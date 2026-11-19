@@ -1556,6 +1556,37 @@ TEST_F(ExpeditorTest, AReadOnlyTransactionPastItsLifetimeIsEndedAndItsNextStatem
     EXPECT_TRUE(running.Stop().ok());
 }
 
+TEST_F(ExpeditorTest, ALockingReadsClaimEndsAtTheLifetimeCeiling) {
+    // DC: a claim is the transaction's, held to its decide - and a holder
+    // that never decides is decided for at the ceiling, so a row locked by
+    // `SELECT ... FOR UPDATE` is not held for good. **The mutation**: a
+    // sweep that skips a transaction with an empty trail, and the UPDATE
+    // below is refused at the lock family's fault net every time.
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.txn_lifetime_ceiling_ns = kCellCeilingMs * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int holder = ConnectToLoopback(config.debug_text_port);
+    ASSERT_GE(holder, 0);
+
+    ASSERT_EQ(SendLine(holder, "CREATE TABLE t (id int64, v int64)").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(SendLine(holder, "INSERT INTO t VALUES (1, 10)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(SendLine(holder, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(SendLine(holder, "SELECT v FROM t WHERE id = 1 FOR UPDATE"), "v\\n10");
+    std::this_thread::sleep_for(kWellPastTheCeiling);
+
+    // The holder said nothing more, and the row is writable.
+    EXPECT_EQ(SendLine(running.client(), "UPDATE t SET v = 11 WHERE id = 1"), "UPDATED 1");
+    const std::string next = SendLine(holder, "SELECT v FROM t WHERE id = 1 FOR UPDATE");
+    EXPECT_TRUE(Refused(next)) << next;
+    EXPECT_EQ(SendLine(holder, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+    ::close(holder);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
 TEST_F(ExpeditorTest, ABusyTransactionIsRolledBackAtItsLifetimeNotItsIdleness) {
     // AN-R14's cost, stated in `txn.md` §1: a transaction that keeps
     // issuing statements is still ended at its lifetime. **The mutation**:

@@ -288,6 +288,15 @@ D9(a) is built as ratified, and its costs are the engine's:
   (`FkCrossCoreRigTest.TwoChildWritersThatThenUpdateTheirParentSerialise`;
   two that then `DELETE` P still deadlock, the `X` family keeping that
   shape).
+- **A locking read of a parent row is passed the same way** (DC-Q1 (a),
+  `[quiet-wrong]`): `SELECT ... FOR UPDATE` takes the row's `U`, so a
+  child `INSERT` naming a locked parent proceeds and commits while the
+  claim stands, and the holder's later `DELETE` of that parent asks `X`
+  then and is refused RESTRICT by the committed child
+  (`LockingReadTest.AForeignKeyChildPassesTheClaimAndTheHoldersDeleteIsThenRefused`).
+  A client that locks a parent to keep children out is not served by it:
+  the spelling gives PostgreSQL's `FOR NO KEY UPDATE` (`txn.md` §5, "A
+  locking read").
 - **The class that replaces it is narrower** (CP-Q10 (a), `[loud]`): a
   parent updater granted `U(P)` over a child writer's share that then
   waits on that writer - at a `DELETE` of P, at another row the child

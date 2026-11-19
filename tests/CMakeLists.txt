@@ -91,6 +91,8 @@ add_executable(kds_tests
     ce_streaming_reply_test.cpp
     issue_under_the_leaf_rig_test.cpp
     lock_family_test.cpp
+    locking_read_rig_test.cpp
+    locking_read_test.cpp
     insert_log_crash_rig_test.cpp
     ddl_fence_rig_test.cpp
     assertion_publish_rig_test.cpp

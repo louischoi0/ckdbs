@@ -1,13 +1,23 @@
 # Work order DC - `SELECT ... FOR UPDATE`: a read that claims the rows it returns
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
+Status: **CLOSED 2026-11-19 on worktree `dc-select-for-update`, its code
+at `7e18598d` (`v3.4.13-16-g7e18598d`), and landed on `main` the same day
+on the operator's word "push no verify" (`raft-marks-2026-11-19.md` §6) -
+a `--no-ff` merge pushed with `--no-verify`, the suite 0 failed of 4794 on
+those build inputs: every stage is done (§7) and the close is measured
+(`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`,
+`bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`). Opened the same
+day on the operator's standing go-ahead (go-ahead-achieving-milestone,
+`raft-marks-2026-11-19.md` §5), from `8e7c820f` (`v3.4.13-10-g8e7c820f`).
+DC-Q0..Q12 are each adopted (a) as CLA proposed, none the operator's own
+mark** (§4). Written on worktree
 `db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
 the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §23): *"Write
 the work order for item 8, SELECT FOR UPDATE."* (given in Korean; recorded
-in English). No stage is started. DC waits for the operator's word and for
-the marks on §4's items. Every `[source-read]` claim below was read at
-`a4d2fb3b`; nothing was built, run or measured for this order. The letter
-DC is CLA's proposal.
+in English). Every `[source-read]` claim in §0 to §2 was read at
+`a4d2fb3b`, and its line numbers are that commit's; DC-S0 (§7) re-read them
+at `8e7c820f` and cites that commit's lines. The letter DC is CLA's
+proposal.
 
 **Item 8** is the eighth item of a survey CLA gave the operator in
 conversation the same day ("what should this engine add, as an OLTP
@@ -384,7 +394,11 @@ Binding once DC opens.
 
 ## 4. Items for the operator (DC-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+**None is the operator's own mark. Each of DC-Q0..Q12 is adopted (a) on the
+operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone,
+`raft-marks-2026-11-19.md` §5)**; (a) is CLA's proposal in each. DC-Q11 and
+DC-Q12 were raised by DC-S0 (§7) and written here before they were
+adopted. Every other option stays open to the operator's own mark.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -399,6 +413,8 @@ None is marked. (a) is CLA's proposal in each.
 | DC-Q8 | What a predicate on the tuple key declares. | what an `UPDATE`'s does: a bound declares its window in `U`, no `WHERE` the whole id space, so an insert into the window waits for the decide and a keyed read never meets the cap; a predicate naming no key takes a unit a row and is refused at 65,536 | (b) a unit a row always: nothing but returned rows is fenced, and a wide read is refused at the cap |
 | DC-Q9 | Whether a locking read may dirty a page. Under DC-Q0 (a) as the walk stands it dirties every leaf it visits (§1.3), so a whole-relation locking read hands the checkpoint the relation. | no: it fetches for read (§2 step 7), a test pins that no frame is dirty after it, and DC-S0 reads whether the claim pass can - if not, back to the operator | (b) the dirtying accepted, its writeback priced in the close and entered in `known-gaps.md` |
 | DC-Q10 | The measurement. | DC-S0 is a read. The close: a point `SELECT` and a point `UPDATE` before against after, interleaved, the bar "no cell slower outside its own spread" - a statement without the clause pays one peek at its tail and one test of a parsed field; and one descriptive cell with no bar - eight sessions, one row, `BEGIN; SELECT ... FOR UPDATE; UPDATE; COMMIT` at `cores = 4` - reporting how many locking reads DC-Q3 (a)'s window refuses. The standing budget | (b) the close without the descriptive cell |
+| DC-Q11 | Which refusals of a locking read fail its transaction (raised by DC-S0: an `UPDATE` fails its transaction on any refusal, a syntax error included, since every one of its refusals ends through `EndWrite`; a plain `SELECT`'s refusal fails nothing). | from the first lock ask on, as the write whose claim it takes: a conflict, the cap, a walk's or the emit's error fail the transaction, and a held row waited for does not. **Before any unit is asked nothing is held and nothing fails**: the parse, the gates (role, `READ ONLY`, autocommit, shape), the relation's resolve and the compile of the `WHERE` and of the select list are refused as a `SELECT`'s are, and the client may go on | (b) every refusal as an `UPDATE`'s: a mistyped column in a locking read forces a `ROLLBACK` |
+| DC-Q12 | What bounds the rows a locking read returns (raised by DC-S0: the emit pass inherits `RETURNING`'s, which has no cap - every row is encoded into the session's reply before the statement ends, and a KWP sink's sealed batches are held in memory; a row-unit read is bounded at 65,536 by the lock cap, a declared window is not). | nothing new: bounded as a write's `RETURNING` is, the claimed keys at 8 bytes a row beside it, and entered in `known-gaps.md` with `RETURNING`'s own missing bound | (b) refused `ResourceExhausted` past `sort_max_rows` claimed rows, before any row is emitted, the claims kept to the decide |
 
 ## 5. Stages
 
@@ -507,3 +523,302 @@ the rule that restated the measurement's bar was cut and the counting item
 became §2 step 9, the measurement taking the number DC-Q10; four tests
 were added. The header's corrections of what the operator was told were
 extended by three of these. **Rejected: none.**
+
+### DC-S0 - the census (2026-11-19)
+
+On worktree `dc-select-for-update` at `8e7c820f` (`v3.4.13-10-g8e7c820f`).
+A read: no engine code, no benchmark, no suite executed for it (documents
+only). §1's claims were re-read at this commit and hold; its line numbers
+are `a4d2fb3b`'s, and the ones below are `8e7c820f`'s.
+`src/server/command_dispatcher.cpp` is `CD`.
+
+**The adopted marks.** DC-Q0..Q10 (a), on the standing go-ahead (§4). The
+two `[quiet-wrong]` items were re-read before they were adopted:
+
+- **DC-Q1 (a), `U`.** `S` and `U` are compatible and `U` refuses `IX`, `U`
+  and `X` (`include/kds/txn/lock_table.hpp:261-268`, the matrix); a foreign
+  key child's insert holds `S` on its parent row. So the premise holds: a
+  child's share passes a locking read's claim, and the holder's later
+  `DELETE` asks `X`. **The spelling `FOR UPDATE` therefore gives PostgreSQL's
+  `FOR NO KEY UPDATE`**, and the manual says so in so many words (DC-S3).
+- **DC-Q3 (a), the write's verdict.** `CheckWriteConflict` admits a head
+  written by this transaction or by one its view sees and refuses every
+  other (`src/txn/manager.cpp:190-209`); a committed-after-view writer is
+  not in flight, so `NoteBlockingWriter` records no wait (`CD:12565`) and
+  `EndWrite` poisons (`CD:13168-13174`); `Claim` borrows before it checks
+  (`CD:11072-11078`), so the unit stays held. The premise holds.
+
+**The reads the stage owed.**
+
+1. **Design step 7, the shared hold (DC-Q9 (a)) - it holds.** A read fetch
+   is a pin in `PinMode::kShared`, which is the page latch taken shared
+   where the latch is armed, and `Get` is `kExclusive`
+   (`include/kds/storage/page_store.hpp:142-152`, `:266-285`). Every writer
+   of a tuple header fetches its leaf with `Get`, so a shared holder
+   excludes it; where the latch is not armed one thread reaches the store.
+   `Claim`'s no-re-read argument (`CD:11063-11067`) rests on two facts - the
+   page is held against writers, and the walk carries no `co_await` - and
+   both are true of a shared hold. Nothing the claim pass does under the
+   leaf asks it exclusively: `Qualify` reads spills and the undo chain
+   shared, `Claim` asks the lock table. So the pass fetches for read:
+   `VisitRelation(kRead)` for the walk, as the collection pass already does
+   (`CD:11121-11122`), and `btree::BtreeLookup` in its default read access
+   for a key, where `LocateByTupleKey` takes `kWrite` (`CD:8885-8886`). The
+   item does not go back to the operator.
+2. **A cancel and a closed connection.** A write never reads the cancel
+   flag: the takers are `SelectRun`'s slice, `BuildRun` and the session's
+   next-frame gate. A wait in `AwaitWriteBlock` has no cancel term
+   (`CD:504-515`) and ends at the holder's decide, as the victim, or at the
+   fault net. A closed connection requests the cancel and rolls an open
+   transaction back when the statement completes
+   (`src/server/tcp_server.cpp:1092-1114`). The locking read inherits all of
+   it: a cancel is seen at the next frame and fails the transaction.
+3. **What bounds the reply.** `RETURNING` has no cap (`CD:10788-10831`): a
+   KWP sink seals a batch at 64 KiB and holds every sealed batch until the
+   statement ends (`src/server/kwp_session.cpp:263-289`); only a `SELECT`'s
+   sliced walk ships while it runs. **Raised as DC-Q12**, adopted (a).
+4. **A bound parameter and a portal.** Parameters are substituted into the
+   text at `C_BIND`, so the handlers see no difference. A portal's
+   `max_rows`, its suspension and `C_DESCRIBE` act on any described sink, a
+   write's `RETURNING` included; the completion tag is the write's reply
+   when `DispatchOutcome::returning` is set and `SELECT` otherwise
+   (`kwp_session.cpp:762-768`). A locking read leaves it unset and so
+   completes as a `SELECT`, with no code in the session.
+5. **The sites that read the leading word**, each of which sees `SELECT`:
+   `RequiredRole` (`CD:1418-1440`) and `ReadOnlyAdmits` (`CD:173-181`), so
+   both gates are asked again after the parse (DC-R7); the archive's gate
+   (`CD:1513-1517`), which a statement that writes no log record does not
+   owe; the failed-transaction allowlist, which refuses it like any
+   `SELECT`; `StatementKindOf`, under which it is counted a `SELECT`.
+6. **An explicit transaction with an empty trail.** `BEGIN` draws an id
+   and appends `TXN_BEGIN` (`src/txn/manager.cpp:138-155`); `COMMIT` appends
+   `TXN_COMMIT` and waits at the session's rung whatever the trail holds.
+   Both are the transaction's. The statement appends nothing (DC-R5).
+7. **Statistics.** `sys.relation_stats` is written by `FinishWrite`
+   (`CD:6560-6572`), which the locking read does not call; a write walk
+   records no access shape; `sys.statement_stats` is keyed by the parse's
+   fingerprint in `HandleSelect` (`CD:9635-9639`) and recorded for every
+   statement.
+8. **Tests that pin today's refusal.** None spells `FOR` after a `SELECT`:
+   the trailing-token text is pinned for `FOO` (`tests/parser_test.cpp:138`)
+   and `garbage` (`tests/assertion_ddl_test.cpp:414`). The golden corpus is
+   `tests/testdata/parser_corpus.txt`, with no line holding `FOR`.
+9. **DC-R9's argument.** The fingerprint is the lexer's, over the token
+   stream, and no grammar reads it; DC changes no lexer rule and reserves
+   no word, so no statement's hash moves. The production is entered at two
+   positions - after a native block's pagination tail, and at the end of a
+   query expression of the query grammar - and before DC the only tokens
+   admitted there were `)`, `;`, the end of input and, after an `INSERT`'s
+   source, `ON` or `RETURNING`. So no statement that parsed has `FOR`
+   there, and every statement that parsed parses as it did. The corpus
+   gains locking lines and its existing lines are unmoved (DC-S1).
+
+**Corrections to the order's text.**
+
+- §5's "`WITH ... FOR UPDATE`, which the query grammar reads" is wrong:
+  `ParseQuery` takes `SELECT` or `(` only, and `WITH` is refused by the
+  native grammar as a CTE, by name (`src/parser/parser.cpp:3793-3801`).
+  `INSERT ... SELECT ... FOR UPDATE` is read by the query grammar and is
+  refused there by name.
+- §2 step 6's "`RETURNING`'s" emit is the pass's shape, not its renderer:
+  the rows go through the `SELECT`'s own description and encoder
+  (`DescribeStar`, `DescribeFields`, `ResultSink::EncodeProjectedRow`), one
+  renderer per output shape, which is what makes a quiet locking read's
+  rows the plain statement's byte for byte.
+- §2 step 2's list of what refuses a locking statement is closed in one
+  place: every consumer of a parsed `SELECT` but `HandleSelect`'s own
+  branch reaches `exec::Compile` (`ANALYZE`, `WAYSTONE ON`, `CREATE PLAN`,
+  `ADVISE PLAN`, a `SET` value's subquery), so the compile refuses a
+  statement carrying the clause and no chain exists for one.
+- A native refusal that is not about the clause must not answer a
+  statement the query grammar reads up to the clause: `SELECT a + 1 FROM t
+  FOR UPDATE` would be told that an expression is not supported, which is
+  false. The clause's one production serves both grammars, and its refusal
+  is the reply wherever it is the grammar's own.
+
+**Raised and adopted**: DC-Q11 (which refusals fail the transaction) and
+DC-Q12 (the reply's bound), both (a), in §4.
+
+**No item goes back to the operator.**
+
+### DC-S1 - the grammar and the refusals (2026-11-19)
+
+On worktree `dc-select-for-update` at `eaeb26ea`. The clause is one
+production, `Parser::ParseLockClause`, read after the pagination tail of
+the outermost native block into `SelectStmt::lock` and refused by name
+everywhere else, by both grammars. `exec::Compile` refuses a statement
+carrying it; `HandleSelect` hands a parsed one to `HandleLockingRead`
+before anything else is asked; the gates are refused at the byte of `FOR`
+and fail no transaction. A well-formed locking read was itself refused
+`NotImplemented` at this commit. The golden corpus gained 18 locking lines
+and none of its existing lines moved, which is DC-R9's pin.
+
+**Reviewed by `critics-developer`**, which found no path dropping the
+clause. Applied, all seven: a statement whose clause the native grammar
+accepted and which then failed for a trailing token was answered with the
+query grammar's refusal - the parser now says a clause was *met*
+(`met_lock_clause()`), and such a statement is answered by the grammar
+that read it; the gate cells could not tell their gate from the stage's
+own last refusal, so each now asserts the words of its own; the role's
+refusal carries its byte; three comments that named a file that does not
+exist or a neighbour that had moved; `sys.<unknown>` no longer answered as
+a catalog view; a redundant `GROUP BY` test and an unused parameter cut; a
+plans check that searched for the letter `p`. **Rejected: none.**
+
+**Suite**: 0 failed of 4766 at `eaeb26ea`'s tree (0 failed of 4765 before
+the review's fixes). Overhead not measured; measured at the milestone's
+close.
+
+### DC-S2 - the claim pass and the emit pass (2026-11-19)
+
+On worktree `dc-select-for-update` at `f6a12f5d`. `RunLockingRead` is an
+`UPDATE`'s row walk with no `SET` list, under the session's transaction:
+the relation's `IX`, the declared window or each row's unit in `U`,
+`UPDATE`'s arms in `UPDATE`'s order, the leaves fetched for read; a held
+row ends the pass with the conflict `DispatchAsync` waits on and the
+statement is run again whole; then the emit pass, through the `SELECT`'s
+own description and encoder. What the stage found and fixed in the design
+as written:
+
+- **§2 step 6's "the page's version, which no other transaction can
+  replace" is asked, not assumed**: the emit checks the row it re-reads -
+  present, not delete-marked, its writer this transaction or one the view
+  sees - and answers `Corruption` otherwise, so a breach of DC-R1 is a
+  refusal and never a row.
+- **DC-Q11 as built**: the resolve and the compile return without ending
+  the write scope, so they fail nothing; every later end is
+  `EndWriteWith`, `FinishWrite` less its `sys.relation_stats` count.
+- **The statement's view is the one `HandleSelect` took**, handed down:
+  inside an explicit transaction the boundary is taken once a statement.
+- **`sys.<unknown> FOR UPDATE`** is answered by the relation's resolve, as
+  any missing relation is.
+
+**Reviewed by `critics-developer`**, which traced every other writer of a
+claimed row, the shared hold, the re-run and the early exits and found no
+wrong or skipped row. Applied, all thirteen: **DC-R4 had no pin** - the
+walked cell ran on the text protocol, whose sink is rebuilt each run, so
+rows sent during the claim pass would have passed it; the cell is now on a
+session's own sink, which a re-run does not rewind, and asserts nothing
+has left while row 1 is claimed and row 2 held; a claimed row not found at
+the emit answered `NotFound` and is now the same `Corruption`;
+`CompileSelectList` decided `*` from an empty list, which an aggregated
+statement's is too, and takes `star()` from its caller; **a deterministic
+cell for the `READ COMMITTED` window** through the after-view seam, with
+the commit made by the other core's dispatcher
+(`LockingReadRigTest.AReadCommittedReadRefusedInItsWindowFailsItsTransactionAndKeepsTheUnit`),
+which the order had thought unreachable on one core; the cells §5 owed and
+lacked - the transaction's own version returned, a claim outliving a later
+failed statement, a cancel during a locking read, each waiter at both
+decides; three duplications cut (`EndWriteWith`, `ReadRowByKey` shared
+with `RETURNING`, `RenderedThrough` shared with `SelectBody`);
+`ProjectColumns` returns its list; the `WHERE` compiled before the select
+list, as a chain's is; a redundant scratch clear; a `sys.relation_stats`
+assertion that could not fail, cut; and the Cabin cell now shows the plain
+statement is a Cabin probe. **Rejected: none.**
+
+**Suite**: 0 failed of 4792 at `f6a12f5d`'s tree. A first run failed one
+cell, `StrictParkRigTest.AnExplicitStrictCommitParksAndPublishesAtItsSync`,
+the one-off `known-gaps.md` (Testing) records, beside another session's
+build; eight repeats of it passed and the run repeated whole passed.
+Overhead not measured; measured at the milestone's close.
+
+**Tests §5 owes that DC-S2 did not write**: a `tsan` run of the cross-core
+cell (the `bs-nightly` build's; not executed for DC), and a portal's
+`max_rows` over a locking read, which is the session's code for any
+described reply. Both are in `known-gaps.md` ("Locking reads (DC)").
+
+### DC-S3 - the close (2026-11-19)
+
+On worktree `dc-select-for-update`, the code at `7e18598d`
+(`v3.4.13-16-g7e18598d`).
+
+**The simulator and the history checker** (`cd80d31d`). With the shapes on,
+40 in 100 of the simulator's reads by tuple key, by range and by `v` inside
+a `READ WRITE` transaction carry `FOR UPDATE`, drawn from a stream of their
+own so the pinned corpus is unmoved; the oracle reconciles each as the
+plain read it replaces. `scripts/sim.sh` (Debug, 4 fresh seeds): 280 runs,
+0 failures. A suite cell runs a clean shapes run that must reconcile its
+locking reads. The list-append checker (`bs-nightly`) gained a
+read-modify-write cycle - a key's list read, then written back whole with
+one more element - and
+`BsHistory.ReadModifyWriteThroughALockingReadLosesNoAppend`: a control by a
+plain read under `READ COMMITTED` must lose committed appends, and the same
+seeds through the clause, and one `REPEATABLE READ` seed, must show no
+anomaly. `kds_bs_tests BsHistory.*`: 4 of 4 passed, run by hand; no
+`bs-nightly` run was made. **Reviewed by `critics-developer`**: no bug.
+Applied: the control counted any anomaly and now counts the checker's own
+"was lost" and fails on every other kind; the suite cell above, which the
+stage lacked; a comment's layout. **Rejected, one nit**: `MaybeLock`'s
+`READ ONLY` test cannot be false as the stream is drawn today, and stays
+as the rule the workload cell asserts.
+
+**The close measurement** (DC-Q10 (a); `ck-tester`, Release, A `8e7c820f`
+against B `cd80d31d`, then against C `7e18598d`; two servers of A's binary
+as the floor).
+
+- **The descriptive cell** (B, `cores = 4`, `group`, `READ COMMITTED`,
+  eight sessions on one row, three cells of 6 s): `BEGIN; SELECT ... FOR
+  UPDATE; UPDATE; COMMIT` committed 90,681 transactions and **lost no
+  increment** - each cell's final value equals its committed count - at
+  5,574, 5,408 and 4,128 transactions a second. The same loop with a plain
+  `SELECT` committed 111,545 and lost 77,905 increments (69.8 %), with no
+  error. **DC-Q3 (a)'s window refused 2,512 of 93,193 locking reads
+  (2.70 %)**, every one `TXN_CONFLICT ... was written by transaction`; no
+  deadlock and no fault net. The clause cost 11 to 33 % of the plain
+  loop's rate, in the tail: p99 1.7 to 3.7 times the plain loop's.
+- **The barred cells** (a point `SELECT` and a point `UPDATE` without the
+  clause, `cores = 1`, server CPU a statement, pooled over clean
+  lifetimes). At B the `SELECT` read +0.10, +0.23 and +0.17 us against A
+  at 200, 1K and 10K rows - inside the floor, a lean not excluded - and
+  the `UPDATE` was not resolved from a floor of 2 to 3 us.
+- **A remedy, applied and measured again** (`7e18598d`). Two refactors of
+  DC-S2's review cost a statement without the clause what it had not
+  paid: a select list built and moved into the chain (one allocation a
+  compile) and a write's outcome passed by value through `EndWriteWith`
+  (two moves a write). Both are gone; **reviewed by `critics-developer`**,
+  correct and equivalent, one nit rejected as it advised (a second
+  four-byte prefix test in `FinishWrite`). At C: **the `SELECT` is +0.13,
+  +0.10 and +0.10 us against A - the bar met, inside the floor, the lean
+  of about 0.5 % of 20.4 us not excluded and not moved by the remedy** (C
+  against B within 0.05 us); **the `UPDATE` is not resolved from its
+  floor** (+0.19, -0.35, -1.12 us of about 75 us), the remedy reading -1.59
+  us at 200 rows and nothing at the other two sizes. No cell is slower
+  outside its own spread. What a statement without the clause still pays
+  is a peek at its tail, a test of a parsed field in `HandleSelect` and in
+  `exec::Compile`, and eight vector moves; the residue of the lean is not
+  separated from a binary's layout on a host with no PMU.
+- **Cut**: three and four arms in place of the CX bisect's ten; lifetimes
+  that ran beside another session's build or suite excluded (three of
+  eight, then two of seven); no PostgreSQL twin. **Time**: about 41 minutes
+  for the first run and about 23 for the second, building included, about
+  9 minutes held by the quiet gate outside both.
+
+**Suite**: 0 failed of 4794 at `7e18598d`'s tree, and at `cd80d31d`'s.
+
+**The documents** (`7c36f610` and the close's commit): `txn.md` §5 ("A
+locking read"), §1 and the verdict table's paragraph; `parser-v2.md` I11a
+and I19; `protocol.md` §7 and §10; `sched.md` §3; `foreign-keys.md` §2c;
+`known-gaps.md` ("Locking reads (DC)"); `manual/sql/sql.md` §4, §5, §7;
+`manual/client/client.md` §5; `CLAUDE.md`'s rows for transactions and for
+the query language. `txn.md` §9 needed no change: it names `SERIALIZABLE`
+and savepoints, and no ruling against a locking read stood there.
+
+**Not done, stated**: no `tsan` and no `bs-nightly` run for DC; the
+overhead bar is met by the floor and the 0.1 us lean on a point `SELECT`
+is neither shown nor excluded; DC-Q0 (b), DC-Q1 (b)/(c), DC-Q3 (b), DC-Q5
+(b)/(c), DC-Q6 (b)/(c), DC-Q7 (b) and DC-Q12 (b) are not built and stay
+open to the operator's own mark.
+
+**The sync**: `origin/main` was `8e7c820f` at the close, the commit DC
+opened from, so the merge brought nothing.
+
+DC is closed on the work branch. It is not merged, not pushed and not
+tagged: each waits for the operator's word.
+
+### Landed (2026-11-19)
+
+On the operator's word "push no verify" (`raft-marks-2026-11-19.md` §6):
+the work branch at its close merged `--no-ff` onto `origin/main` at
+`8e7c820f`, which had not moved, and pushed with `--no-verify`. The hook
+was skipped; the suite ran 0 failed of 4794 at `7e18598d`, on the build
+inputs pushed. Not tagged, and no version named.

@@ -173,6 +173,56 @@ TEST(RowWaitWakeRigTest, AWriterParkedOnAnotherCoresRowProceedsAtTheReleaseKick)
     EXPECT_EQ(rig->locks().EntryCount(), 0u);
 }
 
+TEST(RowWaitWakeRigTest, ALockingReadParkedOnAnotherCoresClaimReturnsTheRowTheHolderLeft) {
+    // DC (`workorder-dc-select-for-update.md`): the claim a locking read
+    // takes is the row unit a writer's is, so core 1's `SELECT ... FOR
+    // UPDATE` parks on core 0's and is re-run at its release - under a fresh
+    // view, returning what the holder committed.
+    auto opened = TwoCoreRig::Open();
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+
+    ASSERT_TRUE(StartsWith(d0.Dispatch("CREATE TABLE t (id int64, v int64)").response, "CREATED"));
+    ASSERT_FALSE(StartsWith(d0.Dispatch("INSERT INTO t VALUES (1, 0)").response, "ERR"));
+    Session holder;
+    ASSERT_TRUE(StartsWith(d0.Dispatch("BEGIN", &holder).response, "BEGIN"));
+    ASSERT_EQ(d0.Dispatch("SELECT v FROM t WHERE id = 1 FOR UPDATE", &holder).response, "v\\n0");
+    ASSERT_EQ(d0.Dispatch("UPDATE t SET v = 7 WHERE id = 1", &holder).response, "UPDATED 1");
+
+    Session waiter;
+    ASSERT_TRUE(StartsWith(d1.Dispatch("BEGIN", &waiter).response, "BEGIN"));
+    Statement read{&waiter, "SELECT v FROM t WHERE id = 1 FOR UPDATE"};
+    Statement commit{&holder, "COMMIT"};
+    commit.go.store(false, std::memory_order_release);
+    rig->core(1).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d1, read)));
+    rig->core(0).scheduler().Submit(
+        sched::MakeCoroTask(sched::SchedulingGroup::kForeground, RunStatement(d0, commit)));
+    rig->Start();
+
+    sched::Scheduler& peer = rig->core(1).scheduler();
+    ASSERT_TRUE(Within(2000ms, [&] { return peer.idle_blocks() >= 1; }))
+        << "core 1 never blocked with its locking read parked; saw " << Seen(read);
+    ASSERT_FALSE(read.done.load(std::memory_order_acquire))
+        << "core 1's locking read did not wait: " << read.out.response;
+
+    commit.go.store(true, std::memory_order_release);
+    ASSERT_TRUE(KickUntil(*rig, 0, [&] { return commit.done.load(std::memory_order_acquire); }))
+        << "core 0's COMMIT never finished; saw " << Seen(commit);
+    ASSERT_TRUE(StartsWith(commit.out.response, "COMMIT")) << commit.out.response;
+    ASSERT_TRUE(Within(2000ms, [&] { return read.done.load(std::memory_order_acquire); }))
+        << "core 1's locking read did not proceed at the release; saw " << Seen(read);
+    EXPECT_EQ(read.out.response, "v\\n7") << "the re-run did not read under a fresh view";
+    rig->Stop();
+
+    // The waiter holds the row now, until its own decide.
+    EXPECT_GT(rig->locks().EntryCount(), 0u);
+    ASSERT_TRUE(StartsWith(d1.Dispatch("ROLLBACK", &waiter).response, "ROLLBACK"));
+    EXPECT_EQ(rig->locks().EntryCount(), 0u);
+}
+
 TEST(RowWaitWakeRigTest, ADeclaredRangeOnCore1ProceedsAtTheReleaseKickOfARowCore0Holds) {
     // **The containment wake** (AY-S2). The same shape as the cell above,
     // with core 1's statement declaring a range (`WHERE id >= 1`) rather

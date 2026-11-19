@@ -3066,6 +3066,72 @@ Status Parser::ParsePaginationTail(SelectStmt& stmt, bool aggregated, std::uint3
     return Status::OK();
 }
 
+// The locking clause (DC; docs/spec/parser-v2.md I11a). What the claim is
+// is `txn.md` §5's; this production reads the words and refuses every
+// spelling nothing serves, so none is accepted and enforced as another
+// (DC-R8: `FOR SHARE` in particular is never the lock table's `S`, which
+// admits another writer's claim).
+Status Parser::ParseLockClause(std::optional<SelectStmt::LockClause>* into,
+                               std::string_view declined_here) {
+    const Token head = lexer_.Peek();
+    if (!IsWord(head, "FOR")) return Status::OK();
+    lexer_.Next();
+    met_lock_clause_ = true;
+
+    const auto expected = [](std::string_view want, const Token& got) {
+        return Status::InvalidArgument("expected '" + std::string(want) + "', got '" +
+                                       std::string(Describe(got)) + "'" + At(got.byte_offset));
+    };
+    const auto other_strength = [&](std::string_view spelling) {
+        return Status::NotImplemented(
+            std::string(spelling) + " is not supported" + At(head.byte_offset) +
+            "; the one locking clause is FOR UPDATE, which claims each returned row as an "
+            "UPDATE of it would");
+    };
+    const Token strength = lexer_.Next();
+    if (IsWord(strength, "SHARE")) return other_strength("FOR SHARE");
+    if (IsWord(strength, "KEY")) {
+        if (const Token share = lexer_.Next(); !IsWord(share, "SHARE")) {
+            return expected("SHARE", share);
+        }
+        return other_strength("FOR KEY SHARE");
+    }
+    if (IsWord(strength, "NO")) {
+        if (const Token key = lexer_.Next(); !IsWord(key, "KEY")) return expected("KEY", key);
+        if (const Token update = lexer_.Next(); !IsWord(update, "UPDATE")) {
+            return expected("UPDATE", update);
+        }
+        return Status::NotImplemented(
+            "FOR NO KEY UPDATE is not supported as a spelling" + At(head.byte_offset) +
+            "; write FOR UPDATE, which takes that claim here: other writers of the row wait, "
+            "and a foreign key child's share on it is admitted");
+    }
+    if (!IsWord(strength, "UPDATE")) return expected("UPDATE", strength);
+
+    const Token option = lexer_.Peek();
+    if (IsWord(option, "OF")) {
+        return Status::NotImplemented(
+            "FOR UPDATE OF <relation> is not supported" + At(option.byte_offset) +
+            "; a locking read names one relation and claims its rows");
+    }
+    if (IsWord(option, "NOWAIT") || IsWord(option, "SKIP")) {
+        return Status::NotImplemented(
+            std::string(IsWord(option, "SKIP") ? "SKIP LOCKED" : "NOWAIT") +
+            " is not supported" + At(option.byte_offset) +
+            "; a locking read waits for a held row until its holder decides, as an UPDATE "
+            "does");
+    }
+    if (into == nullptr) {
+        return Status::NotImplemented(
+            "FOR UPDATE is not supported " + std::string(declined_here) +
+            At(head.byte_offset) +
+            "; a locking read is one SELECT of * or plain columns over one relation, and the "
+            "clause ends the statement");
+    }
+    *into = SelectStmt::LockClause{head.byte_offset};
+    return Status::OK();
+}
+
 // One count clause of the tail: `<word> <n>`, absent-is-ok. The class
 // refusals live here per clause rather than gating the tail once, because
 // each names the clause the client wrote and the byte it starts at -
@@ -3318,6 +3384,18 @@ StatusOr<SelectStmt> Parser::ParseSelect(std::uint32_t depth) {
     // subquery, `DESC` - so the aggregated ORDER BY answer the corpus pins
     // did not move when the non-aggregated form became parseable.
     if (Status s = ParsePaginationTail(stmt, aggregated, depth); !s.ok()) return s;
+
+    // ---- The locking clause: FOR UPDATE (I11a, DC) -----------------------
+    //
+    // Read on the outermost block of a statement that is a SELECT, and
+    // refused by name anywhere else: a subquery's rows feed a predicate or
+    // a value, and nothing would hold or return what the clause claimed. A
+    // SET value's subquery parses at depth 0 and is one all the same.
+    const bool outermost = depth == 0 && !inside_value_subquery_;
+    if (Status s = ParseLockClause(outermost ? &stmt.lock : nullptr, "inside a subquery");
+        !s.ok()) {
+        return s;
+    }
 
     // AG8 / J2: a fold inside a sub-chain puts an aggregation boundary
     // where the execution model has none. Refused with the position of
@@ -3962,6 +4040,21 @@ StatusOr<std::shared_ptr<const Query>> Parser::ParseQueryExpr() {
         auto whole = std::make_shared<Query>(*acc);
         if (Status s = ParseQueryTail(*whole); !s.ok()) return s;
         acc = std::move(whole);
+    }
+    // **This grammar reads no locking clause, and refuses one by name**
+    // (DC-R2): the query layer answers over read walks at the statement's
+    // snapshot and claims nothing, so a clause read here would be dropped.
+    // At every query's end - the statement's, a set operation's operand's, a
+    // derived table's, a subquery's, an `INSERT ... SELECT`'s source.
+    if (Status s = ParseLockClause(
+            nullptr, query_depth_ > 0
+                         ? "inside a subquery or a derived table"
+                         : "on a SELECT the query layer answers (an expression in the select "
+                           "list, DISTINCT, grouping over expressions, an outer, cross or "
+                           "condition join, a set operation, a derived table) or as an "
+                           "INSERT's source");
+        !s.ok()) {
+        return s;
     }
     return acc;
 }

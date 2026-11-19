@@ -839,6 +839,56 @@ TEST(SimWorkload, TheShapesSpellARangeReadAndAByKeyWriteAsAKeyList) {
     }
 }
 
+// DC: with the shapes some reads inside a READ WRITE transaction are locking
+// reads - by tuple key, by range (a key list included) and by `v` - and
+// without them none is, so the pinned corpus draws what it always drew.
+TEST(SimWorkload, TheShapesLockSomeReadsInsideAReadWriteTransaction) {
+    for (const bool shapes : {false, true}) {
+        Workload workload(Rng(11).Fork("workload"), Profile::kUniform, shapes);
+        std::map<Op::Kind, int> locking;
+        std::map<Op::Kind, int> plain;
+        bool in_txn = false;
+        bool read_only = false;
+        for (int i = 0; i < 6000; ++i) {
+            const Op op = workload.Next();
+            if (op.kind == Op::Kind::kBegin) {
+                in_txn = true;
+                read_only = op.sql.find("READ ONLY") != std::string::npos;
+            } else if (op.kind == Op::Kind::kCommit || op.kind == Op::Kind::kRollback) {
+                in_txn = false;
+            }
+            if (!op.sql.ends_with(" FOR UPDATE")) {
+                ++plain[op.kind];
+                continue;
+            }
+            ++locking[op.kind];
+            EXPECT_TRUE(in_txn && !read_only)
+                << "a locking read drawn where the engine refuses one: " << op.sql;
+        }
+        for (const Op::Kind kind :
+             {Op::Kind::kSelectTupleKey, Op::Kind::kSelectRange, Op::Kind::kFilterScan}) {
+            EXPECT_EQ(locking.contains(kind), shapes) << OpKindName(kind) << " shapes=" << shapes;
+            EXPECT_GT(plain[kind], 0) << OpKindName(kind) << " shapes=" << shapes;
+        }
+        EXPECT_EQ(locking.size(), shapes ? 3u : 0u) << "a locking clause on another op kind";
+    }
+}
+
+// And they reach the engine: a clean run with the shapes sends locking
+// reads, and every one answers the rows the oracle expects of the plain read
+// - through the write's row walk, with the claims given back at each decide.
+TEST(SimLoop, ACleanRunWithTheShapesReconcilesItsLockingReads) {
+    SimConfig config;
+    config.seed = 7;
+    config.ops = 3000;
+    config.mode = SimMode::kClean;
+    config.shapes = true;
+    const SimVerdict verdict = RunSimulation(config);
+    EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+    EXPECT_GT(verdict.locking_reads, 10u) << verdict.Summary(config);
+    EXPECT_GT(verdict.read_only_transactions, 0u) << verdict.Summary(config);
+}
+
 // The count a mutation reports is compared against the oracle's own count
 // of the rows the predicate matches — the sharpest single assertion the
 // harness makes. This pins that the corpus actually reaches it.

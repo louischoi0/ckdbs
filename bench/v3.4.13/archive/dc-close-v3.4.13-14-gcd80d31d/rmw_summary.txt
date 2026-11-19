@@ -1,0 +1,68 @@
+== fu
+1 tps 5574 commits 33450 final_v 33450 lost 0 reads 34381 refused {'TXN_CONFLICT written-by': 931} where {'select:TXN_CONFLICT written-by': 931} | p0 565 p25 1099 p50 1280 p95 2455 p99 3759 n 33450
+  lock_waits cols ['seq', 'core', 'started', 'waited_us', 'unit', 'mode', 'rel_oid', 'key', 'waiter_trx', 'holder_trx', 'outcome']
+    ['23227', '0', '2026-11-19 07:05:28.705340', '148', 'tuple', 'U', '4000', '1', '35820', '40907', 'granted']
+    ['23228', '0', '2026-11-19 07:05:28.706183', '126', 'tuple', 'U', '4000', '1', '35822', '42321', 'granted']
+    ['23229', '0', '2026-11-19 07:05:28.706322', '153', 'tuple', 'U', '4000', '1', '35822', '42322', 'granted']
+    ['23230', '0', '2026-11-19 07:05:28.706486', '177', 'tuple', 'U', '4000', '1', '35822', '40909', 'granted']
+    ['23231', '0', '2026-11-19 07:05:28.706542', '128', 'tuple', 'U', '4000', '1', '35823', '40909', 'granted']
+    ['23232', '0', '2026-11-19 07:05:28.706669', '112', 'tuple', 'U', '4000', '1', '35822', '50779', 'granted']
+2 tps 5408 commits 32457 final_v 32457 lost 0 reads 33412 refused {'TXN_CONFLICT written-by': 955} where {'select:TXN_CONFLICT written-by': 955} | p0 579 p25 1109 p50 1306 p95 2643 p99 3746 n 32457
+  lock_waits cols ['seq', 'core', 'started', 'waited_us', 'unit', 'mode', 'rel_oid', 'key', 'waiter_trx', 'holder_trx', 'outcome']
+    ['20025', '0', '2026-11-19 07:05:42.228960', '170', 'tuple', 'U', '4000', '1', '31713', '31712', 'granted']
+    ['20026', '0', '2026-11-19 07:05:42.229753', '41', 'tuple', 'U', '4000', '1', '31714', '42484', 'granted']
+    ['20027', '0', '2026-11-19 07:05:42.229807', '160', 'tuple', 'U', '4000', '1', '31714', '50384', 'granted']
+    ['20028', '0', '2026-11-19 07:05:42.229981', '133', 'tuple', 'U', '4000', '1', '31714', '50385', 'granted']
+    ['20029', '0', '2026-11-19 07:05:42.230287', '35', 'tuple', 'U', '4000', '1', '31715', '31714', 'granted']
+    ['20030', '0', '2026-11-19 07:05:42.231159', '117', 'tuple', 'U', '4000', '1', '31716', '50386', 'granted']
+3 tps 4128 commits 24774 final_v 24774 lost 0 reads 25400 refused {'TXN_CONFLICT written-by': 626} where {'select:TXN_CONFLICT written-by': 626} | p0 597 p25 1236 p50 1533 p95 4065 p99 8139 n 24774
+  lock_waits cols ['seq', 'core', 'started', 'waited_us', 'unit', 'mode', 'rel_oid', 'key', 'waiter_trx', 'holder_trx', 'outcome']
+    ['21169', '0', '2026-11-19 07:05:55.874192', '135', 'tuple', 'U', '4000', '1', '29183', '28498', 'granted']
+    ['21170', '0', '2026-11-19 07:05:55.874204', '145', 'tuple', 'U', '4000', '1', '29184', '28498', 'granted']
+    ['21171', '0', '2026-11-19 07:05:55.874348', '256', 'tuple', 'U', '4000', '1', '29183', '45266', 'granted']
+    ['21172', '0', '2026-11-19 07:05:55.874361', '257', 'tuple', 'U', '4000', '1', '29184', '45266', 'granted']
+    ['21173', '0', '2026-11-19 07:05:55.874617', '219', 'tuple', 'U', '4000', '1', '29183', '45268', 'granted']
+    ['21174', '0', '2026-11-19 07:05:55.874631', '237', 'tuple', 'U', '4000', '1', '29184', '45268', 'granted']
+  cpu.on_cpu               count         0 total_s    18.92 (of 144 session-s) max_us 0
+  commit.wal_flush         count    181374 total_s   114.78 (of 144 session-s) max_us 6679
+  sysio.checkpoint         count        12 total_s     0.01 (of 144 session-s) max_us 1642
+  sysio.wal_write          count       216 total_s     0.11 (of 144 session-s) max_us 1002
+  sysio.wal_roll           count         2 total_s     0.00 (of 144 session-s) max_us 746
+  sched.run_queue          count    740598 total_s     1.00 (of 144 session-s) max_us 3843
+  app.lock_wait            count    611444 total_s    91.45 (of 144 session-s) max_us 9538
+  app.lock_conflict        count    611444 total_s     0.00 (of 144 session-s) max_us 0
+  idle.background          count        16 total_s    16.28 (of 144 session-s) max_us 4467425
+== plain
+1 tps 6235 commits 37419 final_v 11233 lost 26186 reads 38525 refused {'TXN_CONFLICT written-by': 1106} where {'update:TXN_CONFLICT written-by': 1106} | p0 595 p25 1039 p50 1214 p95 1825 p99 2241 n 37419
+  lock_waits cols ['seq', 'core', 'started', 'waited_us', 'unit', 'mode', 'rel_oid', 'key', 'waiter_trx', 'holder_trx', 'outcome']
+    ['11990', '0', '2026-11-19 07:05:34.890273', '10', 'tuple', 'U', '4000', '1', '31792', '31793', 'granted']
+    ['11991', '0', '2026-11-19 07:05:34.890981', '29', 'tuple', 'U', '4000', '1', '31794', '35628', 'granted']
+    ['11992', '0', '2026-11-19 07:05:34.891330', '11', 'tuple', 'U', '4000', '1', '31795', '50462', 'granted']
+    ['11993', '0', '2026-11-19 07:05:34.892223', '88', 'tuple', 'U', '4000', '1', '31796', '35630', 'granted']
+    ['11994', '0', '2026-11-19 07:05:34.892288', '38', 'tuple', 'U', '4000', '1', '31797', '35630', 'granted']
+    ['11995', '0', '2026-11-19 07:05:34.892327', '51', 'tuple', 'U', '4000', '1', '31796', '50463', 'granted']
+2 tps 6178 commits 37077 final_v 11235 lost 25842 reads 38321 refused {'TXN_CONFLICT written-by': 1244} where {'update:TXN_CONFLICT written-by': 1244} | p0 587 p25 1060 p50 1233 p95 1827 p99 2207 n 37077
+  lock_waits cols ['seq', 'core', 'started', 'waited_us', 'unit', 'mode', 'rel_oid', 'key', 'waiter_trx', 'holder_trx', 'outcome']
+    ['10791', '0', '2026-11-19 07:05:48.476342', '60', 'tuple', 'U', '4000', '1', '31611', '35523', 'granted']
+    ['10792', '0', '2026-11-19 07:05:48.477359', '25', 'tuple', 'U', '4000', '1', '31612', '35524', 'granted']
+    ['10793', '0', '2026-11-19 07:05:48.477401', '166', 'tuple', 'U', '4000', '1', '31612', '35525', 'granted']
+    ['10794', '0', '2026-11-19 07:05:48.477578', '159', 'tuple', 'U', '4000', '1', '31612', '38851', 'granted']
+    ['10795', '0', '2026-11-19 07:05:48.477718', '52', 'tuple', 'U', '4000', '1', '31613', '38851', 'granted']
+    ['10796', '0', '2026-11-19 07:05:48.477779', '70', 'tuple', 'U', '4000', '1', '31613', '31612', 'granted']
+3 tps 6173 commits 37049 final_v 11172 lost 25877 reads 38113 refused {'TXN_CONFLICT written-by': 1064} where {'update:TXN_CONFLICT written-by': 1064} | p0 605 p25 1057 p50 1240 p95 1837 p99 2176 n 37049
+  lock_waits cols ['seq', 'core', 'started', 'waited_us', 'unit', 'mode', 'rel_oid', 'key', 'waiter_trx', 'holder_trx', 'outcome']
+    ['12101', '0', '2026-11-19 07:06:02.102252', '45', 'tuple', 'U', '4000', '1', '31965', '31964', 'granted']
+    ['12102', '0', '2026-11-19 07:06:02.102317', '53', 'tuple', 'U', '4000', '1', '31965', '46552', 'granted']
+    ['12103', '0', '2026-11-19 07:06:02.102392', '50', 'tuple', 'U', '4000', '1', '31965', '46553', 'granted']
+    ['12104', '0', '2026-11-19 07:06:02.103082', '13', 'tuple', 'U', '4000', '1', '31966', '35849', 'granted']
+    ['12105', '0', '2026-11-19 07:06:02.103123', '42', 'tuple', 'U', '4000', '1', '31966', '35850', 'granted']
+    ['12106', '0', '2026-11-19 07:06:02.103181', '39', 'tuple', 'U', '4000', '1', '31966', '46554', 'granted']
+  cpu.on_cpu               count         0 total_s    20.21 (of 144 session-s) max_us 0
+  commit.wal_flush         count    223102 total_s   145.55 (of 144 session-s) max_us 10780
+  sysio.checkpoint         count        12 total_s     0.02 (of 144 session-s) max_us 2453
+  sysio.wal_write          count       200 total_s     0.11 (of 144 session-s) max_us 1340
+  sysio.wal_roll           count         8 total_s     0.00 (of 144 session-s) max_us 727
+  sched.run_queue          count    919750 total_s     1.42 (of 144 session-s) max_us 3257
+  app.lock_wait            count    386808 total_s    28.49 (of 144 session-s) max_us 2708
+  app.lock_conflict        count    386808 total_s     0.00 (of 144 session-s) max_us 0
+  idle.background          count        10 total_s     7.65 (of 144 session-s) max_us 2614634
