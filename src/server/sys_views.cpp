@@ -28,6 +28,7 @@
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/optimizer_signals.hpp"
 #include "kds/stats/refusal_stats.hpp"
+#include "kds/stats/txn_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/wait_event.hpp"
 #include "kds/stats/statement_stats.hpp"
@@ -93,6 +94,7 @@ constexpr SysViewSpec kViews[] = {
     {"wait_event_names"},
     {"wait_stats"},
     {"wait_histogram"},
+    {"txn_histogram"},
     {"session_waits"},
     {"session_state"},
     {"ash"},
@@ -278,6 +280,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "wait_event_names") return WaitEventNamesView();
     if (n == "wait_stats") return WaitStatsView();
     if (n == "wait_histogram") return WaitHistogramView();
+    if (n == "txn_histogram") return TxnHistogramView();
     if (n == "session_waits") return SessionWaitsView();
     if (n == "session_state") return SessionStateView();
     if (n == "ash") return AshView();
@@ -1494,6 +1497,30 @@ StatusOr<exec::CatalogView> CommandDispatcher::WaitHistogramView() {
     return view;
 }
 
+StatusOr<exec::CatalogView> CommandDispatcher::TxnHistogramView() {
+    exec::CatalogView view;
+    // How long explicit transactions live (DF-S2, `stats/txn_stats.hpp`): the
+    // head of `BEGIN` to the instant the transaction's end is handled, in
+    // `sys.wait_histogram`'s buckets - bucket k holds [2^k, 2^(k+1))
+    // microseconds, 32 buckets, the last open-ended and bucket 0 taking
+    // everything under 2 us. One row per core, access mode and non-empty
+    // bucket; `access` is `read write` or `read only`, and `lo_us` the
+    // bucket's lower bound. An autocommit statement's transaction is in
+    // `sys.statement_histogram`, not here. Engine-state: reads no session
+    // view and no latch.
+    Define(view, {{"core", kInt},
+                  {"access", kStr},
+                  {"bucket", kInt},
+                  {"lo_us", kInt},
+                  {"count", kInt}});
+    for (const stats::TxnLifeBucket& b : stats::TxnStats::SnapshotLives()) {
+        view.rows.push_back({Int(b.core), Str(b.read_only ? "read only" : "read write"),
+                             Int(b.bucket), Int(b.bucket == 0 ? 0 : std::uint64_t{1} << b.bucket),
+                             Int(b.count)});
+    }
+    return view;
+}
+
 StatusOr<exec::CatalogView> CommandDispatcher::SessionWaitsView() {
     exec::CatalogView view;
     // Cumulative wait statistics per session and event (CJ WE05); a session's
@@ -1524,14 +1551,30 @@ StatusOr<exec::CatalogView> CommandDispatcher::SessionStateView() {
     // it is not waiting), the parameters the event defines and how long it
     // has been in that state, by this core's clock. A session between
     // statements shows the state its last statement ended in.
+    //
+    // **What it holds open** (DF-Q8 (a)), which is how the session holding
+    // the read horizon is found: `txn_age_us`, the time since its explicit
+    // transaction's `BEGIN`, and `view_age_us`, the time since the read view
+    // it holds was minted - its transaction's (re-minted at each statement
+    // under READ COMMITTED, `BEGIN`'s under REPEATABLE READ) or its running
+    // autocommit statement's. Each from the head of the statement that did
+    // it; NULL with none held, and on an instance with no clock.
     Define(view, {{"session_id", kInt},
                   {"state", kStr},
                   {"event", kStr},
                   {"p1", kInt},
                   {"p2", kInt},
                   {"p3", kInt},
-                  {"elapsed_us", kInt}});
+                  {"elapsed_us", kInt},
+                  {"txn_age_us", kInt},
+                  {"view_age_us", kInt}});
     const std::uint64_t now = sched::WaitNow();
+    // The dispatcher's clock, which stamped them (`Session::NoteTxnBegan`).
+    const std::uint64_t held_now = NowNs();
+    const auto age = [&](std::uint64_t since_ns) {
+        if (since_ns == 0 || clock_ == nullptr) return Null();
+        return Int(held_now > since_ns ? Us(held_now - since_ns) : 0);
+    };
     for (const sched::SessionWaitStats& s : sched::SnapshotSessionWaits()) {
         const std::size_t ev = s.current_event.get();
         const std::uint64_t since = s.current_since_ns.get();
@@ -1539,7 +1582,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::SessionStateView() {
             {Int(s.session_id),
              Str(TaskStateName(static_cast<sched::TaskState>(s.current_state.get()))),
              Str(stats::kWaitEvents[ev].name), Int(s.current_p1.get()), Int(s.current_p2.get()),
-             Int(s.current_p3.get()), Int(now > since ? Us(now - since) : 0)});
+             Int(s.current_p3.get()), Int(now > since ? Us(now - since) : 0),
+             age(s.txn_began_ns.get()), age(s.view_minted_ns.get())});
     }
     return view;
 }

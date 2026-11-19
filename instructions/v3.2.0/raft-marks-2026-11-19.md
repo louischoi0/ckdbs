@@ -39,3 +39,21 @@ took under them.
 | **Mark** | **The bisect is closed. DF-S1 is not reverted**: `sys.statement_stats`' widening, `sys.statement_histogram` and `sys.refusal_stats` stand as built, with the cost §3 measured, and so does every other feature on `main`. §3's work goes to `main` with `--no-verify`: the hook was skipped and no suite was executed (bench and documents only, no build input changed) |
 | **Does not settle** | a remedy for the cost - CLA's proposal of a cheaper session sample stays unbuilt and unopened; DF-Q10 (a)'s reading for the parts DF has still to build (B to E), each priced at its own stage; a write's share of DF-S1 and `cores` above 1, unmeasured; no version is named by this word and no tag is made |
 | **Recorded at** | this file; `workorder-df-statistics-coverage.md` §7; this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. DF-S2 started
+
+| | |
+|---|---|
+| **Word** | *"proceed with DF-S2"* - after CLA's list of the open milestones, which named DF with DF-S2 (part B) as its next stage, not started |
+| **Mark** | **DF-S2 started**, on worktree `da-q8-memory-bound-key` (branch `worktree-df-statistics-coverage`), fast-forwarded from `3adf8810` to `origin/main` at `8e7c820f`. No item is marked by the word: DF-Q0..Q14 were each marked (a) on 2026-11-18 |
+| **Does not settle** | DF-S3 onward; any push |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` §7 |
+
+## 6. DF to its close on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the skill `go-ahead-achieving-milestone`, invoked with the argument *"DF"* while DF-S2's build was running: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **DF runs to its close in this session**: DF-S2, DF-S3, DF-S4 and DF-S5, each reviewed and suite-run as the Session Workflow asks. **An item a stage raises is adopted as CLA proposes it, on this word and not as the operator's own mark**; each is recorded in the order's §4 and §7 as adopted on the standing go-ahead of 2026-11-19. The six things DF-S1 built differently from §2, shown to the operator on 2026-11-18 and marked by no word, stand under this one as CLA proposed them |
+| **Does not settle** | a push, a merge to `main`, a tag, a version - each waits for the operator's word; DA-S1, so part C's two `sys.access_stats` columns stay owed; anything outside DF |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` header, §4 and §7; `instructions/v3.2.0/index.md`'s DF row and this file's |

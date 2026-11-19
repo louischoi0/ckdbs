@@ -10,6 +10,7 @@
 #include <string>
 
 #include "kds/base/contention.hpp"
+#include "kds/stats/txn_stats.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/row_compensation.hpp"
@@ -123,7 +124,8 @@ ReadView TransactionManager::MintReadView(std::uint64_t own_trx_id) noexcept {
     return MintCheckView(own_trx_id);
 }
 
-StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
+StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation,
+                                                 std::uint64_t now_ns) {
     // **Refused before anything is spent** (AX-R4): a transaction this core
     // cannot publish would read as not in flight on every other core while
     // it runs, so past the cap there is no transaction rather than an
@@ -143,6 +145,7 @@ StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
     txn->isolation_ = isolation;
     txn->active_ = true;
     txn->view_ = MintReadView(id.value());
+    txn->view_minted_ns_ = now_ns;
 
     if (wal_ != nullptr) {
         if (auto begun = wal_->Append(wal::RecordSpec{wal::RecordType::kTxnBegin, id.value()});
@@ -167,7 +170,7 @@ StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation) {
     return live_.back().get();
 }
 
-Status TransactionManager::StartStatement(Transaction& txn) {
+Status TransactionManager::StartStatement(Transaction& txn, std::uint64_t now_ns) {
     if (!txn.active_) {
         return Status::InvalidArgument("transaction " + std::to_string(txn.id_) +
                                        " is no longer active");
@@ -179,6 +182,7 @@ Status TransactionManager::StartStatement(Transaction& txn) {
     if (txn.isolation_ == IsolationLevel::kRepeatableRead) return Status::OK();
 
     txn.view_ = MintReadView(txn.id_);
+    txn.view_minted_ns_ = now_ns;
     // The view this transaction held is gone, and it may have been the one
     // holding this core's snapshot bound down. A bound left stale-low costs
     // retention, never correctness, but an RC session that never ends would
@@ -307,6 +311,7 @@ void TransactionManager::FinishCommitBody(Transaction& txn, wal::Lsn lsn,
     // after the entry and the ceiling are both in.
     visibility_->PublishCommit(txn.id_, lsn);
     txn.active_ = false;
+    stats::TxnStats::Count(core_, stats::TxnEnd::kCommit);  // DF-Q13 (a)
     PublishCoreBounds();
     // **The marker lifts before the borrows go** (AT-S5e), the order AO-R6
     // below states: a waiter
@@ -634,7 +639,8 @@ void TransactionManager::PublishCoreBounds() noexcept {
     // below - a stale-high read of it is covered by AN-R1's ceiling
     // argument, not by store order - so it goes where a new snapshot lowers
     // it soonest.
-    visibility_->PublishSnapshotBound(core_, LocalSnapshotBound());
+    const HeldBound bound = LocalSnapshotBound();
+    visibility_->PublishSnapshotBound(core_, bound.lsn, bound.minted_ns);
     // **The unresolved bound before the cursor, and the order is the
     // contract, not a preference.** `Begin` moves the two in opposite
     // directions in one step: it lowers this core's oldest unresolved id to
@@ -654,19 +660,19 @@ void TransactionManager::PublishCoreBounds() noexcept {
     visibility_->PublishBounds(core_, OldestActiveTrxId(), ids_.peek());
 }
 
-std::uint64_t TransactionManager::LocalSnapshotBound() const noexcept {
-    std::uint64_t bound = kUnboundedBound;
+HeldBound TransactionManager::LocalSnapshotBound() const noexcept {
+    HeldBound bound;
     for (const std::unique_ptr<Transaction>& t : live_) {
         if (!t->active_) continue;
-        if (t->view_.snapshot_lsn < bound) bound = t->view_.snapshot_lsn;
+        bound.Take(t->view_.snapshot_lsn, t->view_minted_ns_);
     }
     for (std::size_t word = 0; word < reader_used_.size(); ++word) {
         std::uint64_t used = reader_used_[word];
         while (used != 0) {
             const unsigned bit = static_cast<unsigned>(std::countr_zero(used));
             used &= used - 1;
-            const std::uint64_t held = reader_slots_[word * 64 + bit];
-            if (held < bound) bound = held;
+            const std::size_t slot = word * 64 + bit;
+            bound.Take(reader_slots_[slot], reader_minted_ns_[slot]);
         }
     }
     return bound;
@@ -754,7 +760,8 @@ bool TransactionManager::IsInFlight(std::uint64_t trx_id) const noexcept {
     return visibility_->InFlight(trx_id, core_);
 }
 
-StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
+StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view,
+                                                         std::uint64_t now_ns) {
     for (std::size_t word = 0; word < reader_used_.size(); ++word) {
         if (reader_used_[word] == ~std::uint64_t{0}) continue;
         const unsigned bit = static_cast<unsigned>(std::countr_one(reader_used_[word]));
@@ -765,6 +772,7 @@ StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
         // holds the horizon below every commit - which is what that view
         // means.
         reader_slots_[slot] = view.snapshot_lsn;
+        reader_minted_ns_[slot] = now_ns;
         // Published before the lease is handed back, so the slot is never
         // held by a reader the instance cannot see. AN-R1 says why the gap
         // between the mint and this store is harmless anyway.
@@ -775,9 +783,11 @@ StatusOr<ReaderLease> TransactionManager::RegisterReader(const ReadView& view) {
                               " registered readers on this core");
 }
 
-void TransactionManager::RefreshReader(const ReaderLease& lease, const ReadView& view) noexcept {
+void TransactionManager::RefreshReader(const ReaderLease& lease, const ReadView& view,
+                                       std::uint64_t now_ns) noexcept {
     assert(lease.mgr_ == this);
     reader_slots_[lease.slot_] = view.snapshot_lsn;
+    reader_minted_ns_[lease.slot_] = now_ns;
     PublishCoreBounds();
 }
 

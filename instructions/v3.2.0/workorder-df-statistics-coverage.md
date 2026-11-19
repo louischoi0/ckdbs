@@ -7,9 +7,14 @@ it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
 (`raft-marks-2026-11-18.md` §37). **DF-S1 is done and pushed** (§7):
 part A, started on the operator's word (`raft-marks-2026-11-18.md` §39),
 reviewed, the full suite 0 failed of 4700 at `ee89842e`, overhead not
-measured, pushed with the hook skipped on the operator's word (§40);
-**DF-S2 is not started**, and the session handed off there. Written the
-same day on worktree
+measured, pushed with the hook skipped on the operator's word (§40).
+**DF-S2 is done** (§7): part B, started on the operator's word
+(`raft-marks-2026-11-19.md` §5), reviewed, the full suite 0 failed of 4766,
+overhead not measured, not pushed. **The rest of DF runs on the operator's
+standing go-ahead of 2026-11-19** (§6 there, go-ahead-achieving-milestone):
+an item a stage raises is adopted as CLA proposes it and recorded in §4 as
+adopted on that word, never as the operator's own mark. Written on
+2026-11-18 on worktree
 `da-q8-memory-bound-key`, branch `worktree-df-statistics-coverage`, from
 `56d20394` (`v3.4.12-53-g56d20394`) on the operator's word of 2026-11-18
 (`raft-marks-2026-11-18.md` §33). The session was isolated in that worktree
@@ -346,6 +351,20 @@ statement's is the stall the read puts on every other task of the core
 (`sys-views.md:238-239`, `wait-events.md:73`, CJ-Q8). §2's `page_reads`
 is that delta, so it stands or falls with DF-Q6 (a): under (b) or (c) it
 is not built. DF-S0 re-reads this.
+
+**Items the stages raised after the operator's standing go-ahead of
+2026-11-19** (`raft-marks-2026-11-19.md` §6, go-ahead-achieving-milestone).
+**Each is adopted as CLA proposed it, on that word, and is not the
+operator's own mark.** (a) is CLA's proposal in each.
+
+| | item | (a), adopted | other |
+|---|---|---|---|
+| DF-Q15 | Where a view's age is read from (DF-S2). DF-S0 named a mint stamp and "the statement's head instant handed to the mint". | the head of the statement that minted the view, carried as a stamp on every held view and published beside its core's bound: no clock is read on a statement's path, and the age overstates by the head-to-mint time | (b) a clock read at every mint, exact, about three reads a point `SELECT`; (c) the time since the core's bound last changed, no stamp a view, which calls an idle instance's horizon old |
+| DF-Q16 | What the horizon's fields and a session's ages show with nothing held or nothing measured (DF-S2). | `none` in `sys.meta` and NULL in `sys.session_state` (DF-R7): no view held, or a view nobody stamped | (b) 0, which reads as "held, and new" |
+| DF-Q17 | Which transactions the six counts hold (DF-S2). DF-Q13 (a) leaves a `READ ONLY` `COMMIT` out of `commits` and is silent on the rest. | read-write transactions alone: a `READ ONLY` one is in none of the six, whichever way it ends, a sweep's and a close's included; its life is in `sys.txn_histogram` under its own access mode | (b) a `READ ONLY` transaction's rollbacks counted by cause |
+| DF-Q18 | What `wait_aborts` takes beside a wait (DF-S2). DF-S0's census says a structural re-run ends the same way; DF-Q13 (a) names a wait. | the transaction an autocommit write gives up to run again after a stale descent is a `wait_abort` too: the statement did not fail | (b) it is an `abort` |
+| DF-Q19 | Where an explicit transaction's life ends (DF-S2). | where its end is handled - the `COMMIT`, the `ROLLBACK`, the listener's rollback - so a parked `strict` commit's wait for its sync is not in it | (b) at the commit's publish, a second site and a stamp carried across the park |
+| DF-Q20 | A KWP load stream's ends (DF-S2). Its listener dispatches `ROLLBACK` itself at five sites. | its own abort is `rollbacks`; a failed chunk and a frame not legal inside a load are `aborts`; a closed connection and a detaching listener are `close_rollbacks` | (b) all five the client's `rollbacks` |
 
 ## 5. Stages
 
@@ -887,3 +906,122 @@ measured**: a write's share (`BookLogAppend` is reached by no `SELECT`),
 where a wait is booked - is CLA's proposal in that file and nothing is built
 on it: it is the operator's to open, and §4 of that day's marks does not
 open it.
+
+### DF-S2 - part B, 2026-11-19
+
+On worktree `da-q8-memory-bound-key`, branch
+`worktree-df-statistics-coverage`, fast-forwarded from `3adf8810` to
+`origin/main` at `8e7c820f`, on the operator's word
+(`raft-marks-2026-11-19.md` §5); the operator's standing go-ahead for the
+rest of DF came while the stage's first build ran (§6 there).
+
+**What is built**, as `docs/spec/sys-views.md` §6.1c, §6.6 and §7 now
+state it. `sys.meta`'s `txn` section carries six counts of how the core's
+read-write transactions ended and the instance's read horizon in three
+fields; `sys.txn_histogram` is a new view with no `SHOW` spelling;
+`sys.session_state` has `txn_age_us` and `view_age_us`. One store,
+`stats::TxnStats`: 560 bytes a core, single-writer relaxed words, no latch.
+
+**How.**
+
+- **The counts** (DF-Q13 (a)). `commits` is counted in
+  `TransactionManager::FinishCommitBody`, the one site that commits. The
+  other five are counted by the dispatcher where the cause is known:
+  `RollbackLocal` takes the cause - the client's by default, the cause the
+  listener named on the session (`Session::set_rollback_cause`) before it
+  dispatched its own `ROLLBACK`, or `aborts` from a failed `COMMIT` - and
+  `AbortOwnedScope` takes `aborts` or `wait_aborts` from `EndWrite`, which
+  is where a statement that wrote nothing and is about to wait or run again
+  is told from one that failed. A deferred commit a stopped log aborts is
+  counted in `FinishDeferredCommits`. `DdlBuildLock::End` counts nothing.
+- **The life** is recorded by `FinishExplicitTxn`, the one call through
+  which an explicit transaction leaves its session, from the head of its
+  `BEGIN` kept on the `Session`.
+- **The horizon's age** (DF-Q8 (a), DF-Q15 (a)). Every held view carries the
+  instant its minter stamped it with: `now_ns` on `Begin`,
+  `StartStatement`, `RegisterReader`, `RefreshReader` and
+  `AutocommitSnapshot`, kept on the `Transaction` and beside each reader
+  slot. `LocalSnapshotBound` returns the bound with the stamp of the view
+  that holds it, `PublishSnapshotBound` stores the stamp beside the bound -
+  the bound's own store is as it was - and
+  `InstanceVisibility::HorizonHeldBy` names the core. The stamp is the
+  dispatcher's `statement_head_ns_`, which DF-S1 already reads: **no clock
+  read is added to a statement's path**. The two reads that are added are
+  off it: one a slice of an online index build and of a declaration's
+  build, one a KWP load chunk.
+- **A session's two ages** are two words on its `SessionWaitStats`, written
+  by `Session` where its transaction begins, where its statement mints a
+  view, and cleared where the transaction ends and where an autocommit
+  statement is recorded.
+
+**DF-S0's census, corrected by the build.** Its item 6 has a view's stamp
+as "a field beside `ReadView`'s LSN"; the stamp is on the holder instead -
+the transaction, the reader slot - so `ReadView`, which is copied into
+every snapshot, is the size it was. Its count of the writes of a core's
+bound a statement stays unverified; the stage adds one relaxed store to
+each.
+
+**Six items the stage raised are DF-Q15..DF-Q20** (§4), each adopted as
+CLA proposed on the operator's standing go-ahead of 2026-11-19, none the
+operator's own mark.
+
+**Reviewed by `critics-developer`**, report only, on the uncommitted tree:
+it walked every caller of `Commit`, `CommitDeferred`,
+`FinishDeferredCommit` and `Abort` and found each end in exactly one count
+and each life recorded once, the bound's store and the horizon unchanged,
+and no race beyond the documented pairing of two stores. **Applied**:
+**one wrong number** - a KWP load chunk is no staged statement, so the view
+it re-mints was stamped with whichever statement its core staged last, and
+a long load, the transaction likeliest to hold the horizon, could read as
+old as its whole run; `ExecuteInsert` takes a head instant of its own. The
+ranking of "who holds the bound", written once for a core's views and
+again for the instance's cores, is one type (`txn::HeldBound`); the record
+of a life and `Session::Finish`, paired at five sites, are one call;
+`NoteTxnBegan` stamps the view it always came with; the rollback cause is
+read, not exchanged, `Finish` and `Expire` already dropping it; the view's
+word is set once its lease is held. In the documents: a caveat in
+`known-gaps.md` that named waits which are before a statement's head, the
+three places that said a reader could see `none`, a sentence that read as
+"the store is not emptied", and the load stream's two ends no document
+listed. **Not taken**: reading the lifetime sweep's stamp from the session
+in place of the listener's own - it moves the ceiling from `BEGIN`'s
+completion to its head and is not DF's; an opaque declaration of `TxnEnd`
+in `session.hpp`, whose default needs the enumerator; one helper for three
+saturating subtractions. **Read by the review and not reproduced**: a
+statement whose descent noted a stale path and which then failed for
+another reason, having written nothing, is a `wait_abort`
+(`known-gaps.md`). **Seen beside the stage and not DF's**: a load chunk
+does not reset the dispatcher's statement-boundary flag, so whether it
+re-mints its READ COMMITTED view depends on the statement its core ran
+before it; read by the review, not verified, no entry filed. **Left unread
+by the review**: the cells in `tests/txn_manager_test.cpp` and
+`tests/show_sugar_contract_test.cpp`, the two CMake lists, DF-R1..R9 one
+by one, and whether a `ROLLBACK` can be refused before its handler.
+
+**Tests.** `tests/txn_stats_test.cpp` (the store);
+`tests/txn_stats_rig_test.cpp` on the two-core rig - a commit, a client
+rollback and an engine abort each moving one count of their core, a
+`READ ONLY` transaction moving none, a named cause counted once, a write
+that waits counted a `wait_abort` and not an `abort` across two reactors,
+a life recorded once by access mode, the horizon's age growing while a
+`READ ONLY` transaction is held on the other core and returning when it
+ends, and a READ COMMITTED transaction's view as old as its last
+statement; cells in `tests/txn_manager_test.cpp`,
+`tests/instance_visibility_test.cpp` and
+`tests/show_sugar_contract_test.cpp`; and one on a whole instance,
+`ExpeditorTest.TheSweepAClosedConnectionAndTheClientEachCountTheirOwnRollback`,
+the listener's sweep and close through the debug text port. **Owed**
+(`known-gaps.md`): a failed `COMMIT`, a deferred commit whose sync never
+comes, a load stream's ends and its chunk's stamp, a structural re-run;
+the two-core cells under `tsan`, which this host cannot build; the store
+empty after a process restart and a restore.
+
+**Suite.** The full suite - `ctest -LE bs-nightly` - 0 failed of 4766 on
+the tree this stage's commit holds (two disabled and two skipped, as
+before the stage); before the review's fixes, 0 failed of 4766 too.
+**Overhead not measured; measured at the milestone's close** (DF-Q10 (a)):
+the stage adds to every statement's path a stamp where a view is minted
+and published, two words on the session, and a count where a transaction
+is decided. **Documents**: `sys-views.md`, `txn.md` §1,
+`manual/sql/sql.md`, `known-gaps.md` and `CLAUDE.md`'s observability row
+are amended with the stage. **Next: DF-S3**, part C.

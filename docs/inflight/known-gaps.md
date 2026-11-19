@@ -1870,6 +1870,49 @@ Verified on `da-q8-memory-bound-key` (branch
   `conflicts`, or reads `rows` under a KWP `max_rows`; the two-core cell has
   not run under `tsan`.
 
+### Transactions and the read horizon (DF-S2)
+
+Verified on `da-q8-memory-bound-key` (branch
+`worktree-df-statistics-coverage`) at the commit that adds this section.
+Owned by `docs/spec/sys-views.md` §6.1c, §6.6 and §7.
+
+- **A view's age is its minter's statement head, not a clock read at the
+  mint.** `read_horizon_age_us` and `view_age_us` overstate a view's age by
+  the time from the statement's head to the mint: its parse and its
+  catalog revalidation. The waits a statement takes before it runs - the
+  commit ceiling, its core's run queue - are before the head, and a re-run
+  after a lock wait takes a new one. No clock is read on a statement's path
+  for the stamp; a KWP load chunk, which is no staged statement, reads one a
+  chunk. A statement resumed after a park mints, if it mints then, under
+  the head of whichever statement its core staged last.
+- **The horizon's three fields are not one snapshot.** Each core publishes
+  its bound and its stamp in two stores, and a reader pairs them unguarded:
+  a core in the middle of a mint answers the bound it lowered with the
+  stamp its slot held before, `none` where it held no view.
+- **A reader of the fields reads its own view** where nothing older is
+  held: no `SELECT` can see `none` for the horizon's LSN or its core. The
+  age reads `none` on an instance with no clock.
+- **A view the engine holds outside a session has no row in
+  `sys.session_state`**: a declaration build's lock-holder transaction is
+  in the horizon's fields and in no session's `view_age_us`, and a session
+  the listener has not run a statement for has no row at all.
+- **The counts assume one writer a core** and check nothing, as
+  `sys.refusal_stats` does. `commits` is counted by the transaction
+  manager, so a fixture's manager that names no core counts into core 0.
+- **Not measured.** The stamps and the counts are on every statement's
+  path - a store at each mint and at each publication, a count at each
+  decide - and their cost is the milestone's close's.
+- **`wait_aborts` takes a statement whose descent noted a stale path**
+  and which then failed, having written nothing, for another reason: the
+  site tests the note, not the refusal's code, and such a statement is not
+  run again. Read, not reproduced.
+- **No cell** drives a failed `COMMIT`, a parked `strict` commit whose sync
+  never comes, a load stream's failed chunk or a structural re-run into
+  `aborts` and `wait_aborts`, or reads a load chunk's stamp; the two-core
+  cells have not run under `tsan`;
+  and no cell checks that a process restart or a restore empties the store
+  (an in-process restart keeps it, as it keeps the BO stores above).
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close

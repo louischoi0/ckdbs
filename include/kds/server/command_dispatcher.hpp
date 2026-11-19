@@ -878,7 +878,10 @@ private:
     // where there was one, so the answer names what actually went wrong
     // rather than the compensation that followed it. `Status::OK()` means
     // the caller has no answer of its own and wants the unwind's.
-    Status AbortOwnedScope(WriteScope& scope, const Status& reported);
+    // `cause` is the end it is counted under (`stats::TxnEnd`): an abort, or
+    // the transaction a write gave up to wait (DF-Q13 (a)).
+    Status AbortOwnedScope(WriteScope& scope, const Status& reported,
+                           stats::TxnEnd cause = stats::TxnEnd::kAbort);
 
     // The trx_id a write stamps: the scope's transaction, or
     // kBootstrapXid when there is no manager.
@@ -973,7 +976,8 @@ private:
     // its refusal's `sys.refusal_stats` count: `began_ns` is when it
     // entered, re-runs and waits included.
     void RecordStatement(std::string_view line, const DispatchOutcome& out,
-                         sched::MonoTimeNs began_ns, const StatementHead& head);
+                         sched::MonoTimeNs began_ns, const StatementHead& head,
+                         Session* session);
     // The running statement's own chain is compiled: `compile_ns` is taken
     // (DF-S1). Its own compile, so a later one - an UPDATE's WHERE after its
     // SET subquery's - replaces an earlier.
@@ -2447,6 +2451,7 @@ private:
     StatusOr<exec::CatalogView> WaitEventNamesView();
     StatusOr<exec::CatalogView> WaitStatsView();
     StatusOr<exec::CatalogView> WaitHistogramView();
+    StatusOr<exec::CatalogView> TxnHistogramView();
     StatusOr<exec::CatalogView> SessionWaitsView();
     StatusOr<exec::CatalogView> AshView();
     StatusOr<exec::CatalogView> SessionStateView();
@@ -2982,7 +2987,13 @@ private:
 
     // The local commit and rollback - the whole of both.
     DispatchOutcome CommitLocal(Session& session);
-    DispatchOutcome RollbackLocal(Session& session);
+    // `cause` is the end the rollback is counted under (DF-Q13 (a)).
+    DispatchOutcome RollbackLocal(Session& session, stats::TxnEnd cause);
+    // **The one way an explicit transaction leaves its session**: its life,
+    // from the head of its `BEGIN`, goes to `sys.txn_histogram` (DF-S2) -
+    // a dispatcher with no clock measures nothing and records nothing - and
+    // then `Session::Finish`, which forgets when it began.
+    void FinishExplicitTxn(Session& session, bool read_only) noexcept;
 
 
 

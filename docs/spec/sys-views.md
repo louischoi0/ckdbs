@@ -121,6 +121,7 @@ returns only what it names, so that conjunct is not compared again.
 | `wait_event_names` | engine | - | one wait event of the registry (§6.5) |
 | `wait_stats` | engine | - | one event on one core, plus a NULL-core total row per event (§6.6) |
 | `wait_histogram` | engine | - | one non-empty log2 bucket of one event on one core (§6.6) |
+| `txn_histogram` | engine | - | one non-empty log2 bucket of the lives of one core's explicit transactions, by access mode (§6.1c) |
 | `session_waits` | engine | - | one event a session has waited on, cumulative (§6.6) |
 | `session_state` | engine | - | one session's statement task as last published (§6.6) |
 | `ash` | engine | - | one active-session sample (§6.7) |
@@ -136,7 +137,7 @@ returns only what it names, so that conjunct is not compared again.
 | `DESCRIBE <t>`, `DESC <t>` | `SELECT * FROM sys.columns WHERE rel_name = <t>` |
 
 `lock_waits`, `statement_stats`, `statement_histogram`, `refusal_stats`,
-`checkpoints` and `relation_stats`'
+`txn_histogram`, `checkpoints` and `relation_stats`'
 activity have no `SHOW` spelling (BO-Q10), and neither do `types`,
 `objects` or an unkeyed `columns`. `SHOW TRACES`, `SHOW TRACE` and
 `TRACE ON` are retired with the trace sink nothing ever installed (BO-Q9);
@@ -157,8 +158,9 @@ or wrong row costs a reader's insight, never an answer. **No switch**
 server CPU per point statement, inside the measurement's spread
 (`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`); that number is of
 the statement's record before §6.1's cost columns were added, whose path is
-not measured. `sys.refusal_stats` (§6.1b) is the one store with no latch: a
-fixed table of single-writer words a core.
+not measured. `sys.refusal_stats` (§6.1b) and the transaction statistics
+(§6.1c, §7's `txn` counts) are the two stores with no latch: each a fixed
+table of single-writer words a core.
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
@@ -274,6 +276,21 @@ Bounded by the registry: 64 codes a core, a fixed 1 KB, no allocation, and
 keyed by nothing a client can mint. Read without a latch, so a row's
 `count` and `last_seen` may differ by a refusal in flight.
 
+### 6.1c `sys.txn_histogram` (`stats/txn_stats.hpp`)
+
+How long explicit transactions live: `core`, `access`, `bucket`, `lo_us`,
+`count`. A life runs from the head of the transaction's `BEGIN` to the
+instant its end is handled - its `COMMIT`, its `ROLLBACK`, the listener's
+rollback at the lifetime ceiling or at a close - and falls in one of
+`sys.wait_histogram`'s 32 buckets (§6.6). A `strict` commit that parks for
+its sync is recorded before that park, so its wait is not in its life.
+`access` is `read write` or `read only`: a `BEGIN ... READ ONLY`
+transaction's life is kept apart. One row per core, access mode and
+non-empty bucket. **An autocommit statement's transaction is not here**;
+its statement is in `sys.statement_histogram`. The store is §7's `txn`
+counts' (a fixed 0.6 KB a core, no latch, no allocation), and an instance
+with no clock records no life.
+
 ### 6.2 `sys.relation_stats`' activity (`stats/relation_stats.hpp`)
 
 `inserts`, `updates`, `deletes`, `purged`: the rows a relation's write
@@ -353,9 +370,19 @@ two columns of one row may differ by a wait in flight.
 - `session_waits`: `session_id`, `event`, `count`, `total_us`; a session's
   `cpu.on_cpu` row is its ON_CPU time and its RUNNABLE time is `sched.run_queue`.
   A session's rows leave with it; a background task is no session.
-- `session_state`: `session_id`, `state`, `event`, `p1`-`p3`, `elapsed_us`. A
+- `session_state`: `session_id`, `state`, `event`, `p1`-`p3`, `elapsed_us`,
+  `txn_age_us`, `view_age_us`. A
   session between statements shows IDLE on `idle.client`. `session_id` is the
-  engine's private counter, not the KWP handshake id.
+  engine's private counter, not the KWP handshake id. **The two ages are what
+  the session holds open** (DF-Q8 (a)), which is how the session holding the
+  read horizon (§7) is found: `txn_age_us` is the time since its explicit
+  transaction's `BEGIN`, of either access mode, and `view_age_us` the time
+  since the read view it holds was minted - its transaction's, which under
+  READ COMMITTED is re-minted at each statement and under REPEATABLE READ is
+  `BEGIN`'s, or its running autocommit statement's. Each is counted from the
+  head of the statement that did it, on the answering core's clock; each is
+  NULL with nothing held, and on an instance with no clock. An online index
+  build's view is re-minted at every slice and its age follows.
 
 **DB time** (I3) is ON_CPU + `sched.run_queue` + every timed event outside
 `idle.*`; `ANALYZE` prints a statement's as `DB time 4.21 ms = CPU 1.02 +
@@ -432,6 +459,53 @@ captured order did not compile for the statement, or adds a sort its
 line). Both are per core, count from the process's start, and are absent
 on a dispatcher with no transaction manager. No wait event goes with them:
 a read-only transaction adds no wait.
+
+**How this core's read-write transactions ended** (DF-Q13 (a),
+`stats/txn_stats.hpp`), six counts from the process's start, each counted
+where its cause is known, so the six partition the transactions the core
+decided:
+
+- `commits`: a commit published - autocommit and explicit alike, a parked
+  `strict` commit once its record is durable. Not a second name for the
+  log's commit counts: those count records appended, by rung, and keep a
+  staged `strict` commit a failed sync then aborts.
+- `rollbacks`: the client's `ROLLBACK`, and a load stream's own abort. A
+  `ROLLBACK` that ends nothing - after the lifetime sweep has already rolled
+  the transaction back - is not counted.
+- `ceiling_rollbacks`: the listener's sweep at `txn_lifetime_ceiling_ms`.
+- `close_rollbacks`: a connection that went away with a transaction open,
+  and a load listener detaching with a load in progress.
+- `aborts`: the engine rolled the transaction back because a statement or a
+  commit failed - an autocommit statement's, an autocommit or explicit
+  `COMMIT`'s, a parked `strict` commit's whose sync never came, a load
+  stream's failed chunk or a frame not legal inside it. A failed statement
+  inside an explicit transaction decides nothing and counts nothing: the
+  rollback that follows does.
+- `wait_aborts`: an autocommit write gave its transaction up before it had
+  written a row - to wait for a row's writer or a relation's lock, or to run
+  again after a stale descent (`txn.md` §5) - counted when it is given up,
+  whether the statement then runs again or is refused. One client statement
+  can make several.
+
+A `READ ONLY` transaction decides nothing and is in none of the six; nor is
+the lock-holder transaction a declaration's build takes and always rolls
+back, nor a mount's losers (`recovery_rolled_back`).
+
+**The read horizon, the instance's** (DF-Q8 (a)): `read_horizon_lsn`, the
+oldest snapshot LSN a live read view holds on any core, which bounds every
+purge (`txn.md` §4.1); `read_horizon_core`, the core whose bound that is;
+and `read_horizon_age_us`, how long ago the view holding it was minted -
+the oldest such view of that core, counted from the head of the statement
+that minted it. The three read the same on every core. **The statement
+that reads them holds a view of its own while it runs**, so with nothing
+older held it reads its own - its core, and an age near 0 - and no `SELECT`
+sees the `none` the LSN and the core hold with no view held anywhere. The
+age is `none` for a view nobody stamped (an instance with no clock). A KWP
+load chunk's view is stamped by a clock read of its own, a chunk being no
+staged statement. The three are read without a latch from words
+each core publishes for itself, so they are a moment's view: a core in the
+middle of minting a view has lowered its bound and not yet published the
+stamp. `sys.session_state`'s `view_age_us` names the session (§6.6).
 
 ## 8. What is not here
 
