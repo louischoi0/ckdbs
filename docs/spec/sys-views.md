@@ -330,8 +330,11 @@ core's summed. Folded from the executor's per-step counters where a chain's
 run is recorded: for every step an index served, the times the step walked
 it between one pair of bounds - `probes` for an equality step, `ranges` for
 a range step - the entries it read there and the tuple keys it then
-descended for, and the instant of the latest such run; `last_used` is NULL
-for an index no read has used. **A walk is counted where the index is
+descended for, and the instant of the latest such run: `last_used` is the
+head of that run's statement - kept on the monotonic clock, so the fold
+reads no clock, and shown as the wall instant that long before the read -
+and is NULL for an index no read has used and on an instance with no
+clock. **A walk is counted where the index is
 read**: an index step under another step counts once per row of the outer,
 a value list once per value (`index.md` IX8b), and a step that names an
 index and walks its relation instead - the `indexes` key off, the index
@@ -355,9 +358,15 @@ nowhere. `REINDEX` builds under a new oid, so a rebuilt index starts at 0.
 
 **The instance owns the store**, unlike §6's others: a restart, a restore
 and a second instance in one process each start empty with no reset. One
-part per core under its own latch (`stats/oid_parts.hpp`, §6.2's shape),
-the core a statement ran on its only
-writer; the one allocation is a part's first sight of an index. Bounded at
+part per core (`stats/oid_parts.hpp`, §6.2's shape), the core a statement
+ran on its only writer. **The part's latch guards its map, not its
+counts**: a core's first sight of an index takes the latch and makes the
+one allocation; the counts are single-writer relaxed words that are never
+moved or erased, so the core keeps the pointer to an index's counts (its
+dispatcher's eight-slot cache, by oid) and a repeated read adds through it
+with no latch, no lookup and no allocation. A reader takes each part's
+latch for the map and reads the words as they stand, so a row's columns
+may differ by a run in flight. Bounded at
 4096 indexes a core, dropped ones included; past it a new index's counts
 are dropped and `index_stats_dropped` (`sys.meta`) says so. **Nothing reads
 a count**: no advisor, no automatic drop (DF-R3).

@@ -575,6 +575,15 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
     // (DF-S3, `stats/index_stats.hpp` says what counts): every core's part
     // summed, 0 for an index no read has used, `last_used` NULL then.
     const std::unordered_map<catalog::Oid, stats::IndexUse> uses = index_stats_->Snapshot();
+    // `last_used` is kept as the statement head's monotonic instant, so the
+    // fold reads no clock; it is shown as the wall instant that long ago.
+    const std::int64_t wall_us = exec::StatementContextNow().now_us;
+    const std::uint64_t mono_ns = NowNs();
+    const auto last_used = [&](std::uint64_t used_ns) {
+        if (used_ns == 0 || clock_ == nullptr) return Null();
+        const std::uint64_t ago_ns = mono_ns > used_ns ? mono_ns - used_ns : 0;
+        return Timestamp(wall_us - static_cast<std::int64_t>(ago_ns / 1000));
+    };
     // The leaf splits of each index's tree since the process started
     // (DF-S4, `stats/leaf_stats.hpp`).
     const std::unordered_map<catalog::Oid, stats::LeafActivity> leaf_acts =
@@ -619,9 +628,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
              Int(root), Int(row.key_width),
              Int(row.entry_width), height.ok() ? Int(height.value()) : Null(),
              entries.ok() ? Int(entries.value()) : Null(),
-             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0), Int(use.probes),
-             Int(use.ranges), Int(use.entries_scanned), Int(use.rows_resolved),
-             use.last_used_us == 0 ? Null() : Timestamp(use.last_used_us),
+             Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0), Int(use.probes.get()),
+             Int(use.ranges.get()), Int(use.entries_scanned.get()),
+             Int(use.rows_resolved.get()), last_used(use.last_used_ns.get()),
              Int(divided == leaf_acts.end() ? 0 : divided->second.divisions)});
     }
     return view;

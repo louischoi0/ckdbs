@@ -1930,9 +1930,10 @@ Owned by `docs/spec/sys-views.md` §6.2a and §6.2b.
 - **`lock_deadlocks` is not every deadlock**: the two paths that write no
   `sys.lock_waits` row (a victim whose slot had flipped, an online build's
   drain) are in no column.
-- **The index store's latch is on an index-served read's path**, once per
-  index step of a recorded run, uncontended but for a reader of the view;
-  not measured - no cell of DF-S0's spike reached an index.
+- **`last_used` is a statement's head, not the run's own instant**, and a
+  statement resumed after a park stamps the head of whichever statement its
+  core staged last. An index whose slot in the dispatcher's eight-slot cache
+  another index took pays the part's latch and a lookup at its next read.
 - **No cell** counts an index step under an outer step (one walk a row of
   the outer), a sub-chain's or a hoisted step's, or a step that named an
   index and walked its relation instead (`indexes = off`, an index dropped

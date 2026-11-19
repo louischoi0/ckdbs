@@ -2149,7 +2149,10 @@ public:
         if (surface.captured_plans != nullptr) captured_plans_ = surface.captured_plans;
         if (surface.admin_plans != nullptr) admin_plans_ = surface.admin_plans;
         if (surface.plan_advices != nullptr) plan_advices_ = surface.plan_advices;
-        if (surface.index_stats != nullptr) index_stats_ = surface.index_stats;
+        if (surface.index_stats != nullptr) {
+            index_stats_ = surface.index_stats;
+            index_use_cache_ = {};  // pointers into the store it replaces
+        }
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2733,6 +2736,16 @@ private:
     // `sys.indexes`' usage counts (DF-S3), on the same terms.
     stats::IndexStats own_index_stats_;
     stats::IndexStats* index_stats_ = &own_index_stats_;
+    // **This core's counts of the indexes it last read through**, direct
+    // mapped by oid: a pointer into `index_stats_`'s part of this core, which
+    // holds for the store's life (`stats/index_stats.hpp`), so a repeated
+    // read of an index adds through it with no latch and no lookup. A slot
+    // names another index after a collision and is filled again.
+    struct IndexUseSlot {
+        catalog::Oid oid = 0;
+        stats::IndexUse* counts = nullptr;
+    };
+    std::array<IndexUseSlot, 8> index_use_cache_{};
     // `set_plan_stats`': the instance's store, and this core's view of it.
     stats::PlanStats* plan_stats_ = nullptr;
     stats::PlanStatsSource plan_source_;

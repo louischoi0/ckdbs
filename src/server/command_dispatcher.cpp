@@ -10084,9 +10084,9 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
                                        const exec::ExecStats& stats) {
     // Every step an index served, sub-chains and hoisted ones included - a
     // step's id is global to the statement, and so is `stats`. A chain with
-    // no index step, which is most, pays the walk and nothing else: the
-    // wall clock is read at the first one.
-    std::optional<std::int64_t> now_us;
+    // no index step, which is most, pays the walk and nothing else; one that
+    // reads an index this core read before adds through the pointer it kept
+    // - no latch, no lookup, no clock.
     exec::ForEachStep(chain, [&](const exec::Step& step) {
         if (!step.index.has_value() || step.step_id >= stats.steps.size()) return true;
         const exec::StepStats& counts = stats.steps[step.step_id];
@@ -10094,14 +10094,16 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
         // that walked its relation instead (`StepStats::index_walks`) used
         // nothing.
         if (counts.index_walks == 0) return true;
-        if (!now_us.has_value()) now_us = exec::StatementContextNow().now_us;
-        stats::IndexUse use;
-        (step.kind == exec::AccessKind::kIndexRange ? use.ranges : use.probes) =
-            counts.index_walks;
-        use.entries_scanned = counts.index_entries_scanned;
-        use.rows_resolved = counts.index_rows_resolved;
-        use.last_used_us = *now_us;
-        index_stats_->Record(core_id_, step.index->index_oid, use);
+        const catalog::Oid oid = step.index->index_oid;
+        IndexUseSlot& slot = index_use_cache_[oid % index_use_cache_.size()];
+        if (slot.oid != oid) {
+            stats::IndexUse* const found = index_stats_->CountsOf(core_id_, oid);
+            if (found == nullptr) return true;  // the part is full: dropped, counted
+            slot = {oid, found};
+        }
+        slot.counts->Add(step.kind == exec::AccessKind::kIndexRange, counts.index_walks,
+                         counts.index_entries_scanned, counts.index_rows_resolved,
+                         static_cast<std::uint64_t>(statement_head_ns_));
         return true;
     });
 }
