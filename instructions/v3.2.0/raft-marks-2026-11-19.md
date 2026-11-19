@@ -86,3 +86,12 @@ took under them.
 | **Mark** | **DF runs to its close in this session**: DF-S2, DF-S3, DF-S4 and DF-S5, each reviewed and suite-run as the Session Workflow asks. **An item a stage raises is adopted as CLA proposes it, on this word and not as the operator's own mark**; each is recorded in the order's §4 and §7 as adopted on the standing go-ahead of 2026-11-19. The six things DF-S1 built differently from §2, shown to the operator on 2026-11-18 and marked by no word, stand under this one as CLA proposed them |
 | **Does not settle** | a push, a merge to `main`, a tag, a version - each waits for the operator's word; DA-S1, so part C's two `sys.access_stats` columns stay owed; anything outside DF |
 | **Recorded at** | this file; `workorder-df-statistics-coverage.md` header, §4 and §7; `instructions/v3.2.0/index.md`'s DF row and this file's |
+
+## 10. DF closed with its measured cost, and pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"close milestone and push no verify"* - after CLA's report that every stage of DF was on its work branch at `3f4f0214`, that the close measured a tuple key read at about +0.51 us of server CPU for all of DF against DF-Q10 (a)'s 0.5 us bar, not resolved, after three remedies, and that whether DF closes over that was DF-Q24 and the operator's |
+| **Mark** | **DF is closed, the operator's own reading of DF-Q24**: with the cost the close measured and no part reverted - DF-S1 +0.44 us on a tuple key read, DF-S2..S4 +0.07 us more and +0.18 us on an index-served read, a write inside the floor (`bench/v3.4.13/results-df-close-final-v3.4.13-17-gc16b4fc2.md`). The bar of DF-Q10 (a) is not declared met: the centre is at it and the interval straddles it. **Pushed to `main` with `--no-verify`**: the hook was skipped; the suite that stands behind the push is the full suite at `3f4f0214`, 0 failed of 4821, and nothing after that commit changes a build input (this record is documents only) |
+| **Does not settle** | DF-Q15..DF-Q23, which stay adopted on the standing go-ahead of §9 and are not the operator's own marks; DF-S1's share on an index-served read and on a write, and `cores` above 1, unmeasured; the two timing cells that each failed once under load in this session's runs (the order's §7); `sys.access_stats`' two columns, DA's; a tag, a version |
+| **Recorded at** | this file; `workorder-df-statistics-coverage.md` header, §4 and §7; `instructions/v3.2.0/index.md`'s DF row and this file's |
