@@ -864,6 +864,11 @@ private:
     // (BO-S6) - `out.written_oid`'s, once the statement has answered.
     DispatchOutcome FinishWrite(Session& session, WriteScope& scope, DispatchOutcome out,
                                 stats::RelationWrite kind);
+    // `FinishWrite` without the count: ends a write scope with `out` as its
+    // verdict (`EndWrite`), an `ERR` reply being a failed statement. `out`
+    // again, or the scope's own refusal when a statement that succeeded
+    // could not be ended.
+    DispatchOutcome EndWriteWith(Session& session, WriteScope& scope, DispatchOutcome out);
 
     // **The one way an owned scope ends without committing** (AO-S6d,
     // AO-0 item 15). Three arms of `EndWrite` reach it: the statement
@@ -1846,13 +1851,28 @@ private:
                                bool analyze, const exec::StatementContext* context,
                                std::string_view line);
 
-    // **A locking read** (DC; `docs/spec/txn.md` §5): a parsed `SELECT ...
-    // FOR UPDATE`, which `HandleSelect` hands here before anything compiles
-    // a chain for it. The gates first, each refused at the byte of `FOR`
-    // with nothing asked or held: `ANALYZE` and a pinned caller, the
-    // `readwrite` role, a `READ ONLY` transaction, autocommit, the shape.
+    // **A locking read** (DC; `docs/spec/txn.md` §5, "A locking read"): a
+    // parsed `SELECT ... FOR UPDATE`, which `HandleSelect` hands here before
+    // anything compiles a chain for it. The gates first, each refused at the
+    // byte of `FOR` with nothing asked or held: `ANALYZE` and a pinned
+    // caller, the `readwrite` role, a `READ ONLY` transaction, autocommit,
+    // the shape. Then `RunLockingRead`.
     DispatchOutcome HandleLockingRead(const parser::SelectStmt& stmt, Session& session,
-                                      bool analyze, bool pinned);
+                                      bool analyze, bool pinned,
+                                      const exec::StatementContext& context,
+                                      const txn::Snapshot& snap);
+    // The two passes of a gated locking read, under the session's
+    // transaction. **The claim pass** is an `UPDATE`'s row walk with no
+    // `SET` list (`WriteWalk`: the same `Qualify`, the same `Claim` in `U`,
+    // the same declared window, the same arms in the same order), its
+    // leaves fetched for read, keeping each claimed row's key; a held row
+    // ends it with the conflict `DispatchAsync` waits on and re-runs. **The
+    // emit pass**, only once every row is claimed, reads each key again by
+    // a shared descent and renders it as a `SELECT`'s row. Writes nothing.
+    // `snap` is the statement's view, which `HandleSelect` took.
+    DispatchOutcome RunLockingRead(const parser::SelectStmt& stmt, Session& session,
+                                   const exec::StatementContext& context,
+                                   const txn::Snapshot& snap);
 
     // The query layer's host (`exec::LayerHost`): a relation's description
     // and its walks, at the statement's snapshot.
@@ -2548,15 +2568,18 @@ private:
     //            scan reaches the leaves by their sibling links and is
     //            authoritative.
     //   kAt      look at this (page, slot) - a btree descent, which is
-    //            authoritative - through `at.leaf`, held **exclusive**:
-    //            every caller writes the slot (btree.hpp `Location`).
+    //            authoritative - through `at.leaf`, held **exclusive** for
+    //            a caller that writes the slot (btree.hpp `Location`) and
+    //            shared under `kRead`, for the one that does not: a locking
+    //            read's claim pass.
     //   kAbsent  **no such row**, on authority.
     struct TupleKeyLookup {
         enum class Kind { kScan, kAt, kAbsent };
         Kind kind = Kind::kScan;
         btree::Location at;
     };
-    TupleKeyLookup LocateByTupleKey(const catalog::TableAccess& access, std::uint64_t tuple_key);
+    TupleKeyLookup LocateByTupleKey(const catalog::TableAccess& access, std::uint64_t tuple_key,
+                                    storage::PageAccess leaf = storage::PageAccess::kWrite);
 
     // The row-relocation callback a rollback needs when a leaf division has
     // moved rows this transaction wrote (txn/manager.hpp's RowLocator).

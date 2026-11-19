@@ -6559,16 +6559,22 @@ DispatchOutcome CommandDispatcher::HandleInsert(std::string_view line, Session& 
 
 DispatchOutcome CommandDispatcher::FinishWrite(Session& session, WriteScope& scope,
                                                DispatchOutcome out, stats::RelationWrite kind) {
+    out = EndWriteWith(session, scope, std::move(out));
+    // `sys.relation_stats`' count (BO-S6), once the statement has answered.
+    if (out.response.rfind("ERR ", 0) != 0) {
+        stats::RelationStats::Record(core_id_, out.written_oid, kind, out.rows_affected);
+    }
+    return out;
+}
+
+DispatchOutcome CommandDispatcher::EndWriteWith(Session& session, WriteScope& scope,
+                                                DispatchOutcome out) {
     // The reply is the verdict, which is the same rule Dispatch() itself
     // applies one level up. A statement that answered ERR did not happen as
     // far as the client is concerned, so an autocommit scope unwinds it.
     const bool failed = out.response.rfind("ERR ", 0) == 0;
-    Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
-    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) {
-        return Refused(s);
-    }
-    // `sys.relation_stats`' count (BO-S6), once the statement has answered.
-    if (!failed) stats::RelationStats::Record(core_id_, out.written_oid, kind, out.rows_affected);
+    const Status verdict = failed ? Status::InvalidArgument(out.response) : Status::OK();
+    if (Status s = EndWrite(session, scope, verdict); !s.ok() && !failed) return Refused(s);
     return out;
 }
 
@@ -6754,6 +6760,21 @@ StarDescription DescribeStar(std::span<const catalog::SysColumnRow> columns) {
         out.type_mods.push_back(catalog::TypeModOf(columns[i].type_val, columns[i].len));
     }
     return out;
+}
+
+// What a row is rendered through: a star read's projection, built from the
+// schema, or the written list's as it was compiled.
+struct RenderedBy {
+    std::span<const exec::ColumnRef> projection;
+    std::span<const std::uint32_t> types;
+    std::span<const std::uint32_t> type_mods;
+};
+RenderedBy RenderedThrough(const StarDescription* star,
+                           std::span<const exec::ColumnRef> projection,
+                           std::span<const std::uint32_t> types,
+                           std::span<const std::uint32_t> type_mods) {
+    if (star == nullptr) return {projection, types, type_mods};
+    return {star->projection, star->types, star->type_mods};
 }
 
 }  // namespace
@@ -7128,6 +7149,25 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
 }
 
 namespace {
+
+// **A row read back by its tuple key**, through a shared descent whose leaf
+// is released before this returns: the bytes of the version on the page
+// into `payload`, and that version's writer and delete mark. For a caller
+// that knows the page's version is the one it wants - a write's `RETURNING`
+// of the rows it wrote, a locking read's emit of the rows it claimed.
+struct RowOnPage {
+    std::uint64_t trx_id = 0;
+    bool deleted = false;
+};
+StatusOr<RowOnPage> ReadRowByKey(storage::PageStore& store, PageId root, std::uint64_t key,
+                                 std::vector<std::byte>& payload) {
+    auto at = btree::BtreeLookup(store, root, key);
+    if (!at.ok()) return at.status();
+    auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
+    if (!tuple.ok()) return tuple.status();
+    payload.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+    return RowOnPage{tuple.value().trx_id, tuple.value().deleted};
+}
 
 // A write's reply with the rows it reports and the relation they are of
 // (`DispatchOutcome::written_oid`, BO-S6).
@@ -8874,17 +8914,17 @@ txn::TransactionManager::RowLocator CommandDispatcher::RowLocatorForRollback() {
     };
 }
 
-CommandDispatcher::TupleKeyLookup CommandDispatcher::LocateByTupleKey(const catalog::TableAccess& access,
-                                                          std::uint64_t tuple_key) {
+CommandDispatcher::TupleKeyLookup CommandDispatcher::LocateByTupleKey(
+    const catalog::TableAccess& access, std::uint64_t tuple_key, storage::PageAccess leaf) {
     // The tree *is* the relation's storage, so its answer is
     // authoritative in both directions: a hit is where the row lives,
     // and a NotFound means no such row - the scan it replaces would
     // visit the same leaf and find the same nothing. This is the one
     // place a point lookup may skip the scan on a miss, and it is
     // allowed precisely because it is not a hint.
-    // Exclusive, because every caller writes the slot it is handed.
-    auto found = btree::BtreeLookup(page_store_, access.desc_page_id, tuple_key,
-                                    storage::PageAccess::kWrite);
+    // `leaf` is exclusive for every caller that writes the slot it is
+    // handed, and shared for a locking read, which writes none (DC-Q9).
+    auto found = btree::BtreeLookup(page_store_, access.desc_page_id, tuple_key, leaf);
     if (found.ok()) {
         return TupleKeyLookup{TupleKeyLookup::Kind::kAt, std::move(found.value())};
     }
@@ -9657,14 +9697,16 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // **A locking read leaves here** (DC-R2), before a catalog view, a
     // chain, a trail, a Cabin or the query layer can answer it unclaimed.
     if (const auto& stmt = std::get<parser::SelectStmt>(*run->statement); stmt.lock.has_value()) {
-        return HandleLockingRead(stmt, session, analyze, pinned != nullptr);
+        return HandleLockingRead(stmt, session, analyze, pinned != nullptr, *context, snap);
     }
     return SelectBody(run, session, analyze, context, line);
 }
 
 DispatchOutcome CommandDispatcher::HandleLockingRead(const parser::SelectStmt& stmt,
                                                      Session& session, bool analyze,
-                                                     bool pinned) {
+                                                     bool pinned,
+                                                     const exec::StatementContext& context,
+                                                     const txn::Snapshot& snap) {
     const std::string at = " (byte " + std::to_string(stmt.lock->byte_offset) + ")";
 
     // ---- The route (DC-R2) ----------------------------------------------
@@ -9743,7 +9785,7 @@ DispatchOutcome CommandDispatcher::HandleLockingRead(const parser::SelectStmt& s
             "returned in tuple key order"));
     }
 
-    return Refused(Status::NotImplemented("SELECT ... FOR UPDATE is not built yet" + at));
+    return RunLockingRead(stmt, session, context, snap);
 }
 
 DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& run,
@@ -10063,15 +10105,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // path below formats both shapes.
     StarDescription& star = run->star;
     if (star_access != nullptr) star = DescribeStar(star_access->schema.columns);
-    const std::span<const exec::ColumnRef> projection =
-        star_access != nullptr ? std::span<const exec::ColumnRef>(star.projection)
-                               : std::span<const exec::ColumnRef>(compiled.projection);
-    const std::span<const std::uint32_t> types =
-        star_access != nullptr ? std::span<const std::uint32_t>(star.types)
-                               : std::span<const std::uint32_t>(compiled.projection_types);
-    const std::span<const std::uint32_t> type_mods =
-        star_access != nullptr ? std::span<const std::uint32_t>(star.type_mods)
-                               : std::span<const std::uint32_t>(compiled.projection_type_mods);
+    const auto [projection, types, type_mods] =
+        RenderedThrough(star_access != nullptr ? &star : nullptr, compiled.projection,
+                        compiled.projection_types, compiled.projection_type_mods);
 
     // The FROM relation's slot: its step id is the lowest, its written
     // position, wherever the join planner runs it (CB-Q3).
@@ -10895,17 +10931,14 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     if (Status s = sink.Describe(std::move(fields)); !s.ok()) return Refused(s);
     std::vector<parser::AstValue> image(ta.schema.columns.size());
     std::vector<exec::PendingSpill> spills;
+    std::vector<std::byte> payload;
     std::string row_scratch;
     for (std::uint64_t key : keys) {
         // The slot holds this statement's version: an INSERT's and an
         // UPDATE's after-image, and a DELETE's before-image under its mark.
-        auto at = btree::BtreeLookup(page_store_, ta.desc_page_id, key);
-        if (!at.ok()) return Refused(at.status());
-        auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
-        if (!tuple.ok()) return Refused(tuple.status());
-        const std::vector<std::byte> payload(tuple.value().payload.begin(),
-                                             tuple.value().payload.end());
-        at.value().leaf.Release();
+        if (auto read = ReadRowByKey(page_store_, ta.desc_page_id, key, payload); !read.ok()) {
+            return Refused(read.status());
+        }
         spills.clear();
         if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, payload, image,
                                               exec::kAllColumnsMask, spills);
@@ -12115,6 +12148,193 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                                 std::to_string(oid.value()));
     }
     return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
+}
+
+// ---- A locking read's two passes (DC; docs/spec/txn.md section 5) ------------
+//
+// **Lock protocol.** Under the session's explicit transaction: the
+// relation's `IX`, then `U` on the declared tuple key window or on each
+// qualifying row's tuple unit, every one held to the decide and released by
+// nothing else (DC-R5). Leaves are fetched for read and held shared across
+// one row's `Qualify` and `Claim`, with no suspension between them; no page
+// is held across the two passes or across a wait, which is `DispatchAsync`'s
+// on the statement.
+DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt,
+                                                  Session& session,
+                                                  const exec::StatementContext& context,
+                                                  const txn::Snapshot& snap) {
+    // The session's write scope: its transaction and this statement's mark
+    // on the trail, which a locking read never moves. `snap` is the
+    // transaction's view at this statement's boundary, which the scope
+    // takes no second time.
+    auto opened = BeginWrite(session);
+    if (!opened.ok()) return Refused(opened.status());
+    WriteScope scope = opened.value();
+
+    // ---- Resolve and compile ---------------------------------------------
+    //
+    // **Nothing is asked yet, so nothing here fails the transaction**
+    // (DC-Q11): these refusals leave as a `SELECT`'s do, past `EndWrite`.
+    auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
+        return catalog_.ResolveRelation(stmt.from.schema, stmt.from.table_name,
+                                        context.default_namespace, stmt.from.byte_offset, v);
+    });
+    if (!oid.ok()) return Refused(oid.status());
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+    auto access = catalog_.InitTableAccess(oid.value());
+    if (!access.ok()) return Refused(access.status());
+    const catalog::TableAccess& ta = *access.value();
+
+    // The WHERE by an UPDATE's compile and the select list by the chain's
+    // own resolution, so the claims are an UPDATE's with this WHERE and the
+    // rows the plain statement's. The WHERE first, as a chain is compiled.
+    const std::string& binding = stmt.from.binding();
+    auto predicates = ResolveNames(session, [&](const txn::ReadView* v) {
+        return exec::CompileWhere(catalog_, ta, binding, stmt.where, v, &borrow, &context);
+    });
+    if (!predicates.ok()) return Refused(predicates.status());
+    auto list = exec::CompileSelectList(ta, binding, stmt.projection, stmt.star());
+    if (!list.ok()) return Refused(list.status());
+    NoteStatementCompiled();
+
+    // **From here every end is the write scope's** (`EndWrite`): a refusal
+    // fails the transaction unless it is one a wait gets past, which
+    // `DispatchAsync` then waits on and re-runs - always whole, the trail
+    // being at its mark. No row of `sys.relation_stats`: nothing is written.
+    const auto ended = [&](DispatchOutcome out) {
+        return EndWriteWith(session, scope, std::move(out));
+    };
+
+    // ---- The claim pass ----------------------------------------------------
+    //
+    // `UPDATE`'s, minus the write (DC-R3): the window it declares, then its
+    // arms in its order - the tuple key, a list on it, the collection pass
+    // for a WHERE holding a subquery, the walk. No `CheckWriteAdmission`, no
+    // foreign key, assertion or transition check: nothing is written (DC-R6).
+    WriteWalk walk(*this, scope, ta, snap, predicates.value(), /*resumed_targets=*/nullptr);
+    std::vector<std::uint64_t> claimed;  // ascending: every arm meets rows in key order
+
+    const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    if (declared.has_value()) {
+        // `kFutile` and `U`: `UpdateParsed`'s site states both arguments.
+        if (std::optional<Status> held = BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile,
+                                                      txn::LockMode::kUpdate)) {
+            return ended(Refused(*held));
+        }
+    }
+
+    // One row: qualified and claimed under the leaf the caller holds
+    // **shared** (DC-Q9). `Claim`'s no-re-read argument needs the page held
+    // against writers and no suspension before the grant; a shared pin is
+    // the page latch held shared, which every writer of a tuple header asks
+    // exclusive, and nothing here suspends. A held row answers OK with
+    // nothing kept, and the caller stops on `walk.parked_on_row`.
+    const auto claim = [&](heap::PageView& page, std::uint16_t slot) -> Status {
+        auto qualified = walk.Qualify(page, slot);
+        if (!qualified.ok()) return qualified.status();
+        if (!qualified.value().has_value()) return Status::OK();
+        auto granted =
+            walk.Claim(*qualified.value(), declared.has_value(), txn::LockMode::kUpdate);
+        if (!granted.ok()) return granted.status();
+        if (granted.value()) claimed.push_back(qualified.value()->id);
+        return Status::OK();
+    };
+    using PointWrite = WriteWalk::PointWrite;
+    const auto claim_at = [&](std::uint64_t key) -> StatusOr<PointWrite> {
+        TupleKeyLookup found = LocateByTupleKey(ta, key, storage::PageAccess::kRead);
+        if (found.kind == TupleKeyLookup::Kind::kAbsent) return PointWrite::kAbsent;
+        if (found.kind != TupleKeyLookup::Kind::kAt) return PointWrite::kScan;
+        heap::PageView page(found.at.leaf.bytes());
+        if (Status s = claim(page, found.at.slot); !s.ok()) return s;
+        return walk.parked_on_row ? PointWrite::kParked : PointWrite::kOffered;
+    };
+
+    // Whether an arm answered for every row, so the walk is not owed.
+    bool answered = false;
+    WalkCursor cursor;
+    if (std::optional<std::uint64_t> key = exec::WriteKeyOf(predicates.value()); key.has_value()) {
+        StatusOr<PointWrite> at = claim_at(*key);
+        if (!at.ok()) return ended(Refused(at.status()));
+        if (at.value() == PointWrite::kParked) return ended(Refused(walk.blocked_verdict));
+        answered = at.value() != PointWrite::kScan;
+    }
+    if (!answered) {
+        if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
+            set.has_value()) {
+            auto all = walk.WriteKeySet(*set, cursor, claim_at);
+            if (!all.ok()) return ended(Refused(all.status()));
+            if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
+            answered = all.value();
+        }
+    }
+    if (!answered) {
+        auto any = walk.CollectTargets();
+        if (!any.ok()) return ended(Refused(any.status()));
+        if (any.value()) {
+            cursor.targets = walk.targets;
+            const Status scan = VisitRelation(
+                ta, storage::PageAccess::kRead,
+                [&](PageId, heap::PageView& page,
+                    std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+                    if (Status s = claim(page, slot); !s.ok()) return s;
+                    return walk.parked_on_row ? storage::VisitControl::kStop
+                                              : storage::VisitControl::kContinue;
+                },
+                &cursor);
+            if (!scan.ok()) return ended(Refused(scan));
+            if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
+        }
+    }
+
+    // ---- The emit pass (DC-R4) ---------------------------------------------
+    //
+    // Only now, with every row claimed: a held row above ended the statement
+    // before a row or a description left, so a re-run sends nothing twice.
+    // Rendered by the `SELECT`'s own description and encoder, one renderer
+    // per output shape.
+    StarDescription star;
+    if (stmt.star()) star = DescribeStar(ta.schema.columns);
+    const auto [projection, types, type_mods] =
+        RenderedThrough(stmt.star() ? &star : nullptr, list.value().projection,
+                        list.value().types, list.value().type_mods);
+    TextResultSink text_sink;
+    ResultSink& sink = SinkFor(session, text_sink);
+    if (Status s = sink.Describe(DescribeFields(list.value().names, types, type_mods, projection));
+        !s.ok()) {
+        return ended(Refused(s));
+    }
+    std::string row_scratch;
+    for (const std::uint64_t key : claimed) {
+        auto read = ReadRowByKey(page_store_, ta.desc_page_id, key, walk.payload_copy);
+        // **DC-R1, asked of the bytes about to leave**: the row is there,
+        // and the version on its page is the one the claim admitted - this
+        // transaction's, or one its view sees - because nothing else may
+        // write or remove the row while the claim stands. A row that fails
+        // it is refused, never returned. A descent's own refusal keeps its
+        // code, a stale one being re-run.
+        const bool gone = !read.ok() && read.status().code() == StatusCode::kNotFound;
+        if (!read.ok() && !gone) return ended(Refused(read.status()));
+        if (gone || read.value().deleted ||
+            !txn_->CheckWriteConflict(*scope.txn, read.value().trx_id, key).ok()) {
+            return ended(Refused(Status::Corruption(
+                "row id=" + std::to_string(key) + " of relation oid " + std::to_string(ta.oid) +
+                " changed under a locking read's claim")));
+        }
+        if (Status s = exec::DecodeAndResolve(page_store_, ta.schema, ta.layout, walk.payload_copy,
+                                              walk.frame.SlotsFor(0), exec::kAllColumnsMask,
+                                              walk.frame_spills);
+            !s.ok()) {
+            return ended(Refused(s));
+        }
+        if (Status s = sink.EncodeProjectedRow(projection, types, walk.frame, row_scratch);
+            !s.ok()) {
+            return ended(Refused(s));
+        }
+        if (Status s = sink.Emit(row_scratch); !s.ok()) return ended(Refused(s));
+    }
+    DispatchOutcome out{text_sink.Take(), false};
+    out.rows_returned = claimed.size();
+    return ended(std::move(out));
 }
 
 // ---- Transaction control (docs/spec/txn.md sections 1, 6) ---------------------

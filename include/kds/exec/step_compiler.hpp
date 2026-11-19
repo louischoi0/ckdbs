@@ -160,6 +160,24 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 std::optional<std::uint64_t> WriteKeyOf(const Step& where);
 std::optional<KeySet> WriteKeySetOf(const Step& where);
 
+// **The select list of a statement over one relation, as `Compile` resolves
+// a chain's**: each written column's reference, heading, type and type mod,
+// by the same code (`Compile`'s step 5), so a row rendered from it is the
+// row the chain would render. `star` is `SelectStmt::star()` - never
+// "the list is empty", which an aggregated statement's is too - and gives
+// the visible columns' headings alone, the references being the caller's to
+// build from the schema, as they are for a chain. For the dispatcher's
+// locking read (DC), which compiles no chain.
+struct SelectList {
+    std::vector<ColumnRef> projection;
+    std::vector<std::string> names;
+    std::vector<std::uint32_t> types;
+    std::vector<std::uint32_t> type_mods;
+};
+StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
+                                       std::string_view binding,
+                                       const std::vector<parser::ColumnName>& list, bool star);
+
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).
 //

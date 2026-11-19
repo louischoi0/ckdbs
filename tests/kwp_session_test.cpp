@@ -416,6 +416,52 @@ TEST_F(KwpSessionTest, AReturningWriteAnswersItsRowsThenItsOwnCompletion) {
     EXPECT_EQ(*affected, 2u);
 }
 
+// A locking read (DC): a `SELECT`'s description, rows and completion, frame
+// for frame the plain statement's - no code in the session knows the clause.
+TEST_F(KwpSessionTest, ALockingReadAnswersThePlainSelectsFramesByteForByte) {
+    Handshake();
+    ASSERT_EQ(Run("BEGIN").rfind("BEGIN", 0), 0u);
+    for (const char* sql : {"SELECT id, v FROM t", "SELECT * FROM t WHERE id = 2",
+                            "SELECT name FROM t WHERE id IN (1, 3)"}) {
+        const auto plain = RunStatement(sql);
+        const auto locking = RunStatement(std::string(sql) + " FOR UPDATE");
+        ASSERT_EQ(plain.size(), 3u) << sql;
+        ASSERT_EQ(locking.size(), plain.size()) << sql;
+        for (std::size_t i = 0; i < plain.size(); ++i) {
+            EXPECT_EQ(locking[i].type, plain[i].type) << sql << ", frame " << i;
+            EXPECT_EQ(locking[i].payload, plain[i].payload) << sql << ", frame " << i;
+        }
+    }
+    // Outside a transaction it is an error frame, and no description.
+    ASSERT_EQ(Run("COMMIT").rfind("COMMIT", 0), 0u);
+    const auto refused = RunStatement("SELECT id FROM t FOR UPDATE");
+    ASSERT_FALSE(refused.empty());
+    EXPECT_EQ(refused[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+}
+
+TEST_F(KwpSessionTest, ACancelDuringALockingReadIsSeenAtTheNextFrameAndFailsTheTransaction) {
+    // A locking read's walk is a write's: it reads no cancel flag, so a
+    // cancel that arrives while it runs does not cut it short - the rows
+    // come back - and refuses the next frame, leaving the transaction
+    // failed with its claims held until the ROLLBACK (`protocol.md` §10).
+    Handshake();
+    ASSERT_EQ(Run("BEGIN").rfind("BEGIN", 0), 0u);
+    dispatcher_->SetAfterViewForTest([&] { session_->RequestCancel(); });
+    const auto ran = RunStatement("SELECT id FROM t WHERE v > 0 FOR UPDATE");
+    dispatcher_->SetAfterViewForTest(nullptr);
+    ASSERT_EQ(ran.size(), 3u) << "the walk was cut short by the cancel";
+    EXPECT_EQ(ran[2].type, static_cast<std::uint8_t>(ServerFrameType::kComplete));
+
+    const auto next = Feed(ClientFrameType::kPing, {});
+    ASSERT_EQ(next.size(), 1u);
+    auto err = wire::DecodeError(next[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kCancelled);
+    EXPECT_TRUE(session_->session().failed());
+    ASSERT_EQ(Feed(ClientFrameType::kSync, {}).size(), 1u);
+    EXPECT_EQ(Run("ROLLBACK").rfind("ROLLBACK", 0), 0u);
+}
+
 TEST_F(KwpSessionTest, AMultiLineDiagnosticArrivesAsAOneColumnTextResultSet) {
     // `ANALYZE` - a plan, not a table - is the one text-lines reply BO-R3
     // leaves; every `sys` view and `SHOW` answers as a typed result set.
