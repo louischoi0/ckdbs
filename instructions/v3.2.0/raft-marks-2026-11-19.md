@@ -59,6 +59,16 @@ took under them.
 | **Does not settle** | a tag, a version - no version is named by this word and no tag is made; the options the standing go-ahead did not take (DC-Q0 (b), DC-Q1 (b)/(c), DC-Q3 (b), DC-Q5 (b)/(c), DC-Q6 (b)/(c), DC-Q7 (b), DC-Q12 (b)), which stay open to the operator's own mark; the point `SELECT`'s 0.1 us lean, neither shown nor excluded; CR, written and not opened |
 | **Recorded at** | this file; the DC order's header and §7; the DC row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 7. v3.4.14 named and tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.14"* - after CLA's report that DC landed on `main` at `35086008` with the hook skipped and the full suite 0 failed of 4794 on its build inputs (§6) |
+| **Mark** | **The version of record is `v3.4.14`**, the operator's own word: an annotated tag on `main` at `35086008`, pushed. Its message states what is built since `v3.4.13` (DC, and CZ's C1), that the superblock did not move, the suite, DC's close measurement, and the gaps that bound it - first that `FOR UPDATE` takes `U`, PostgreSQL's `FOR NO KEY UPDATE` |
+| **The record's push** | *"push no verify"* - after CLA's report that the tag was pushed and its record (`CLAUDE.md`'s line, this section, the index row) was committed on `worktree-dc-select-for-update` and not pushed. The record goes to `main` with `--no-verify`, a fast-forward of two documents-only commits; the hook was skipped and no suite was executed for them (no build input changed) |
+| **Does not settle** | anything after `35086008` but this record; the options DC's standing go-ahead did not take |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
 ## 8. DE opened on the standing go-ahead
 
 | | |
