@@ -315,9 +315,9 @@ Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording) 
     // back. An opted pattern gets a fresh, empty one, which names no stale
     // child (CF-S1b). Two walks of `sys.patterns`, whatever its length; the
     // second sets the instance's opted count (CF-S1c).
+    // `sys.access_stats` is no longer on pages (DA): nothing here empties it.
     auto opted = catalog.RenewPatternDirectories(waystone_recording);
-    if (!opted.ok()) return opted.status();
-    return catalog.DiscardAccessStats();
+    return opted.ok() ? Status::OK() : opted.status();
 }
 
 Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {

@@ -202,7 +202,8 @@ TEST_F(StatisticsPersistenceTest, TheMountsDeleteMarkSweepPassesADamagedChainBy)
     auto finalized = catalog_->FinalizeDeleteMarksAtMount();
     ASSERT_TRUE(finalized.ok()) << "the mount is refused: " << finalized.status().message();
     EXPECT_TRUE(Take().empty());
-    // The same holds for the relation that had the hole before this one.
+    // The same holds for page 11, which a pre-DA build left unlogged and
+    // which nothing walks since DA: a damaged link there refuses no mount.
     {
         auto head = store_.Get(kCatalogPageAccessStats);
         ASSERT_TRUE(head.ok());
@@ -210,7 +211,6 @@ TEST_F(StatisticsPersistenceTest, TheMountsDeleteMarkSweepPassesADamagedChainBy)
     }
     finalized = catalog_->FinalizeDeleteMarksAtMount();
     EXPECT_TRUE(finalized.ok()) << finalized.status().message();
-    EXPECT_TRUE(catalog_->DiscardAccessStats().ok());
 }
 
 TEST_F(StatisticsPersistenceTest, AHeadThatIsNoHeapPageIsMadeAgainEmptyAndTheMountGoesOn) {

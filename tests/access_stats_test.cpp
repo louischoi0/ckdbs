@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -10,9 +11,7 @@
 #include "kds/catalog/well_known.hpp"
 #include "kds/exec/plan_printer.hpp"
 #include "kds/server/command_dispatcher.hpp"
-#include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
-#include "kds/storage/page_header.hpp"
 #include "view_text.hpp"
 
 // `sys.access_stats` (docs/spec/heap-and-tuple.md §7): how often each access
@@ -57,14 +56,10 @@ protected:
     }
 
     // The row for one shape, or nullopt.
-    std::optional<catalog::SysAccessStatRow> Shape(exec::AccessKind kind, const std::string& rel,
-                                                   std::uint64_t mask) {
-        auto rows = boot_->catalog.ListAccessStats();
-        EXPECT_TRUE(rows.ok());
-        if (!rows.ok()) return std::nullopt;
-        for (const catalog::SysAccessStatRow& row : rows.value()) {
-            if (row.kind == exec::StoredAccessKind(kind) && row.rel_id == OidOf(rel) &&
-                row.column_mask == mask) {
+    std::optional<AccessShape> Shape(exec::AccessKind kind, const std::string& rel,
+                                     std::uint64_t mask) {
+        for (const AccessShape& row : dispatcher_->access_stats().Snapshot()) {
+            if (row.kind == kind && row.rel_id == OidOf(rel) && row.column_mask == mask) {
                 return row;
             }
         }
@@ -97,7 +92,7 @@ TEST_F(AccessStatsTest, TheSameShapeWithDifferentValuesIsOneRow) {
 
     auto shape = Shape(exec::AccessKind::kFilterScan, "b", kFlag);
     ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->use_count, 3u);
+    EXPECT_EQ(shape->uses, 3u);
 }
 
 TEST_F(AccessStatsTest, DifferentColumnsAreDifferentShapes) {
@@ -110,7 +105,7 @@ TEST_F(AccessStatsTest, DifferentColumnsAreDifferentShapes) {
     Run("SELECT * FROM b WHERE flag = 1 AND name = 'n'");
     auto both = Shape(exec::AccessKind::kFilterScan, "b", kFlag | kName);
     ASSERT_TRUE(both.has_value());
-    EXPECT_EQ(both->use_count, 1u);
+    EXPECT_EQ(both->uses, 1u);
 }
 
 TEST_F(AccessStatsTest, DifferentRelationsAreDifferentShapes) {
@@ -143,10 +138,7 @@ TEST_F(AccessStatsTest, EveryAccessKindIsRecordedTheSameWay) {
 
 TEST_F(AccessStatsTest, AnIndexAccessIsRecordedByTheSameCallAsEveryOther) {
     // IX16's whole claim: the two new kinds needed no recording code, because
-    // the recorder has no per-kind branch. Checked rather than assumed - the
-    // kind reaches `sys.access_stats` through `StoredAccessKind`, and a kind
-    // added without a number there records as `kAccessKindUnset` and merges
-    // with every other unmapped one.
+    // the recorder has no per-kind branch. Checked rather than assumed.
     ASSERT_EQ(Run("CREATE INDEX b_flag ON b (flag)").substr(0, 7), "CREATED");
 
     Run("SELECT * FROM b WHERE flag = 1");
@@ -198,9 +190,8 @@ TEST_F(AccessStatsTest, AnIndexShapeNamesThePinnedKeyColumnsAndNoOthers) {
 }
 
 TEST_F(AccessStatsTest, ShowAccessNamesTheIndexKinds) {
-    // The stored number and the rendered name are two mappings, and a kind
-    // can be right in one and missing from the other - `SHOW ACCESS` would
-    // then print `?` for a shape the catalog holds perfectly well.
+    // The rendered name is a mapping of its own, and a kind missing from it
+    // would print `?` for a shape the store holds perfectly well.
     ASSERT_EQ(Run("CREATE INDEX b_flag ON b (flag)").substr(0, 7), "CREATED");
     Run("SELECT * FROM b WHERE flag = 1");
     Run("SELECT * FROM b WHERE flag BETWEEN 1 AND 2");
@@ -222,7 +213,7 @@ TEST_F(AccessStatsTest, AnIndexShapeCountsUsesLikeAnyOther) {
     auto shape = Shape(exec::AccessKind::kIndexProbe, "b", kFlag);
     ASSERT_TRUE(shape.has_value());
     // Four executions, one shape - the values differ and the shape does not.
-    EXPECT_EQ(shape->use_count, 4u);
+    EXPECT_EQ(shape->uses, 4u);
 }
 
 TEST_F(AccessStatsTest, AJoinRecordsBothOfItsSteps) {
@@ -238,270 +229,221 @@ TEST_F(AccessStatsTest, CountAndLastSeenBothAdvance) {
     Run("SELECT * FROM b WHERE flag = 1");
     auto first = Shape(exec::AccessKind::kFilterScan, "b", kFlag);
     ASSERT_TRUE(first.has_value());
-    EXPECT_EQ(first->use_count, 1u);
+    EXPECT_EQ(first->uses, 1u);
 
     Run("SELECT * FROM b WHERE flag = 1");
     auto second = Shape(exec::AccessKind::kFilterScan, "b", kFlag);
     ASSERT_TRUE(second.has_value());
-    EXPECT_EQ(second->use_count, 2u);
+    EXPECT_EQ(second->uses, 2u);
     EXPECT_GE(second->last_seen, first->last_seen);
 }
 
 TEST_F(AccessStatsTest, AFailedStatementRecordsNothing) {
-    const std::size_t before = boot_->catalog.ListAccessStats().value().size();
+    const std::size_t before = dispatcher_->access_stats().Snapshot().size();
     EXPECT_EQ(Run("SELECT * FROM nosuchtable WHERE id = 1").substr(0, 3), "ERR");
-    EXPECT_EQ(boot_->catalog.ListAccessStats().value().size(), before);
+    EXPECT_EQ(dispatcher_->access_stats().Snapshot().size(), before);
 }
 
-// ---- The stored kind ------------------------------------------------------
-
-TEST_F(AccessStatsTest, TheStoredKindIsNeverZeroAndRoundTrips) {
-    // A zeroed catalog row decodes `kind` to 0, so no real kind may map to
-    // it - the same collision `stmt_class` had to be taught to avoid, and
-    // the reason neither mapping is a cast.
-    //
-    // Enumerated by hand, which is the weakness of this test and the reason
-    // it is written to be *extended*: kCabinProbe was missing here from the
-    // day it landed, and the two index kinds were added with it in 2026-08.
-    // A kind absent from this list is a kind whose round trip nobody checks.
-    for (exec::AccessKind kind :
-         {exec::AccessKind::kLookup, exec::AccessKind::kProbe, exec::AccessKind::kRange,
-          exec::AccessKind::kCabinProbe, exec::AccessKind::kIndexProbe,
-          exec::AccessKind::kIndexRange, exec::AccessKind::kFilterScan,
-          exec::AccessKind::kScan}) {
-        const std::uint8_t stored = exec::StoredAccessKind(kind);
-        EXPECT_NE(stored, catalog::kAccessKindUnset);
-        auto back = exec::AccessKindOfStored(stored);
-        ASSERT_TRUE(back.has_value());
-        EXPECT_EQ(*back, kind);
-    }
-    EXPECT_FALSE(exec::AccessKindOfStored(catalog::kAccessKindUnset).has_value());
-}
-
-// ---- One relation, whichever core recorded it (AT-S7) --------------------
+// ---- The store (DA, `stats/access_stats.hpp`) ----------------------------
 //
-// The three cells that stood in `access_batch_test.cpp` for CR7's wire -
-// the fold by shape, the buffer's overflow count and a peer's fold reaching
-// the row the local path writes - retire with the batch: a peer writes
-// `sys.access_stats` itself, so there is no fold, no message and no drop.
-// What has to stay true is the property the wire existed to preserve, and
-// it is pinned here instead.
+// One part per core, each a flat table of fixed-size slots sized by the boot
+// key's bytes (DA-Q8 (a)); a reader merges the parts by key.
 
-TEST_F(AccessStatsTest, TwoCoresRecordingOneShapeShareItsRow) {
-    // Two catalogs over one store, which is what two cores are: each has
-    // its own memo and both walk the same pages. A shape one of them admits
-    // is the shape the other increments.
-    catalog::Catalog peer(store_);
-    ASSERT_TRUE(peer.RecordAccess(/*kind=*/1, /*rel_id=*/4242, /*mask=*/0b101, /*now=*/900).ok());
-    ASSERT_TRUE(boot_->catalog.RecordAccess(1, 4242, 0b101, 950).ok());
-    ASSERT_TRUE(peer.RecordAccess(1, 4242, 0b101, 990).ok());
+constexpr exec::AccessKind kLookupKind = exec::AccessKind::kLookup;
 
-    auto rows = boot_->catalog.ListAccessStats();
-    ASSERT_TRUE(rows.ok()) << rows.status().message();
-    std::size_t found = 0;
-    for (const catalog::SysAccessStatRow& row : rows.value()) {
-        if (row.rel_id != 4242) continue;
-        ++found;
-        // **The totals are what the done-condition names**: three
-        // executions, one row, and `last_seen` the newest of them - which
-        // is what a fold-then-apply produced and what a shared row has to
-        // produce too.
-        EXPECT_EQ(row.use_count, 3u);
-        EXPECT_EQ(row.last_seen, 990u);
+std::vector<AccessShape> Of(const AccessStats& store, catalog::Oid rel) {
+    std::vector<AccessShape> out;
+    for (const AccessShape& s : store.Snapshot()) {
+        if (s.rel_id == rel) out.push_back(s);
     }
-    EXPECT_EQ(found, 1u) << "a second row for one shape splits its count and no later "
-                            "increment reaches it - ForFirstRow stops at the first match";
+    return out;
 }
 
-// ---- CR6 / CB8: unlogged, and discarded when damaged ---------------------
-//
-// Carried over from `access_batch_test.cpp`, whose batch half AT-S7 retired.
-// The relation is the sole unlogged catalog relation, and every mount
-// discards it (`DiscardAccessStats`), cutting a damaged chain.
+TEST(AccessStatsStore, TwoCoresRecordingOneShapeAnswerOneRowWithTheSum) {
+    // The property page 11's exclusive hold gave and the parts must keep:
+    // one row for one shape, its count the sum, `last_seen` the newest.
+    AccessStats store;
+    store.Record(/*core=*/1, kLookupKind, /*rel_id=*/4242, /*mask=*/0b101, /*now=*/900);
+    store.Record(0, kLookupKind, 4242, 0b101, 990);
+    store.Record(1, kLookupKind, 4242, 0b101, 950);
+    const std::vector<AccessShape> rows = Of(store, 4242);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].uses, 3u);
+    EXPECT_EQ(rows[0].last_seen, 990u);
+}
 
-class AccessStatsDurabilityTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        catalog_.emplace(store_);
-        ASSERT_TRUE(catalog_->Bootstrap().ok());
-        ASSERT_TRUE(catalog_->RecordAccess(/*kind=*/1, /*rel_id=*/5, /*mask=*/1, /*now=*/10).ok());
-        ASSERT_TRUE(catalog_->RecordAccess(1, 6, 1, 11).ok());
+TEST(AccessStatsStore, RowsAreInKeyOrder) {
+    // DA-Q2 (a): `rel_id`, then the kind's name, then `column_mask` - not
+    // the order shapes were admitted in, which no part can share.
+    AccessStats store;
+    store.Record(0, exec::AccessKind::kScan, 9, 0, 1);
+    store.Record(1, exec::AccessKind::kFilterScan, 9, 4, 1);
+    store.Record(0, exec::AccessKind::kFilterScan, 9, 2, 1);
+    store.Record(1, exec::AccessKind::kLookup, 3, 1, 1);
+    const std::vector<AccessShape> rows = store.Snapshot();
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_EQ(rows[0].rel_id, 3u);
+    EXPECT_EQ(rows[1].kind, exec::AccessKind::kFilterScan);
+    EXPECT_EQ(rows[1].column_mask, 2u);
+    EXPECT_EQ(rows[2].column_mask, 4u);
+    EXPECT_EQ(rows[3].kind, exec::AccessKind::kScan);
+}
+
+TEST(AccessStatsStore, AShapePastTheBoundIsDroppedCountedAndTheKnownOnesStillCount) {
+    // The least key: two slots, one shape a part.
+    AccessStats store(AccessStats::kMinBytesPerCore);
+    EXPECT_EQ(store.ShapesPerCore(), 1u);
+    store.Record(0, kLookupKind, 1, 1, 1);
+    store.Record(0, kLookupKind, 2, 1, 1);  // past the bound
+    store.Record(0, kLookupKind, 1, 1, 2);
+    EXPECT_EQ(store.Dropped(), 1u);
+    const std::vector<AccessShape> rows = store.Snapshot();
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].uses, 2u);
+    // Another core's part has its own bound.
+    store.Record(1, kLookupKind, 2, 1, 3);
+    EXPECT_EQ(store.Snapshot().size(), 2u);
+    EXPECT_EQ(store.Dropped(), 1u);
+}
+
+TEST(AccessStatsStore, APartAdmitsNoMoreThanTheKeysBytesHoldAtHalfLoad) {
+    // A value that is not a whole number of slots admits the slots that fit.
+    AccessStats store(10 * AccessStats::kSlotBytes + 7);
+    EXPECT_EQ(store.ShapesPerCore(), 5u);
+    for (catalog::Oid rel = 1; rel <= 8; ++rel) store.Record(0, kLookupKind, rel, 1, rel);
+    EXPECT_EQ(store.Snapshot().size(), 5u);
+    EXPECT_EQ(store.Dropped(), 3u);
+    // The default admits 4,096 a core (DA-Q3 (a)).
+    EXPECT_EQ(AccessStats().ShapesPerCore(), 4096u);
+}
+
+TEST(AccessStatsStore, TheKeysRangeIsCheckedAndZeroIsRefused) {
+    EXPECT_FALSE(AccessStats::CheckBytesPerCore(0).ok());
+    EXPECT_FALSE(AccessStats::CheckBytesPerCore(AccessStats::kMinBytesPerCore - 1).ok());
+    EXPECT_TRUE(AccessStats::CheckBytesPerCore(AccessStats::kMinBytesPerCore).ok());
+    EXPECT_TRUE(AccessStats::CheckBytesPerCore(AccessStats::kDefaultBytesPerCore).ok());
+    EXPECT_TRUE(AccessStats::CheckBytesPerCore(AccessStats::kMaxBytesPerCore).ok());
+    EXPECT_FALSE(AccessStats::CheckBytesPerCore(AccessStats::kMaxBytesPerCore + 1).ok());
+}
+
+TEST(AccessStatsStore, AForgetOnOneCoreRemovesAnotherCoresShapes) {
+    // CD-OI-13 (a), DA-R5: a reused position's shapes leave every part
+    // before the `ADD COLUMN` answers; shapes not naming it stay.
+    AccessStats store;
+    store.Record(0, kLookupKind, 7, 0b100, 1);
+    store.Record(3, exec::AccessKind::kFilterScan, 7, 0b110, 1);
+    store.Record(3, exec::AccessKind::kFilterScan, 7, 0b010, 1);
+    store.Record(2, exec::AccessKind::kFilterScan, 8, 0b100, 1);  // another relation
+    store.Forget(7, 2);
+    const std::vector<AccessShape> left = store.Snapshot();
+    ASSERT_EQ(left.size(), 2u);
+    EXPECT_EQ(left[0].rel_id, 7u);
+    EXPECT_EQ(left[0].column_mask, 0b010u);
+    EXPECT_EQ(left[1].rel_id, 8u);
+    // A position past 63 names no bit, so it forgets nothing.
+    store.Forget(8, 64);
+    EXPECT_EQ(store.Snapshot().size(), 2u);
+}
+
+TEST(AccessStatsStore, AForgetKeepsEveryOtherShapeReachableInAFullTable) {
+    // The backward shift: a part at its bound, every slot's run crossing the
+    // others', and half its shapes forgotten - each remaining shape must
+    // still be found (a record increments it rather than admitting a twin)
+    // and the freed slots admit new shapes.
+    AccessStats store(64 * AccessStats::kSlotBytes);
+    const std::uint64_t n = store.ShapesPerCore();
+    for (catalog::Oid rel = 1; rel <= n; ++rel) {
+        store.Record(0, kLookupKind, 5, rel % 2 == 0 ? (1u << 3) | rel << 8 : rel << 8, rel);
     }
+    ASSERT_EQ(store.Snapshot().size(), n);
+    store.Forget(5, 3);
+    ASSERT_EQ(store.Snapshot().size(), n / 2);
+    for (catalog::Oid rel = 1; rel <= n; rel += 2) store.Record(0, kLookupKind, 5, rel << 8, 0);
+    const std::vector<AccessShape> after = store.Snapshot();
+    ASSERT_EQ(after.size(), n / 2);
+    for (const AccessShape& s : after) EXPECT_EQ(s.uses, 2u) << s.column_mask;
+    for (catalog::Oid rel = 1; rel <= n / 2; ++rel) store.Record(0, kLookupKind, 6, rel, 0);
+    EXPECT_EQ(store.Snapshot().size(), n);
+    EXPECT_EQ(store.Dropped(), 0u);
+}
 
-    PageId NextOf(PageId page_id) {
-        auto bytes = store_.GetForRead(page_id);
-        EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-        return bytes.ok() ? heap::PageView(bytes.value().bytes()).next_page_id() : kInvalidPageId;
-    }
-
-    std::uint64_t OwnerOf(PageId page_id) {
-        auto bytes = store_.GetForRead(page_id);
-        EXPECT_TRUE(bytes.ok()) << bytes.status().message();
-        return bytes.ok() ? storage::GetOwnerOid(bytes.value().bytes()) : 0;
-    }
-
-    void SetNext(PageId page_id, PageId next) {
-        auto bytes = store_.Get(page_id);
-        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-        heap::PageView(bytes.value().bytes()).set_next_page_id(next);
-    }
-
-    // Records distinct shapes until the relation takes a second page, and
-    // returns it: a row is 33 bytes, so a page holds a little over a hundred.
-    PageId GrowAccessStats() {
-        for (catalog::Oid rel = 100; rel < 1000; ++rel) {
-            EXPECT_TRUE(catalog_->RecordAccess(1, rel, 1, 12).ok());
-            const PageId next = NextOf(catalog::kCatalogPageAccessStats);
-            if (next != kInvalidPageId) return next;
+TEST(AccessStatsStore, RecordsAndForgetsAgreeWithAnOracleInSmallTables) {
+    // Small tables make every run wrap the table's end; each round's
+    // snapshot must equal a map's, so no forget skips a match nor loses a
+    // shape it should keep.
+    std::uint64_t seed = 0x9E3779B97F4A7C15ull;
+    const auto next = [&seed] {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        return seed;
+    };
+    for (std::uint64_t slots : {2u, 3u, 7u, 8u, 17u}) {
+        AccessStats store(slots * AccessStats::kSlotBytes);
+        std::map<std::pair<catalog::Oid, std::uint64_t>, std::uint64_t> oracle;
+        for (int round = 0; round < 2000; ++round) {
+            if (next() % 4 == 0) {
+                const catalog::Oid rel = 1 + next() % 2;
+                const std::uint16_t col = static_cast<std::uint16_t>(next() % 4);
+                store.Forget(rel, col);
+                std::erase_if(oracle, [&](const auto& e) {
+                    return e.first.first == rel && (e.first.second & (1u << col)) != 0;
+                });
+            } else {
+                const catalog::Oid rel = 1 + next() % 2;
+                const std::uint64_t mask = next() % 16;
+                const auto key = std::make_pair(rel, mask);
+                if (oracle.contains(key) || oracle.size() < store.ShapesPerCore()) ++oracle[key];
+                store.Record(0, kLookupKind, rel, mask, 0);
+            }
+            const std::vector<AccessShape> got = store.Snapshot();
+            ASSERT_EQ(got.size(), oracle.size()) << "slots " << slots << " round " << round;
+            for (const AccessShape& s : got) {
+                const auto it = oracle.find({s.rel_id, s.column_mask});
+                ASSERT_NE(it, oracle.end()) << "slots " << slots << " round " << round;
+                EXPECT_EQ(s.uses, it->second);
+            }
         }
-        ADD_FAILURE() << "sys.access_stats never grew past its head page";
-        return kInvalidPageId;
     }
-
-    storage::InMemoryPageStore store_{128};
-    std::optional<catalog::Catalog> catalog_;
-};
-
-TEST_F(AccessStatsDurabilityTest, ABrokenChainIsDiscardedAndTheRelationWorksAgain) {
-    // Damage the chain the way a half-applied grow would: a link to a page
-    // that is not there. Nothing redoes this relation (CR6), so without the
-    // discard the failure is permanent - every `RecordAccess` and every
-    // `SHOW ACCESS` fails for the life of the file.
-    {
-        auto head = store_.Get(catalog::kCatalogPageAccessStats);
-        ASSERT_TRUE(head.ok()) << head.status().message();
-        heap::PageView page(head.value().bytes());
-        page.set_next_page_id(9999);
-    }
-    ASSERT_FALSE(catalog_->ListAccessStats().ok())
-        << "the fixture did not actually break the relation";
-
-    // The link is cut, not refused: a store's NotFound returned from here
-    // would refuse every mount.
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
-
-    // Empty, readable, and writable again - which is the whole claim:
-    // invariant 8 prices a lost trail as performance, so an empty statistic
-    // is a slower optimizer and never a wrong answer.
-    auto rows = catalog_->ListAccessStats();
-    ASSERT_TRUE(rows.ok()) << rows.status().message();
-    EXPECT_TRUE(rows.value().empty());
-    ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
-    EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
 }
 
-// ---- The discard's walk: a page is the chain's by what it says ----------
-//
-// `DiscardAccessStats` runs at every mount, so whatever it meets at a link
-// it either keeps, cuts at, or turns into a mount refusal. The cells below
-// pin which: the chain's own pages are kept, and anything else - a page
-// that is not there, a page that is not a page, another relation's page,
-// the head again - is cut at, never re-formatted and never refused.
-
-TEST_F(AccessStatsDurabilityTest, AGrowthPageIsStampedAndTheDiscardKeepsIt) {
-    const PageId grown = GrowAccessStats();
-    ASSERT_NE(grown, kInvalidPageId);
-    EXPECT_EQ(OwnerOf(grown), catalog::kSysAccessStatsTable)
-        << "the growth page does not say it is sys.access_stats'; the discard would cut it";
-    EXPECT_EQ(OwnerOf(catalog::kCatalogPageAccessStats), 0u) << "the head lost bootstrap's owner";
-
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), grown)
-        << "a discard that drops the growth page spends a page at every mount";
-    EXPECT_EQ(OwnerOf(grown), catalog::kSysAccessStatsTable)
-        << "the re-format lost the owner; the next mount's discard would cut its own chain";
-    EXPECT_EQ(OwnerOf(catalog::kCatalogPageAccessStats), 0u);
-    auto rows = catalog_->ListAccessStats();
-    ASSERT_TRUE(rows.ok()) << rows.status().message();
-    EXPECT_TRUE(rows.value().empty());
+TEST(AccessStatsStore, AStoreThatRecordedNothingAllocatedNothingAndASecondStartsEmpty) {
+    // DA-R6: a second instance in one process starts empty with no reset.
+    AccessStats first;
+    first.Record(0, kLookupKind, 1, 1, 1);
+    AccessStats second;
+    EXPECT_TRUE(second.Snapshot().empty());
+    EXPECT_EQ(second.Dropped(), 0u);
+    EXPECT_EQ(first.Snapshot().size(), 1u);
 }
 
-TEST_F(AccessStatsDurabilityTest, AnAllZeroGrowthPageIsCutAt) {
-    // What a restore's copy holds for a page the backup never wrote: the id
-    // is allocated, its bytes are zero, and its type says it is no page.
-    const PageId grown = GrowAccessStats();
-    ASSERT_NE(grown, kInvalidPageId);
-    {
-        auto bytes = store_.Get(grown);
-        ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-        std::fill(bytes.value().bytes().begin(), bytes.value().bytes().end(), std::byte{0});
-    }
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
-    ASSERT_TRUE(catalog_->RecordAccess(1, 7, 1, 12).ok());
-    EXPECT_EQ(catalog_->ListAccessStats().value().size(), 1u);
+// ---- Through the dispatcher --------------------------------------------
+
+TEST_F(AccessStatsTest, AHandedStoreIsTheOneEveryRecordReaches) {
+    // DA-R6: the instance's store replaces the dispatcher's own.
+    AccessStats instance;
+    server::OptimizerSurface surface;
+    surface.access_stats = &instance;
+    dispatcher_->set_optimizer_surface(surface);
+    Run("SELECT * FROM b WHERE flag = 1");
+    EXPECT_EQ(Of(instance, OidOf("b")).size(), 1u);
+    EXPECT_EQ(&dispatcher_->access_stats(), &instance);
 }
 
-TEST_F(AccessStatsDurabilityTest, ALinkIntoAnotherRelationsPageIsCutAndThatPageIsKept) {
-    // A heap page, readable, inside whatever range catalog pages come from -
-    // and sys.columns'. Only its owner says it is not this chain's, and a
-    // discard that re-formatted it would erase every column row on it.
-    catalog::Schema schema;
-    for (std::uint32_t pos = 0; pos < 20; ++pos) {
-        catalog::SysColumnRow col{};
-        col.pos = pos;
-        catalog::SetName(col.name, "c" + std::to_string(pos));
-        col.type_val = catalog::kTypeValInt64;
-        col.len = 8;
-        col.notnull = true;
-        schema.columns.push_back(col);
-    }
-    catalog::Oid last = 0;
-    for (int i = 0; i < 12 && NextOf(catalog::kCatalogPageColumns) == kInvalidPageId; ++i) {
-        auto oid = catalog_->CreateTable(catalog::kNamespacePublic, "wide" + std::to_string(i),
-                                         schema);
-        ASSERT_TRUE(oid.ok()) << oid.status().message();
-        last = oid.value();
-    }
-    const PageId columns_page = NextOf(catalog::kCatalogPageColumns);
-    ASSERT_NE(columns_page, kInvalidPageId) << "sys.columns never grew; the cell tests nothing";
-    ASSERT_EQ(OwnerOf(columns_page), catalog::kSysColumnsTable);
-    std::uint16_t slots_before = 0;
-    {
-        auto bytes = store_.GetForRead(columns_page);
-        ASSERT_TRUE(bytes.ok());
-        slots_before = heap::PageView(bytes.value().bytes()).slot_count();
-    }
-
-    SetNext(catalog::kCatalogPageAccessStats, columns_page);
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), kInvalidPageId);
-
-    auto bytes = store_.GetForRead(columns_page);
-    ASSERT_TRUE(bytes.ok());
-    EXPECT_EQ(heap::PageView(bytes.value().bytes()).slot_count(), slots_before)
-        << "the discard re-formatted a page of sys.columns";
-    auto read_back = catalog_->BuildSchemaFromColumns(last);
-    ASSERT_TRUE(read_back.ok()) << read_back.status().message();
-    EXPECT_EQ(read_back.value().columns.size(), 20u);
+TEST_F(AccessStatsTest, TheSwitchOffRecordsNothing) {
+    server::CommandDispatcher off(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                                  /*clock=*/nullptr, /*wal=*/nullptr,
+                                  wal::DurabilityClass::kGroup, exec::Budget(),
+                                  /*recorder=*/nullptr, /*replay_enabled=*/false,
+                                  /*access_statistics=*/false);
+    off.Dispatch("SELECT * FROM b WHERE flag = 1");
+    EXPECT_TRUE(off.access_stats().Snapshot().empty());
 }
 
-TEST_F(AccessStatsDurabilityTest, ALinkBackToTheHeadIsCutAtOnce) {
-    // A cycle through the head: page 11 met past the head carries
-    // bootstrap's owner, not the relation's, so the walk stops there rather
-    // than circling until the walk budget is spent.
-    //
-    // **Three pages, not two**: a walk that circled instead would be cut by
-    // the budget at step 2^20, and 2^20 mod 3 == 1 puts that cut at the
-    // head's link - where a two-page cycle's parity would have put it on
-    // the second page, exactly where the owner check cuts.
-    const PageId first = GrowAccessStats();
-    ASSERT_NE(first, kInvalidPageId);
-    PageId second = kInvalidPageId;
-    for (catalog::Oid rel = 1000; rel < 2000 && second == kInvalidPageId; ++rel) {
-        ASSERT_TRUE(catalog_->RecordAccess(1, rel, 1, 12).ok());
-        second = NextOf(first);
-    }
-    ASSERT_NE(second, kInvalidPageId) << "sys.access_stats never grew a third page";
-    ASSERT_EQ(NextOf(second), kInvalidPageId);
-    SetNext(second, catalog::kCatalogPageAccessStats);
-
-    ASSERT_TRUE(catalog_->DiscardAccessStats().ok());
-    EXPECT_EQ(NextOf(catalog::kCatalogPageAccessStats), first)
-        << "the cut fell on the head's link: the walk circled to its budget";
-    EXPECT_EQ(NextOf(first), second);
-    EXPECT_EQ(NextOf(second), kInvalidPageId);
+TEST_F(AccessStatsTest, SysMetaCountsTheDroppedAndNamesTheBound) {
+    const std::string meta = Run("SHOW META");
+    EXPECT_NE(meta.find("access_stats,access_stats_dropped,0"), std::string::npos) << meta;
+    EXPECT_NE(meta.find("access_stats,access_stats_shapes_per_core,4096"), std::string::npos) << meta;
 }
 
 }  // namespace

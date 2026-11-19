@@ -41,7 +41,7 @@ sched::Coro RunOne(CommandDispatcher& d, OneShot& o) {
     co_return Status::OK();
 }
 
-TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneRelation) {
+TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneStore) {
     TwoCoreRig::Options options;
     options.wal_drain_interval_ns = 1'000'000;
     auto opened = TwoCoreRig::Open(options);
@@ -61,13 +61,9 @@ TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneRelation) {
 
     // What this core has recorded for the relation before the peer runs.
     const auto count_for = [&](catalog::Oid rel) {
-        auto rows = rig->core(0).catalog().ListAccessStats();
-        EXPECT_TRUE(rows.ok());
         std::uint64_t total = 0;
-        if (rows.ok()) {
-            for (const catalog::SysAccessStatRow& row : rows.value()) {
-                if (row.rel_id == rel) total += row.use_count;
-            }
+        for (const stats::AccessShape& row : d0.access_stats().Snapshot()) {
+            if (row.rel_id == rel) total += row.uses;
         }
         return total;
     };
@@ -85,11 +81,11 @@ TEST(AccessStatsAcrossCores, APeersStatementIsCountedInTheOneRelation) {
         << peer.out.response;
     ASSERT_EQ(peer.out.response, "id\\n1") << peer.out.response;
 
-    // **Immediately, not on a tick.** There is no flush to wait for: the
-    // peer wrote the row under the relation's own root-page latch before
-    // its statement returned.
+    // **Immediately, not on a tick** (DA-R2). There is no flush to wait for:
+    // the peer added to its own part of the instance's store before its
+    // statement returned, and core 0's read merges every part.
     EXPECT_GT(count_for(oid.value()), before)
-        << "the peer's read left no shape in sys.access_stats";
+        << "the peer's read left no shape in the instance's store";
     rig->Stop();
 }
 

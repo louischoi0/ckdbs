@@ -79,7 +79,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "buffer_pool_frames",
             "inline_cell_width",      "waystone_recording",
             "waystone_replay",
-            "access_statistics",       "cabins",   "cabin_max_values",
+            "access_statistics",       "access_stats_bytes_per_core",
+            "cabins",   "cabin_max_values",
             "indexes",
             "cabin_max_entries_per_value", "cores",  "reactor_cpus",
             "aggregate_max_groups",  "aggregate_max_distinct", "sort_max_rows",
@@ -415,6 +416,14 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     }
     if (Status s = flag("waystone_replay", waystone_replay); !s.ok()) return s;
     if (Status s = flag("access_statistics", access_statistics); !s.ok()) return s;
+    if (file.Has("access_stats_bytes_per_core")) {
+        auto v = file.GetUint("access_stats_bytes_per_core");
+        if (!v.ok()) return v.status();
+        if (Status r = stats::AccessStats::CheckBytesPerCore(v.value()); !r.ok()) {
+            return Status::InvalidArgument(file.origin() + ": " + r.message());
+        }
+        access_stats_bytes_per_core = v.value();
+    }
     if (Status s = flag("cabins", cabins); !s.ok()) return s;
     if (Status s = flag("indexes", indexes); !s.ok()) return s;
     // No upper range check, and no zero check either: 0 means no value
@@ -1029,13 +1038,6 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // Here, after recovery and before the completion checkpoint that
     // persists it.
     //
-    // CR6/CB8: `sys.access_stats` is discarded rather than repaired because
-    // it is unlogged - there is no record to replay and nothing to
-    // compensate. **The same window as the maintenance steps around it**:
-    // after recovery, so this mount's own log has had its say, and before
-    // the listener binds, so nothing is reading the relation while it is
-    // emptied. Core 0's, at mount, like the step above.
-    //
     // **An opted pattern's directory is renewed here** (CF-S1b): a fresh,
     // empty root for each row `WAYSTONE ON` set, under the
     // `waystone_recording` ceiling, before the listener binds.
@@ -1347,6 +1349,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // S4 (CJ WE13) counts only while the controller's own switch is on.
     expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
+    expeditor->access_stats_.emplace(expeditor->config_.access_stats_bytes_per_core);
     // CY-S1: the priors and managed objects the mount took, published
     // before any statement compiles, so the run's first planned compile is
     // not blind.
@@ -1442,6 +1445,7 @@ OptimizerSurface Expeditor::Optimizer() {
     surface.admin_plans = &admin_plans_;
     surface.plan_advices = &plan_advices_;
     surface.index_stats = &index_stats_;
+    surface.access_stats = &*access_stats_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
     if (cabin_controller_) {
         surface.controller = &*cabin_controller_;
@@ -1958,8 +1962,8 @@ Status Expeditor::Start() {
             // a session accepted here runs here, under the same config file.
             core_config.statement_limits = config_.Limits();
             core_config.optimizer = Optimizer();
-            // The instance's switch, on every core: a peer writes
-            // `sys.access_stats` itself since AT-S7.
+            // The instance's switch, on every core: a peer records into its
+            // own part of the instance's store (DA-R4).
             core_config.access_statistics = config_.access_statistics;
             // AK-S2: and the Cabin's (the store is the instance's since
             // AT-S7, handed over below).

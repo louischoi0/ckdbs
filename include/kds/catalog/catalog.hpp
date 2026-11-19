@@ -875,8 +875,8 @@ public:
     // a pattern row's `flags` (`kPatternWaystone`), the opt-in that decides
     // whether `fetch_id`'s shape records and replays at all.
     //
-    // **Page 9 held exclusive across the decision and the write**, as
-    // `RecordAccess` holds its own root: the existence check and the insert
+    // **Page 9 held exclusive across the decision and the write**: the
+    // existence check and the insert
     // under it are one act across cores, so two concurrent ONs serialize and
     // no shape owns two current rows. Released before the schema word moves
     // (`BumpVersion`, after a write only), and before any wait - the caller
@@ -1023,45 +1023,6 @@ public:
     // word bumped so every other core re-reads the anchor.
     void AdoptRoot(Oid rel_oid, std::uint64_t index_oid, PageId new_root);
 
-    // ---- sys.access_stats (docs/spec/heap-and-tuple.md §7) --------------------
-
-    // Counts one execution of an access shape, creating its row the first
-    // time the shape is seen.
-    //
-    // `kind` is `exec::StoredAccessKind()`'s value, never a raw cast of the
-    // enum. `column_mask` is a bit per `col_pos` the access keyed or
-    // filtered on - **columns, never values**, which is what keeps this
-    // relation bounded by the schema (rows.hpp).
-    //
-    // Called from the statement path after a successful execution, and
-    // deliberately bumps no catalog version: a statistic appearing cannot
-    // stale a cached fact, and a cache drop here would dangle the
-    // `const TableAccess*` the running statement holds.
-    //
-    // Fails with ResourceExhausted once `kMaxAccessShapes` distinct shapes
-    // exist - which refuses a *new* shape and keeps counting every known
-    // one. Every caller is expected to drop the failure: a statistic that
-    // could fail a query would be a worse trade than no statistic.
-    Status RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
-                        std::uint64_t last_seen,
-                        std::uint64_t count = 1);
-
-    // Every access shape, in page order. The inspection surface behind
-    // `SHOW ACCESS`.
-    // Empties `sys.access_stats` unconditionally: every page of its chain
-    // re-formatted in place and kept, the chain cut before the first link
-    // that does not reach one of its pages (CR6's discard). Every mount's
-    // (BR-S8, `server::DiscardAdvisoryState`).
-    //
-    // The relation is unlogged, so nothing redoes or undoes it and no repair
-    // exists; damage would otherwise surface as a failing statistic on every
-    // statement and a failing `SHOW ACCESS`, for the life of the file.
-    // Discarding is sound on invariant 8's terms - a deleted trail costs
-    // performance and never a result - and the pages past a cut are leaked:
-    // no reclaim walk reaches a catalog relation's discarded chain
-    // (`drop-table.md` DT1's stated leaks).
-    Status DiscardAccessStats();
-
     // **`sys.statistics`, at a mount** (CY-S1, `plan-stats.md` PS16): the
     // relation rows a completed shutdown wrote, and the chain left empty.
     // Core 0's, after recovery and before the completion checkpoint, which
@@ -1079,13 +1040,6 @@ public:
     // un-undone (CR6); the shutdown's final sync carries the pages out.
     // Called with no statement running.
     Status WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows);
-
-    StatusOr<std::vector<SysAccessStatRow>> ListAccessStats();
-
-    // Retires every `sys.access_stats` row of `rel_id` whose column mask
-    // names `col_pos` (CD-OI-13 (a)): a reused position's history is the
-    // dropped column's, not the new one's. Unlogged, as every write here is.
-    Status ForgetAccessStats(Oid rel_id, std::uint16_t col_pos);
 
     // ---- sys.cabins (docs/spec/cabin.md §10) -----------------------------
 

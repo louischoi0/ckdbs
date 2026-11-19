@@ -548,3 +548,69 @@ No engine code. §1.3 re-read at `673f025d`; what moved since `3b3f4851`:
 
 No item goes back to the operator: nothing read needs a fact only the
 operator holds. Overhead not measured; measured at the milestone's close.
+
+### DA-S1 - the store and the switch, 2026-11-19
+
+On worktree `da-access-stats-memory-resident` over `75bbf9f2`. No format
+change: the superblock stays 37 and page 11 is still bootstrapped.
+
+- **`stats::AccessStats`** (`include/kds/stats/access_stats.hpp`): the
+  instance's (`Expeditor`, emplaced at the mount beside the plan
+  statistics and handed to every core through `OptimizerSurface`), a
+  dispatcher handed none keeping its own, as DF-S3's `IndexStats` does.
+  64 parts under `kStatsRing` latches, each a flat table of 40-byte slots
+  allocated at the part's first record (DA-Q10 (a)), linear probing at a
+  half-load bound with backward-shift deletion (DA-Q11 (a)).
+- **The writers**: a `SELECT`'s steps at its successful end
+  (`RecordChainAccess`), a foreign key's checks (`RecordFkAccess`), and the
+  `ADD COLUMN` forget, all on the store. **The readers**: the view, in key
+  order (DA-Q2 (a)), and `CREATE CABIN`'s warning, which `exec::CreateCabin`
+  is now handed the store for.
+- **The key** `access_stats_bytes_per_core` (DA-Q8 (a), DA-Q12 (a)), and
+  `sys.meta`'s `access_stats` section: `access_stats_dropped`,
+  `access_stats_shapes_per_core`. `access_statistics` kept (DA-Q4 (a)).
+- **Deleted** (DA-R8): `Catalog::RecordAccess`, `ListAccessStats`,
+  `ForgetAccessStats`, `DiscardAccessStats`; the mount's discard of page 11
+  from `DiscardAdvisoryState` (DA-Q9 (a)); `exec::StoredAccessKind`,
+  `AccessKindOfStored`, `catalog::kAccessKindUnset`, `kMaxAccessShapes`;
+  `AccessStatsDurabilityTest`'s five cells and the stored-kind cell. **Kept
+  until DA-S3**, each named by DA-Q1 or DA-Q9: the bootstrap entry,
+  `SysAccessStatRow` and its codec, the `kCatalogRoots` and
+  `kAllWellKnownOids` entries, and page 11's halves of
+  `IsUnloggedCatalogRelation` and `RegisterUnloggedClasses`.
+- **Tests DA owes, as built** (`tests/access_stats_test.cpp`,
+  `tests/config_file_test.cpp`): two cores' records of one shape answer one
+  row with the sum and the latest `last_seen`; rows in key order; a shape
+  past the bound dropped, counted and failing nothing, the known shapes
+  still counting; a part admits `bytes / 40 / 2` shapes and the default
+  4,096; the key's range refused at boot, `0` among it; a forget on one core
+  removes another core's shapes; the forget keeps a full table's remaining
+  shapes reachable, and an oracle of random records and forgets over tables
+  of 2 to 17 slots; a second store starts empty; a handed store is the one
+  every record reaches; the switch off records nothing; `sys.meta`'s two
+  fields. The two-core rig (`tests/two_core_rig.hpp`) hands both cores one
+  store, so `AccessStatsAcrossCores` reads a peer's record through core 0.
+  **Not built**: an armed two-core rig under `tsan` reading the view while
+  both cores record - the latch protocol is `IndexStats`' and `OidParts`',
+  and the `tsan` build is BS's nightly label, outside the push gate.
+  The view's rows before against after "equal as sets" is carried by the
+  dispatcher cells, which read the same shapes the page held.
+
+**Reviewed by `critics-developer`.** It found one bug and fixed it: a
+forget restarted its scan at slot 0 after every deletion, O(matches x
+slots) under the part's latch - every record on that core waiting behind
+it (DA-R3); now one pass from just past an empty slot, re-checking the
+refilled slot. It added the oracle cell and corrected four comments that
+still named `RecordAccess` or page 11's discard. **Applied from its
+reported findings**: the parts are an inline array, as `OidParts` keeps
+them, where a failed allocation of the array lost every record with
+`Dropped()` reading 0; the key's boot refusal is tested in `ApplyFile`;
+`restore.hpp` no longer lists `sys.access_stats` among what a restore
+cannot trust; the one-caller key test became a member; `Snapshot` reserves
+before it copies. **Rejected**: rewriting `superblock.hpp`'s history entry
+that says "this build's `sys.access_stats` discard" - it records why that
+version step was taken, not what the engine does; and DA-S3's list, which
+the review asked to confirm, already names `SysAccessStatRow` (§5), its
+codec going with it.
+
+Overhead not measured; measured at the milestone's close.

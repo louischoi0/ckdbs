@@ -727,10 +727,9 @@ TEST_F(AlterColumnTest, CyclesOfDropCleanAndAddAddNoPosition) {
                       std::to_string(cycle) + "'"),
                   "n\\n" + std::to_string(cycle))
             << cycle;
-        auto shapes = boot_->catalog.ListAccessStats();
-        ASSERT_TRUE(shapes.ok());
-        EXPECT_TRUE(std::any_of(shapes.value().begin(), shapes.value().end(),
-                                [&](const catalog::SysAccessStatRow& r) {
+        auto shapes = dispatcher_->access_stats().Snapshot();
+        EXPECT_TRUE(std::any_of(shapes.begin(), shapes.end(),
+                                [&](const stats::AccessShape& r) {
                                     return r.rel_id == oid && (r.column_mask & (1u << 2)) != 0;
                                 }))
             << cycle;
@@ -740,10 +739,9 @@ TEST_F(AlterColumnTest, CyclesOfDropCleanAndAddAddNoPosition) {
         // The next ADD forgets the dropped column's shapes at its position.
         if (cycle + 1 < 5) continue;
         Ok("ALTER TABLE t ADD COLUMN last int64 NULL");
-        shapes = boot_->catalog.ListAccessStats();
-        ASSERT_TRUE(shapes.ok());
-        EXPECT_FALSE(std::any_of(shapes.value().begin(), shapes.value().end(),
-                                 [&](const catalog::SysAccessStatRow& r) {
+        shapes = dispatcher_->access_stats().Snapshot();
+        EXPECT_FALSE(std::any_of(shapes.begin(), shapes.end(),
+                                 [&](const stats::AccessShape& r) {
                                      return r.rel_id == oid && (r.column_mask & (1u << 2)) != 0;
                                  }));
     }

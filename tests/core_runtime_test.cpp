@@ -1504,10 +1504,8 @@ TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing)
         EXPECT_TRUE(patterns.ok()) << patterns.message();
     }
 
-    // And nothing on core 0's side was written by the peer existing.
-    auto shapes = core0_->catalog.ListAccessStats();
-    ASSERT_TRUE(shapes.ok()) << shapes.status().message();
-    EXPECT_TRUE(shapes.value().empty());
+    // And a peer that has run no statement has recorded no shape.
+    EXPECT_TRUE(peer.value()->dispatcher().access_stats().Snapshot().empty());
 }
 
 TEST_F(CoreRuntimeTest, APeerListenerAsksTheAuthGateItIsHanded) {

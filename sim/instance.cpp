@@ -104,11 +104,11 @@ Status SimInstance::Boot() {
         // **The mount's advisory discard, exactly where the expeditor runs
         // it** (BR-S8, `restore.hpp`): after recovery and before the
         // completion checkpoint that persists it. A reboot after a crash is
-        // the case it is for - an unlogged `sys.access_stats` growth page
-        // whose allocation bit the crash lost is cut from its chain here, or
-        // the next `CreateNew` hands the id to another relation and the
-        // statistic walks into it - so a harness that skipped it would grade
-        // a mount this project does not ship.
+        // the case it is for - a Waystone directory whose child's allocation
+        // bit the crash lost is replaced here, or the next `CreateNew` hands
+        // the id to another relation and the trail writes into it - so a
+        // harness that skipped it would grade a mount this project does not
+        // ship.
         // Under the harness's own recording switch, as the expeditor passes
         // `waystone_recording`, so an opted pattern is renewed only where a
         // recorder will write into it (CF-S1b).

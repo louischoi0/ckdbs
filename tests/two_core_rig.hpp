@@ -491,6 +491,8 @@ private:
             // The instance's index usage counts (DF-S3), as `Expeditor`
             // hands them: one store both cores' reads fold into.
             config.optimizer.index_stats = &index_stats_;
+            // And the instance's access statistics (DA-R6), on the same terms.
+            config.optimizer.access_stats = &access_stats_;
             // The peer's checkpointer publishes into an anchor, as
             // `Expeditor`'s peers do (AT-S8); a rig never remounts, so an
             // in-memory one stands in for page 0. Core 0's is `Expeditor`'s
@@ -529,6 +531,7 @@ private:
     std::filesystem::path dir_;
     sched::SystemClock clock_;
     stats::IndexStats index_stats_;  // outlives both cores' dispatchers
+    stats::AccessStats access_stats_;  // the same
     std::unique_ptr<storage::PageDevice> device_;
     std::unique_ptr<storage::DevicePageStore> store_;
     std::optional<bootstrap::BootstrapResult> boot_;

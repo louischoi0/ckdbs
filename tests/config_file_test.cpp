@@ -701,5 +701,21 @@ TEST(ExpeditorConfigTest, TheAshKeysTakeTheirRangesAndRefuseOutsideThem) {
     EXPECT_EQ(config.ash_interval_ms, 250u) << "a refused value changes nothing";
 }
 
+TEST(ExpeditorConfigTest, TheAccessStatsBytesKeyTakesItsRangeAndRefusesZero) {
+    // DA-Q8 (a), DA-Q12 (a): bytes a core's part; `access_statistics` is the
+    // switch, so 0 is refused rather than read as off.
+    Expeditor::Config config;
+    EXPECT_EQ(config.access_stats_bytes_per_core, stats::AccessStats::kDefaultBytesPerCore);
+    ASSERT_TRUE(config.ApplyFile(WithPool("access_stats_bytes_per_core = 80\n")).ok());
+    EXPECT_EQ(config.access_stats_bytes_per_core, 80u);
+    for (const char* bad : {"access_stats_bytes_per_core = 0\n",
+                            "access_stats_bytes_per_core = 79\n",
+                            "access_stats_bytes_per_core = 268435457\n"}) {
+        const Status s = config.ApplyFile(WithPool(bad));
+        EXPECT_EQ(s.code(), StatusCode::kInvalidArgument) << bad;
+    }
+    EXPECT_EQ(config.access_stats_bytes_per_core, 80u) << "a refused value changes nothing";
+}
+
 }  // namespace
 }  // namespace kds::server
