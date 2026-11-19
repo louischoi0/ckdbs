@@ -1,13 +1,21 @@
 # Work order DB - a torn page healed, not refused: the full-page image the log owes
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
-`db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
-the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §22).
+Status: **OPENED 2026-11-19** on the operator's standing go-ahead
+(go-ahead-achieving-milestone, scheduled by the operator at 08:38 UTC for
+12:38 UTC; `raft-marks-2026-11-19.md` §8), on worktree
+`db-torn-page-healing` from `734484ca` (`v3.4.14-2-g734484ca`). **DB-Q1..Q6
+adopted as CLA proposed, DB-Q1 (a) and DB-Q2 (a) as revised at DB-S0, and
+DB-Q7 added at DB-S0 and adopted (a)** - each on the operator's standing
+go-ahead of 2026-11-19 (go-ahead-achieving-milestone), none the operator's
+own mark (§4). **DB-S0 done** (§7): the census corrected §1 and §2.1 in five
+places, and the premise was measured
+(`bench/v3.4.14/results-db-s0-premise-v3.4.14-2-g734484ca.md`).
 
-No stage is started. DB waits for the operator's word and for the marks on
-§4's items. Every `[source-read]` claim below was read at `a4d2fb3b`.
-Nothing was measured for this order and no suite was run: it changes no
-build input.
+Written 2026-11-18 on worktree `db-fpi-cadence-dc-for-update` from
+`a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on the operator's word of 2026-11-18
+(`raft-marks-2026-11-18.md` §22). The `[source-read]` claims of §1-§2 were
+read at `a4d2fb3b`; DB-S0's corrections (§7) were read at `734484ca`, and
+where the two disagree §7 is the tree.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -311,16 +319,21 @@ Binding once DB opens, under the marked DB-Q1.
 
 ## 4. Items for the operator (DB-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+(a) is CLA's proposal in each. **Every item is adopted (a) on the operator's
+standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone)**, none as the
+operator's own mark; DB-Q1 and DB-Q2 as DB-S0 revised them against the tree
+(§7, "DB-S0"), and DB-Q7 added by DB-S0. The options not taken stay open to
+the operator's own mark.
 
 | | item | (a) | other |
 |---|---|---|---|
-| DB-Q1 `[quiet-wrong]` | Where the image is logged. | **F**, at the first exclusive fetch after a copy (§2.1): the spec's placement at one site, no change to recovery, to the gates that free a page, or to the stream; a missed image is a refusal. Its cost is on the statement that first touches a page after it was written | (b) **W**, at the device write (§2.2): nothing on the statement path, and five obligations, three of which touch recovery, the reclaim and the stream; (c) neither until DB-S0 has priced F's statement-path cost |
-| DB-Q2 | Which frames are imaged. | only frames whose content records describe, by a class test DB-S0 lists; a class left out keeps today's refusal | (b) every headered frame but page 0 - less to get wrong in the test, more volume, and images of content recovery discards |
+| DB-Q1 `[quiet-wrong]` | Where the image is logged. | **F**, at the first exclusive fetch after a copy (§2.1): the spec's placement at one site, no change to recovery, to the gates that free a page, or to the stream; a missed image is a refusal. Its cost is on the statement that first touches a page after it was written. **Revised at DB-S0 (F')**: the debt is set at the fault-in as well as the copy; the decision is taken in `FetchPinned` once the page latch is granted, which is the one site at `cores = 1` and above; the image carries `kNoTxnId` and lowers the frame's recLSN; images are off for the whole mount, not redo alone (DB-R2); and a PAGE_INIT heals a torn page as an image does, for the page created and never copied, which owes no image. **Adopted** | (b) **W**, at the device write (§2.2): nothing on the statement path, and five obligations, three of which touch recovery, the reclaim and the stream; (c) neither until DB-S0 has priced F's statement-path cost |
+| DB-Q2 | Which frames are imaged. | only frames whose content records describe, by a class test DB-S0 lists; a class left out keeps today's refusal. **Revised at DB-S0**: the page type alone cannot tell them (§7), so the test is page 0, a headerless page, a whitelist of logged types, and a registry of unlogged owners and page ids the layer that knows them fills - the two unlogged catalog chains at the mount, a fenced index build's oid for the build's life. **Adopted** | (b) every headered frame but page 0 - less to get wrong in the test, more volume, and images of content recovery discards |
 | DB-Q3 | Page 0 and the maps (§2.3). | read at DB-S0 and entered in `known-gaps.md` with what a tear does; no remedy in DB | (b) a second copy of page 0 added to DB - a format event |
 | DB-Q4 | A switch. | none: the protection is always on | (b) a boot key that turns it off for a data device that writes 8 KiB atomically - a way to be wrong by configuration |
 | DB-Q5 | The measurement and its bar. | **DB-S0, no code**: over the standard point and insert cells at `cores` 1 and 4, `group`, the pages written per second by the checkpoint and by writeback - the image volume of either placement - beside the log bytes per second today. **The close**: interleaved A/B before against after over the same cells: statements per second, p50/p99, server CPU a statement, log bytes a commit, checkpoint duration, and the recovery time of one fixed log. **No throughput bar**: the deltas are reported and the operator rules on them, the protection being a correctness item. The standing budget | (b) a bar named by the operator before DB-S1; (c) the close alone |
 | DB-Q6 | The sim's assertion (BS-Q5 (a) asserts the refusal). | flipped: a tear at any page write of a logged page is healed and the oracle reconciles; the refusal is asserted only where §2.3 says it stays | (b) both kept behind a draw |
+| DB-Q7 | Added at DB-S0. A path D backup on a snapshot that does not freeze (§1.1): `BACKUP START` syncs nothing, and the copy's every page is checked and a torn one refused at STOP, `--verify-backup` and the restore's layout (`src/server/restore.cpp:150-209`). | **left as it stands**: DB heals a crash; a torn page in a path D copy stays refused by the backup, and `known-gaps.md`'s entry says so. The restore's mount would heal it where its image is in `[start, stop]`, which no cell shows; relaxing the checks is a successor's. The test row "a crash-image backup restored with a planted tear" leaves §5 with it. **Adopted** | (b) relax the three checks for a page whose image the backup's log holds, in DB |
 
 ## 5. Stages
 
@@ -400,3 +413,94 @@ Rejected: none.
 reviewed.** The review named the site; the bit, the replay-range argument
 and the claim that BR's two conditions do not arise are CLA's, `[design]`,
 and are what DB-S0 reads the tree against before DB-Q1 is marked.
+
+### DB-S0 - census and premise, 2026-11-19
+
+On worktree `db-torn-page-healing` at `734484ca` (`v3.4.14-2-g734484ca`), no
+engine code. Four read-only censuses (every write fetch; every append against
+its page hold; page classes and every gate that frees an id; the checkpoint,
+page 0, the backup and the sim), and the volume measured.
+
+**What held.** The checkpoint writes and syncs every page dirty at its publish
+before the anchor's page (`src/wal/checkpointer.cpp:619-678`; the synchronous
+path `src/server/superblock_checkpoint_anchor.cpp:158-174`), with `kWait` at
+every step, so no durable anchor leaves a page dirty at its publish unwritten.
+Every page-changing record at a production site is appended under the
+exclusive hold that changed the page, or under one taken before the append
+and kept to the stamp (the undo recycle's PAGE_INIT, `ASSERT_ROLLBACK`); no
+site appends first and takes the page after. The sites that log after
+release are fenced or unpublished: a CREATE TABLE's var-heap root
+(`src/catalog/catalog.cpp:1451`), a declaration chain's growth page, a split's
+created pages (a whole-page record), the fenced index build's tree and the
+online build's root (images), and the manager-less dispatcher's spills and
+index entries, which no production server runs (`src/server/command_dispatcher.cpp:12795`).
+No page byte is written through a read fetch; `PageRef::MarkDirty` has no
+caller. So the image's argument (§2.1) stands on the tree: a page's next
+write fetch after a copy is the first holder since the copy, and every change
+after it is a record after the image.
+
+**What §1-§2 got wrong, corrected in the build (DB-Q1 (a) as revised):**
+
+1. **The decision site.** The exclusive hold's re-mark (`device_page_store.cpp:2797-2811`)
+   is armed only above one core; at `cores = 1` the fetch is `Resolve` then
+   `PinFrame`. The site is `DevicePageStore::FetchPinned` with `for_read`
+   false, after `FetchAndPin` returns with the latch granted, which both
+   paths reach. The debt is set at the fault-in too, not only at the copy:
+   an evicted clean frame re-faulted has lost its bit.
+2. **The page type is no class test** (DB-Q2 as revised). The two unlogged
+   catalog chains, `sys.access_stats` and `sys.statistics`, are `kHeap`
+   pages like every logged chain, their heads owned by oid 0 like every
+   bootstrap root (`include/kds/catalog/well_known.hpp:263-272`, `:378`, `:407`);
+   a fenced index build's pages carry the types of a published index; a
+   nonzero `page_lsn` fails both ways (an unstamped PAGE_INIT is logged at
+   0, an image would stamp an unlogged page). Built: a whitelist of logged
+   types, page 0 and headerless pages by the store, and a registry the
+   catalog fills at the mount and the fenced build holds for its life
+   (`IndexBuild::ReleaseUnlogged`) - the build frees its pages ungated
+   (`FreeUnbuiltTree`, `src/exec/index_ddl.cpp:189-196`), so an image of one
+   would break DB-R3.
+3. **The undo exemption does not hold** (`include/kds/txn/undo_log.hpp:62-65`):
+   a tail page takes about 92 records and stays the tail across
+   checkpoints, so it routinely outlives its PAGE_INIT in the replay range,
+   and a torn one is refused today even with its PAGE_INIT in range, since
+   redo let only an image heal (`src/wal/redo.cpp:401-409` at the base). Undo
+   pages are imaged like every logged class.
+4. **A page created and never copied owes no image, so its PAGE_INIT heals
+   it.** It was created after the last landed anchor's publish listed the
+   dirty pages - or that publish wrote and synced it - so its PAGE_INIT is
+   above the anchor's redo start. Redo now lets a PAGE_INIT heal a torn page
+   as an image does. A PAGE_INIT that re-formats in place (the undo recycle,
+   `src/txn/undo_log.cpp:98-127`) meets a torn page only after the image its
+   own write fetch logged or the creation's PAGE_INIT healed it.
+5. **DB-R2 is the whole mount, not redo.** Mount undo, the assertion fold
+   (which writes Bound Cabin pages ungated and unstamped,
+   `src/exec/assertion_replay.cpp:21-28`, `:65-90`), the unlogged chains'
+   discard and the completion checkpoint all fetch for write after redo; an
+   image logged mid-fold would sit above records the fold re-applies. Images
+   are off until the end of `Expeditor::Open` and `SimInstance::Boot`; the
+   debt set meanwhile is paid at the first write fetch after.
+
+Also found: the image's envelope must be `kNoTxnId` (analysis makes a real id
+a loser when its commit is below the scan start, `src/wal/analysis.cpp:53-61`;
+two existing `LogFullPageImage` callers pass real ids, `src/exec/wal_row_log.cpp:50`,
+`src/exec/index_ddl.cpp:170`, `:836` - not DB's to change, and named here);
+and the image must lower the frame's recLSN, which `StampPageLsn` does.
+
+**Not reachable by F, stated as gaps** (`known-gaps.md`): page 0 and the two
+map regions (read before recovery; a tear refuses the mount); headerless
+pages (no checksum); a page written back during a mount and torn by a crash
+before the completion checkpoint lands, when its pre-crash image is below the
+scan start; and a path D copy (DB-Q7). A candidate race independent of DB, an
+index job's `ANCHOR_SLOT_REMOVE` on a relation a concurrent `DROP TABLE` will
+free (`src/catalog/catalog.cpp:990`, `src/server/page_reclaim.cpp:122-127`),
+was found by reading and not verified; it is not DB's and goes to
+`known-gaps.md` as unverified.
+
+**The premise measured** (`bench/v3.4.14/results-db-s0-premise-v3.4.14-2-g734484ca.md`,
+`ck-tester`, inside the budget, no hold): the image volume is the page-write
+rate, set by the hot set and by the checkpoint cadence, which runs per core.
+At the standard setup the log would grow 1.01x to 2.0x at `cores = 1` and
+1.19x to 4.4x at `cores = 4` (100,000-row uniform UPDATE the top); under pool
+pressure - a 6,060-page table in a 2,048-frame pool - eviction writes 2,534
+pages a second and the log would grow **27.5x**. One run a cell; no `strict`
+or `relaxed` cell.

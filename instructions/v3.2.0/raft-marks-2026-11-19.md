@@ -68,3 +68,12 @@ took under them.
 | **The record's push** | *"push no verify"* - after CLA's report that the tag was pushed and its record (`CLAUDE.md`'s line, this section, the index row) was committed on `worktree-dc-select-for-update` and not pushed. The record goes to `main` with `--no-verify`, a fast-forward of two documents-only commits; the hook was skipped and no suite was executed for them (no build input changed) |
 | **Does not settle** | anything after `35086008` but this record; the options DC's standing go-ahead did not take |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. DB opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"schedule the DB work for 4 hours from now /go-ahead-achieving-milestone"* (given in Korean, recorded in English) - at 08:38 UTC, after CLA listed the open milestones; the scheduled run started at 12:38 UTC |
+| **Mark** | None of the operator's own. **DB opened** on worktree `db-torn-page-healing` from `origin/main` at `734484ca` (`v3.4.14-2-g734484ca`), under the skill's standing word: CLA's proposals are adopted. **DB-Q1..Q6 adopted (a)**, DB-Q1 and DB-Q2 as DB-S0 revised them against the tree (the order's §4 and §7), and **DB-Q7, added at DB-S0, adopted (a)** - each on the operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the options the standing go-ahead did not take (DB-Q1 (b)/(c), DB-Q2 (b), DB-Q3 (b), DB-Q4 (b), DB-Q5 (b)/(c), DB-Q6 (b), DB-Q7 (b)), which stay open to the operator's own mark |
+| **Recorded at** | this file; the DB order's header, §4 and §7; the DB row and this file's row in `instructions/v3.2.0/index.md` |

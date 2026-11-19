@@ -1,0 +1,5 @@
+13:01:10 update-lit-1000000-c1: warm 4s
+13:01:39 update-lit-1000000-c1: done 85998 stmts in 25.0s, bad=0, ckpt_runs=5
+13:01:47 update-spill-assign-30000-c1: warm 4s
+13:02:16 update-spill-assign-30000-c1: done 91972 stmts in 25.0s, bad=0, ckpt_runs=5
+13:02:16 ALL DONE
