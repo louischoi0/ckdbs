@@ -1611,6 +1611,18 @@ some `n` rows of the reply. Write `ORDER BY` for a defined slice.
   `SELECT * FROM t ORDER BY id DESC LIMIT 20` reads about 20 rows, not the
   relation. `ANALYZE` shows `order=tuple_key_desc` on the step and no
   `sort` line. Without a `LIMIT` it is an output sort.
+- **Ordering by an index's columns is free under a `LIMIT`**, where the
+  index begins with the columns your `WHERE` fixes by equality and goes on
+  with exactly the `ORDER BY` columns, ascending: with an index on
+  `(user_id, created_at)`, `SELECT * FROM events WHERE user_id = 7 ORDER BY
+  created_at LIMIT 20` reads that user's entries in `created_at` order and
+  stops at the twentieth row, where without it every row of the user is
+  read and sorted. With no `WHERE` at all, an index whose columns are the
+  `ORDER BY` columns serves `ORDER BY` alone. `ANALYZE` shows
+  `order=index_asc` on the step and no `sort` line. A `varchar` or `char`
+  column is never served this way (an index keeps only a prefix of a
+  string), and rows that tie on every `ORDER BY` column come back in
+  ascending tuple key order, as a sort returns them.
 - Every other order is an output sort, which is not free; see the two
   notes below.
 - **That order holds on every `BTREE` page, at any number of cores.** A

@@ -219,5 +219,131 @@ TEST_F(OrderedWalkTest, WhatTheReverseWalkDoesNotTake) {
     EXPECT_EQ(plan.find("sorted="), std::string::npos) << plan;
 }
 
+// ---- O1: the forward ordered index walk (CV-S2) ----------------------------
+
+class OrderedIndexWalkTest : public OrderedWalkTest {
+protected:
+    // `ev (id, user_id, created_at, note)`: three users of 30, 300 and 600
+    // rows, interleaved through the tuple key order, `created_at` a
+    // permutation that is not the tuple key's, with ties every 7 rows.
+    void LoadEvents() {
+        Run("CREATE TABLE ev (id int64, user_id int64, created_at int64, kind int64, "
+            "note varchar)");
+        for (int i = 1; i <= 930; ++i) {
+            const int user = i % 31 == 0 ? 1 : (i % 3 == 0 ? 2 : 3);
+            Run("INSERT INTO ev VALUES (" + std::to_string(i) + ", " + std::to_string(user) + ", " +
+                std::to_string((i * 389) % 1000 / 7) + ", " + std::to_string(i % 4) + ", 'n')");
+        }
+    }
+};
+
+TEST_F(OrderedIndexWalkTest, ALatestRowsReadIsTheSortsWindow) {
+    LoadEvents();
+    Run("CREATE INDEX ev_user ON ev (user_id)");
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    for (const char* user : {"1", "2", "3", "4"}) {
+        const std::string base =
+            std::string("SELECT id, created_at FROM ev WHERE user_id = ") + user +
+            " ORDER BY created_at";
+        for (const auto& [limit, offset] : std::vector<std::pair<std::size_t, std::size_t>>{
+                 {1, 0}, {20, 0}, {20, 7}, {5, 290}, {700, 0}, {0, 0}}) {
+            ExpectElidedWindow(base, limit, offset, "index_asc");
+        }
+    }
+    ExpectElidedWindow("SELECT id FROM ev WHERE user_id = 3 ORDER BY created_at, id", 25, 3,
+                       "index_asc");
+}
+
+TEST_F(OrderedIndexWalkTest, ARangeAFilterAndAPermutedPrefix) {
+    LoadEvents();
+    Run("CREATE INDEX ev_kind_user_at ON ev (kind, user_id, created_at)");
+    ExpectElidedWindow(
+        "SELECT id FROM ev WHERE user_id = 3 AND kind = 2 ORDER BY created_at", 30, 2,
+        "index_asc");
+    ExpectElidedWindow("SELECT id FROM ev WHERE kind = 1 AND user_id = 2 AND created_at BETWEEN "
+                       "20 AND 90 ORDER BY created_at",
+                       12, 0, "index_asc");
+    // A conjunct beyond the prefix is a residual on each row the walk reaches.
+    ExpectElidedWindow(
+        "SELECT id FROM ev WHERE kind = 1 AND user_id = 3 AND id > 400 ORDER BY created_at", 9,
+        0, "index_asc");
+}
+
+TEST_F(OrderedIndexWalkTest, AWholeIndexIsWalkedOnlyForAStepWithNoConjunct) {
+    LoadEvents();
+    Run("CREATE INDEX ev_at ON ev (created_at)");
+    ExpectElidedWindow("SELECT id, created_at FROM ev ORDER BY created_at", 40, 100, "index_asc");
+    // A filter would have the walk resolve entry after entry to find its rows.
+    const std::string plan =
+        Run("ANALYZE SELECT id FROM ev WHERE kind = 1 ORDER BY created_at LIMIT 5");
+    EXPECT_EQ(plan.find("order=index"), std::string::npos) << plan;
+    // The LIMIT bounds what is resolved.
+    const std::string bounded = Run("ANALYZE SELECT id FROM ev ORDER BY created_at LIMIT 5");
+    const auto at = bounded.find("examined=");
+    ASSERT_NE(at, std::string::npos) << bounded;
+    EXPECT_LE(std::stoull(bounded.substr(at + 9)), 5u) << bounded;
+}
+
+TEST_F(OrderedIndexWalkTest, UpdatesAndDeletesLeaveTheOrderTheSorts) {
+    LoadEvents();
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    Run("UPDATE ev SET created_at = 5000 WHERE id BETWEEN 1 AND 60");
+    Run("UPDATE ev SET created_at = 1 WHERE id BETWEEN 300 AND 330");
+    Run("UPDATE ev SET user_id = 2 WHERE id BETWEEN 400 AND 450");
+    Run("DELETE FROM ev WHERE id BETWEEN 500 AND 560");
+    for (const char* user : {"2", "3"}) {
+        ExpectElidedWindow(std::string("SELECT id, created_at FROM ev WHERE user_id = ") + user +
+                               " ORDER BY created_at",
+                           50, 10, "index_asc");
+    }
+}
+
+// Every key type an ordered walk serves, each a different encoding the key
+// check re-derives from the decoded row (`[quiet-wrong]` if one disagreed:
+// every row would fail it and the reply would be empty, or misplaced).
+TEST_F(OrderedIndexWalkTest, EveryOrderPreservingKeyTypeIsWalkedInItsOrder) {
+    Run("CREATE TABLE ty (id int64, d date, ts timestamp, m decimal(12, 2), "
+        "w decimal(30, 2), i int32, u uint64)");
+    const std::vector<std::string> rows = {
+        "'2026-03-01', '2026-03-01 10:00:00', -3.75, '1701411834604692317316.87', -5, 5",
+        "'1999-12-31', '2026-03-01 09:59:59', 10.05, '-5.00', 7, 18446744073709551615",
+        "'2026-03-01', '1970-01-01 00:00:00', 2.50, '1.00', -2147483648, 9223372036854775808",
+        "'2001-01-01', '2030-06-30 23:59:59', 100.00, '1701411834604692317316.86', 2147483647, 0",
+        "'1999-12-31', '2026-03-01 10:00:00', 2.50, '-5.00', 7, 5",
+    };
+    for (int rep = 0; rep < 6; ++rep) {
+        for (std::size_t r = 0; r < rows.size(); ++r) {
+            Run("INSERT INTO ty VALUES (" + std::to_string(rep * 10 + r + 1) + ", " + rows[r] +
+                ")");
+        }
+    }
+    for (const char* col : {"d", "ts", "m", "w", "i", "u"}) {
+        Run(std::string("CREATE INDEX ty_") + col + " ON ty (" + col + ")");
+        ExpectElidedWindow(std::string("SELECT id, ") + col + " FROM ty ORDER BY " + col, 11, 4,
+                           "index_asc");
+    }
+}
+
+TEST_F(OrderedIndexWalkTest, AnEqualityOnALaterOrderKeyIsAConstantInTheOrder) {
+    LoadEvents();
+    Run("CREATE INDEX ev_user_at_kind ON ev (user_id, created_at, kind)");
+    ExpectElidedWindow(
+        "SELECT id FROM ev WHERE user_id = 3 AND kind = 1 ORDER BY created_at, kind", 15, 2,
+        "index_asc");
+}
+
+TEST_F(OrderedIndexWalkTest, AJoinKeepsTheOrderedDriversOrder) {
+    LoadEvents();
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    Run("CREATE TABLE k (id int64, label int64)");
+    for (int i = 0; i < 4; ++i) {
+        Run("INSERT INTO k VALUES (" + std::to_string(i + 1) + ", " + std::to_string(i * 10) + ")");
+    }
+    ExpectElidedWindow(
+        "SELECT ev.id, k.label FROM ev JOIN k ON k.id = ev.kind WHERE ev.user_id = 2 "
+        "ORDER BY ev.created_at",
+        17, 3, "index_asc");
+}
+
 }  // namespace
 }  // namespace kds::server

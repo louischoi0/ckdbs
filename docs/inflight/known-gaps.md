@@ -2655,6 +2655,20 @@ Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
   lets out and does not add those descents.
 - **`ORDER BY <tuple key> DESC` without a `LIMIT` is still a sort**
   (CV-Q2 (a)), and so is one over a key set, a build or a Cabin arm.
+- **An ordered index step's decline holds every match** (CV-S2, `index.md`
+  IX8c): under `indexes = off`, or an index gone under the chain, the walk
+  collects each matching row's key and tuple key, sorts them and resolves
+  each one - memory in the matches, as IX8a's collection, and a descent per
+  row where the walk would have emitted in place. Bounded by nothing but
+  `exec::Budget`, which it charges twice for each row (the walk's decode
+  and the resolve's), so under `indexes = off` a budget is met at about
+  half the rows `plain` reaches - a refusal that depends on the switch.
+- **An ordered index walk resolves entry by entry**: a row its prefix
+  admits and a residual rejects still costs its descent, so `WHERE user_id
+  = ? AND kind = ? ORDER BY created_at LIMIT 20` over `(user_id,
+  created_at)` can resolve every one of the user's entries to find 20 of a
+  rare kind - no more than IX8a's step resolves, and the order no sort. Its
+  index leaf reads are blocking reads, as every index step's are.
 
 ## Locking reads (DC)
 

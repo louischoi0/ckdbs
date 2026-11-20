@@ -206,6 +206,12 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 StatusOr<PageId> IndexSeekLeaf(storage::PageStore& store, PageId root, const IndexLayout& layout,
                                std::span<const std::byte> sort_key);
 
+// A leaf, fetched under `access` and checked - its type and its widths
+// against `layout` - as every fetch of the walk below is: the page an
+// ordered index run (CV) reads one at a time, holding it while it reads.
+StatusOr<storage::PageRef> IndexFetchLeaf(storage::PageStore& store, PageId leaf,
+                                          const IndexLayout& layout, storage::PageAccess access);
+
 // Calls `fn` once per entry of every leaf from `first_leaf` rightwards -
 // which is key order. Signature and contract match heap::ChainVisit and
 // btree::BtreeVisit deliberately: `kStop` ends the walk with Status::OK()

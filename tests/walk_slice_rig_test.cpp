@@ -312,6 +312,79 @@ TEST_F(WalkSliceRigTest, ACancelEndsAReverseWalkAtItsNextBoundary) {
     EXPECT_FALSE(long_.TakeCancel());
 }
 
+// ---- The ordered index run (CV O1, CV-R3, CV-R4) ---------------------------
+//
+// An index covering a ~2 KB cell holds about four entries a leaf, so the
+// walk of 1,600 entries crosses many slice boundaries. `k` runs against the
+// tuple key, so the index order is the reply's and not the relation's.
+
+void LoadOrdered(CommandDispatcher& d, int rows) {
+    ASSERT_EQ(d.Dispatch("CREATE TABLE o (id int64, k int64, name varchar(2000))")
+                  .response.rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(d.Dispatch("CREATE INDEX o_k ON o (k) COVERING (name)").response.rfind("CREATED", 0),
+              0u);
+    for (int i = 0; i < rows;) {
+        std::string sql = "INSERT INTO o VALUES ";
+        for (int n = 0; n < 100 && i < rows; ++n, ++i) {
+            if (n != 0) sql += ", ";
+            sql += "(" + std::to_string(i + 1) + ", " + std::to_string(2 * (rows - i)) + ", 'x')";
+        }
+        const std::string reply = d.Dispatch(sql).response;
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    }
+}
+
+TEST_F(WalkSliceRigTest, AnOrderedIndexWalkYieldsAndMissesAndRepeatsNoRowUnderDivides) {
+    LoadOrdered(d(), kRows);
+    const std::string ordered = "SELECT id FROM o ORDER BY k LIMIT 100000";
+    ASSERT_NE(d().Dispatch("ANALYZE " + ordered).response.find("order=index_asc"),
+              std::string::npos);
+    Script walk{&long_, {ordered}};
+    // Odd keys between every two the walk will read, each a divide of a
+    // leaf behind, at or ahead of it, and moves of keys it has not reached.
+    Script writer{&other_, {"SELECT id FROM o WHERE id = 5"}};
+    for (int i = 0; i < kRows; ++i) {
+        writer.lines.push_back("INSERT INTO o VALUES (" + std::to_string(kRows + 1 + i) + ", " +
+                               std::to_string(2 * i + 1) + ", 'x')");
+    }
+    writer.lines.push_back("UPDATE o SET k = 0 WHERE id BETWEEN 1 AND 50");
+    std::atomic<bool> walk_running{false};
+    writer.after = [&] { walk_running.store(walk.done.load() == 0); };
+    RunBoth(walk, writer);
+
+    ASSERT_TRUE(walk_running.load()) << "the walk ended before the writes: nothing yielded";
+    for (const DispatchOutcome& out : writer.outs) {
+        ASSERT_EQ(out.response.rfind("ERR", 0), std::string::npos) << out.response;
+    }
+    ASSERT_TRUE(walk.outs[0].status.ok()) << walk.outs[0].response;
+    std::vector<std::int64_t> expected;
+    for (int i = kRows; i >= 1; --i) expected.push_back(i);
+    EXPECT_EQ(Ids(walk.outs[0].response), expected)
+        << "the ordered walk read under its own view, in its order, every row once";
+}
+
+TEST_F(WalkSliceRigTest, APurgedKeyNamedAgainIsReadAtItsNewKeyOnly) {
+    // The purged rows' entries stay (IX1) and name tuple keys a named INSERT
+    // binds again, under another order value: each row comes out once, at
+    // the key its visible version holds (CV-R2's key check).
+    LoadOrdered(d(), 300);
+    ASSERT_EQ(d().Dispatch("DELETE FROM o WHERE id BETWEEN 1 AND 100").response.rfind("ERR", 0),
+              std::string::npos);
+    const std::string purged = d().Dispatch("PURGE FROM o WHERE id BETWEEN 1 AND 100").response;
+    ASSERT_EQ(purged.rfind("ERR", 0), std::string::npos) << purged;
+    for (int id = 1; id <= 100; ++id) {
+        const std::string reply = d().Dispatch("INSERT INTO o VALUES (" + std::to_string(id) +
+                                               ", " + std::to_string(10000 + id) + ", 'x')")
+                                      .response;
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    }
+    std::vector<std::int64_t> expected;
+    for (int id = 300; id >= 101; --id) expected.push_back(id);  // k = 2 * (301 - id)
+    for (int id = 1; id <= 100; ++id) expected.push_back(id);    // k = 10000 + id
+    EXPECT_EQ(Ids(d().Dispatch("SELECT id FROM o ORDER BY k LIMIT 1000").response), expected);
+}
+
 TEST_F(WalkSliceRigTest, ACancelEndsTheWalkAtItsNextBoundaryAndFailsTheTransaction) {
     Load(1, 1, kRows);
     Script walk{&long_, {"BEGIN", "SELECT id FROM t"}};

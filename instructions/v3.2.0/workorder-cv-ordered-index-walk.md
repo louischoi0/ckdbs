@@ -379,3 +379,79 @@ On worktree `cv-ordered-index-walk`, over `3ff0b377`.
   measurement; counting the move-right hops in `pages_fetched` - the hops
   are rare and the meter's unit is the leaf read.
 - **Suite**: 0 failed of 4,880 (`ctest -LE bs-nightly`) on S1's tree.
+
+### CV-S2 - O1, the forward ordered index walk (2026-11-20)
+
+On worktree `cv-ordered-index-walk`, over `dd1d3f4a`.
+
+- **The choice** (`step_compiler.cpp`, `DriverOrderOf` and
+  `OrderedIndexChoiceOf`; CV-Q3 (a) as revised): after the ladder, on the
+  driving step, under a LIMIT, where the pin admits the index class - the
+  lowest-oid index whose keys are the ladder's own equality prefix in any
+  order and then exactly the `ORDER BY` keys (a last tuple key key
+  allowed). Over a bare walk the prefix is empty and the step must carry no
+  conjunct. A string order key (CV-Q7 (a)), a key the prefix binds, mixed
+  directions and every descending order keep the sort here. The step keeps
+  or takes `kIndexProbe`/`kIndexRange` and `EmitOrder::kIndexKeyForward`;
+  section 5a drops `sort_keys`; section 7 adds the index's key columns to
+  the step's read set for the key check. The join planner prices the chain
+  as any unsorted one under a LIMIT, which is CV §2's `min(matches, limit +
+  offset)` resolutions (CV-S0's census).
+- **The run** (`step_vm.cpp`, `RunOrderedIndexStep`): entry order, a leaf at
+  a time, collected under the leaf's hold and resolved after its release;
+  the next leaf sought again from the last entry the leaf held (CV-R3);
+  a yield at the bottom of the leaf loop for the outermost walk (CV-R4).
+  `LiveIndexOf` is the decline test `RunIndexStep` made inline, now one
+  function both ask; `index::IndexFetchLeaf` is the checked leaf fetch
+  `IndexVisitFrom` made inline, now one function both call.
+- **CV-R2's two checks**: `OrderedKeyMatches`, in `AcceptTupleAt` after the
+  row's columns are decoded and only for the ordered step, encodes the
+  visible version's key and compares it with the entry's; the run keeps the
+  seen set of tuple keys emitted.
+- **The decline** (CV-S0's census): `RunOrderedDecline` walks, collecting
+  key and tuple key per matching row instead of emitting, sorts, and
+  resolves in the index's order - so `indexes = off` answers the same bytes.
+- **Tests**: the index contract suite's query set gains twelve ordered
+  statements, compared byte for byte across its six configurations
+  (`indexes = off` exercising the decline, `plain` the sort); two cells of
+  its own - which statements are taken (CV-Q3's move from `by_owner` to
+  `by_owner_qty` among them) and CV-R2 (a row moved forward, moved back,
+  round-tripped, its prefix moved, its covered column moved, a delete -
+  under a view older than the moves and a fresh one, each against the
+  unlimited sorted reply); `ordered_walk_test.cpp`'s `OrderedIndexWalkTest`
+  (latest rows at six windows over three user sizes, a range, a filter
+  beyond the prefix, a permuted prefix, the whole index for a step with no
+  conjunct, updates and deletes, a join); a rig cell (a yield, divides on
+  both sides of the walk, and moved keys inside its suspensions).
+- **Specs moved** (CV-R6): `index.md` IX8a scoped, IX8c new, IX9's last
+  rule; `parser-v2.md` I11; the manual; `known-gaps.md`.
+- Overhead not measured; measured at the milestone's close.
+- **Review** (`critics-developer`): **one defect, fixed by the reviewer
+  (B1)**: the run moved `from` to the last entry of every leaf it read, and
+  a seek that lands left of a divide reaches a leaf wholly below `from` -
+  so `from` could move back and the hop re-collect entries already read,
+  or entries below the low bound (CV-R3); the seen set, the residual and
+  the fixed view kept the reply right, at the price of repeated resolves.
+  `from` now moves only from a leaf holding an entry at or past it.
+  **Applied**: the run's hop right within one pass named in IX8c and the
+  run's comment (B2: the text said "never by pointer" of a step that does
+  follow a sibling inside a pass); every leaf read counted toward the slice
+  and a due slice ending the pass (B3: a run of leaves the covering filter
+  empties walked with no yield); `past_from` removed (no entry equals the
+  low bound); the decline's records a `(key bytes, tuple key)` pair, whose
+  own order is the entry order, in place of two hand-written byte loops;
+  the key check's final width check; tests for every order-preserving key
+  type (`date`, `timestamp`, `decimal`, `decimal128`, `int32`, `uint64`),
+  an equality on a later order key, a view older than the index on a
+  statement with no conjunct, and a purged key bound again under another
+  order value. **Not applied**: replacing the seen set by an adjacency
+  test - CV-R2 names the set, it holds only the rows emitted, and the
+  adjacency argument would rest on the walk never repeating an entry,
+  which B1 just showed is a property to defend, not assume; one shared
+  `LayoutOf` (three copies now, two before) - its one home would be the
+  catalog's `IndexRef`, a layering change outside CV; folding the key
+  encode into `EncodeIndexKey` - that takes values in key order and would
+  build a vector per row; a second-core divide between seek and fetch and
+  the plan-pin cells - the rig interleaves on one core, and the pins are
+  read against `ArmPin` in the review rather than tested here.
+- **Suite**: 0 failed of 4,892 (`ctest -LE bs-nightly`) on S2's tree after the review's fixes.

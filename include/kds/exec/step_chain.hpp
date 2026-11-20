@@ -215,12 +215,17 @@ constexpr bool EmitsTupleKeyOrder(AccessKind kind) noexcept {
 //
 //   kTupleKeyBackward  a walk or range of the clustered tree, read from its
 //                      high end down: `ORDER BY <tuple key> DESC` (O2)
+//   kIndexKeyForward   an index step walked in entry order - key, then
+//                      tuple key - resolving as it goes, instead of IX8a's
+//                      sort back into tuple key order: `ORDER BY` the index
+//                      keys after its prefix (O1)
 //
 // Ascending tuple key order needs no annotation: every kind
 // `EmitsTupleKeyOrder` lists already emits it.
 enum class EmitOrder : std::uint8_t {
     kAny = 0,
     kTupleKeyBackward,
+    kIndexKeyForward,
 };
 
 // The inclusive tuple key bounds a kRange step walks between.

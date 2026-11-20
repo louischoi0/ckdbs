@@ -587,6 +587,20 @@ StatusOr<PageId> IndexSeekLeaf(storage::PageStore& store, PageId root, const Ind
     return descent.value().path[descent.value().depth];
 }
 
+StatusOr<storage::PageRef> IndexFetchLeaf(storage::PageStore& store, PageId leaf_id,
+                                          const IndexLayout& layout, storage::PageAccess access) {
+    auto bytes = store.Fetch(leaf_id, access);
+    if (!bytes.ok()) return bytes.status();
+    if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kIndexLeaf); !s.ok()) {
+        return s;
+    }
+    if (Status s = IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, leaf_id);
+        !s.ok()) {
+        return s;
+    }
+    return bytes;
+}
+
 Status IndexVisitFrom(
     storage::PageStore& store, PageId first_leaf, const IndexLayout& layout,
     storage::PageAccess access,
@@ -599,13 +613,9 @@ Status IndexVisitFrom(
     for (;;) {
         if (Status s = guard.Visit(current); !s.ok()) return s;
 
-        auto bytes = store.Fetch(current, access);
+        auto bytes = IndexFetchLeaf(store, current, layout, access);
         if (!bytes.ok()) return bytes.status();
-        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexLeaf); !s.ok()) {
-            return s;
-        }
         IndexLeafView leaf(AsPage(bytes.value().bytes()));
-        if (Status s = leaf.CheckAgainst(layout, current); !s.ok()) return s;
 
         const std::uint16_t n = leaf.entry_count();
         for (std::uint16_t i = 0; i < n; ++i) {
