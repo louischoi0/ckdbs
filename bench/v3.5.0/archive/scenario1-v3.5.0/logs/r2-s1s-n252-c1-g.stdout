@@ -1,0 +1,160 @@
+loading: 1 years x 252 sessions x 1 symbols = 252 bars, 252 feature rows  (tables suffixed _r2_s1s_n252_c1_g)  [daily_bars BTREE]  [200-row transactions]
+  sessions        252 rows
+  symbol 1/1: 252 bars
+  models            8 rows   (load took 0.1s)
+backtesting: 8 models over 12 rebalance periods (21 sessions apart)
+  11 periods scored in 0.0s
+QPS sweep:
+  sweeping bar-lookup...
+  sweeping bar-range...
+  sweeping day-slice...
+  sweeping symbol-history...
+  sweeping cross-join...
+  sweeping point-join...
+  sweeping model-join...
+write sweep:
+  batch     1:      1,755 rows/s
+  batch    10:      9,640 rows/s
+  batch   100:     18,555 rows/s
+  batch  1000:     22,578 rows/s
+concurrency sweep:
+    1 connection(s):      9,404 q/s
+    2 connection(s):     13,519 q/s
+    4 connection(s):      9,684 q/s
+    8 connection(s):      9,386 q/s
+
+ckdbs benchmark - 49 columns, 765 rows resident, btree-clustered, 1 connection
+server 127.0.0.1:15610  table 7 relations, suffix _r2_s1s_n252_c1_g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load-exchanges               1     1,764     566.9    566.9    566.9    566.9    566.9    566.9     566.9     0
+load-symbols                 1     1,890     529.1    529.1    529.1    529.1    529.1    529.1     529.1     0
+load-sessions              252    23,869      41.9     37.9     39.7     40.2     50.3     70.7     110.6     0
+load-bars                  252    22,405      44.6     40.3     42.0     42.8     52.1     76.5     231.7     0
+load-stats                 252    22,178      45.1     40.2     42.4     43.1     50.3     96.2     163.7     0
+load-models                  8     1,668     599.3    440.9    497.9    557.6    769.5    769.5     769.5     0
+backtest-read               12     3,371     296.6    229.7    236.6    266.7    557.6    557.6     557.6     0
+result-insert               88     2,012     496.9    322.2    421.1    480.4    651.5    776.0     776.0     0
+backtest-replay             12     5,608     178.3    124.4    128.0    151.1    317.5    317.5     317.5     0
+compare-all                  1     2,178     459.0    459.0    459.0    459.0    459.0    459.0     459.0     0
+compare-one                 32     8,909     112.2    103.4    104.3    106.1    160.1    163.7     163.7     0
+read-bar-lookup            200    13,680      73.1     68.2     69.9     71.1     82.4     93.1     181.3     0
+read-bar-range             200     1,149     870.1    800.6    823.8    853.7    983.4   1063.9    1087.7     0
+read-symbol-history         10       754    1326.6   1291.1   1299.9   1305.2   1443.2   1443.2    1443.2     0
+read-day-slice             200     8,485     117.8     81.9     85.9     95.1    158.4    170.2     219.3     0
+read-join-point            200     9,342     107.0     66.4     70.4    128.4    139.4    156.5     187.2     0
+read-join-exists            10    15,715      63.6     55.8     57.0     57.6     99.8     99.8      99.8     0
+agg-global                  10    10,923      91.5     84.8     85.9     86.8    115.8    115.8     115.8     0
+agg-by-symbol               10    10,652      93.9     90.3     92.0     93.6    100.8    100.8     100.8     0
+agg-by-session              10     1,776     563.1    532.0    545.9    552.2    613.1    613.1     613.1     0
+agg-day-slice              200    11,724      85.3     62.3     64.7     66.8    131.8    173.7     203.8     0
+agg-distinct                10     7,648     130.7    121.3    122.8    123.8    172.5    172.5     172.5     0
+sync                         1       229    4364.1   4364.1   4364.1   4364.1   4364.1   4364.1    4364.1     0
+
+  load-exchanges: venues
+  load-symbols: instruments
+  load-sessions: 252 business days
+  load-bars: OHLCV, one row per (symbol, session)
+  load-stats: derived features, one row per bar
+  load-models: 8 strategies
+  backtest-read: 3-relation join, one cross-section per rebalance
+  result-insert: 8 rows per rebalance, one per model
+  backtest-replay: the same cross-sections re-read, x1
+  compare-all: every result row, joined to its model
+  compare-one: one model's history joined to its model, x4
+  read-bar-lookup: pk equality on daily_bars
+  read-bar-range: pk BETWEEN on daily_bars, 200 wide
+  read-symbol-history: FilterScan, one symbol's whole run
+  read-day-slice: FilterScan, one session's features
+  read-join-point: bar -> symbol -> exchange, by pk
+  read-join-exists: semi-join: symbols with a bar
+  agg-global: whole-relation fold, no GROUP BY
+  agg-by-symbol: GROUP BY symbol_id - 8 groups
+  agg-by-session: GROUP BY session_no - one per day
+  agg-day-slice: one session's cross section, grouped
+  agg-distinct: COUNT(DISTINCT symbol_id) over the run
+  sync: SYNC after the run
+
+  ingest: 252 bars + 252 feature rows, batched 200 per transaction
+  backtest-read is a 3-relation join: FilterScan(daily_stats) + Probe(daily_bars) + Probe(symbols)
+  daily_bars is BTREE: a pk Probe descends
+  money and P&L are int64 basis points; float/decimal columns are refused at CREATE TABLE
+  the model totals are computed client-side because the comparison phase prices a join, not a fold; the agg-* phases price the fold on its own, and means and deviations stay client-side because there is still no arithmetic in a select list
+  this table is the workload as it ran, with tail latency; the QPS matrix below re-measures the same shapes as a controlled A/B. Both are here because throughput and p99 are different questions
+
+QPS by read shape and case - 100 statements per cell, 8 distinct arguments in the warm cases
+shape                  cold       warm      cabin    dropped  warm/cold  cabin/warm   notes
+-------------------------------------------------------------------------------------------------------------------
+bar-lookup            8,523      8,639          -          -      1.01x           -   pk - a cabin on the pk column is refused
+bar-range             1,123      1,131          -          -      1.01x           -   pk - a cabin on the pk column is refused
+day-slice             7,173      8,511     12,247     11,622      1.19x       1.44x   daily_stats.session_no
+symbol-history          700        736        697        752      1.05x       0.95x   daily_stats.symbol_id
+cross-join            9,642      9,919     10,297      9,726      1.03x       1.04x   daily_stats.session_no
+point-join           14,519     14,704          -          -      1.01x           -   pk - a cabin on the pk column is refused
+model-join            8,159      9,634      9,493      9,279      1.18x       0.99x   model_results.model_id
+
+  bar-range: cold ran 52 of 100 - the shape has fewer distinct arguments than that, and repeating one would have made it a warm case
+  symbol-history: cold ran 1 of 100 - the shape has fewer distinct arguments than that, and repeating one would have made it a warm case
+  model-join: cold ran 8 of 100 - the shape has fewer distinct arguments than that, and repeating one would have made it a warm case
+
+  cold    every argument seen for the first time: no warm page,
+          no Waystone trail, no observed Cabin value.
+  warm    the same few arguments cycled - a dashboard on a fixed
+          filter. warm/cold is what repetition alone buys.
+  cabin   warm, with a Cabin on the filter column, observed. It
+          is `-` where the filter is the primary key, because a
+          cabin on the pk column is refused: the clustered tree
+          already is one.
+  dropped warm again straight after DROP CABIN. It should return
+          to the warm column - un-observing is always legal, and
+          a Cabin's removal is a performance event, never a
+          correctness one.
+
+INSERT QPS by transaction batch size
+rows/transaction          ops      rows/s   vs autocommit   err
+---------------------------------------------------------------
+1 (autocommit)          2,000       1,755           1.00x     0
+10                      2,000       9,640           5.49x     0
+100                     2,000      18,555          10.57x     0
+1,000                   2,000      22,578          12.87x     0
+
+  every row is one round trip in every case; what changes is how
+  many durability points they cost. A batch of one is a batch.
+
+QPS by connection count - the backtest's 3-relation join
+connections         ops         q/s   vs 1 conn   per conn   err
+----------------------------------------------------------------
+1                   200       9,404       1.00x      9,404     0
+2                   200      13,519       1.44x      6,760     0
+4                   200       9,684       1.03x      2,421     0
+8                   200       9,386       1.00x      1,173     0
+
+  the server dispatches one core's statements on one thread, so
+  a rising aggregate here is round-trip overlap, not parallel
+  execution. Where it stops rising is where the client stopped
+  being the bottleneck.
+
+plans (ANALYZE)
+statement             steps                                   rows    examined
+------------------------------------------------------------------------------
+backtest-read         FilterScan+Probe+Probe                     1         254
+compare-all           Scan+Scan                                 88         173
+compare-one           FilterScan+Probe                          11          99
+read-bar-lookup       Lookup                                     1           1
+read-bar-range        Range                                    200         252
+read-day-slice        FilterScan                                 1         252
+
+  a Probe or Lookup step on a HEAP relation has no index to
+  descend and walks the chain instead: `examined` far above
+  `rows` is that, and is what --bars-clustered heap measures.
+  read-bar-lookup is the clean read of it. No Waystone trail hides
+  it on the joins: nothing records without WAYSTONE ON, and this
+  driver opts no shape in (docs/spec/waystone-concpets.md).
+
+models: 8 scored from the comparison join over 12.0 periods/year  (--show-models for the full table)
+  momentum     4 models, total 12,290 bp, best 5,058 bp, worst 1,645 bp
+  volatility   4 models, total 14,715 bp, best 5,119 bp, worst 0 bp
+
+verify: OK - all 8 models' P&L read back through the comparison join matches what was accumulated
+  wrote /home/louis/bench-runs/scenarios-v3.5.0/json/r2-s1s-n252-c1-g.json

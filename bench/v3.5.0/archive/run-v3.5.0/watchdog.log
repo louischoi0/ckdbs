@@ -1,0 +1,31 @@
+2026-11-20T18:02:19Z master=none alive=n status_age=0s status=
+2026-11-20T18:02:19Z ORPHAN: master gone, restarting
+2026-11-20T18:03:03Z note: logs/ was missing at the first launch (the launch's redirect into logs/ failed); created by hand, the watchdogs relaunch
+2026-11-20T18:03:19Z master=none alive=n status_age=60s status=
+2026-11-20T18:03:19Z ORPHAN: master gone, restarting
+2026-11-20T18:04:19Z master=24966 alive=y status_age=24s status=2026-11-20T18:03:55Z s1-c8-g start
+2026-11-20T18:05:19Z master=24966 alive=y status_age=13s status=2026-11-20T18:05:06Z r2-s1-c1-g start
+2026-11-20T18:06:19Z master=24966 alive=y status_age=1s status=2026-11-20T18:06:18Z r2-s1-c1-s start
+2026-11-20T18:07:19Z master=24966 alive=y status_age=25s status=2026-11-20T18:06:54Z r3-s1-c1-g start
+2026-11-20T18:08:19Z master=24966 alive=y status_age=13s status=2026-11-20T18:08:06Z r3-s1-c1-s start
+2026-11-20T18:09:19Z master=24966 alive=y status_age=1s status=2026-11-20T18:09:18Z r2-s1s-n10080-c1-g start
+2026-11-20T18:10:19Z master=24966 alive=y status_age=2s status=2026-11-20T18:10:17Z s2-c1-g start
+2026-11-20T18:11:19Z master=24966 alive=y status_age=3s status=2026-11-20T18:11:16Z r2-s2-c8-g start
+2026-11-20T18:12:19Z master=24966 alive=y status_age=5s status=2026-11-20T18:12:14Z x-b1-s2-c8-g start
+2026-11-20T18:13:19Z master=24966 alive=y status_age=7s status=2026-11-20T18:13:12Z x-b4-s2-c8-g start
+2026-11-20T18:14:19Z master=24966 alive=y status_age=7s status=2026-11-20T18:14:12Z b1-s2-c1-s start
+2026-11-20T18:15:19Z master=24966 alive=y status_age=11s status=2026-11-20T18:15:08Z r3-b1-s2-c1-s start
+2026-11-20T18:16:19Z master=24966 alive=y status_age=1s status=2026-11-20T18:16:18Z s3-c1-n10000-all start
+2026-11-20T18:17:19Z master=24966 alive=y status_age=13s status=2026-11-20T18:17:06Z s3-c8-n10000-all start
+2026-11-20T18:18:19Z master=24966 alive=y status_age=4s status=2026-11-20T18:18:15Z r3-s3-c1-n1000-none start
+2026-11-20T18:19:19Z master=24966 alive=y status_age=26s status=2026-11-20T18:18:53Z s4 start
+2026-11-20T18:20:20Z master=24966 alive=y status_age=87s status=2026-11-20T18:18:53Z s4 start
+2026-11-20T18:21:20Z master=24966 alive=y status_age=147s status=2026-11-20T18:18:53Z s4 start
+2026-11-20T18:22:20Z master=24966 alive=y status_age=207s status=2026-11-20T18:18:53Z s4 start
+2026-11-20T18:23:20Z master=24966 alive=y status_age=267s status=2026-11-20T18:18:53Z s4 start
+2026-11-20T18:24:20Z master=24966 alive=y status_age=40s status=2026-11-20T18:23:40Z cd2-s4 start
+2026-11-20T18:25:20Z master=24966 alive=y status_age=100s status=2026-11-20T18:23:40Z cd2-s4 start
+2026-11-20T18:26:20Z master=24966 alive=y status_age=160s status=2026-11-20T18:23:40Z cd2-s4 start
+2026-11-20T18:27:20Z master=24966 alive=y status_age=220s status=2026-11-20T18:23:40Z cd2-s4 start
+2026-11-20T18:28:20Z master=24966 alive=y status_age=280s status=2026-11-20T18:23:40Z cd2-s4 start
+2026-11-20T18:29:20Z all.done seen, watchdog exits
