@@ -155,3 +155,12 @@ took under them.
 | **Does not settle** | DN-Q11 - what a heap page's `min_key` is; whether the reading of "the `min_key` invariant" as 2 and 3 is the operator's; DN-Q0..Q10 as before; whether DN opens |
 | **Recorded at** | this file; the DN order's header, §0, §1.4, §3, §4 and §7; this file's row in `instructions/v3.2.0/index.md` |
 
+## 16. A note in DD: read again with DN's consumer
+
+| | |
+|---|---|
+| **Word** | *"Leave a note so that DD is looked at again from that viewpoint."* (given in Korean; recorded in English) - after CLA's report that DN makes DD its prerequisite, and that DD's premise, weak as an index's growth, has under DN a consumer it did not have: without entry removal a heap never reuses a slot |
+| **Mark** | **The note is left**: `workorder-dd-index-entry-purge.md` §0a, with a pointer in its header and in DN §1.5, in the main checkout on `main` at `9c7d3b2e`, documents only. Eight items for DD-S0 to read again: DD-Q0's verdict rule has no arm for DN; DD-Q1 (a) keeps a delete-marked row's head entry; DD-Q3 (a) pins one slot a leaf of every index; DD-Q4 (a) makes space reuse an administrator's statement; DD purges an index where DN needs to know a slot is named by no index; DD-R1's byte-equality is about another entry; DD-S0's cells measure no heap; and CV's reverse index walk now leans on "no entry is removed" |
+| **Does not settle** | anything in DD: no DD-Q is marked, no rule or stage changed, and each of the eight is a question for DD-S0, not a finding; whether DD or DN opens; the order CLA proposes, DN-S0's census before DD-S0 |
+| **Recorded at** | this file; DD's header, §0a and §7; DN §1.5; the DD row and this file's row in `instructions/v3.2.0/index.md` |
+

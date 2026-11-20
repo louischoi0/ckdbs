@@ -151,7 +151,11 @@ DD's premise is that "the one measurement the tree holds on a churned
 index argues against part of it" (DD §0, §1.1). Under DN-D1 the reason to
 remove an entry is no longer an index's size: **a slot cannot be reused
 until it is**, so without DD a heap never reuses space. That is a consumer
-DD's census did not have, and DD-S0 should be re-read with it.
+DD's census did not have, and DD-S0 should be re-read with it. **The note
+is in DD's own §0a** (2026-11-20): eight items, among them that DD-Q1 (a)
+keeps a delete-marked row's head entry, DD-Q3 (a) pins one slot a leaf,
+DD-Q4 (a) leaves reuse to an administrator's statement, and nothing in DD
+says who knows that no entry of any index names a slot.
 
 ## 2. The design `[design]`
 
