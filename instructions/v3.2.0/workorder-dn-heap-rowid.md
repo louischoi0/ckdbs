@@ -7,7 +7,10 @@ proposal. **Exploratory by CLA's proposal** (DN-Q0): the operator's words
 fix the shape; that DN-S0 measures its premise before anything is built is
 CLA's. **Two more marks the same day** (`raft-marks-2026-11-20.md` §14):
 the hidden Keystone's name is a reserved word (DN-D6, which settles half of
-DN-Q1) and invariants 2 to 4 are the btree's alone (DN-D7).
+DN-Q1) and invariants 2 to 4 are the btree's alone (DN-D7) - **revised by
+the operator's next word (§15 there): the `min_key` invariants, 2 and 3,
+bind a heap data page too, and only 4's order is the btree's** (DN-D7 as
+revised, DN-R10).
 
 **DN rests on DD.** The operator's mark DN-D1 is that a slot is reused only
 once every index entry naming it is removed, and DD
@@ -59,7 +62,7 @@ answers, each recorded as a mark:
 | DN-D3 | *"2. The key's identity: a multi-column PK, a PK of other types supported, and where no PK is created, the engine-issued Keystone in its place (in that case not seen by `SELECT *` in SQL, but its value can be read by naming the column, e.g. `keyidentity`)."* | **a PK of any column count and type**; with none, the issued Keystone, hidden from `*` and **readable by an explicit name** |
 | DN-D4 | *"3. No global order guaranteed."* | **rowid order is not insertion order across cores** |
 | DN-D6 | *"The name for reading it (`keyidentity` or the like) as a reserved word."* | **the hidden Keystone's name is a reserved word**; its spelling is not fixed by the word ("or the like") |
-| DN-D7 | *"Invariants 2 to 4 are btree-only."* | **invariants 2, 3 and 4 bind a btree page and no heap data page** |
+| DN-D7 | *"Invariants 2 to 4 are btree-only."* then *"But even for a heap, the `min_key` invariant is kept (applied)."* | **as revised: invariants 2 and 3, the `min_key` pair, bind a heap data page as they bind every page; invariant 4's order is the btree leaf's alone, and a heap data page's slots are in no key order.** CLA reads "the `min_key` invariant" as both 2 (immutable) and 3 (no tuple below it), which are one statement about one field |
 | DN-D5 | *"If the user sets no PK or makes it an int64, the engine-issued Keystone is used."* and, asked whether a single `int64` PK **is** the Keystone - a value named by the `INSERT` or issued when omitted - *"(a) is right, write it."* | **a single `int64` PK column is the Keystone** (named or issued, as a btree relation's tuple key is today); any other PK is a unique index beside a hidden issued Keystone |
 
 `[design]` **Why the two words fit.** Keeping the Keystone apart from the
@@ -122,18 +125,19 @@ Not a complete census (DN-S0's):
 `CLAUDE.md`'s hard invariants, numbered as `heap-and-tuple.md` §8:
 
 - **2, 3** - `min_key` immutable, "no tuple with `id < min_key(page)`":
-  stated for every page that holds tuples. A heap page holds Keystones in
-  no order once a slot is reused or a named `int64` key arrives (DN-D5).
-  **DN-D7: they are the btree's alone.**
+  stated for every page that holds tuples, and **kept for a heap data
+  page (DN-D7 as revised)**. They are not free there. A heap page holds
+  Keystones in no order, and two things can bring a Keystone below a
+  page's `min_key`: a named `int64` key (DN-D5) lower than the page's, and
+  nothing else - an issued Keystone is the relation's mark, above every
+  key placed (invariant 11), so a reused slot (DN-D1) always takes a
+  higher one. So 3 is a **rule of placement**: a row goes only to a page
+  whose `min_key` is at or below its Keystone (DN-R10).
 - **4** - "Tuples within a catalog chain page are unordered. A btree leaf
-  is sorted by placement": a heap data page is a third kind, unordered by
-  DN-D7.
-- **What DN-D7 leaves to read**: 2 and 3 are written today with no page
-  class named, and a catalog chain page holds tuples too. Whether any
-  code outside the btree reads a page's `min_key` or relies on 3 - a
-  catalog chain's growth, recovery, a checker - was not read; DN-S0 reads
-  it, so that "btree-only" takes nothing from a page that is neither a
-  btree's nor a heap's.
+  is sorted by placement": a heap data page is a third kind, unordered
+  (DN-D7). 4 gains a sentence; 2 and 3 keep their text.
+- **What `min_key` is on a heap page** is not said by 2 or 3: only that
+  it never changes and nothing sits below it. DN-Q11.
 - **11** - "every relation's tuple key is a unique 48-bit id, carried only
   by the Keystone word, never rebound except by `PURGE`": holds by DN-D2;
   "a declared tuple key - the first column - must be integer-typed" becomes
@@ -217,12 +221,18 @@ Binding once DN opens.
   relation moves outside its floor.
 - **DN-R8 - no constant without a measurement**: a rowid's bit split, a
   per-core page count, a fill threshold.
-- **DN-R9 - the invariants are amended before the code**: 2, 3 and 4 are
-  restated as the btree's (DN-D7) and 11 for a heap, in
-  `heap-and-tuple.md` §8 and `CLAUDE.md`, before DN-S2 writes a heap
-  page. **Not amended at the mark**: both files state what is built, and
-  no heap data page exists; DN-S1 writes them, after DN-S0's reading of
-  §1.4's last item.
+- **DN-R9 - the invariants are amended before the code**: 4 gains "a heap
+  data page is unordered" (DN-D7 as revised) and 11 is restated for a
+  heap, in `heap-and-tuple.md` §8 and `CLAUDE.md`, before DN-S2 writes a
+  heap page; 2 and 3 are not reworded. **Not amended at the mark**: both
+  files state what is built, and no heap data page exists; DN-S1 writes
+  them.
+- **DN-R10 - a heap page's `min_key` is immutable and nothing sits below
+  it** (invariants 2 and 3, DN-D7 as revised). An insert places a row
+  only on a page whose `min_key` is at or below the row's Keystone; a
+  slot's reuse is under the same test; a page that cannot take a row is
+  passed over, never rewritten. Checked where a row is placed and again
+  by redo.
 
 ## 4. Items for the operator (DN-Q)
 
@@ -238,7 +248,8 @@ Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 | DN-Q4 | The rowid's encoding and whether SQL sees it. | **`page_id << 16 \| slot` in 48 bits; not visible to SQL** | (b) a `ROWID` pseudo-column, read-only; (c) another split, measured |
 | DN-Q5 | A foreign key to a heap. | **a heap with a single `int64` PK is a parent as today (F1: the Keystone); a heap with another PK, or none, is not a parent** in DN | (b) a foreign key to any unique PK - a new FK form, its own order |
 | DN-Q6 | `PURGE` on a heap. | **`PURGE` by Keystone where the Keystone is the PK; refused elsewhere, as today** | (b) by PK |
-| DN-Q7 | Where an insert goes. | **a page of its core's, a free slot on it first, a new page when none** | (b) the free map's first free slot, any core |
+| DN-Q7 | Where an insert goes. | **a page of its core's whose `min_key` admits the row (DN-R10), a free slot on it first, a new page when none** | (b) the free map's first free slot, any core, under the same test |
+| DN-Q11 | **What a heap data page's `min_key` is** (raised by DN-D7 as revised). An issued Keystone always passes DN-R10; a named `int64` key below every open page's `min_key` does not. | **the Keystone of the first row placed on the page.** A named key below every page with room opens a new page, whose `min_key` is that key. **The cost is stated**: keys named in descending order open a page a row, and DN-S0 measures a descending named load before DN-S2. What the field then gives a reader - a lower bound a scan by Keystone can skip a page on - has no consumer in DN and none is built | (b) a page opened by a named key takes the lowest valid key, 1, as its `min_key`: no page a row, and the invariant holds on that page with nothing to say; (c) named `int64` keys on a heap are placed through a second set of pages, apart from the issued ones |
 | DN-Q8 | What `CREATE TABLE` without `HEAP` makes. | **a btree relation, as today** | (b) a heap |
 | DN-Q9 | A BZ heap on an existing volume. | **the mount refuses the volume by name**, as every earlier format change did | (b) a mount converts it; (c) BZ's heap kept under another keyword |
 | DN-Q10 | Cabin and Waystone over a heap. | **their entries keep the Keystone (C2) and their location hint becomes the rowid**, verified as today | (b) neither serves a heap in DN |
@@ -280,3 +291,13 @@ reserved word; DN-R5 and DN-Q1 rewritten, the spelling and the edges left
 open. DN-D7: invariants 2 to 4 are the btree's alone; §1.4 and DN-R9
 rewritten, the two files that state the invariants not touched until
 DN-S1. Nothing was run.
+
+### DN-D7 revised, 2026-11-20
+
+In the main checkout on `main` at `e3b770e6`, documents only
+(`raft-marks-2026-11-20.md` §15). The `min_key` invariants bind a heap
+data page; only 4's order is the btree's. §1.4 rewritten: on a heap,
+invariant 3 is a rule of placement, and only a named `int64` key can meet
+it. DN-R10 and DN-Q11 added, DN-Q7 and DN-R9 amended. The reading of a
+catalog chain page that the first form of DN-D7 owed is dropped: 2 and 3
+keep their scope. Nothing was run.

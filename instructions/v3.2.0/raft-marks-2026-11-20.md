@@ -145,3 +145,13 @@ took under them.
 | **Does not settle** | the word's spelling ("or the like"; CLA proposes `keyidentity`) and its edges (DN-Q1: what it reads on a relation with a declared Keystone, a volume that already declares the name, the fingerprint's bump rule); invariant 11's wording for a heap; DN-Q0 and DN-Q2..Q10; whether DN opens |
 | **Recorded at** | this file; the DN order's header, §0, §1.4, §3, §4 and §7; this file's row in `instructions/v3.2.0/index.md` |
 
+## 15. DN-D7 revised: the `min_key` invariants bind a heap too
+
+| | |
+|---|---|
+| **Word** | *"But even for a heap, the `min_key` invariant is kept (applied)."* (given in Korean; recorded in English) - straight after §14's "invariants 2 to 4 are btree-only" |
+| **Mark** | **DN-D7 as revised: invariants 2 and 3 bind a heap data page; invariant 4's order is the btree leaf's alone, and a heap data page is unordered.** CLA reads "the `min_key` invariant" as 2 and 3 together. The order is amended in the main checkout on `main` at `e3b770e6`, documents only: on a heap invariant 3 becomes a rule of placement (DN-R10) - a row goes only to a page whose `min_key` is at or below its Keystone |
+| **What it costs, as read** | An issued Keystone always passes (the mark is above every key placed, so a reused slot takes a higher one). A named `int64` key (DN-D5) lower than every open page's `min_key` cannot be placed on them; keys named in descending order would open a page a row under CLA's proposal for what the field is (DN-Q11 (a)) |
+| **Does not settle** | DN-Q11 - what a heap page's `min_key` is; whether the reading of "the `min_key` invariant" as 2 and 3 is the operator's; DN-Q0..Q10 as before; whether DN opens |
+| **Recorded at** | this file; the DN order's header, §0, §1.4, §3, §4 and §7; this file's row in `instructions/v3.2.0/index.md` |
+
