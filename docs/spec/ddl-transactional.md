@@ -569,13 +569,15 @@ commit record for the durability class to ride on. `SHOW META`:
 `ddl_durable=1`, `catalog_recovered=1`.
 
 **One relation is outside this rule, by ratification** (`docs/rules/rules.md`
-§5). `sys.access_stats` is written **unlogged**: its whole content is a
+§5). `sys.statistics` is written **unlogged**: its whole content is a
 statistic, which invariant 8 already prices as performance and never as a
-result, so it is neither redone nor undone and every mount **discards**
-it (`Catalog::DiscardAccessStats`), cutting a damaged chain. Read the
-paragraph above as "every catalog write except that one" — the exception
-is sole, and a second relation would have to be shown to meet the same
-test rather than to resemble this one.
+result, so it is neither redone nor undone; a mount takes the rows a
+completed shutdown wrote and empties the chain (`plan-stats.md` PS16).
+Read the paragraph above as "every catalog write except that one" — the
+exception is sole, and a second relation would have to be shown to meet
+the same test rather than to resemble this one. `sys.access_stats`, the
+exception's first member, is a memory store since DA
+(`heap-and-tuple.md` §7) and writes no catalog page.
 
 Two contract consequences, stated because nothing else states them: **a
 failed DDL statement inside an explicit transaction poisons the session**,

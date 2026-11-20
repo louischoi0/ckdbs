@@ -680,23 +680,21 @@ StatusOr<exec::CatalogView> CommandDispatcher::AccessStatsView() {
                   {"column_mask", kInt},
                   {"uses", kInt},
                   {"last_seen", kInt}});
-    auto rows = catalog_.ListAccessStats();
-    if (!rows.ok()) return rows.status();
+    // The instance's store, every core's part merged, in key order (DA-Q2 (a)).
+    const std::vector<stats::AccessShape> shapes = access_stats_->Snapshot();
     auto labels = RelationLabels::Read(catalog_, nullptr);
     if (!labels.ok()) return labels.status();
-    for (const catalog::SysAccessStatRow& row : rows.value()) {
-        auto kind = exec::AccessKindOfStored(row.kind);
+    for (const stats::AccessShape& row : shapes) {
         auto access = catalog_.InitTableAccess(row.rel_id);
         std::string columns;
         for (std::uint16_t col = 0; col < 64; ++col) {
-            if ((row.column_mask & (std::uint64_t{1} << col)) == 0) continue;
+            if ((row.column_mask & catalog::ColumnBit(col)) == 0) continue;
             if (!columns.empty()) columns += ',';
             columns += ColumnLabel(access, col);
         }
         view.rows.push_back({Int(row.rel_id), labels.value().Namespace(row.rel_id), labels.value().Name(row.rel_id),
-                             Str(kind.has_value() ? exec::AccessKindName(*kind) : "?"),
-                             Str(std::move(columns)), Int(row.column_mask), Int(row.use_count),
-                             Int(row.last_seen)});
+                             Str(exec::AccessKindName(row.kind)), Str(std::move(columns)),
+                             Int(row.column_mask), Int(row.uses), Int(row.last_seen)});
     }
     return view;
 }

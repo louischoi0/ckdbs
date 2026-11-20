@@ -372,9 +372,9 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // CC12/CR1. One frame table serves every core, so no core needs a right to
 // read a page another loaded.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
-// sys.access_stats' root is fixed here, like every catalog root. Every core
-// writes it under its root page latch (AT-S7); the per-core copy CC12/CR3
-// left open was declined (`core_runtime.hpp`).
+// sys.access_stats' root, made by bootstrap and written by nothing since DA
+// (the rows are memory-resident, `stats/access_stats.hpp`); it leaves at
+// DA-S3.
 inline constexpr PageId kCatalogPageAccessStats = 11;
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
@@ -432,7 +432,7 @@ inline constexpr PageId kCatalogPagePlans = 18;
 // **The oid is the owner a page the chain grows onto is stamped with**
 // (page.md §2a), as `heap::ChainInsert` stamps a declaration relation's:
 // the page says whose it is, so a walk that must not stray into another
-// relation's page - the `sys.access_stats` discard - can test a link by
+// relation's page - an unlogged chain's discard - can test a link by
 // what it reaches, and reclaim, which frees only a page a dropped user
 // relation owns, passes it by. The roots themselves keep the owner bootstrap gave
 // them: 0 for the fixed core, the relation's oid for the three row-codec

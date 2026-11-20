@@ -188,7 +188,7 @@ is no session default and no `SET TRANSACTION` spelling (CS-Q2 (a)); KWP's
   read-only session too, a second line for a route that enters below the
   head. **What is not the transaction's write is not refused**: `SYNC`
   (admin's) may write a checkpoint record, and a read records what an
-  autocommit read records - the unlogged `sys.access_stats` fold, an
+  autocommit read records - its access shapes, a memory add since DA, an
   opted pattern's Waystone trail, a Cabin bank under the bank's own gate
   (CS-Q11 (a)). The `in_flight_at_mint` bit and the `CommitCeiling` test
   decline a bank from a `REPEATABLE READ` view held past a commit.

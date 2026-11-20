@@ -356,7 +356,8 @@ structure of the relation reaches - a failed split's, a failed
 - **Dependents drop with it**: its indexes, Cabins (catalog rows and
   in-memory sets), columns and child-side foreign keys.
 - Patterns and trails naming the dead relation die quietly (advisory);
-  `sys.access_stats` ghosts stay, keyed by an oid that cannot return.
+  `sys.access_stats` ghosts stay until a restart, keyed by an oid that
+  cannot return.
 - **Atomic inside a transaction as of 2026-08-16**: `ROLLBACK` restores
   the relation and its rows. Unlogged still, so a committed drop is no
   more crash-durable than any catalog write.

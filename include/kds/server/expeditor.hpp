@@ -305,6 +305,15 @@ public:
         // enable it is a history that does not exist when it is asked for.
         bool access_statistics = true;
 
+        // **The bytes of one core's part of `sys.access_stats`' store**
+        // (`access_stats_bytes_per_core`, DA-Q8 (a)): a flat table of
+        // `stats::AccessStats::kSlotBytes`-byte slots, half of them admitted
+        // as shapes, allocated at the part's first record. The default admits
+        // 4,096 shapes a core; a value outside
+        // `AccessStats::CheckBytesPerCore`'s range is refused at boot, `0`
+        // among them - `access_statistics` is the switch.
+        std::uint64_t access_stats_bytes_per_core = stats::AccessStats::kDefaultBytesPerCore;
+
         // ---- Decay score and Cabin controller (docs/spec/decay.md,
         // docs/spec/cabin-controller.md) ------------------------------------
 
@@ -875,6 +884,9 @@ private:
     // `sys.indexes`' usage counts (`stats/index_stats.hpp`, DF-S3): one
     // store every core's reads fold into, memory only, this instance's.
     stats::IndexStats index_stats_;
+    // `sys.access_stats`' shapes (`stats/access_stats.hpp`, DA-R6): the
+    // instance's, sized by `access_stats_bytes_per_core` at the mount.
+    std::optional<stats::AccessStats> access_stats_;
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;

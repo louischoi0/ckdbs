@@ -36,8 +36,7 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // **What a restored volume cannot trust, made unreachable** (BR-S8). The
 // copy holds every page as of some instant of the window; redo brings the
 // logged ones to the stop, and nothing brings the unlogged ones anywhere -
-// Waystone pages and `sys.access_stats` (invariant 8 and CR6 make both
-// advisory). Two halves:
+// Waystone pages (invariant 8 makes them advisory). Two halves:
 //
 // `ForgetUnwrittenPages` - offline, on the laid-out data file: the check
 // above, and then every user page the copied maps call allocated whose
@@ -50,10 +49,9 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // `DiscardAdvisoryState` - at every mount, after recovery: every pattern's
 // Waystone root is replaced - by a fresh empty directory for a pattern opted
 // in while `waystone_recording` is on, by none otherwise
-// (`Catalog::RenewPatternDirectories`, CF-S1b) - and `sys.access_stats`
-// emptied, so no unlogged structure can reach a page the first half gave
-// back, nor - after a crash - a child whose allocation bit never reached the
-// device. The renewal's walk sets the instance's opted count (CF-S1c), which
+// (`Catalog::RenewPatternDirectories`, CF-S1b), so no unlogged directory can
+// reach a page the first half gave back, nor - after a crash - a child whose
+// allocation bit never reached the device. The renewal's walk sets the instance's opted count (CF-S1c), which
 // the mount's log line reads.
 Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out = nullptr);
 

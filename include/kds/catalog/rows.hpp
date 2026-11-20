@@ -697,12 +697,15 @@ static_assert(SysPatternRow::kOnDiskSize == 41);
 // it says, so losing it costs performance rather than answers.
 inline constexpr std::uint16_t kPatternWaystone = 0x1;
 
-// ---- sys.access_stats -------------------------------------------------
+// ---- sys.access_stats, as a pre-DA build stored it -----------------------
 //
-// How often each **access shape** ran, and when it last ran
-// (`docs/spec/heap-and-tuple.md` §7). One row per
-// `(kind, rel_id, column_mask)`, read by `SHOW ACCESS` and CREATE CABIN's
-// no-filter warning.
+// **Written and read by no build since DA**: the statistic is the
+// instance's memory store (`stats/access_stats.hpp`), and this row stays
+// only with the bootstrap that still makes page 11 (DA-Q1 (a), DA-S3). What
+// follows is the row's meaning as those builds wrote it.
+//
+// How often each **access shape** ran, and when it last ran. One row per
+// `(kind, rel_id, column_mask)`.
 //
 // **Keyed by columns, never by values.** `WHERE flag = 1` and
 // `WHERE flag = 2` are one row here. That is what makes the relation
@@ -737,10 +740,9 @@ struct SysAccessStatRow {
     // reports it.
     std::uint64_t last_seen;
 
-    // The `exec::AccessKind`, mapped explicitly by
-    // `exec::StoredAccessKind()` - never a raw cast. The enum's first
-    // value is 0 and so is a zeroed page's, which is exactly the collision
-    // `stmt_class` already had to be taught to avoid.
+    // The access kind as a pre-DA build stored it, 0 unset. No build since
+    // DA writes or reads the row: the struct stays with the bootstrap that
+    // still makes page 11, until DA-S3 removes both.
     std::uint8_t kind;
 
     static constexpr std::size_t kRelIdOffset = 0;
@@ -766,19 +768,6 @@ constexpr std::uint64_t ColumnBit(std::uint16_t col) noexcept {
     return col < 64 ? std::uint64_t{1} << col : 0;
 }
 static_assert(SysAccessStatRow::kOnDiskSize == 33);
-
-// The stored `kind` a zeroed or never-written row decodes to, and therefore
-// the one value that never names a real access kind.
-inline constexpr std::uint8_t kAccessKindUnset = 0;
-
-// Distinct access shapes recorded before new ones stop being admitted.
-//
-// `[PROPOSED]`. The population is (kind x relation x column combination),
-// which in a real schema is dozens - a relation is searched on a handful of
-// columns, not on the power set. The cap exists because "in a real schema"
-// is an assumption, and an unbounded catalog relation on the statement path
-// is the kind of assumption that fails quietly.
-inline constexpr std::size_t kMaxAccessShapes = 4096;
 
 // The class value a row carries when nothing has classified the statement
 // - which is every row until the parser gains its class tags. Named so no
@@ -969,7 +958,7 @@ static_assert(SysCabinRow::kOnDiskSize == 37);
 
 // `origin` and `status`, with **0 reserved for "unset"** in both.
 //
-// The same collision `StoredStatementClass` and `StoredAccessKind` were
+// The same collision `StoredStatementClass` and a stored access kind were
 // each taught to avoid: a zeroed or never-written row decodes to 0, so a
 // 0 that also named a real value would make every absent row read as a
 // real one. Here that would be an active user-declared Cabin conjured out

@@ -172,8 +172,10 @@ controller's snapshot sequence.
   the scores and decisions behind them.
 - Statistics rows are never removed, and a statistic outlives its
   relation — a vanished relation prints `rel=oid=<n>`.
-- Every core records into the instance's one `sys.access_stats`, so on a
-  multi-core instance `SHOW ACCESS` reflects every core's traffic.
+- Every core records into its own part of the instance's one
+  `sys.access_stats` store, and a read merges every part, so on a
+  multi-core instance `SHOW ACCESS` reflects every core's traffic. The
+  store is memory: a restart empties it.
 - Nothing here can change a query result: the epoch pairing rule keeps
   every location hint verified, and the Cabin controller manages only
   Observational Cabins, and dropping one returns its queries to the tree

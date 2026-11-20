@@ -117,9 +117,10 @@ reusable, which matters against the columns-ever-created ceiling), its
 
 Patterns and trails whose text or entries name the dead relation stop
 resolving and answer nothing — invariant 8's license, the rename
-argument verbatim. `sys.access_stats` rows for the dead oid stay as
-ghosts (keyed by an oid that can never be reissued, they can never
-mis-attribute; `SHOW ACCESS` may list them and honesty costs a row).
+argument verbatim. `sys.access_stats` shapes for the dead oid stay as
+ghosts until a restart (keyed by an oid that can never be reissued, they
+can never mis-attribute; `SHOW ACCESS` may list them and honesty costs a
+row, which counts against its core's bound).
 
 ## DT5 — One bump; atomic, not isolated
 

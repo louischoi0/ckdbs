@@ -52,8 +52,8 @@
 // every core writes the catalog's pages under the page latch, the DDL's
 // relation `X` and the schema word (`catalog.md` CT5); every core reaches
 // the one free map under its structure latch; and every core records and
-// replays trails, writes `sys.access_stats` itself under the relation's
-// root page latch, and observes into the instance's one
+// replays trails, records its access shapes into its own part of the
+// instance's `stats::AccessStats`, and observes into the instance's one
 // `stats::CabinStore` (`cabin.md` §6's announce).
 // The read-only peer catalog, the per-core extent lease and the per-core
 // Cabin store retired (AT-S5, AW-S1b, AT-S7); their history is at cf889b63.
@@ -153,9 +153,9 @@ public:
 
         // Whether this core records access shapes at all. **The
         // instance's own `access_statistics` setting**, passed down rather
-        // than re-decided here. Every core writes `sys.access_stats` itself
-        // (AT-S7), so the operator's one switch means the same thing on
-        // every core.
+        // than re-decided here. Every core records into its own part of the
+        // instance's store (DA-R4), so the operator's one switch means the
+        // same thing on every core.
         bool access_statistics = true;
 
         // **Waystone's two switches, on the same terms** (AT-S7,

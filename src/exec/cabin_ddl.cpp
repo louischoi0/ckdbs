@@ -6,6 +6,7 @@
 #include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/declaration_relation.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/stats/access_stats.hpp"
 
 namespace kds::exec {
 namespace {
@@ -63,16 +64,13 @@ StatusOr<Resolved> Resolve(catalog::Catalog& catalog, const parser::CabinStmt& s
 //
 // A failure to read the statistics is not a failure to create a Cabin: the
 // warning is dropped and the statement proceeds.
-bool AnyFilterRecordedOn(catalog::Catalog& catalog, catalog::Oid rel_oid,
+bool AnyFilterRecordedOn(const stats::AccessStats* access, catalog::Oid rel_oid,
                          std::uint16_t col_pos) {
     const std::uint64_t bit = catalog::ColumnBit(col_pos);
-    if (bit == 0) return true;  // outside the mask; say nothing rather than warn wrongly
-    auto shapes = catalog.ListAccessStats();
-    if (!shapes.ok()) return true;
-
-    for (const catalog::SysAccessStatRow& row : shapes.value()) {
-        if (row.rel_id != rel_oid) continue;
-        if ((row.column_mask & bit) != 0) return true;
+    // Outside the mask, or no statistics: say nothing rather than warn wrongly.
+    if (bit == 0 || access == nullptr) return true;
+    for (const stats::AccessShape& shape : access->Snapshot()) {
+        if (shape.rel_id == rel_oid && (shape.column_mask & bit) != 0) return true;
     }
     return false;
 }
@@ -173,7 +171,8 @@ StatusOr<std::optional<std::uint64_t>> FindExprCabin(catalog::Catalog& catalog,
 StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageStore& store,
                                      wal::WalManager* wal, const parser::CabinStmt& stmt,
                                      catalog::Oid default_namespace,
-                                     const txn::ReadView* view) {
+                                     const txn::ReadView* view,
+                                     const stats::AccessStats* access) {
     if (stmt.shape != catalog::kCabinShapeColumn) {
         return CreateExprCabin(catalog, store, wal, stmt, default_namespace, view);
     }
@@ -200,7 +199,7 @@ StatusOr<CabinDdlResult> CreateCabin(catalog::Catalog& catalog, storage::PageSto
     // Warnings are collected *after* the write, because none of them is a
     // reason not to write - and computing them first would make a statement's
     // success depend on a statistics read that has nothing to do with it.
-    if (!AnyFilterRecordedOn(catalog, out.rel_oid, out.col_pos)) {
+    if (!AnyFilterRecordedOn(access, out.rel_oid, out.col_pos)) {
         out.warnings.push_back("no recorded access has filtered '" + stmt.table_name + "." +
                                stmt.column_name +
                                "'; this cabin will stay empty until traffic probes that column "

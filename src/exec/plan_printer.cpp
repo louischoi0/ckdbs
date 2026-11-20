@@ -37,37 +37,6 @@ bool ShapeAdmitsDescent(const StepChain& chain) noexcept {
     });
 }
 
-std::uint8_t StoredAccessKind(AccessKind kind) noexcept {
-    switch (kind) {
-        case AccessKind::kLookup: return 1;
-        case AccessKind::kProbe: return 2;
-        case AccessKind::kRange: return 3;
-        case AccessKind::kFilterScan: return 4;
-        case AccessKind::kScan: return 5;
-        // 6 onward appended rather than inserted: these numbers are
-        // persisted in sys.access_stats, so a value never changes meaning
-        // and a new kind takes the next free one however the enum is ordered.
-        case AccessKind::kCabinProbe: return 6;
-        case AccessKind::kIndexProbe: return 7;
-        case AccessKind::kIndexRange: return 8;
-    }
-    return catalog::kAccessKindUnset;
-}
-
-std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept {
-    switch (stored) {
-        case 1: return AccessKind::kLookup;
-        case 2: return AccessKind::kProbe;
-        case 3: return AccessKind::kRange;
-        case 4: return AccessKind::kFilterScan;
-        case 5: return AccessKind::kScan;
-        case 6: return AccessKind::kCabinProbe;
-        case 7: return AccessKind::kIndexProbe;
-        case 8: return AccessKind::kIndexRange;
-        default: return std::nullopt;
-    }
-}
-
 std::uint8_t StoredStatementClass(StatementClass klass) noexcept {
     switch (klass) {
         case StatementClass::kPointSelect: return 1;

@@ -1128,16 +1128,4 @@ bool HasReplayableStep(const StepChain& chain) noexcept;
 // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3).
 bool ShapeAdmitsDescent(const StepChain& chain) noexcept;
 
-// The value `SysAccessStatRow::kind` stores for an access kind.
-//
-// **Not a cast**, for `StoredStatementClass`'s reason: `kLookup` is 0 and so is a zeroed catalog row, so a straight cast
-// would make every never-written row read as a recorded tuple key lookup. Mapping
-// it explicitly also means this enum can gain a value or be reordered
-// without silently changing what stored statistics mean.
-std::uint8_t StoredAccessKind(AccessKind kind) noexcept;
-
-// The reverse, for rendering a stored row. Returns nullopt for a value no
-// build of this engine ever wrote - which a zeroed row decodes to.
-std::optional<AccessKind> AccessKindOfStored(std::uint8_t stored) noexcept;
-
 }  // namespace kds::exec

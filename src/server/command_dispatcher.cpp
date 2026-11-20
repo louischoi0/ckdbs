@@ -2675,6 +2675,11 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // full part could not take, whose counts the view lacks.
     section("index_stats");
     os << " index_stats_dropped=" << index_stats_->Dropped();
+    // **`sys.access_stats`' store** (DA), the instance's: new shapes a full
+    // part could not take, and what one core's part admits.
+    section("access_stats");
+    os << " access_stats_dropped=" << access_stats_->Dropped()
+       << " access_stats_shapes_per_core=" << access_stats_->ShapesPerCore();
     // **The leaf division and compaction counts** (DF-S4), the process's:
     // trees a full part could not take.
     section("leaf_stats");
@@ -4304,7 +4309,7 @@ DispatchOutcome CommandDispatcher::RunCabinDdl(const parser::CabinStmt& stmt,
     std::optional<txn::ReadView> committed;
     if (txn_ != nullptr) committed = txn_->MintCheckView(txn::kNoTrxId);
     auto result = exec::CreateCabin(catalog_, page_store_, wal_, stmt, default_namespace,
-                                    committed.has_value() ? &*committed : nullptr);
+                                    committed.has_value() ? &*committed : nullptr, access_stats_);
     if (!result.ok()) {
         return Refused(result.status());
     }
@@ -4692,8 +4697,9 @@ DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt
         NoteCatalogRowChanges(ddl, reused);
         if (!added.ok()) return refused(added);
         // CD-OI-13 (a): a reused position's access shapes are the dropped
-        // column's history. A statistic, so a failure here is dropped.
-        (void)catalog_.ForgetAccessStats(oid.value(), pos.value());
+        // column's history, removed from every core's part before the reply
+        // (DA-R5).
+        access_stats_->Forget(oid.value(), pos.value());
         if (logging(LogLevel::kInfo)) {
             log_->Info("ddl", "added column " + stmt.table_name + "." + col.name);
         }
@@ -5301,11 +5307,8 @@ void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_o
     // through, so `SHOW ACCESS` compares constraint cost against query cost
     // without anyone having to know which is which.
     if (!access_stats_enabled_) return;
-    Status recorded = catalog_.RecordAccess(exec::StoredAccessKind(kind), rel_oid, column_mask,
-                                            static_cast<std::uint64_t>(NowNs()));
-    // Dropped deliberately: a statistic that could fail a write would be a
-    // worse trade than no statistic (catalog.hpp says so at the source).
-    (void)recorded;
+    access_stats_->Record(core_id_, kind, rel_oid, column_mask,
+                          static_cast<std::uint64_t>(NowNs()));
 }
 
 namespace {
@@ -10498,11 +10501,11 @@ void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
     // this is access statistics (docs/spec/heap-and-tuple.md §7),
     // not a trail, and it is collected whether or not anything is recording
     // or replaying one.
-    // **The instance's one switch decides it on every core** (AT-S7):
-    // every core writes the relation itself, so `access_statistics` means
-    // the same thing wherever the statement ran.
+    // **The instance's one switch decides it on every core**: every core
+    // adds to its own part of the instance's store (DA-R4), so
+    // `access_statistics` means the same thing wherever the statement ran.
     if (!access_stats_enabled_) return;
-    stats::RecordChainAccess(catalog_, chain, static_cast<std::uint64_t>(NowNs()));
+    stats::RecordChainAccess(*access_stats_, core_id_, chain, static_cast<std::uint64_t>(NowNs()));
 }
 
 void CommandDispatcher::NoteCabinWrite(const catalog::TableAccess& access,

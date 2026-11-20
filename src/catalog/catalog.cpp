@@ -3172,7 +3172,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
     Status wrote = Status::OK();
     {
         // **The relation's root page, held exclusive across the decision and
-        // the write** (AT-S7's hold, `RecordAccess`'s reason): every core
+        // the write** (AT-S7's hold): every core
         // runs `WAYSTONE ON`, and the existence check and the insert under it
         // are a read-then-write two cores would both pass. The loser's row
         // would be a second current row for one shape, which
@@ -3434,129 +3434,6 @@ StatusOr<std::uint64_t> Catalog::RecountOptedPatterns() {
     }
     StoreOptedCount(opted);
     return opted;
-}
-
-Status Catalog::ForgetAccessStats(Oid rel_id, std::uint16_t col_pos) {
-    const std::uint64_t bit = ColumnBit(col_pos);
-    if (bit == 0) return Status::OK();  // a mask names positions below 64 only
-    // RecordAccess's hold, so no admission races the retire.
-    auto held = store_.Get(kCatalogPageAccessStats);
-    if (!held.ok()) return held.status();
-    for (;;) {
-        auto acted = ForFirstRow<SysAccessStatRow>(
-            store_, kCatalogPageAccessStats,
-            [&](SysAccessStatRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
-                const heap::PageView::Tuple&) -> StatusOr<bool> {
-                if (row.rel_id != rel_id || (row.column_mask & bit) == 0) return false;
-                // Unlogged, by CR6 (RecordAccess states it).
-                if (Status s = RetireLogged(/*wal=*/nullptr, store_, page, page_id, i,
-                                            kBootstrapXid);
-                    !s.ok()) {
-                    return s;
-                }
-                return true;
-            });
-        if (!acted.ok()) return acted.status();
-        if (!acted.value()) return Status::OK();
-    }
-}
-
-Status Catalog::RecordAccess(std::uint8_t kind, Oid rel_id, std::uint64_t column_mask,
-                              std::uint64_t last_seen, std::uint64_t count) {
-    if (kind == kAccessKindUnset) {
-        return Status::InvalidArgument("catalog: access kind 0 is reserved for an unset row");
-    }
-
-    // **The relation's root page, held exclusive across the whole call**
-    // (AT-S7, `crosscore.md` CC13). Every core records its own accesses,
-    // so the walk below, the increment it makes and the
-    // admission of a shape nobody has seen have to be one act against a
-    // relation two reactors reach. Page 11 is the door: `ForFirstRow` and
-    // `InsertRow` both enter the chain here, so a core holding it exclusive
-    // is the only core inside, and the acquisition each of them makes on
-    // this core is the re-entrant one the latch grants its owner
-    // (`device_page_store.hpp`, "Re-entrant for the owning core").
-    //
-    // **The race it closes is the admission, not the increment.** A match
-    // is read, changed and written under `ForFirstRow`'s own hold on the
-    // page it was found on, so no count is lost without this; what is lost
-    // without it is the *shape* - two cores that both miss the same new one
-    // both admit it, and the second row no later increment ever reaches,
-    // because `ForFirstRow` stops at the first match. One shape's count
-    // would split in two and stay split, which is the one way an advisory
-    // statistic can mislead the mover rather than merely thin out.
-    //
-    // **What it costs, unmeasured:** once per step per statement on every
-    // core, so at `cores > 1` every statement end takes one exclusive latch
-    // on one page; the hold spans a chain walk bounded by
-    // `kMaxAccessShapes` and, on the admit path, an `InsertRow` that may
-    // grow the chain. `access_statistics = off` is the way out.
-    auto held = store_.Get(kCatalogPageAccessStats);
-    if (!held.ok()) return held.status();
-
-    // `live` counts every row the walk passed, across every page of the
-    // chain - what the cap below is measured against.
-    std::size_t live = 0;
-    auto acted = ForFirstRow<SysAccessStatRow>(
-        store_, kCatalogPageAccessStats,
-        [&](SysAccessStatRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
-            const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-        ++live;
-        if (row.kind != kind || row.rel_id != rel_id || row.column_mask != column_mask) {
-            return false;
-        }
-
-        // Saturating for the reason rows.hpp gives: a wrapped count would
-        // invert the ranking this exists to produce. `count` is 1 on the
-        // statement path, the one path since AT-S7 retired CR7's batch
-        // (whose fold passed more); the saturation stays an add.
-        if (row.use_count > std::numeric_limits<std::uint64_t>::max() - count) {
-            row.use_count = std::numeric_limits<std::uint64_t>::max();
-        } else {
-            row.use_count += count;
-        }
-        row.last_seen = last_seen;
-        auto encoded = row.Encode();
-        // In place - the row size is fixed, so there is nothing to move.
-        //
-        // **Unlogged, by CR6** (`docs/rules/rules.md` §5): `nullptr` where
-        // every other catalog write passes `wal_`. This relation's whole
-        // content is a statistic - invariant 8's advisory class, priced as
-        // performance and never as a result - so it is neither redone nor
-        // undone, and every mount discards it (`DiscardAccessStats`). It is the **sole** exception to
-        // RV3's rule that catalog writes are logged as ordinary record
-        // types; a second one has to be shown to meet the same test rather
-        // than to resemble this one.
-        if (Status s = OverwriteLogged(/*wal=*/nullptr, store_, page, page_id, i, encoded, wal::kNoTxnId, tuple.trx_id, tuple.undo_ptr); !s.ok()) {
-            return s;
-        }
-        return true;
-    });
-    if (!acted.ok()) return acted.status();
-    if (acted.value()) return Status::OK();
-
-    // A shape nobody has recorded. Admitted only under the cap: an
-    // unbounded catalog relation written from the statement path is the
-    // failure this guards, and refusing a *new* shape while continuing to
-    // count every known one degrades the statistic rather than the server.
-    if (live >= kMaxAccessShapes) {
-        return Status::ResourceExhausted("catalog: sys.access_stats is at its shape cap");
-    }
-
-    SysAccessStatRow row{};
-    row.rel_id = rel_id;
-    row.column_mask = column_mask;
-    row.use_count = count;
-    row.last_seen = last_seen;
-    row.kind = kind;
-    // No BumpVersion(): nothing cached is derived from these rows - a
-    // statistic appearing cannot stale a cached relation - and this runs on
-    // the statement path, where a cache drop would dangle a held pointer.
-    // Unlogged and un-undone, by CR6 - the same exception the update path
-    // above takes, and for the same reason. The undo hook goes with the WAL
-    // pointer: a row nothing redoes has nothing to compensate.
-    return InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_, kCatalogPageAccessStats,
-                     row, kBootstrapXid);
 }
 
 StatusOr<std::uint64_t> Catalog::CreateCabin(Oid rel_oid, std::uint16_t col_pos,
@@ -3959,12 +3836,6 @@ StatusOr<bool> Catalog::DiscardUnloggedChain(
     return false;
 }
 
-Status Catalog::DiscardAccessStats() {
-    auto discarded = DiscardUnloggedChain(kCatalogPageAccessStats, kSysAccessStatsTable,
-                                          "sys.access_stats", /*heal_head=*/false);
-    return discarded.ok() ? Status::OK() : discarded.status();
-}
-
 StatusOr<std::vector<SysStatisticsRow>> Catalog::TakeStatisticsAtMount() {
     // One walk: each page's rows are read as the discard reaches it, before
     // it is re-formatted, so what is read is exactly what the guarded walk
@@ -4019,7 +3890,7 @@ Status Catalog::WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows
     auto emptied = DiscardUnloggedChain(kCatalogPageStatistics, kSysStatisticsTable,
                                         "sys.statistics", /*heal_head=*/true);
     if (!emptied.ok()) return emptied.status();
-    // Unlogged and un-undone, by CR6, as `RecordAccess` writes its rows; no
+    // Unlogged and un-undone, by CR6; no
     // `BumpVersion()`, since nothing cached is derived from them. The
     // closing mark last: a failure before it leaves a chain with none.
     for (const SysStatisticsRow& row : rows) {
@@ -4037,10 +3908,6 @@ Status Catalog::WriteStatisticsAtShutdown(std::span<const SysStatisticsRow> rows
     mark.count = rows.size();
     return InsertRow(/*wal=*/nullptr, /*undo_hook=*/nullptr, store_, kCatalogPageStatistics,
                      mark, kBootstrapXid);
-}
-
-StatusOr<std::vector<SysAccessStatRow>> Catalog::ListAccessStats() {
-    return ScanAll<SysAccessStatRow>(store_, kCatalogPageAccessStats, nullptr, txn_);
 }
 
 Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {

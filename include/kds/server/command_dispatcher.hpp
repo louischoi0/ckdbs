@@ -483,6 +483,9 @@ struct OptimizerSurface {
     // The instance's index usage counts (`stats/index_stats.hpp`, DF-S3). A
     // null leaves the dispatcher's own.
     stats::IndexStats* index_stats = nullptr;
+    // The instance's access statistics (`stats/access_stats.hpp`, DA). A
+    // null leaves the dispatcher's own.
+    stats::AccessStats* access_stats = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
     const stats::CabinOptimizer* controller = nullptr;
     const exec::CabinOptimizerExecutor* executor = nullptr;
@@ -2197,6 +2200,10 @@ public:
         return cabin_optimizer_on_->load(std::memory_order_relaxed);
     }
 
+    // The access statistics this dispatcher records into: the instance's
+    // where a surface handed them, its own otherwise (DA-R6).
+    stats::AccessStats& access_stats() noexcept { return *access_stats_; }
+
     // Every piece of the optimizer surface at once, as an instance hands it
     // to each core (AT-S8, `OptimizerSurface`).
     void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
@@ -2210,6 +2217,7 @@ public:
             index_stats_ = surface.index_stats;
             index_use_cache_ = {};  // pointers into the store it replaces
         }
+        if (surface.access_stats != nullptr) access_stats_ = surface.access_stats;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
         set_cabin_optimizer_view(surface.controller, surface.executor);
         cabin_optimizer_view_latch_ = surface.view_latch;
@@ -2816,6 +2824,11 @@ private:
     // `sys.indexes`' usage counts (DF-S3), on the same terms.
     stats::IndexStats own_index_stats_;
     stats::IndexStats* index_stats_ = &own_index_stats_;
+    // `sys.access_stats`' shapes (DA), on the same terms; a part allocates
+    // its table at its first record, so the fallback costs nothing once the
+    // instance's replaces it.
+    stats::AccessStats own_access_stats_;
+    stats::AccessStats* access_stats_ = &own_access_stats_;
     // **This core's counts of the indexes it last read through**, direct
     // mapped by oid: a pointer into `index_stats_`'s part of this core, which
     // holds for the store's life (`stats/index_stats.hpp`), so a repeated

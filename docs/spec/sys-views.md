@@ -103,7 +103,7 @@ returns only what it names, so that conjunct is not compared again.
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
 | `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, how often it served a read (§6.2b) and how often its leaves split (§6.2c) |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
-| `access_stats` | engine | - | an access shape `(rel, kind, columns)` of `sys.access_stats` |
+| `access_stats` | engine | - | an access shape `(rel, kind, columns)`, every core's part merged (§6.2d) |
 | `relation_stats` | engine | - | a relation's Keystone budget, its tree's shape, the join planner's prior, its write activity (§6.2), its lock waits (§6.2a) and its space (§6.2c) |
 | `cabins` | engine | - | a Cabin and its store counters |
 | `assertions` | engine | - | an assertion, whether it is enforcing, and its counters |
@@ -154,7 +154,9 @@ write never fails, delays or reorders what it describes**: a row past a
 bound or an allocation that fails is dropped and counted in `sys.meta`
 (SV3). No row is read by the engine, so none can change a result - a lost
 or wrong row costs a reader's insight, never an answer. **No switch**
-(BO-Q8): recording is always on. At BO's close it cost 0.35-0.52 us of
+(BO-Q8): recording is always on - but for `sys.access_stats` (§6.2d),
+which kept the `access_statistics` key it had as a catalog relation
+(DA-Q4 (a)). At BO's close it cost 0.35-0.52 us of
 server CPU per point statement, inside the measurement's spread
 (`bench/v3.3.0/results-bo-close-v3.3.0-23-g86d1fe1a.md`); that number is of
 the statement's record before DF widened it. What DF added costs a tuple
@@ -414,6 +416,32 @@ relations and indexes together; past it a new tree's counts are dropped and
 `leaf_stats_dropped` (`sys.meta`) says so. A tree's first division on a
 core allocates its count, under the divided leaf's hold; a failed
 allocation drops the count, never the split.
+
+### 6.2d `sys.access_stats` (`stats/access_stats.hpp`)
+
+`rel_oid`, `namespace`, `rel_name`, `kind`, `columns`, `column_mask`,
+`uses`, `last_seen`: one row per access shape `(kind, rel_oid,
+column_mask)` for the instance, every core's part merged - `uses` summed
+and saturating, `last_seen` the latest, on the instance's monotonic clock
+in ns. What a shape is and what counts is `heap-and-tuple.md` §7's. **Rows
+in key order** (DA-Q2 (a)): `rel_oid`, then the kind's name, then
+`column_mask`. A catalog relation at page 11 until DA; memory-resident
+since, like every view of this section, and the instance's
+(`Expeditor`'s, handed to every core; DA-R6), so a restart, a restore and
+a second instance in one process each start empty.
+
+**A part is a flat table of 40-byte slots, at most half of them live**
+(DA-Q8 (a), DA-Q11 (a)), allocated whole at its core's first record and
+never grown; its bytes are the boot key `access_stats_bytes_per_core`
+(DA-Q12 (a): `[80, 256 MiB]`, default 327,680, 4,096 shapes a core). A new
+shape past a part's bound, or every record of a part whose table could not
+be allocated, is dropped and counted: `sys.meta`'s `access_stats_dropped`,
+beside `access_stats_shapes_per_core`. `access_statistics = off` records
+nothing and allocates nothing. Measured at DA-S0 against the page it
+replaced: the page-11 write cost 11.6 % of a point `SELECT`'s throughput
+at `cores = 8`, outside the measurement's spread, and +0.60 us of server
+CPU at `cores = 1`, inside it
+(`bench/v3.4.14/results-da-s0-premise-v3.4.14-30-g673f025d.md`).
 
 ### 6.3 `sys.lock_waits` (`stats/lock_wait_log.hpp`)
 
