@@ -41,6 +41,23 @@ protected:
 
 // ---- SHOW PATTERNS: `sys.patterns` (docs/spec/waystone-concpets.md section 4) --
 
+// DA-S3 (superblock 38): `sys.access_stats` is a view over the instance's
+// memory store and no catalog relation - bootstrap makes neither its page
+// nor its rows.
+TEST_F(CommandDispatcherTest, AccessStatsIsAViewAndNoRelationSinceSuperblock38) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    for (const char* view : {"SELECT name FROM sys.tables", "SELECT name FROM sys.objects"}) {
+        const std::string reply = d.Dispatch(view).response;
+        const auto names = testing_view::ReadViewText(reply).Column("name");
+        EXPECT_FALSE(names.empty()) << view;
+        for (const std::string& name : names) EXPECT_NE(name, "access_stats") << view;
+    }
+    const auto shown = testing_view::ReadViewText(d.Dispatch("SHOW ACCESS").response);
+    EXPECT_FALSE(shown.columns.empty());
+    EXPECT_EQ(d.Dispatch("SHOW ACCESS").response,
+              d.Dispatch("SELECT * FROM sys.access_stats").response);
+}
+
 TEST_F(CommandDispatcherTest, ShowPatternsOnAFreshDatabaseReportsNone) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     const auto shown = testing_view::ReadViewText(d.Dispatch("SHOW PATTERNS").response);

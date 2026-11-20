@@ -697,77 +697,13 @@ static_assert(SysPatternRow::kOnDiskSize == 41);
 // it says, so losing it costs performance rather than answers.
 inline constexpr std::uint16_t kPatternWaystone = 0x1;
 
-// ---- sys.access_stats, as a pre-DA build stored it -----------------------
-//
-// **Written and read by no build since DA**: the statistic is the
-// instance's memory store (`stats/access_stats.hpp`), and this row stays
-// only with the bootstrap that still makes page 11 (DA-Q1 (a), DA-S3). What
-// follows is the row's meaning as those builds wrote it.
-//
-// How often each **access shape** ran, and when it last ran. One row per
-// `(kind, rel_id, column_mask)`.
-//
-// **Keyed by columns, never by values.** `WHERE flag = 1` and
-// `WHERE flag = 2` are one row here. That is what makes the relation
-// bounded - by the schema rather than by the data - so it needs no
-// eviction policy and no directory. The *values* already identify
-// something: a Waystone pattern instance, through `arg_hash`. Two layers,
-// two questions: "which columns does this workload search on" belongs
-// here, "which arguments repeat" belongs there.
-//
-// Field order by descending alignment, so the on-disk offsets and the
-// struct's coincide and every field carries an offsetof assert.
-struct SysAccessStatRow {
-    Oid rel_id;
-
-    // Bit per `col_pos` the access was keyed or filtered on: bit 0 (the
-    // tuple key) for a lookup, probe or range; the filtered columns for a filter
-    // scan; 0 for a bare scan.
-    //
-    // A relation wider than 64 columns folds its high columns into no bit,
-    // which makes the shape *coarser* rather than wrong - two accesses
-    // differing only past column 63 merge into one row. Stated here rather
-    // than left to be discovered.
-    std::uint64_t column_mask;
-
-    // Executions observed. Saturating, never wrapping: a count that rolled
-    // over would make the hottest access in the database look like the
-    // coldest, which is the one reading an optimizer must never be handed.
-    std::uint64_t use_count;
-
-    // Truncated logical timestamp of the last execution. Best-effort, in
-    // the same sense sys.patterns' is: it ranks shapes, and nothing
-    // reports it.
-    std::uint64_t last_seen;
-
-    // The access kind as a pre-DA build stored it, 0 unset. No build since
-    // DA writes or reads the row: the struct stays with the bootstrap that
-    // still makes page 11, until DA-S3 removes both.
-    std::uint8_t kind;
-
-    static constexpr std::size_t kRelIdOffset = 0;
-    static constexpr std::size_t kColumnMaskOffset = 8;
-    static constexpr std::size_t kUseCountOffset = 16;
-    static constexpr std::size_t kLastSeenOffset = 24;
-    static constexpr std::size_t kKindOffset = 32;
-    static constexpr std::size_t kOnDiskSize = kKindOffset + sizeof(std::uint8_t);
-
-    std::array<std::byte, kOnDiskSize> Encode() const;
-    static StatusOr<SysAccessStatRow> Decode(std::span<const std::byte> bytes);
-};
-
-static_assert(offsetof(SysAccessStatRow, rel_id) == SysAccessStatRow::kRelIdOffset);
-static_assert(offsetof(SysAccessStatRow, column_mask) == SysAccessStatRow::kColumnMaskOffset);
-static_assert(offsetof(SysAccessStatRow, use_count) == SysAccessStatRow::kUseCountOffset);
-static_assert(offsetof(SysAccessStatRow, last_seen) == SysAccessStatRow::kLastSeenOffset);
-static_assert(offsetof(SysAccessStatRow, kind) == SysAccessStatRow::kKindOffset);
-
-// One column's bit in `SysAccessStatRow::column_mask`, 0 past 63 by the
-// field's folding rule: the one shift, so no site shifts by a position >= 64.
+// One column's bit in an access shape's column mask
+// (`stats/access_stats.hpp`), 0 past 63: a relation wider than 64 columns
+// folds its high columns into no bit, which makes the shape coarser rather
+// than wrong. The one shift, so no site shifts by a position >= 64.
 constexpr std::uint64_t ColumnBit(std::uint16_t col) noexcept {
     return col < 64 ? std::uint64_t{1} << col : 0;
 }
-static_assert(SysAccessStatRow::kOnDiskSize == 33);
 
 // The class value a row carries when nothing has classified the statement
 // - which is every row until the parser gains its class tags. Named so no

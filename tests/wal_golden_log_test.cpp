@@ -120,7 +120,13 @@ namespace {
 // so the script's stream gains one image of every bootstrap page it writes
 // after the boot's flush, each at `kNoTxnId`, and every later LSN moves. No
 // record kind is added and none changes its framing (DB-R5).
-constexpr std::uint32_t kGoldenLogCrc = 0x0124c937u;
+// **Re-pinned at DA-S3** (on `di-shape-identity`,
+// `instructions/v3.2.0/workorder-da-access-stats-memory-resident.md` DA-Q1
+// (a), superblock 38): bootstrap no longer creates `sys.access_stats`, so
+// its `sys.objects` and `sys.tables` rows leave the stream, every later
+// record's LSN moves, and the script's own catalog rows land one slot
+// earlier on those two pages. No record's format changes.
+constexpr std::uint32_t kGoldenLogCrc = 0x0ed962f4u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

@@ -701,12 +701,10 @@ Status Catalog::Bootstrap() {
         // codecs (rows.hpp), never through a schema, so a column list for
         // them would describe nothing anyone reads.
         {kSysPatternsTable, "patterns", kCatalogPagePatterns},
-        // sys.access_stats is a fixed-offset typed row like the six above,
-        // so it needs nothing beyond a page and its two catalog rows -
-        // unlike sys.assertions, which stores text and therefore had to
-        // become a real row-codec relation in phase 5.
-        {kSysAccessStatsTable, "access_stats", kCatalogPageAccessStats},
-        // sys.cabins, same shape again: a page and its two catalog rows.
+        // sys.cabins is a fixed-offset typed row like the six above, so
+        // it needs nothing beyond a page and its two catalog rows - unlike
+        // sys.assertions, which stores text and therefore had to become a
+        // real row-codec relation in phase 5.
         // It issues Keystone ids (a Cabin's `cabin_id` comes from this
         // relation's own `next_id`, like sys.patterns' oid), which is why
         // it needs the sys.tables row and not just the page.
@@ -715,8 +713,8 @@ Status Catalog::Bootstrap() {
         // reason sys.cabins does - an `fk_id` comes from this relation's own
         // `next_id`, not from GenerateUserOid(), which numbers objects.
         {kSysFkeysTable, "fkeys", kCatalogPageFkeys},
-        // sys.statistics (CY-S1): a page and its two catalog rows, as
-        // sys.access_stats, and unlogged for the same reason (CR6).
+        // sys.statistics (CY-S1): a page and its two catalog rows, and
+        // unlogged (CR6).
         {kSysStatisticsTable, "statistics", kCatalogPageStatistics},
     };
 
@@ -4339,16 +4337,10 @@ StatusOr<SysIndexRow> Catalog::FindIndexOnColumn(Oid table_oid, std::uint32_t co
 }
 
 Status RegisterUnloggedClasses(storage::PageStore& store) {
-    static_assert(IsUnloggedCatalogRelation(kSysAccessStatsTable) &&
-                      IsUnloggedCatalogRelation(kSysStatisticsTable),
+    static_assert(IsUnloggedCatalogRelation(kSysStatisticsTable),
                   "the registration names every unlogged catalog relation");
-    for (const Oid owner : {kSysAccessStatsTable, kSysStatisticsTable}) {
-        if (Status s = store.AddUnloggedOwner(owner); !s.ok()) return s;
-    }
-    for (const PageId head : {kCatalogPageAccessStats, kCatalogPageStatistics}) {
-        if (Status s = store.AddUnloggedPage(head); !s.ok()) return s;
-    }
-    return Status::OK();
+    if (Status s = store.AddUnloggedOwner(kSysStatisticsTable); !s.ok()) return s;
+    return store.AddUnloggedPage(kCatalogPageStatistics);
 }
 
 }  // namespace kds::catalog

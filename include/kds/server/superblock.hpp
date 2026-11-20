@@ -244,7 +244,17 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // no page 18 and no `sys.objects`, `sys.tables` or `sys.columns` row for the
 // relation, so this build's mount would open a relation that is not there.
 // Refused with no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 37;
+//
+// 38 (DA-S3, `instructions/v3.2.0/workorder-da-access-stats-memory-resident.md`
+// DA-Q1 (a), carried by DI's format event,
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q11 (a)):
+// `sys.access_stats`' dead bootstrap is gone - no page 11, no `sys.objects`
+// or `sys.tables` row for oid 130, which is retired. A version-37 volume
+// has all three, and its `sys.tables` names a relation this build has no
+// root and no row codec for; a version-37 binary on this build's volume
+// would walk a page 11 nobody made. Refused with no migration, the
+// standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 38;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

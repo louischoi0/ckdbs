@@ -1498,8 +1498,6 @@ TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing)
     {
         const CurrentCoreGuard as_the_peer(1);
         // Writable since AT-S5.
-        const Status stats = peer.value()->store().Get(catalog::kCatalogPageAccessStats).status();
-        EXPECT_TRUE(stats.ok()) << stats.message();
         const Status patterns = peer.value()->store().Get(catalog::kCatalogPagePatterns).status();
         EXPECT_TRUE(patterns.ok()) << patterns.message();
     }

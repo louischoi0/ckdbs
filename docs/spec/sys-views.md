@@ -480,8 +480,10 @@ column_mask)` for the instance, every core's part merged - `uses` summed
 and saturating, `last_seen` the latest, on the instance's monotonic clock
 in ns. What a shape is and what counts is `heap-and-tuple.md` §7's. **Rows
 in key order** (DA-Q2 (a)): `rel_oid`, then the kind's name, then
-`column_mask`. A catalog relation at page 11 until DA; memory-resident
-since, like every view of this section, and the instance's
+`column_mask`. A catalog relation at page 11 until DA, whose dead
+bootstrap left at superblock 38 (oid 130 retired, page 11 reserved and
+unused); memory-resident since DA, like every view of this section, and
+the instance's
 (`Expeditor`'s, handed to every core; DA-R6), so a restart, a restore and
 a second instance in one process each start empty.
 

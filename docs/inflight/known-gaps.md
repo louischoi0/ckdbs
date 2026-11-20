@@ -2813,13 +2813,10 @@ Verified on `da-access-stats-memory-resident` at DA-S1
 (`instructions/v3.2.0/workorder-da-access-stats-memory-resident.md`; owner
 `docs/spec/sys-views.md` §6.2d, `docs/spec/heap-and-tuple.md` §7).
 
-- **DA-S3 is owed: page 11's bootstrap stays.** Bootstrap still makes page
-  11 and its `sys.objects` and `sys.tables` rows (oid 130), so `SHOW TABLES`
-  and `sys.tables` still list `access_stats`, and `SysAccessStatRow`, the
-  `kCatalogRoots` entry, `IsUnloggedCatalogRelation`'s and
-  `RegisterUnloggedClasses`' page-11 halves stay with it (DA-Q9 (a)). No
-  build since DA writes or reads the page. Removing them is a format event,
-  bound to the first superblock bump after 37 any order makes (DA-Q1 (a)).
+- **DA-S3 is done at superblock 38** (on `di-shape-identity`, carried by
+  DI's format event): bootstrap makes no page 11 and no `sys.objects` or
+  `sys.tables` row for oid 130, which is retired; page 11 is reserved and
+  unused, as page 10. A version-37 volume does not mount.
 - **A forget orders the writes, not the statements** (DA-R5): a `SELECT`
   whose borrow was refused and that records after an `ADD COLUMN`'s forget
   can re-admit the reused position's shape, as page 11's hold allowed.
