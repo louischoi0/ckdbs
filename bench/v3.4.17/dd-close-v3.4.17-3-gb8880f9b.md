@@ -226,3 +226,69 @@ With a second core, **writers on the other core go on through the purge** (6,235
 | `p2b`'s host was busy (a competing build from 14:07:11) | reported flagged; the `cores = 2` rows should be read from `p2` |
 
 **Time spent.** Build of B (about 2 minutes: another session's build had ended; A reused from S0), about 11 minutes of cells, about 15 minutes of writing and analysis; 14:11 UTC for this report, 17 minutes after the session began (13:54) against the order's hour, with no quiet-host hold counted. The 60 s watchdog's records (`/home/louis/bench-runs/dd-close/watch_*.txt`) show the progress files advancing every poll; one watcher was lost to a script error and restarted before its cell finished.
+
+## After the remedy (`57008fdf`, `v3.4.17-12-g57008fdf`)
+
+**Thesis.** With `PURGE INDEX` a sliced run that yields its core between slices, **the writer stall at `cores = 1` falls from the whole statement (243-283 ms) to a slice (12.8-35 ms in 7 of 8 runs), against `REINDEX`'s 71-74 ms; the purge's own cost is unchanged (246.7 ms, 2.48 us an entry, against 242 ms and 2.43 us).** The host was not quiet, and one 254 ms stall and some `cores = 2` 200+ ms stalls are not attributed (below).
+
+| stamp | value |
+|---|---|
+| executed | 2026-11-20 14:35-14:39 UTC |
+| branch, commit | `worktree-dd-index-entry-purge`, `57008fdf` (`v3.4.17-12-g57008fdf`), a detached checkout (since removed), tree clean |
+| binary | Release, built from that checkout at 14:35:04 UTC (after the commit's own time); the copy `kds_R` was started for every cell, sha256 `baf51e74f3ddea08dc0031209a63c38f753b1ccdfd3bf14b987aa16ec8ed3ad9` |
+| device | `/dev/nvme0n1p1` (ext4), data files under `$HOME/bench-runs` |
+| server | `cores` 1 and 2, `relaxed`, `buffer_pool_frames = 65536`, the server pinned to cores 2 (and 3) |
+| cell | the close's cell 3 unchanged (`dd_close.py` cell 9; `dd_close_r.py` adds three stall-position fields): n = 100,000, `v = id`, `UPDATE SET v = v + 10000000` (surplus = live set), two writer connections `UPDATE x SET <col> = ? WHERE id = ?` from 0.5 s before to 0.5 s after the statement |
+| runs | `p1`, `p2`, `p2b` at 14:35:15-14:36:09 (load 10.8 falling to 6.1, **0 competing builds, not quiet: other sessions' runs on the host**); `s1`-`s6` at 14:36:48-14:38:47 (**load 7-15**, alternating `cores` 1, 2) |
+| quiet-host check | **failed**: `uptime` load 4.8-15 throughout against the close's 1.8-2.0, no `cc1plus`. REINDEX measured in the same server ran 74.5 ms in `p1` (the close: 71) but 104-175 ms in `s1`-`s6`, so **`s1`-`s6` ran 1.4-2.4x slow; read the `p`-runs for absolute numbers and the `s`-runs for repeatability** |
+
+**Writer stall at `cores = 1`** (writers on the relation across the one statement; "longest stall" is the longest writer statement overlapping the window; the purge's own reply is `attempts=53` for 99,581 entries, `57-58` with `v`-writers adding entries):
+
+| run | statement | writers | statement ms | longest stall ms | writer statements in window | writer p50, p99 us in window | refusals | before the window: ops, p50, p99 us |
+|---|---|---|---|---|---|---|---|---|
+| `p1` | `REINDEX INDEX` | w | 74 | **74.5** | 3 | 74,380 (both stalled the statement) | 0 | 21,018; 44; 98 |
+| `p1` | `PURGE INDEX` | w | 258 | **12.8** | 57 | 8,759; 12,761 | 0 | 21,044; 44; 96 |
+| `p1` | `PURGE INDEX` | v | 305 | **12.9** | 70 | 9,184; 12,926 | 0 | 21,099; 44; 103 |
+| `p1` | control, 0.3 s | w | - | 2.0 | 13,049 | 43; 94 | 0 | 16,872; 45; 263 |
+| `s1` (load ~8-11) | `PURGE INDEX` | w / v | 448 / 489 | 21.3 / 35.4 | 59 / 62 | 15,385 / 15,286 | 0 / 0 | p50 94 / 88 |
+| `s3` (load ~11-12) | `PURGE INDEX` | w / v | 421 / 496 | 21.3 / 34.4 | 58 / 62 | 14,829 / 14,627 | 0 / 0 | p50 90 / 77 |
+| `s5` (load ~13-14) | `PURGE INDEX` | w / v | 519 / 459 | **254.3** / 20.2 | 56 / 61 | 10,112 / 16,055 | 0 / 0 | p50 46 / 89 |
+| close, `b8880f9b` | `PURGE INDEX` | w / v | 243 / 283 | **243.3 / 283.9** | 4 / 4 | the two writers' stalled statements only | 0 / 0 | p50 43 / 43 |
+| close, `b8880f9b` | `REINDEX INDEX` | w | 71 | 70.65 | 4 | - | 0 | p50 43 |
+
+Delta, `p1` (the quietest run) against the close: the longest stall falls **243.3 to 12.8 ms (19x) with `w`-writers and 283.9 to 12.9 ms (22x) with `v`-writers**, and 12.8 ms is 17 % of REINDEX's 74.5 ms in the same server (close: 71 ms, REINDEX not touched by the remedy). The writers now **complete 57-70 statements inside a 258-305 ms window, where no writer statement completed in the close's**; each waits one slice (p50 8.8-9.2 ms, p99 12.8-12.9 ms in `p1`; 14.6-16.1 ms p50 in the 1.4-2.4x slower `s`-runs), against a 43-44 us p50 with nothing running: a writer is served at about one slice per writer statement while the purge runs, a 200x lengthening of its statement and not a stall of the window. **Seven of eight `cores = 1` runs bound the longest stall by a slice (12.8-35.4 ms); one run, `s5` with `w`-writers at load 13-14, shows 254.3 ms, and the cause is not established.** It did not recur in the other four `w` runs, no counter in the reply explains it (`attempts=53`, `skipped_rows=0`), and `p1`'s `PURGE INDEX`/`w` run also recorded a 241 ms writer statement outside its window (`all_max`; the driver did not record where in `p1`, the three position fields were added for the `s`-runs, where `after_max` is 1.7-8.6 ms). A single run with a 250 ms outlier on a host at load 14 is not a refutation of the slice bound and not a confirmation of it; **a repeat at a quiet host is owed**.
+
+**The purge's own cost.**
+
+| measured | close (`b8880f9b`) | after (`57008fdf`), `p1` | `s1`, `s3`, `s5` (host 1.4-2.4x slow) |
+|---|---|---|---|
+| `PURGE INDEX` alone, surplus = live set, ms | 242 (232-252, 6 runs) | **246.7** | 415.8, 309.1, 429.2 |
+| entries removed | 99,581 | 99,581 | 99,581 |
+| attempts | 14 | **53** (16-leaf slices; the close's `attempts=` was 64-leaf attempts) | 53 |
+| us per entry removed | 2.43 (2.33-2.53) | **2.48** | 3.1-4.3 |
+| the same purge again, nothing to remove, ms (us per row) | 108.4, 109.3 (1.08) | 106.5 (1.06) | 171-176 |
+| `REINDEX INDEX` alone, ms | 70.9, 73.1 | 74.5 | 125-136 |
+| purge / REINDEX | 3.4x | 3.3x | 2.3-3.4x |
+| `PURGE INDEX`, surplus = 2x live (`q6`), ms | 393.4, 402.2 | 398.1 (`attempts=79`) | - |
+
+**The purge costs what it cost: +2 % in the one quiet-ish run (246.7 against 242 ms, 2.48 against 2.43 us), inside the close's own range of 232-252 ms.** Slicing into 16-leaf slices (53 attempts against 14) adds no measurable per-entry cost; the purge-to-`REINDEX` ratio is 3.3x, the close's 3.4x. The `s`-runs' per-entry costs are the host's and are not a result; their ratio to the same server's REINDEX (2.3-3.4x) is the usable part.
+
+**`cores = 2`** (the writer on the other core goes on; the one on the statement's core waits one slice instead of the statement):
+
+| run | statement | writers | statement ms | longest stall ms | writer statements in window | writer p50, p99 us | refusals inside the window |
+|---|---|---|---|---|---|---|---|
+| `p2` (load 6-8) | `REINDEX INDEX` | w | 100 | 100.6 | 4 | 279; 100,571 | 0 |
+| `p2` | `PURGE INDEX` | w | 380 | **16.6** | 7,538 | 52; 115 | 0 |
+| `p2` | `PURGE INDEX` | v | 458 | **36.0** | 6,696 | 60; 451 | 0 |
+| `p2b` | `PURGE INDEX` | w / v | 348 / 462 | 15.9 / 17.8 | 6,508 / 7,293 | 51, 86 / 59, 345 | 0 / 0 |
+| `s2`, `s4`, `s6` (load 9-15) | `PURGE INDEX` | w | 576, 584, 571 | 31.0, 25.5, 25.5 | 5,379; 6,131; 5,189 | 96; 88; 98 (p99 359-416) | 0 |
+| `s2`, `s4`, `s6` | `PURGE INDEX` | v | 675, 636, 409 | **203.2, 224.8**, 18.7 | 5,566; 4,525; 6,692 | 103; 104; 59 | 0 |
+| `s2`, `s4`, `s6` | `REINDEX INDEX` | w | 213, 200, 176 | 213.1, 200.8, 176.1 | 4 | - | 0 |
+| close, `p2` | `PURGE INDEX` | w / v | 350 / 369 | **349.9 / 316.6** | 6,235 / 2,366 | 53, 131 / 63, 108 | 0 |
+| close, `p2` | `REINDEX INDEX` | w | 99 | 98.8 | 4 | - | 0 |
+
+At `cores = 2` the stall of the writer sharing the purge's core falls from the statement (350 ms) to a slice (16-36 ms in `p2`/`p2b`; 25-31 ms for `w` in the loaded `s`-runs), against the REINDEX's whole-statement stall (100-213 ms). **With `v`-writers two of three loaded runs (`s2`, `s4`) show a 203-225 ms stall, which is not a slice.** Two of the same runs (and `p2`'s and `p2b`'s first-0.5 s windows, and `s6`) also recorded 95-267 ms writer statements *before* the statement began (`before max` 232.9, 94.7, 267.3 ms for `v`-writers), so a 100-270 ms writer outlier with `v`-writers occurs on this host without any statement running; the loaded runs cannot say whether a purge adds to it. **Read the `cores = 2` `v` rows as: slice-bounded in the two quiet-ish runs (17.8, 36.0 ms), 200+ ms in two loaded runs with an unattributed outlier class present before the statement as well.** Refusals: **0 inside every window, 0 in `cores = 1` whole runs**; the whole-run counts at `cores = 2` (up to 154) are the two writer connections colliding on one row (`row id=... was written by transaction ...`), present in the no-statement control windows (9-55) as well. `skipped_rows=0` in all 45 replies, and every relation answered `WHERE id >= 1` and `WHERE v >= 0` (through the index) with 100,000 rows after every run.
+
+**What the run says.** The close's contradiction (the manual's "Writes go on while it runs" against a statement that held its reactor) is removed at `cores = 1` and `cores = 2` for the typical run: the writers' statements are served between slices and the longest stall is bounded by a slice, not the statement, at no measurable cost to the purge's own time. Two gaps remain stated, not closed: a **254 ms (`cores = 1`) and 203-225 ms (`cores = 2`, `v`-writers) outlier in the loaded runs** that this run cannot attribute, and a **writer's per-statement latency during the purge of one slice (about 9-16 ms p50)**: the purge is served fairly, not invisibly. Both want a quiet-host repeat.
+
+**Not done / cut.** One server per run; five loaded repeats (`s1`-`s6`) and three semi-quiet (`p1`, `p2`, `p2b`) instead of a quiet-host series; no `perf`; the two 16-leaf slices' per-slice clock is not in the reply, so a slice's time (about 4.7 ms: 246.7 ms / 53) is inferred. Run 14:35-14:39 UTC, about 17 minutes in all including a 5-minute build and a 4-minute hold on a loaded host; the budget of 20 minutes held.

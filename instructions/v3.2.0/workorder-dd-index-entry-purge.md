@@ -804,7 +804,12 @@ a shared partial-count helper for `PURGE` and `PURGE INDEX` - two
 statements' wordings, one line each, which a helper would couple for no
 cut; a stronger "it started" assertion in the rig cell - the `attempts=`
 assertion already carries the yield, and the start is the reactor's
-submission order. **Not re-measured**: the writer stall after the remedy -
-a slice is a quarter of the attempt measured, and the rig cell shows the
-yield; the number is owed to the next run of these cells.
+submission order. **Measured again after the remedy** (the same file, its section "After
+the remedy", at `57008fdf`, `v3.4.17-12-g57008fdf`, on a loaded host): a
+writer on the purge's core waits one slice - its longest stall 12.8 ms on
+`w` and 12.9 ms on `v` in the least loaded run, against the close's 243 and
+284 ms and the same server's `REINDEX` 74.5 ms - and 57 to 70 writer
+statements complete inside the purge, where none did. The purge's own cost
+did not move (2.48 us an entry against 2.43, 53 slices). One loaded run
+showed a 254 ms stall the run could not place; a quiet-host repeat is owed.
 
