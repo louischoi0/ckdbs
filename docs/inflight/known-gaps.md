@@ -2826,11 +2826,13 @@ Verified on `da-access-stats-memory-resident` at DA-S1
 
 ## Statistics that can queue a statement (DL)
 
-Verified in the main checkout on `main` at `1aaafe1b` by reading; nothing
-here is measured. The rules are `docs/rules/rules.md` §3a's two; the milestone that
-closes these is `instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md`,
-whose §1.2 carries the `path:line` of each. A first reading of `src/stats/`
-and its call sites, not a census: DL-S0 is the census.
+Verified on worktree `dl-statistics-queue-no-statement` at `b0a824db` by
+reading - DL-S0's census - and priced by
+`bench/v3.4.16/results-dl-s0-premise-v3.4.16-2-gb0a824db.md`. The rules are
+`docs/rules/rules.md` §3a's two; the milestone that closes these is
+`instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md`, whose
+§1.3 carries the `path:line` of each and the stage that brings it in. An
+entry is struck here when its path lands, never before.
 
 - **Every successful `SELECT` with an identity takes one latch for the
   instance to note itself to the Cabin controller's collector**
@@ -2838,36 +2840,66 @@ and its call sites, not a census: DL-S0 is the census.
   `cabin_optimizer` is on - it is off by default, and only the wait sample
   asks the switch. Under that latch a new fingerprint past 4,096 evicts by
   a scan of the whole table, and the controller's tick copies and sorts
-  every entry. Breaks clauses (a) and (c), and the second rule: the consumer is
-  off and the statement still builds an identity and notes for it. Its cost is inside every
-  `cores = 8` number of DA's results files and separated in none.
-- **A Cabin probe's hit or miss takes three shared latches to count
-  itself**: the cabin's partition latch a second time, the instance's one
-  `stats_latch_`, and the collector's latch above (`CabinStore::NoteHit`,
-  `NoteMiss`). Reached by a statement whose plan names a Cabin. Breaks (a).
+  every entry. Breaks clauses (a) and (c), and the second rule: the consumer
+  is off and the statement still builds an identity, walks its chain for a
+  candidate, publishes its pattern id and notes for it.
+- **The Cabin store counts under shared latches**: a probe's hit or miss
+  takes the cabin's partition latch a second time, then the instance's one
+  `stats_latch_`, then the collector's latch above; seven more sites take
+  `stats_latch_` for one add, and **a write's append to an observed set
+  (`NoteWrite`) takes it holding its leaf exclusive**. Breaks (a).
 - **A record into a per-core statistics part waits for a reader's copy of
   that part**, and the latch is a `std::mutex`, so the wait sleeps the
   core's reactor and every session on it: `StatementStats` (whose
   `Snapshot` merges and allocates under the latch, up to 4,096 shapes a
-  part, and whose `sys.meta` drop count takes every part's latch),
-  `RelationStats`, `LeafStats` (counted under a leaf's page hold),
-  `AccessStats`, `LockWaitLog`, `CheckpointLog`, `AshRing`, and
-  `PlanStats`' parts (the steward's `Merge` allocates under the latch over
-  a 1,024-slot table). Allowed by DF-R2 and DA-R3 as written; breaks (b),
-  the strict end state, and for the two allocating readers (c). The BO
-  entry above ("A view's read delays the writer of each part it copies")
-  is the same gap, older.
+  part), `RelationStats`, `LeafStats` (counted under a leaf's exclusive
+  hold and its secured parents'), `IndexStats` at a core's first sight of
+  an index, `AccessStats`, `LockWaitLog`, `CheckpointLog`, `AshRing` (whose
+  reader decodes the whole ring under the latch) and `PlanStats`' parts
+  (the steward's `Merge` allocates under the latch). Allowed by DF-R2 and
+  DA-R3 as written; breaks (b), the strict end state, and for the
+  allocating readers (c). The BO entry above ("A view's read delays the
+  writer of each part it copies") is the same gap, older.
+- **A column change's `AccessStats::Forget` takes every core's part latch
+  in turn**, so an `ALTER TABLE ... ADD COLUMN` that reuses a position
+  waits for a reader's walk of each part. Breaks (a).
+- **A session's creation and its end take one process-wide mutex**, the
+  end with a linear erase, and a `sys.session_waits` or `sys.session_state`
+  reader holds it for a copy of every session
+  (`src/sched/wait_state.cpp`): a connect or a close on any core waits
+  behind another core's, or behind a reader. Breaks (a).
 - **A core's first compile after a plan-statistics publish takes the
   instance's `publish_latch_`**, which an install holds across the
-  snapshot's construction (`PlanStats::Current`, `InstallLocked`). Breaks
-  (d).
-- **`SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build**:
-  the entry under "Multi-core state, continued". Within the rule if the
-  controller's view is a statistic (DL-Q0).
+  snapshot's construction - three sorts over up to 16,384 posteriors, the
+  managed store's latch nested (`PlanStats::Current`, `InstallLocked`).
+  Breaks (d).
+- **The statistics callbacks wait on core 0's reactor**: the planner's
+  steward and the controller's tick are timer callbacks run inline in core
+  0's loop, and each takes its latches by the blocking form - a part's, the
+  space table's, the publish latch, the controller's view latch (taken
+  before the switch is asked) - so a wait of theirs stops every statement
+  on core 0. The ASH sampler, a phase of every core's loop, does the same
+  on its ring's latch and the collector's.
+- **`SHOW CABIN_OPTIMIZER` and `SHOW META` can stall their core for a
+  whole Cabin build**: both take the controller's view latch, which core
+  0's tick holds across a Cabin's creation and its seeded build (the entry
+  under "Multi-core state, continued" names the first; `sys.meta`'s
+  `cabin_optimizer` section is the second, found by the census).
+
+**Not a statistic's, and not DL's** (DL-Q0 (a)): **the controller's seeded
+build stops core 0 for a whole-relation walk.** A created or extended
+Cabin's build (`CabinOptimizerExecutor::BuildSeededSets`) runs inside the
+tick's one timer callback with no yield, a shared latch on the leaf it
+stands on, and a create holds `sys.cabins`' root exclusive across a catalog
+scan and a log append; every session on core 0 waits for the walk. Off by
+default (`cabin_optimizer`). Verified at `b0a824db` by reading. Owner:
+`docs/spec/cabin-controller.md`.
 
 What already meets the rule: `RefusalStats`, `TxnStats`, `IndexStats`'
-counts, the wait statistics, the contention instrument and the per-core
-load slots - single-writer words a core, read with no latch.
+counts, the wait statistics' totals, the contention instrument and the
+per-core load slots - single-writer words a core, read with no latch. The
+wait-free words every core writes (the buffer pool's counts, the plan
+tables' counters) are within the rule and priced in the results file.
 
 ## Assertion admission
 

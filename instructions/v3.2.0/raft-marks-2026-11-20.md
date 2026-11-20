@@ -101,3 +101,12 @@ took under them.
 | **Found** | Read at `1aaafe1b`: the collector's S1-S3 are the one case that breaks it - with `cabin_optimizer` off, the default, every fingerprinted `SELECT` still builds an identity for the collector, walks its chain for a candidate and notes under the instance's latch (`command_dispatcher.cpp:10261-10265`, `:10683-10719`); S4, the access statistics and ASH already ask their switch |
 | **Does not settle** | DL-Q11 (whether the rule adds switches), DL-Q12 (whether any `join_order` value turns the planner's observations' consumer off), DL-Q13 (evidence already collected at a switch-off); DL-Q0, DL-Q2 and DL-Q4..Q10 as before; whether DL opens |
 | **Recorded at** | this file; `docs/rules/rules.md` §3a; `docs/inflight/known-gaps.md`; the DL order's header, §0, §1.2, §3, §4, §5 and §7; the DL row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 11. DL opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone DL` - the standing word *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*, given for DL |
+| **Mark** | **DL is opened**, on worktree `dl-statistics-queue-no-statement` from `b0a824db` (`v3.4.16-2-gb0a824db`). **DL-Q1 and DL-Q3 are the operator's own marks (§9, §10); no other DL-Q item is.** Each of the others is **adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone)**, as CLA proposed it: DL-Q0, DL-Q2, DL-Q4..Q11 and DL-Q13 each (a); **DL-Q12 (a) as revised at DL-S0** - the tree gathers the planner's observations under `planned` and `fixed` and nothing under `written` (CX-Q2), not "under every value" as the proposal was written, and DL changes none of it; and **DL-Q14..Q18 (a)**, raised by DL-S0's census and written into the order's §4 with their options before they were adopted: the session registry of the wait statistics takes no latch (Q14), `AccessStats::Forget` waits for nothing and a forgotten shape's slot stays until a restart (Q15), a statement whose subject is the statistic is outside the rule as a reader is (Q16), a statistics callback on a reactor tries its latches (Q17), the plan tables take a latch kind of their own (Q18). None is tagged `[quiet-wrong]` |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; the options the standing go-ahead did not take, which stay open to the operator's own mark |
+| **Recorded at** | this file; the order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
