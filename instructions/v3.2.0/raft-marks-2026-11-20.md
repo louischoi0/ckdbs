@@ -30,3 +30,14 @@ took under them.
 | **Corrected** | Two things CLA said in the conversation. (1) The word speaks of a quiet wrong answer; CLA found no path on which a statement's rows are wrong by the fetch id's text identity - the plan tables, the advice and the posteriors compare oids, and a replay checks `rel_oid`. What is wrong is `sys.statement_stats`' row, which sums two bindings of one text with no mark; the order uses `[quiet-wrong]` for that reading and says so in §0. (2) The fifth item, the identity, was spoken as "the plan key, reused". The plan key exists for a searched join block only, so it would leave every one-relation statement merged; **DI-Q3 is restated in the order and is not covered by "as proposed"** |
 | **Does not settle** | DI-Q0, DI-Q3 and DI-Q6..Q11; whether DI opens; a statistics history or statistics per plan variant, which the conversation named as a later order |
 | **Recorded at** | this file; the DI order's header, §0 and §4; the DI row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. DI widened: every path
+
+| | |
+|---|---|
+| **Word** | *"Is there no such thing outside `statement_stats`? It has to be applied to every path on which this problem can occur."* (given in Korean; recorded in English) - after CLA's report that DI was written and pushed at `5915182c` |
+| **Mark** | **DI covers every structure that names a statement by its text alone** (DI-R2a). **DI-Q4 is re-marked (b)**: the Waystone opt-in's reach, which §3 marked out of DI, is in it. The order is amended in the main checkout on `main` at `5915182c`, documents only: §0a, the Cabin controller's signal as DI-S2 (DI-Q12), the opt-in and the trail as DI-S3 (DI-Q13, with a format event, DI-Q11) |
+| **Found** | Read at `5915182c`: the Cabin controller's execution signal is keyed by `pattern_id` alone and credits a pattern's whole heat to the `(relation, column)` seen last (`optimizer_signals.hpp:87-97`, `cabin_optimizer.cpp:239-240`), so one text over two relations prices one relation's Cabin with the other's heat. The engine, not a reader, acts on that merge; no result is wrong by it and the controller is off by default |
+| **Does not settle** | DI-Q0, DI-Q3, DI-Q6..Q13 but DI-Q4; whether DI opens; that the census is complete - 40 files name the two ids and DI-S0 opens the ones this reading did not |
+| **Recorded at** | this file; the DI order's header, §0a, §3, §4, §5 and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |
+
