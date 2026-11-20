@@ -1012,9 +1012,9 @@ private:
     void StopPageReader() noexcept;
 
     // The optimizer surface every core's dispatcher is handed (AT-S8,
-    // `OptimizerSurface`): the collector, the switch, and
-    // the controller view where a Cabin store exists. The view latch is
-    // armed above one core only.
+    // `OptimizerSurface`): the collector, the switch, and the board the
+    // tick publishes the controller's view to where a Cabin store exists
+    // (DL-S3).
     OptimizerSurface Optimizer();
 
     // Core 0's checkpointer; the live set it records comes from the

@@ -1,13 +1,20 @@
 # Work order DL - statistics queue no statement, and a switched-off consumer collects nothing: the two rules established over every recording path, every statistics read a statement makes and every collection task, and checked
 
-Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+Status: **CLOSED 2026-11-20 on the work branch, not landed** (§7, DL-S6):
+every stage built, the close measured
+(`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`: no cell
+regressed, the eviction cliff gone, the reader storm's tail and DL-Q4's two
+words not resolved on a contended host and left in `known-gaps.md`).
+**OPENED 2026-11-20 on the operator's standing go-ahead
 (go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §22)**, on
 worktree `dl-statistics-queue-no-statement` from `b0a824db`
 (`v3.4.16-2-gb0a824db`). **No DL-Q item but DL-Q1 and DL-Q3 is the
 operator's own mark**: every other one is CLA's proposal, adopted on that
 standing word as §4's mark column records it, DL-Q12 as revised against
-the tree, and DL-Q14..Q18 raised by DL-S0's census and written into §4
-with their options before they were adopted. The stage log is §7.
+the tree, DL-Q14..Q18 raised by DL-S0's census and written into §4
+with their options before they were adopted, DL-Q15 and DL-Q16 revised as
+built (DL-S2, DL-S3), and DL-Q19 raised by DL-S3's review. The stage log
+is §7.
 
 Written in the main checkout on
 `main` at `1aaafe1b` (`v3.4.16-1-g1aaafe1b`) on the operator's words of
@@ -930,3 +937,117 @@ scope's header - the three files that name it directly do not include
 
 **Suite.** 0 failed of 4,936 (2 disabled, 2 skipped) on the committed tree, the guard armed in every cell. **`tsan`** (gcc 14): 220 cells - the guard's own, the contract suite, the stores, their rigs - 0 reports. **Overhead not
 measured; measured at the milestone's close.**
+
+
+### The sync: `origin/main` merged (DH, DI, `v3.4.17`)
+
+On worktree `dl-statistics-queue-no-statement`, `origin/main` at
+`054dbc5e` (`v3.4.17` and two documents commits after it, DH and DI
+landed) merged at `22e37632`. Seven files conflicted. **DI-S2 had re-keyed
+the Cabin controller's collector while DL-S1 moved it to per-core parts**,
+so the two are one structure in the merge: a part holds three fixed tables
+- execution signals keyed `(pattern, candidate relation, candidate
+column)`, a pattern's wait samples, Cabins - and the fold keeps DI's rules
+(a newcomer counted to its pattern before a victim is chosen, a pattern's
+waits erased with its last signal, a wait counted only for a pattern with
+a signal) on DL's shape (a note tries its own part; the fold copies,
+releases, merges in key order and makes room in one pass). DI's
+`set_wait_gate` and its instance latch went: every note asks DL-R10's one
+gate. `StatementStats` takes DI's binding in its key on DL's tried record.
+The three documents: the `known-gaps.md` section DL-S5 removed stays
+removed (main had amended it for DI-S2); the index keeps main's DK, DM and
+DN rows; DL's opening record moved from §11 to §22 of
+`raft-marks-2026-11-20.md`, main having taken §11..§21.
+
+**Review (`critics-developer`) of the resolution.** One defect, made by the
+merge and fixed at `c37761a5`: **the fold ranked its victims before it
+merged what the part had noted of keys the map already held**, so the
+coldest signal could be the victim in the fold carrying its newest
+execution and the merge then made it again - the map one over its cap, the
+pattern released to zero and erased with its waits, and every later wait
+sample of it dropped while the signal lived. Now a part's notes of present
+keys merge in place first and only the newcomers are counted, given room
+and made, under one rollback; the Cabin table the same. Applied with it:
+the eviction's ranking reserved for a whole map at construction, so a fold
+allocates nothing; `Claim` counting its own refusal; one projection of a
+Cabin's quality; `tracked_cabins`, which nothing called, cut; the part
+bounds asserted to fit the folded maps; three cells (the refcount under a
+coldest key run beside a newcomer, the wait table's bound and emptying, a
+wait on a core below its pattern's first execution). Its two observable
+differences from DI's single map, stated in the header and not changed: a
+wait noted on a core below the one that first ran its pattern in the same
+interval is not counted, and a waiting pattern with no signal - a write's -
+takes a wait-table slot and counts a `full` drop past its bound. Nothing
+reads `OptimizerSnapshot::waits` yet. Clean: the note paths (try-latch
+only, the one allocation the part's first note), the statement store, the
+auto-merged callers.
+
+**A DI cell read freed memory** (`StatementCostRig.AConflictArmsSubqueryIsBoundWhetherOrNotARowConflicts`:
+a pointer into a temporary snapshot), found by the merged tree's `tsan`
+run and fixed in the test at `30e169df`. One suite run at `c37761a5` failed
+`StrictMarkerSnapshotRigTest.AnExplicitCommitIsSeenByTheSessionsNextStatement`
+(a 1 s deadline) while another session's build held the host at a load
+of about 8; it passed 40 of 40 alone on the quiet host and in the next
+full run.
+
+**Suite** at `30e169df` (`v3.4.17-11-g30e169df`), DL's closing commit: 0
+failed of 4,991. **`tsan`** (gcc 14): 233 cells, 0 reports.
+
+
+### DL-S6: the close
+
+On worktree `dl-statistics-queue-no-statement`, measured by `ck-tester`
+(`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`, its archive
+beside it). Interleaved, Release, one server lifetime an arm a round, each
+binary from a clean `git archive`. **A is not the commit DL opened from**:
+A = `054dbc5e` (`v3.4.17-1-g054dbc5e`), `origin/main` as merged into the
+branch, because DI and DH landed on `main` while DL ran and A =
+`b0a824db` would have measured the three together; B = `30e169df`
+(`v3.4.17-11-g30e169df`), DL's closing commit; X = B plus two
+measurement-only switches on no branch (DL-Q4's words).
+
+- **DL regresses no cell.** Six cells re-run alone on a quiet host
+  (`select1`, `select8`, `fk1`, `select8off`, `cabin8`, `join8i`): B's
+  server CPU a statement is 0.2 to 1.2 us *below* A's against a within-arm
+  spread of 0.4-2.6 us, and throughput is within 0.6-2.2 % against spreads
+  of 2-13 %. `join8i` was captured and served on every statement in both
+  arms, so the cell DL-S0 could not run is valid here.
+- **The collector waits on nothing.** With `cabin_optimizer` off B waits on
+  `optimizer`, `cabin_stats` or `stats_ring` zero times in all 69 of its
+  lifetimes but `storm8`'s reader arm (38 `stats_ring` waits in 1.03 million
+  statements, the reader's); A waits 0.017-0.052 times a statement there.
+- **The eviction cliff is gone** (`evict8`, 6,000 live shapes, a contended
+  host but 17 times its spread): A 246 us of CPU a statement at 4,445 a
+  second, 0.60 `optimizer` waits and 1,139 us of wait a statement; B 58 us
+  at 20,902 a second with none. DL-S0 had priced it at +150.9 us.
+- **Not resolved**, on a host other sessions' builds and drivers held at a
+  load of 17-25: the reader storm's effect on the described statements'
+  tail (`storm8`/`stormA8`, DL-Q9's bar, M3) - neither failed nor shown to
+  hold - and **DL-Q4's two words** (`pool8x` +0.26 us, `join8ix` -1.02 us,
+  inside 4.5 and 8.3 us of spread). Neither word is above the floor, so
+  both stay as they are, and both items are in `known-gaps.md`.
+- One wait moved name, not place: B's `join8i` waits 0.0147 times a
+  statement on `plan_table`, A's on `stats_ring` at about the same size -
+  DL-Q18's relabel of the captured-plan table's latch, which is CX's and
+  outside the rule (DL-Q0 (a)); in `known-gaps.md` under CX.
+
+**Time.** About 42 minutes of running (18 for the first pass, 24 for the
+gated re-run of six cells, 9 of them rejected tries), and about 70 minutes
+of quiet-gate holds, outside the budget. Counted from the first pass's
+start to the stop, the hour is overrun; the re-run was stopped at
+`evict8` on that count and the four contended cells were not re-run.
+
+**Documents.** `CLAUDE.md`'s Cabin controller row (a core notes into its own
+part; nothing while the switch is off; the view a published copy) and its
+Observability row (the two rules, linking `rules.md` §3a and this order);
+`known-gaps.md` (the reader's measured drop rate, DL-Q4's two words, the
+statement-shape bound now reached, the captured-plan latch under CX); three
+source comments that still described the latched view. `rules.md` §3a,
+`cabin-controller.md`, `sys-views.md` §6, `plan-stats.md`, the client
+manual and `manual/sql/sql.md` were amended at the stages that changed
+them; no SQL surface changed.
+
+**Suite** on the closing tree: 0 failed of 4,991 (2 disabled), the three comment edits since `30e169df` included; the `tsan` cells ran at `30e169df` (233, 0 reports) and no engine code changed after it.
+
+**DL is closed.** What is left is named above and in `known-gaps.md`; no
+`[quiet-wrong]` item was raised or adopted.

@@ -2061,7 +2061,27 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   its copy**, never a wait (DL-S2): a record tries its part's latch and is
   dropped and counted where a reader holds it (`sys.meta`'s `*_busy`
   fields). Bounded by the part (4096 shapes, 4096 waits, 1024 runs, an ASH
-  ring); the rate was not measured before DL's close.
+  ring). Measured at DL's close (`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`,
+  `storm8`, on a host that was not quiet): one session reading
+  `sys.statement_stats`, `sys.relation_stats` and `sys.meta` in a loop
+  beside 16 point-`SELECT` clients at `cores` 8 cost 254 dropped
+  `sys.statement_stats` records in 1.03 million statements (0.00025 a
+  statement) and 38 `stats_ring` waits, all of them the reader's; **what it
+  does to the described statements' tail is not resolved** (DL-Q9's bar,
+  M3): every p99 of that run was 4-6 ms in both arms, the host's.
+- **DL-Q4's two words are unpriced** (DL-S6): the buffer pool's hit count
+  (`device_page_store.cpp`, `hits_.Add()`) and `CapturedPlans::CountServed`
+  are one word every core writes on a statement's path. DL's close measured
+  each against the same binary with it skipped and found nothing above the
+  floor (+0.26 us and -1.02 us a statement, inside 4.5 us and 8.3 us of a
+  contended host's spread), so they stay as they are; a quiet re-run of
+  `pool8x` and `join8ix` (the archive's `dl_close.py`) is what prices them.
+- **A shape past a part's 4,096 statement shapes loses its record, every
+  time** (`sys.statement_stats`, `kShapesPerCore`): at 6,000 live shapes DL's
+  close found B dropping 0.28-0.30 of `sys.statement_stats` records, counted
+  in `statement_stats_dropped`. A bound, as designed, and now reached: with
+  the eviction cliff gone (DL-S1) a statement reaches it at 20,902 a second
+  where it used to stall first.
 - **An in-process restart keeps the statistics stores**: they are
   process-wide, so the sim harness's restart (`sim/`) and a test's second
   instance in one process see the rows the first wrote. A real restart
@@ -2439,6 +2459,16 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   Owned by `plan-stats.md` PS16.
 
 ## Captured plans (CX)
+
+- **A compile of a captured shape can wait for the captured-plan table's
+  latch** (`plan_table`), which another core's compile or core 0's
+  `system` task holds: 0.0147 waits a statement, 0.09 us, on DL's close's
+  `join8i` at `cores` 8 on `30e169df`, the same with `CountServed` skipped
+  (`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`). Before DL-Q18
+  the latch was counted as `stats_ring`, which is where A's 0.0142 waits on
+  that cell are (CLA's reading of the relabel; the results file does not
+  isolate it). A plan table is not a statistic (DL-Q0 (a)), so `rules.md`
+  §3a does not reach it; whether a compile may wait for it is CX's.
 
 - **A capture is lost if the instance crashes within about a second of
   it.** Verified at CX-S1a on `cx-plan-change-option`. A capture is in

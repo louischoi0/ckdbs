@@ -48,7 +48,9 @@ enum class LatchKind : std::uint8_t {
     kWalStream,           // WalStream's stream latch
     kWalSyncGate,         // WalStream's sync gate (`sync_mutex_`)
     kAssertionDirectory,  // AssertionEnforcer's directory latch and chain latches
-    kOptimizer,           // the Cabin controller's view latch
+    kOptimizer,           // the Cabin controller's view board: the tick's
+                          // publish tries it, a reader holds it for a
+                          // pointer copy (DL-S3)
     kSuperblock,          // the superblock latch
     kCabinPartition,      // a CabinStore partition
     kHandoff,             // a connection-handoff inbox (D19's fallback)

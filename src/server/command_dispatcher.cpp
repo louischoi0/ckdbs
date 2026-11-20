@@ -2183,9 +2183,9 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // **The Cabin controller's own numbers** (PHY06), which `SHOW
     // CABIN_OPTIMIZER`'s header printed; its managed entries are
     // `sys.cabin_optimizer`'s rows. The switch is always printed; the rest
-    // only where an instance runs a controller, under the view latch the
-    // entries are read under (AT-S8). The executor's counters are what it
-    // applied, beside what the controller decided.
+    // only where an instance runs a controller, from the copy its tick
+    // published (DL-S3). The executor's counters are what it applied,
+    // beside what the controller decided.
     section("cabin_optimizer");
     os << " cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off");
     if (optimizer_signals_ != nullptr) {

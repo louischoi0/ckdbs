@@ -1,0 +1,66 @@
+## per arm
+cell | arm | lifetimes | cpu us/stmt mean (per lifetime) | cpu spread | qps mean | qps spread | stmts | bad | load range | busy rows
+select1 | A | 6 | 22.74 (23.72 22.47 22.23 23.11 22.59 22.35) | 1.49 | 23,602 | 1,658 | 1,133,656 | 0 | 0.9-1.1 | 0
+select1 | B | 6 | 22.53 (22.98 22.39 22.42 22.75 22.29 22.35) | 0.69 | 23,742 | 891 | 1,140,366 | 0 | 0.8-1.1 | 0
+select8 | A | 6 | 34.36 (34.02 34.51 34.24 34.09 35.12 34.20) | 1.11 | 103,630 | 13,721 | 4,990,066 | 0 | 10.0-16.1 | 0
+select8 | B | 6 | 33.69 (33.77 34.23 33.72 33.64 33.71 33.08) | 1.15 | 104,902 | 11,863 | 5,050,556 | 0 | 11.4-15.5 | 0
+fk1 | A | 4 | 24.63 (24.51 25.23 24.66 24.12) | 1.11 | 21,674 | 737 | 694,017 | 0 | 4.5-9.7 | 0
+fk1 | B | 4 | 23.93 (24.13 23.36 23.57 24.67) | 1.30 | 22,180 | 1,144 | 710,240 | 0 | 4.7-8.5 | 0
+select8off | A | 4 | 34.36 (34.31 34.10 34.57 34.45) | 0.47 | 96,772 | 7,339 | 3,105,605 | 0 | 6.2-13.9 | 0
+select8off | B | 4 | 34.11 (33.56 34.17 33.88 34.85) | 1.29 | 97,718 | 2,736 | 3,136,286 | 0 | 8.0-13.3 | 0
+cabin8 | A | 4 | 36.51 (36.46 36.77 36.50 36.33) | 0.43 | 92,391 | 1,427 | 2,965,425 | 0 | 11.2-13.8 | 0
+cabin8 | B | 4 | 35.34 (34.95 35.89 35.22 35.29) | 0.93 | 93,131 | 6,217 | 2,988,575 | 0 | 12.1-13.4 | 0
+join8i | A | 4 | 65.91 (65.44 65.47 65.22 67.49) | 2.28 | 65,661 | 5,754 | 2,108,459 | 0 | 10.8-17.1 | 0
+join8i | B | 4 | 64.94 (64.31 64.07 64.68 66.68) | 2.61 | 67,112 | 5,856 | 2,155,010 | 0 | 12.2-15.1 | 0
+
+## latency, median of per-lifetime percentiles (us)
+cell | arm | n | p0 | p25 | p50 | p90 | p99 | p99.9 | max(median of max)
+select1 | A | 1,133,656 | 35 | 39 | 39.5 | 46 | 56.5 | 122 | 3403.5  [p99 range 53-66, p99.9 range 97-146]
+select1 | B | 1,140,366 | 34.5 | 39 | 39 | 47 | 56 | 119 | 3044  [p99 range 55-60, p99.9 range 115-135]
+select8 | A | 4,990,066 | 29.5 | 87 | 130.5 | 261.5 | 493.5 | 1258 | 8901.5  [p99 range 402-514, p99.9 range 1076-2331]
+select8 | B | 5,050,556 | 30.5 | 85.5 | 125.5 | 247.5 | 479.5 | 1085 | 19859  [p99 range 428-535, p99.9 range 901-3931]
+fk1 | A | 694,017 | 32.5 | 38 | 39 | 48 | 72.5 | 204.5 | 194271  [p99 range 68-78, p99.9 range 190-219]
+fk1 | B | 710,240 | 32.5 | 38 | 39 | 46.5 | 69.5 | 181.5 | 191951  [p99 range 68-73, p99.9 range 170-184]
+select8off | A | 3,105,605 | 30 | 93.5 | 137.5 | 280 | 532 | 1461 | 12539.5  [p99 range 505-578, p99.9 range 1278-3190]
+select8off | B | 3,136,286 | 28.5 | 93.5 | 138 | 275.5 | 501.5 | 1166 | 6938.5  [p99 range 475-528, p99.9 range 1122-2053]
+cabin8 | A | 2,965,425 | 31.5 | 98 | 143.5 | 282 | 538 | 2840 | 11389  [p99 range 512-546, p99.9 range 1428-3903]
+cabin8 | B | 2,988,575 | 29 | 96 | 141.5 | 282.5 | 532 | 3828 | 23213.5  [p99 range 487-562, p99.9 range 1452-4040]
+join8i | A | 2,108,459 | 46 | 151.5 | 217.5 | 399.5 | 681 | 1984 | 10446.5  [p99 range 630-709, p99.9 range 1696-2244]
+join8i | B | 2,155,010 | 45 | 149 | 212.5 | 390 | 642 | 1742.5 | 8495.5  [p99 range 603-684, p99.9 range 1531-2078]
+
+## paired deltas (first arm - second arm, same round)
+select1 (A-B): cpu +0.74 +0.08 -0.20 +0.36 +0.30 -0.00 mean +0.21 median +0.19 us, first slower in 4/6; qps% -2.9 +0.3 +1.4 -1.6 -1.8 +0.9 mean -0.6%; larger within-arm cpu spread 1.49 us, qps spread 1,658
+select8 (A-B): cpu +0.25 +0.28 +0.53 +0.45 +1.42 +1.13 mean +0.67 median +0.49 us, first slower in 6/6; qps% +0.2 -0.2 -2.6 -0.5 -3.4 -0.9 mean -1.2%; larger within-arm cpu spread 1.15 us, qps spread 13,721
+fk1 (A-B): cpu +0.38 +1.86 +1.09 -0.55 mean +0.70 median +0.73 us, first slower in 3/4; qps% -1.3 -4.3 -5.5 +2.3 mean -2.2%; larger within-arm cpu spread 1.30 us, qps spread 1,144
+select8off (A-B): cpu +0.75 -0.07 +0.69 -0.40 mean +0.24 median +0.31 us, first slower in 2/4; qps% -1.2 +3.6 -5.8 -0.4 mean -0.9%; larger within-arm cpu spread 1.29 us, qps spread 7,339
+cabin8 (A-B): cpu +1.50 +0.88 +1.29 +1.04 mean +1.18 median +1.16 us, first slower in 4/4; qps% -2.9 -0.5 +2.3 -1.9 mean -0.7%; larger within-arm cpu spread 0.93 us, qps spread 6,217
+join8i (A-B): cpu +1.13 +1.40 +0.54 +0.81 mean +0.97 median +0.97 us, first slower in 4/4; qps% -1.5 -2.0 -3.5 -1.6 mean -2.2%; larger within-arm cpu spread 2.61 us, qps spread 5,856
+
+## waits per statement (waits, us) — pooled over the arm's lifetimes
+cell | arm | optimizer | cabin_stats | stats_ring | cabin_partition | plan_table | frame_table | lock_partition | window
+select1 | A | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us
+select1 | B | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us
+select8 | A | 0.0189, 0.26 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.9113, 3.01 us | 0.1066, 0.59 us | 0.0035, 0.11 us
+select8 | B | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.8920, 2.87 us | 0.1117, 0.58 us | 0.0031, 0.11 us
+fk1 | A | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us
+fk1 | B | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us
+select8off | A | 0.0198, 0.32 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.8704, 3.30 us | 0.0965, 0.62 us | 0.0032, 0.11 us
+select8off | B | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.8299, 3.22 us | 0.1026, 0.64 us | 0.0031, 0.13 us
+cabin8 | A | 0.0520, 0.52 us | 0.0033, 0.02 us | 0.0000, 0.00 us | 0.1070, 0.99 us | 0.0000, 0.00 us | 0.7835, 3.56 us | 0.0936, 0.62 us | 0.0025, 0.08 us
+cabin8 | B | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0676, 0.78 us | 0.0000, 0.00 us | 0.7181, 3.23 us | 0.0975, 0.58 us | 0.0022, 0.10 us
+join8i | A | 0.0169, 0.17 us | 0.0000, 0.00 us | 0.0142, 0.07 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 4.6712, 27.29 us | 0.1363, 0.88 us | 0.0085, 0.21 us
+join8i | B | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0000, 0.00 us | 0.0147, 0.09 us | 4.7026, 25.31 us | 0.1422, 0.89 us | 0.0088, 0.21 us
+
+## drop / busy / capture counts, summed over the arm's lifetimes (per-statement in brackets)
+select1 | A | stmts 1,133,656 | 
+select1 | B | stmts 1,140,366 | 
+select8 | A | stmts 4,990,066 | 
+select8 | B | stmts 5,050,556 | 
+fk1 | A | stmts 694,017 | 
+fk1 | B | stmts 710,240 | 
+select8off | A | stmts 3,105,605 | 
+select8off | B | stmts 3,136,286 | 
+cabin8 | A | stmts 2,965,425 | 
+cabin8 | B | stmts 2,988,575 | 
+join8i | A | stmts 2,108,459 | captured_served=2,108,459 (1.0000)
+join8i | B | stmts 2,155,010 | captured_served=2,155,010 (1.0000), plan_stats_part_busy=18 (0.0000)

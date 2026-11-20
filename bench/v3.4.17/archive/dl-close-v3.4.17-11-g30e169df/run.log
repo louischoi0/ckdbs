@@ -1,0 +1,10 @@
+2026-11-20T14:22:35Z select1 try 1 rows=12 secs=130 dirty_samples=12 dirty_rows=1 -> REJECT
+2026-11-20T14:25:15Z select1 try 2 rows=12 secs=130 dirty_samples=0 dirty_rows=0 -> ACCEPT
+2026-11-20T14:27:48Z select8 try 1 rows=12 secs=132 dirty_samples=29 dirty_rows=5 -> REJECT
+2026-11-20T14:34:35Z select8 try 2 rows=12 secs=133 dirty_samples=50 dirty_rows=10 -> REJECT
+2026-11-20T14:38:50Z select8 try 3 rows=12 secs=139 dirty_samples=60 dirty_rows=11 -> REJECT
+2026-11-20T14:41:28Z select8 try 4 rows=12 secs=133 dirty_samples=0 dirty_rows=0 -> ACCEPT
+2026-11-20T14:43:15Z fk1 try 1 rows=8 secs=86 dirty_samples=0 dirty_rows=0 -> ACCEPT
+2026-11-20T14:45:04Z select8off try 1 rows=8 secs=89 dirty_samples=0 dirty_rows=0 -> ACCEPT
+2026-11-20T14:46:53Z cabin8 try 1 rows=8 secs=89 dirty_samples=0 dirty_rows=0 -> ACCEPT
+2026-11-20T14:49:15Z join8i try 1 rows=8 secs=121 dirty_samples=0 dirty_rows=0 -> ACCEPT
