@@ -1,0 +1,4 @@
+ckdbs on /home/louis/bench-runs/dh-s1/wd/run/d5r2/run.db: 6060 pages, superblock version 37
+logging to /home/louis/bench-runs/dh-s1/wd/run/d5r2/db-run.log at level WARN
+listening on 127.0.0.1:17432
+stopped; 6062 pages persisted
