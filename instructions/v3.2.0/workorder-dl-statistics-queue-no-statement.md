@@ -1051,3 +1051,26 @@ them; no SQL surface changed.
 
 **DL is closed.** What is left is named above and in `known-gaps.md`; no
 `[quiet-wrong]` item was raised or adopted.
+
+
+### The second sync: `origin/main` merged again (DJ, audit H, `v3.4.18`)
+
+`origin/main` moved to `07f4552a` while DL closed; merged at `43cecfa0`.
+Four files conflicted: `statement_stats.cpp` takes audit H's rule (a
+compiled call with no plan source clears the shape's source) on DL's
+shared-note row; `known-gaps.md` keeps DJ's new section and not the DL one
+DL-S5 removed; DJ took §22..§25 of `raft-marks-2026-11-20.md`, so DL's
+record is §26 and this order and the index cite it there. Main's other
+changes to stores DL rebuilt are compatible (`wait_state.cpp`'s clock
+read, `plan_stats.cpp`'s merge no longer evicting a key its own step
+merged).
+
+The merged tree's suite failed two cells. **One was DL's own cell
+over-claiming**: `OptimizerSignalsTest.EveryNoteBesideAFoldLandsOrIsCounted`
+required a signal from core 1, but a fold preempted while it holds that
+part sees every one of the peer's notes to it dropped and counted busy,
+which is the rule; the cell now requires the exact count (landed + busy)
+and at most one signal. **The other is `main`'s**:
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` failed 3 of 200
+on `07f4552a`'s own binary and 0 of 200 on DL's, interleaved in blocks of
+20 - a best-effort kick skipped against a 2 s bound, in `known-gaps.md`.

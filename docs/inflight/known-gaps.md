@@ -2073,6 +2073,13 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   floor (+0.26 us and -1.02 us a statement, inside 4.5 us and 8.3 us of a
   contended host's spread), so they stay as they are; a quiet re-run of
   `pool8x` and `join8ix` (the archive's `dl_close.py`) is what prices them.
+- **`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` fails about
+  one run in 70 on `origin/main` at `07f4552a`** (3 of 200 interleaved with
+  DL's merged tree at `43cecfa0`, which failed 0 of 200; found by DL's second
+  sync). Each failure is one kick skipped (`kicks skipped 1`), which the wake
+  registry allows by design and which costs the reactor one 5 s idle block,
+  past the cell's 2 s bound: the cell claims more than the contract. Not
+  bisected inside `main`.
 - **A shape past a part's 4,096 statement shapes loses its record, every
   time** (`sys.statement_stats`, `kShapesPerCore`): at 6,000 live shapes DL's
   close found B dropping 0.28-0.30 of `sys.statement_stats` records, counted

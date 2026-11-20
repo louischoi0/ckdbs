@@ -477,14 +477,19 @@ TEST(OptimizerSignalsTest, EveryNoteBesideAFoldLandsOrIsCounted) {
     peer.join();
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
+    // The cabin's first note was made before the peer started, so it is
+    // there. The signal may not be: a fold preempted while it holds core 1's
+    // part can see the peer's every note to it dropped and counted busy,
+    // which is the rule, not a loss.
     ASSERT_EQ(snap.cabins.size(), 1u);
-    ASSERT_EQ(snap.fingerprints.size(), 1u);
+    ASSERT_LE(snap.fingerprints.size(), 1u);
     const stats::OptimizerSignals::Drops lost = signals.drops();
     EXPECT_EQ(lost.full, 0u);
     // The clock is parked, so a merge is an exact sum: 256 a note, and
     // 40,001 notes stay far below the saturating ceiling.
-    const std::uint64_t landed =
-        (snap.cabins[0].lookups_q8 + snap.fingerprints[0].frequency_q8) / stats::kDecayScoreScale;
+    const std::uint64_t executions =
+        snap.fingerprints.empty() ? 0 : snap.fingerprints[0].frequency_q8;
+    const std::uint64_t landed = (snap.cabins[0].lookups_q8 + executions) / stats::kDecayScoreScale;
     EXPECT_EQ(landed + lost.busy, 40001u) << "folds=" << folds;
 }
 
