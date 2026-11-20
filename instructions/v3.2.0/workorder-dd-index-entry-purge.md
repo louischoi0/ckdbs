@@ -813,3 +813,5 @@ statements complete inside the purge, where none did. The purge's own cost
 did not move (2.48 us an entry against 2.43, 53 slices). One loaded run
 showed a 254 ms stall the run could not place; a quiet-host repeat is owed.
 
+
+**Synced** with `origin/main` at `49327ef9` (DJ merged; the marks file's section renumbered §24 behind DJ's §22 and §23); suite on the merged tree 0 failed of 5010. **DD is closed on the work branch, not landed**: a push, a merge to `main`, a tag and DD-S4 wait for the operator's word.
