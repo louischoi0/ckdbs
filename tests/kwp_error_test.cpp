@@ -87,6 +87,11 @@ TEST(KwpErrorRegistryTest, TheDetailNumberingIsFrozenToo) {
     // Appended for AN-R14's instance-wide half: an explicit transaction the
     // server rolled back at `txn_lifetime_ceiling_ms` (`docs/spec/txn.md` §1).
     EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kTxnLifetimeCeiling), 5);
+    // Appended by DJ-S1 (`server/connection_limits.hpp`): a session refused
+    // by `max_connections`, and a connection closed by
+    // `idle_session_timeout_s`.
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kConnectionLimit), 6);
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kIdleSessionTimeout), 7);
 
     // `kNoDetail` is not a detail and must never collide with one, or a
     // category carrying no detail would read as carrying the first.

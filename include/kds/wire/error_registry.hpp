@@ -147,6 +147,19 @@ enum class ResourceDetail : std::uint16_t {
     // `kLockCap`'s reason: the fix is a shorter transaction, and the
     // client has to learn that its writes are already gone.
     kTxnLifetimeCeiling = 5,
+    // The instance holds as many sessions as `max_connections` admits, or
+    // the seats left are `reserved_admin_connections`' and this session is
+    // not `admin` (DJ-S1, `server/connection_limits.hpp`). Fatal - the
+    // connection is not served - and its own detail because the client's
+    // fix is neither a smaller statement nor a shorter transaction: a pool
+    // must hand out fewer connections, or an operator raise the key.
+    kConnectionLimit = 6,
+    // A connection that ran no statement and held no transaction and no
+    // portal for `idle_session_timeout_s` was closed (DJ-S1,
+    // `TcpServer::CloseIdleSessions`). Fatal, sent unasked ahead of the
+    // close, so a pool can tell a timeout from a failure: nothing was lost
+    // and reconnecting is the whole remedy.
+    kIdleSessionTimeout = 7,
 };
 
 // ---- The mapping ---------------------------------------------------------
@@ -196,6 +209,15 @@ struct WireError {
 // project refuses everywhere else - so `position` is filled only by callers
 // that hold one as a number, which today is the protocol layer alone.
 WireError ErrorFromStatus(const Status& status, std::uint16_t detail = kNoDetail);
+
+// The same, for a refusal that ends the connection: a session the cap does
+// not seat, a connection the idle sweep closes (DJ-S1). Fatal is a property
+// of where the refusal is given, not of the status, so the caller says it.
+inline WireError FatalErrorFromStatus(const Status& status, std::uint16_t detail) {
+    WireError error = ErrorFromStatus(status, detail);
+    error.severity = Severity::kFatal;
+    return error;
+}
 
 // A protocol-layer error, which has no `Status` behind it: a malformed
 // frame is not something the engine failed to do (kwp.hpp's note on why

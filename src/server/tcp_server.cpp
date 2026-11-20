@@ -46,8 +46,9 @@ Status ConfigureAcceptedSocket(int fd, std::uint32_t keepalive_s) {
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
     // **Keepalive** (CN-10 §3.3, U7). A peer that vanished without a FIN -
-    // power lost, a cable pulled - leaves a connection nothing else ends,
-    // since no idle-session timeout exists (protocol.md §10). One number is
+    // power lost, a cable pulled - leaves a connection nothing else ends
+    // unless `idle_session_timeout_s` is set, and that key is off by default
+    // (protocol.md §10). One number is
     // configured and the rest follow from it: six probes a sixth of the idle
     // apart, and `TCP_USER_TIMEOUT` at the same total. With the user
     // timeout set the kernel ends the connection once that long has passed
@@ -158,6 +159,8 @@ TcpServer::TcpServer(TcpServer&& other) noexcept
       server_info_(std::move(other.server_info_)),
       stop_handler_(std::move(other.stop_handler_)),
       txn_lifetime_ceiling_ns_(other.txn_lifetime_ceiling_ns_),
+      limits_(other.limits_),
+      idle_session_timeout_ns_(other.idle_session_timeout_ns_),
       clients_(std::move(other.clients_)),
       reply_writes_(other.reply_writes_) {
     if (host_ != nullptr) host_->server = this;
@@ -196,6 +199,8 @@ TcpServer& TcpServer::operator=(TcpServer&& other) noexcept {
         server_info_ = std::move(other.server_info_);
         stop_handler_ = std::move(other.stop_handler_);
         txn_lifetime_ceiling_ns_ = other.txn_lifetime_ceiling_ns_;
+        limits_ = other.limits_;
+        idle_session_timeout_ns_ = other.idle_session_timeout_ns_;
         clients_ = std::move(other.clients_);
         other.listen_fd_ = -1;
         other.scheduler_ = nullptr;
@@ -266,6 +271,17 @@ Status TcpServer::Attach(sched::Scheduler& scheduler, CommandDispatcher& dispatc
     txn_sweep_ = scheduler_->SubmitEvery(
         std::max(txn_lifetime_ceiling_ns_ / 4, kMinTxnSweepPeriodNs),
         [this] { ExpireOverdueTransactions(); });
+
+    // **The idle-session timeout's caller** (DJ-S1), on both protocols and
+    // only where the key is set: unset, no timer is registered and no
+    // connection carries a mark (DJ-R1, DJ-R6). An eighth of the timeout, so
+    // the close falls within a quarter of it (`CloseIdleSessions`), and
+    // never under a millisecond, for the ceiling sweep's reason.
+    if (idle_session_timeout_ns_ != 0) {
+        idle_session_sweep_ = scheduler_->SubmitEvery(
+            std::max(idle_session_timeout_ns_ / 8, kMinTxnSweepPeriodNs),
+            [this] { CloseIdleSessions(); });
+    }
     return Status::OK();
 }
 
@@ -281,6 +297,10 @@ void TcpServer::Detach() noexcept {
         if (txn_sweep_ != sched::kInvalidTimerId) {
             scheduler_->CancelTimer(txn_sweep_);
             txn_sweep_ = sched::kInvalidTimerId;
+        }
+        if (idle_session_sweep_ != sched::kInvalidTimerId) {
+            scheduler_->CancelTimer(idle_session_sweep_);
+            idle_session_sweep_ = sched::kInvalidTimerId;
         }
         // Copied first: CloseClient mutates clients_.
         std::vector<int> fds;
@@ -380,6 +400,9 @@ void TcpServer::AdoptConnection(int client_fd) {
         // flow (the gate absorbs every pre-auth line).
         fresh.session.set_role(Role::kReadOnly);
     }
+    // Idle from its accept (DJ-S1): a connection that never sends a frame is
+    // the sweep's too.
+    if (idle_session_timeout_ns_ != 0) fresh.idle_since_ns = scheduler_->clock().Now();
     auto [entry, inserted] = clients_.emplace(client_fd, std::move(fresh));
     if (protocol_ == Protocol::kKwp) {
         Connection& conn = entry->second;
@@ -397,6 +420,10 @@ void TcpServer::AdoptConnection(int client_fd) {
         // a session built without one stamps no portal and expires none.
         conn.kwp.emplace(conn.session, config, durability_, &scheduler_->clock());
         conn.kwp->set_identity(NextIdentity(), NextIdentity());
+        // The cap's seat is taken where this session's handshake ends, not
+        // here: its first frame may be a `C_CANCEL`, which holds none
+        // (DJ-R2), and an exchange it never finishes holds none either.
+        conn.kwp->set_connection_limits(limits_);
         // A source that failed answers 0, which is no secret: such a
         // session is offered the bit and is simply never matched. The
         // registry is still this connection's to match a `C_CANCEL` in.
@@ -516,7 +543,9 @@ void TcpServer::OnClientReadable(int client_fd) {
     // without ever completing a line - or an exchange - must not grow
     // server memory at will. SCRAM lines are a few hundred bytes; 4 KiB
     // is generous, and an authenticated connection is uncapped as before.
-    // (A pre-auth *deadline* needs a timer and is future hardening.)
+    // (A pre-auth *deadline* of its own is not built: where
+    // `idle_session_timeout_s` is set, a connection that never finishes its
+    // handshake is idle from its accept and that sweep closes it, DJ-S1.)
     constexpr std::size_t kPreAuthInboxCap = 4096;
     // **"Pre-auth" is "has not finished its handshake", not
     // `auth_gate != nullptr`**: a KWP connection's gate is *moved* into its
@@ -702,6 +731,9 @@ bool TcpServer::DrainFrames(int client_fd, Connection& conn) {
 
 void TcpServer::SubmitStatement(int client_fd, Connection& conn) {
     conn.in_flight = true;
+    // The idle sweep's mark (DJ-S1): this session worked since the last
+    // tick. A byte, and only where the timeout is set (DJ-R6).
+    if (idle_session_timeout_ns_ != 0) conn.worked = true;
     if (conn.kwp.has_value()) {
         // **Armed here, for every statement** (CE-A3): this is the one
         // place both a frame's dispatch and a moved connection's adoption
@@ -964,6 +996,71 @@ void TcpServer::ExpireOverdueTransactions() {
                                   " rolled back at the lifetime ceiling of " +
                                   std::to_string(txn_lifetime_ceiling_ns_ / 1'000'000) + " ms");
         }
+    }
+}
+
+void TcpServer::CloseIdleSessions() {
+    const sched::MonoTimeNs now = scheduler_->clock().Now();
+    // Collected first: `CloseClient` erases from the map this walks.
+    std::vector<int> idle;
+    for (auto& [fd, conn] : clients_) {
+        // DJ-R3: what holds a statement, a transaction or a portal is not
+        // idle and keeps the bound that thing has. An expired session's
+        // transaction is already rolled back (`Session::Expire`); it holds
+        // nothing and only its state is left. A spent portal is not held
+        // (`KwpSession::holds_live_portal`).
+        const bool busy =
+            conn.in_flight || conn.closing || conn.worked ||
+            (conn.session.in_explicit_txn() && !conn.session.expired()) ||
+            (conn.kwp.has_value() && conn.kwp->holds_live_portal());
+        if (busy) {
+            // Kept while the statement runs: cleared here, a tick inside a
+            // long statement would leave `idle_since_ns` at that tick, and
+            // the close could come up to a tick short of a timeout after
+            // the statement ended. Kept, the first tick after its end sees
+            // the mark and counts from there.
+            conn.worked = conn.in_flight;
+            conn.idle_since_ns = now;
+            continue;
+        }
+        if (now - conn.idle_since_ns >= idle_session_timeout_ns_) idle.push_back(fd);
+    }
+    for (int fd : idle) {
+        auto it = clients_.find(fd);
+        if (it == clients_.end()) continue;
+        Connection& conn = it->second;
+        // **Told why, then closed** (DJ-R4): `RESOURCE_EXHAUSTED` with its
+        // own detail and the key's name, so a pool can tell this close from
+        // a failure. Best effort, as any goodbye on a non-blocking socket
+        // is: a peer whose buffer is full, or one still inside its TLS
+        // handshake, is closed without it.
+        const Status why = Status::ResourceExhausted(
+            "this connection ran no statement and held no transaction and no portal for "
+            "idle_session_timeout_s = " +
+            std::to_string(idle_session_timeout_ns_ / 1'000'000'000) +
+            " s, and the server is closing it; reconnect to continue");
+        if (limits_ != nullptr) limits_->idle_closes.fetch_add(1, std::memory_order_relaxed);
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("client", "fd=" + std::to_string(fd) + " closed at the idle-session "
+                                     "timeout of " +
+                                     std::to_string(idle_session_timeout_ns_ / 1'000'000'000) +
+                                     " s");
+        }
+        bool open = true;
+        if (conn.kwp.has_value()) {
+            const wire::WireError e = wire::FatalErrorFromStatus(
+                why, static_cast<std::uint16_t>(wire::ResourceDetail::kIdleSessionTimeout));
+            const auto frame = wire::EncodeFrame(
+                static_cast<std::uint8_t>(wire::ServerFrameType::kError), 0, wire::EncodeError(e));
+            open = AppendReplyBytes(
+                fd, conn,
+                std::string_view(reinterpret_cast<const char*>(frame.data()), frame.size()));
+        } else {
+            open = AppendReplyLine(fd, conn, ErrorReply(why));
+        }
+        // A failed append or flush has already closed and erased it.
+        if (!open || !FlushOutbox(fd, conn)) continue;
+        CloseClient(fd);
     }
 }
 

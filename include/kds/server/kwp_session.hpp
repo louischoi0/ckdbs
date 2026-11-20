@@ -14,6 +14,7 @@
 #include "kds/server/auth.hpp"
 #include "kds/server/cancel_registry.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/connection_limits.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
 #include "kds/wire/error_registry.hpp"
@@ -276,8 +277,30 @@ public:
     // as any unexpected first frame is.
     void set_cancel_registry(CancelRegistry* registry) noexcept { cancels_ = registry; }
 
+    // **The instance's connection cap** (DJ-S1, `connection_limits.hpp`), or
+    // null where the listener has none. This session takes its seat where
+    // its handshake ends - never a cancel connection, which has none, and
+    // never a connection still in its exchange - and holds it until it is
+    // destroyed; one refused a seat is answered `RESOURCE_EXHAUSTED` /
+    // `kConnectionLimit`, fatal, in place of `S_HELLO`. Set before the
+    // first frame.
+    void set_connection_limits(ConnectionLimits* limits) noexcept { limits_ = limits; }
+
     std::size_t statement_count() const noexcept { return statements_.size(); }
     std::size_t portal_count() const noexcept { return portals_.size(); }
+    // Whether the session holds a portal that still owes something: one
+    // bound and not yet executed, or suspended with rows to continue. A
+    // spent portal - its `S_COMPLETE` sent - is a name and nothing a client
+    // can resume, so the idle-session sweep does not read it as held
+    // (DJ-R3, `TcpServer::CloseIdleSessions`): a client that never closes
+    // its unnamed portal would otherwise be idle only once the portal
+    // timeout had released it.
+    bool holds_live_portal() const noexcept {
+        for (const auto& [name, portal] : portals_) {
+            if (!portal.complete_sent) return true;
+        }
+        return false;
+    }
 
 private:
     enum class Phase : std::uint8_t { kAwaitHello, kAwaitAuth, kReady };
@@ -343,6 +366,11 @@ private:
     // never typed, delivered as a one-column TEXT result set.
     void DeliverTextLines(std::string_view reply, std::vector<std::byte>& out);
 
+    // Takes this session's seat under the cap as its handshake ends, or
+    // answers the refusal. `gated` says a gate stamped `role`; the reserve
+    // is open to a gated `admin` alone (`connection_limits.hpp`).
+    std::optional<wire::WireError> TakeSeat(bool gated, Role role);
+
     Portal* FindPortal(const std::string& name);
     // The refusal for a frame naming a portal this session does not hold:
     // `kPortalIdleTimeout` for one the sweep released, `kUnknownPortal`
@@ -365,6 +393,8 @@ private:
     // whole rule.
     bool skipping_to_sync_ = false;
     CancelRegistry* cancels_ = nullptr;
+    ConnectionLimits* limits_ = nullptr;  // `set_connection_limits`
+    ConnectionSeat seat_;
     std::uint64_t session_id_ = 0;
     std::uint64_t cancel_key_ = 0;
 

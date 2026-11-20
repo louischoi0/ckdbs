@@ -2618,6 +2618,19 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // report is installed - a dispatcher built without one (every socket-free
     // test) has not "recovered nothing", it has no answer, and printing zeroes
     // would be an answer.
+    // **The instance's sessions against its cap** (DJ-S1,
+    // `connection_limits.hpp`): one count for every core, so this block,
+    // like `load`, does not describe the asking session's core alone.
+    section("connections");
+    if (connection_limits_ != nullptr) {
+        const ConnectionLimits& c = *connection_limits_;
+        os << "max_connections=" << c.max_connections
+           << " reserved_admin_connections=" << c.reserved_admin_connections
+           << " connection_sessions=" << c.seats.load(std::memory_order_relaxed)
+           << " connection_refusals=" << c.refused.load(std::memory_order_relaxed)
+           << " idle_session_closes=" << c.idle_closes.load(std::memory_order_relaxed);
+    }
+
     section("recovery");
     if (recovery_ != nullptr) {
         // **Where the pass ran** (AR0 M0). Printed only where it was not

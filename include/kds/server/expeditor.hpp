@@ -476,6 +476,27 @@ public:
         // `ExpireOverdueTransactions` (tcp_server.hpp).
         sched::MonoTimeNs txn_lifetime_ceiling_ns = kDefaultTxnLifetimeCeilingNs;
 
+        // `max_connections` (DJ-S1): how many sessions the default port
+        // serves on every core together; 0, the default, is no limit. The
+        // semantics have one home, `server/connection_limits.hpp`.
+        std::uint32_t max_connections = 0;
+        // `reserved_admin_connections` (DJ-S1): seats past `max_connections`
+        // for a session an authentication gate stamped `admin`. In force
+        // only beside `max_connections` and `auth = scram`
+        // (`ReservedAdminConnections`); naming it without either is refused.
+        std::uint32_t reserved_admin_connections = kDefaultReservedAdminConnections;
+        // `idle_session_timeout_s` (DJ-S1), for the default port and the
+        // debug text port: seconds in the file, `tcp_keepalive_s`'s unit; 0,
+        // the default, closes nothing. The semantics have one home,
+        // `TcpServer::CloseIdleSessions`.
+        sched::MonoTimeNs idle_session_timeout_ns = 0;
+
+        // The reserve as it applies: none where no cap is set or no gate
+        // stamps a role, every session being `admin` there.
+        std::uint32_t ReservedAdminConnections() const noexcept {
+            return max_connections != 0 && auth_scram ? reserved_admin_connections : 0;
+        }
+
 
         // How often the `system`-group WAL drain runs. It is what makes a
         // kRelaxed commit durable within its interval and what resolves a
@@ -949,6 +970,14 @@ private:
     // the reader - whose destructor joins its threads - dies first.
     std::optional<sched::WakerTable> page_read_wakers_;
     std::optional<storage::PageReader> page_reader_;
+    // **The instance's connection cap and its count of seats** (DJ-S1,
+    // `connection_limits.hpp`): one object every core's listener seats its
+    // sessions in. A member, not `ServeRuntime`'s, so it outlives every
+    // listener and every dispatcher that reads it - and declared above
+    // `handoff_`, whose inboxes can hold a connection in transit between
+    // two cores: destroyed untaken, that connection gives its seat back
+    // here, so this must still stand then.
+    ConnectionLimits connection_limits_;
     // D19's fallback (AT-S10c): the inboxes core 0's listener hands
     // connections into, built only where the port cannot be shared. After
     // `wakers_`, which it kicks through, and before `cores_` and

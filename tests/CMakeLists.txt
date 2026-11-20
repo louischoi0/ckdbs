@@ -244,6 +244,7 @@ add_executable(kds_tests
     show_sugar_contract_test.cpp
     kwp_conformance_test.cpp
     kwp_endpoint_test.cpp
+    connection_limits_test.cpp
     wire_row_codec_test.cpp
     wal_record_test.cpp
     wal_payload_test.cpp

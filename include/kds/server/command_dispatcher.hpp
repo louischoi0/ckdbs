@@ -52,6 +52,7 @@
 #include "kds/sched/coro.hpp"
 
 
+#include "kds/server/connection_limits.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/sys_views.hpp"
 #include "kds/exec/catalog_view.hpp"
@@ -2220,6 +2221,14 @@ public:
     // where a surface handed them, its own otherwise (DA-R6).
     stats::AccessStats& access_stats() noexcept { return *access_stats_; }
 
+    // The instance's connection cap and its counts (DJ-S1,
+    // `connection_limits.hpp`), for `sys.meta`'s `connections` section. Read
+    // only, and null on a dispatcher no instance is behind, which prints no
+    // section: it has no answer, and zeroes would be one.
+    void set_connection_limits(const ConnectionLimits* limits) noexcept {
+        connection_limits_ = limits;
+    }
+
     // Every piece of the optimizer surface at once, as an instance hands it
     // to each core (AT-S8, `OptimizerSurface`).
     void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
@@ -3108,6 +3117,7 @@ private:
     // mutates the controller under it. Null where one thread owns both.
     Latch* cabin_optimizer_view_latch_ = nullptr;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
+    const ConnectionLimits* connection_limits_ = nullptr;  // DJ-S1, set_connection_limits()
     BackupControl* backup_ = nullptr;          // BR-S2, set_backup()
     const WalArchiver* archiver_ = nullptr;    // BR-S4, set_archiver()
 

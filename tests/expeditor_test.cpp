@@ -1039,6 +1039,20 @@ public:
         return core.empty() || core.rfind("ERR", 0) == 0 ? -1 : std::atoi(core.c_str());
     }
 
+    // What the server says unasked before it closes this connection: reads
+    // to the hangup and answers the last error frame's message, `ERR` first,
+    // or nothing where it closed with none. Nothing is written, so no reset
+    // can take the frame from the socket's buffer.
+    std::string Goodbye() {
+        std::string last;
+        for (auto f = Read(); f.has_value(); f = Read()) {
+            if (f->type != static_cast<std::uint8_t>(wire::ServerFrameType::kError)) continue;
+            auto e = wire::DecodeError(f->payload);
+            last = "ERR " + (e.ok() ? e.value().message : std::string("undecodable"));
+        }
+        return last;
+    }
+
     // One `sys.meta` field over KWP, as its text; empty when absent.
     std::string Meta(std::string_view field) {
         std::string value =
@@ -1978,6 +1992,142 @@ TEST_F(ExpeditorTest, OnConflictDoUpdateHoldsItsRowNotTheRelation) {
     EXPECT_EQ(other.rfind("UPDATED 1", 0), 0u) << other;
     ASSERT_EQ(a.Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
     EXPECT_TRUE(running.Stop().ok());
+}
+
+// ---- DJ-S1: the connection cap and the idle-session timeout, instance-wide --
+//
+// `docs/spec/protocol.md` §10. `connection_limits_test.cpp` holds the cap and
+// the sweep on one listener; these are the halves only an instance has: one
+// count for every core's listener, a session that changes core with its seat,
+// and the sweep beside a transaction and a statement in flight.
+
+// One `connections` field of `sys.meta`, read over the debug text port -
+// whose sessions the cap does not count (DJ-Q2), so the reader is not in
+// the number it reads.
+std::string ConnectionsField(int text_fd, std::string_view field) {
+    return testing_view::MetaField(SendLine(text_fd, "SHOW META"), field).value_or("absent");
+}
+
+// Asks until the instance's count of seated sessions reads `want`: a close
+// is the reactor's to see, at its next read of that socket.
+bool SessionsBecome(int text_fd, std::string_view want) {
+    for (int i = 0; i < 400; ++i) {
+        if (ConnectionsField(text_fd, "connection_sessions") == want) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
+TEST_F(ExpeditorTest, TheConnectionCapIsOneCountForEveryCore) {
+    Expeditor::Config config = ConfigAt(/*cores=*/2);
+    config.max_connections = 4;
+    ScriptedPlacer placer;
+    config.transaction_placer = &placer;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+    const int text = running.client();
+    EXPECT_EQ(ConnectionsField(text, "max_connections"), "4");
+    EXPECT_EQ(ConnectionsField(text, "connection_sessions"), "0")
+        << "a debug text session holds no seat";
+
+    // Four sessions, accepted by whichever core the kernel chose for each.
+    std::vector<std::unique_ptr<KwpClient>> sessions;
+    for (int i = 0; i < 4; ++i) {
+        sessions.push_back(std::make_unique<KwpClient>(config.port));
+        ASSERT_TRUE(sessions.back()->Hello()) << "session " << i;
+    }
+    EXPECT_EQ(ConnectionsField(text, "connection_sessions"), "4");
+
+    // **The cap is the instance's**, so the fifth is refused whichever core
+    // accepts it - and several are tried, so both cores' listeners are asked.
+    for (int i = 0; i < 8; ++i) {
+        KwpClient late(config.port);
+        EXPECT_FALSE(late.Hello()) << "a session past the cap was served, attempt " << i;
+    }
+    EXPECT_EQ(ConnectionsField(text, "connection_refusals"), "8");
+    EXPECT_EQ(ConnectionsField(text, "connection_sessions"), "4");
+
+    // **A session that changes core keeps its seat**: moved to core 1 and
+    // back to core 0, the count does not move, and each core's own
+    // `sys.meta` reads the one number.
+    for (const int core : {1, 0}) {
+        placer.target = core;
+        ASSERT_EQ(sessions[0]->Core(), core);
+        EXPECT_EQ(sessions[0]->Meta("connection_sessions"), "4") << "asked on core " << core;
+    }
+    placer.target = -1;
+
+    // A seat given back is a seat again, and the count reaches zero when
+    // every session has gone.
+    sessions.pop_back();
+    ASSERT_TRUE(SessionsBecome(text, "3"));
+    KwpClient next(config.port);
+    EXPECT_TRUE(next.Hello());
+    sessions.clear();
+    EXPECT_TRUE(SessionsBecome(text, "1"));
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+TEST_F(ExpeditorTest, TheIdleTimeoutLeavesAnOpenTransactionAndARunningStatementAlone) {
+    // DJ-R3. A second of idleness - under what the file admits, so that a
+    // cell can wait it out - beside a lock wait of three: the waiter is in
+    // flight for three timeouts and the holder inside its transaction for
+    // as long, and neither is the sweep's. **The mutation**: drop
+    // `in_flight` or the transaction from `CloseIdleSessions`' test, and the
+    // waiter's answer or the holder's COMMIT is a hangup.
+    constexpr std::uint64_t kIdleNs = 1'000'000'000ULL;
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.idle_session_timeout_ns = kIdleNs;
+    config.lock_wait_fault_net_ns = 3 * kIdleNs;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+
+    KwpClient holder(config.port);
+    ASSERT_TRUE(holder.Hello());
+    ASSERT_EQ(holder.Run("CREATE TABLE acct (id int64, bal int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(holder.Run("INSERT INTO acct VALUES (1, 100)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(holder.Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK");
+    ASSERT_EQ(holder.Run("UPDATE acct SET bal = 1 WHERE id = 1").rfind("UPDATED 1", 0), 0u);
+
+    // Idle from here on: it says hello and runs nothing.
+    KwpClient bystander(config.port);
+    ASSERT_TRUE(bystander.Hello());
+
+    // Parks on the holder's row until the fault net refuses it.
+    KwpClient waiter(config.port);
+    ASSERT_TRUE(waiter.Hello());
+    const std::string waited = waiter.Run("UPDATE acct SET bal = 2 WHERE id = 1");
+    ASSERT_EQ(waited.rfind("ERR", 0), 0u) << waited;
+    EXPECT_NE(waited, "ERR hung up") << "a statement in flight was closed as idle";
+    EXPECT_EQ(waited.find("idle_session_timeout_s"), std::string::npos) << waited;
+
+    // The holder sat three timeouts inside its transaction and is served.
+    EXPECT_EQ(holder.Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
+
+    // The bystander held nothing for as long: told why, and closed.
+    const std::string told = bystander.Goodbye();
+    EXPECT_NE(told.find("idle_session_timeout_s = 1"), std::string::npos) << told;
+
+    // And the other two go the same way once they too hold nothing.
+    EXPECT_NE(holder.Goodbye().find("idle_session_timeout_s"), std::string::npos);
+    EXPECT_NE(waiter.Goodbye().find("idle_session_timeout_s"), std::string::npos);
+    const int text = ConnectToLoopback(config.debug_text_port);
+    ASSERT_GE(text, 0);
+    EXPECT_EQ(ConnectionsField(text, "idle_session_closes"), "3")
+        << "the default port's three; the text port's closes are counted nowhere";
+    ::close(text);
+    // The text client `Run()` opened is closed by the sweep as well: stop
+    // through a fresh one.
+    const int stopper = ConnectToLoopback(config.debug_text_port);
+    ASSERT_GE(stopper, 0);
+    (void)SendLine(stopper, "STOP");
+    ::close(stopper);
 }
 
 }  // namespace

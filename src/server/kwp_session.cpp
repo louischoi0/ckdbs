@@ -488,6 +488,12 @@ FrameAction KwpSession::OnHello(std::span<const std::byte> payload, std::vector<
         phase_ = Phase::kAwaitAuth;
         return FrameAction{};
     }
+    // **The handshake ends here where no exchange is owed, and the session
+    // takes its seat** (DJ-S1, `connection_limits.hpp`). No gate stamped a
+    // role, so nothing is reserved for it.
+    if (auto refused = TakeSeat(/*gated=*/false, session_.role()); refused.has_value()) {
+        return Refuse(out, *refused);
+    }
     phase_ = Phase::kReady;
     Send(out, ServerFrameType::kHello, 0, wire::EncodeServerHello(outcome.hello));
     SendReady(out);
@@ -515,6 +521,15 @@ FrameAction KwpSession::OnAuth(std::span<const std::byte> payload, std::vector<s
         return action;
     }
     if (!result.authenticated) return FrameAction{};
+
+    // **The seat is taken once the role is known** (DJ-S1): a connection
+    // still in its exchange holds none, so a peer with no credentials
+    // cannot fill the cap, and the reserve is asked for by the one role it
+    // is for. Refused, the session has its `S_AUTH` and this in place of
+    // `S_HELLO`.
+    if (auto refused = TakeSeat(/*gated=*/true, result.role); refused.has_value()) {
+        return Refuse(out, *refused);
+    }
 
     session_.set_role(result.role);
     auth_gate_.reset();
@@ -1077,6 +1092,25 @@ FrameAction KwpSession::RefuseMissingPortal(std::string_view frame, const std::s
                                     "', which this session does not hold"));
 }
 
+
+std::optional<wire::WireError> KwpSession::TakeSeat(bool gated, Role role) {
+    const bool reserve = gated && role == Role::kAdmin;
+    if (seat_.Take(limits_, reserve)) return std::nullopt;
+    // DJ-R4: the key's name and value, and - where a reserve stands - which
+    // side of it this session is on.
+    std::string why = "this server holds max_connections = " +
+                      std::to_string(limits_->max_connections) + " sessions";
+    if (gated && limits_->reserved_admin_connections != 0) {
+        const std::string seats = std::to_string(limits_->reserved_admin_connections);
+        why += reserve ? " and the reserved_admin_connections = " + seats + " past them"
+                       : ", and the reserved_admin_connections = " + seats +
+                             " past them are for a session whose role is admin; this session is " +
+                             std::string(RoleName(role));
+    }
+    return wire::FatalErrorFromStatus(
+        Status::ResourceExhausted(why + "; this connection is not served"),
+        static_cast<std::uint16_t>(ResourceDetail::kConnectionLimit));
+}
 
 KwpSession::Portal* KwpSession::FindPortal(const std::string& name) {
     auto it = portals_.find(name);
