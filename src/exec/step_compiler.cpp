@@ -3460,13 +3460,14 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // continue the prefix the ladder chose with the `ORDER BY` keys is
         // walked in its order and the sort dropped (section 5a). Only where
         // the pin admits the index class, and only the index it names.
-        if (i == 0 && index && driver_order.has_value() && !driver_order->descending) {
+        if (i == 0 && index && driver_order.has_value()) {
             if (auto ordered = OrderedIndexChoiceOf(rel, step, *driver_order, pin.name);
                 ordered.has_value()) {
                 step.kind = ordered->eq_prefix > 0 && !ordered->ranged ? AccessKind::kIndexProbe
                                                                         : AccessKind::kIndexRange;
                 step.index = std::move(ordered);
-                step.emit_order = EmitOrder::kIndexKeyForward;
+                step.emit_order = driver_order->descending ? EmitOrder::kIndexKeyBackward
+                                                           : EmitOrder::kIndexKeyForward;
             }
         }
 
@@ -3627,8 +3628,10 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // **An index order (CV O1)**: section 4 put the driving step on an index
     // holding exactly these keys after its prefix (`OrderedIndexChoiceOf`),
     // so the step emits them in order, ties by ascending tuple key - the
-    // sort's own tie order over IX8a's emission.
-    if (!chain.steps.empty() && chain.steps[0].emit_order == EmitOrder::kIndexKeyForward) {
+    // sort's own tie order over IX8a's emission - or, descending (O3), from
+    // the high end down with ties by descending tuple key (CV-Q4 (a),
+    // `parser-v2.md` I12).
+    if (!chain.steps.empty() && IsIndexOrder(chain.steps[0].emit_order)) {
         chain.sort_keys.clear();
     }
     chain.limit = stmt.limit;
@@ -3669,7 +3672,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 : ReadColumnsOf(chain, step, static_cast<std::uint16_t>(i));
         // An ordered index step checks each row's visible key against its
         // entry's (CV-R2), so it decodes its index's key columns.
-        if (step.emit_order == EmitOrder::kIndexKeyForward && step.read_columns != Step::kAllColumns) {
+        if (IsIndexOrder(step.emit_order) && step.read_columns != Step::kAllColumns) {
             for (const std::uint16_t col : step.index->key_cols) {
                 step.read_columns |= std::uint64_t{1} << col;
             }

@@ -219,6 +219,9 @@ constexpr bool EmitsTupleKeyOrder(AccessKind kind) noexcept {
 //                      tuple key - resolving as it goes, instead of IX8a's
 //                      sort back into tuple key order: `ORDER BY` the index
 //                      keys after its prefix (O1)
+//   kIndexKeyBackward  the same from the high end down, ties by descending
+//                      tuple key (CV-Q4 (a)): `ORDER BY` those keys `DESC`
+//                      (O3)
 //
 // Ascending tuple key order needs no annotation: every kind
 // `EmitsTupleKeyOrder` lists already emits it.
@@ -226,7 +229,13 @@ enum class EmitOrder : std::uint8_t {
     kAny = 0,
     kTupleKeyBackward,
     kIndexKeyForward,
+    kIndexKeyBackward,
 };
+
+// Whether a step walks its index in its order for an elided `ORDER BY`.
+constexpr bool IsIndexOrder(EmitOrder order) noexcept {
+    return order == EmitOrder::kIndexKeyForward || order == EmitOrder::kIndexKeyBackward;
+}
 
 // The inclusive tuple key bounds a kRange step walks between.
 //

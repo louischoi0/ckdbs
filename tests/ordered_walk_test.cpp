@@ -76,6 +76,21 @@ protected:
         EXPECT_EQ(Rows(paged), Window(base, limit, offset)) << paged;
     }
 
+    // `base` paged, checked elided, against the window of `reference`: the
+    // same statement with its ties broken by descending tuple key, which is
+    // CV-Q4 (a)'s tie rule for an elided `DESC` - so the sort that answers
+    // `reference` defines the order the reverse walk owes.
+    void ExpectElidedWindowAgainst(const std::string& base, const std::string& reference,
+                                   std::size_t limit, std::size_t offset,
+                                   const std::string& order) {
+        const std::string paged = base + " LIMIT " + std::to_string(limit) +
+                                  (offset != 0 ? " OFFSET " + std::to_string(offset) : "");
+        const std::string plan = Run("ANALYZE " + paged);
+        EXPECT_NE(plan.find("order=" + order), std::string::npos) << paged << ": " << plan;
+        EXPECT_EQ(plan.find("sorted="), std::string::npos) << paged << " still sorted: " << plan;
+        EXPECT_EQ(Rows(paged), Window(reference, limit, offset)) << paged;
+    }
+
     // ids 1..n with a ~2 KB cell, so a leaf holds about four rows and `n`
     // rows are about `n / 4` leaves.
     void LoadWide(const std::string& table, int n, int step = 1) {
@@ -330,6 +345,62 @@ TEST_F(OrderedIndexWalkTest, AnEqualityOnALaterOrderKeyIsAConstantInTheOrder) {
     ExpectElidedWindow(
         "SELECT id FROM ev WHERE user_id = 3 AND kind = 1 ORDER BY created_at, kind", 15, 2,
         "index_asc");
+}
+
+// ---- O3: the reverse ordered index walk (CV-S3) ----------------------------
+
+TEST_F(OrderedIndexWalkTest, ALatestRowsReadDescendingTiesByDescendingTupleKey) {
+    LoadEvents();
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    for (const char* user : {"1", "2", "3", "4"}) {
+        const std::string base = std::string("SELECT id, created_at FROM ev WHERE user_id = ") +
+                                 user + " ORDER BY created_at DESC";
+        for (const auto& [limit, offset] : std::vector<std::pair<std::size_t, std::size_t>>{
+                 {1, 0}, {20, 0}, {20, 7}, {5, 290}, {700, 0}, {0, 0}}) {
+            ExpectElidedWindowAgainst(base, base + ", id DESC", limit, offset, "index_desc");
+        }
+    }
+    // With the tuple key written, the order is total and the sort's own.
+    ExpectElidedWindow("SELECT id FROM ev WHERE user_id = 3 ORDER BY created_at DESC, id DESC",
+                       25, 3, "index_desc");
+}
+
+TEST_F(OrderedIndexWalkTest, AReverseRangeAWholeIndexAndMovedRows) {
+    LoadEvents();
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    Run("CREATE INDEX ev_at ON ev (created_at)");
+    Run("UPDATE ev SET created_at = 5000 WHERE id BETWEEN 1 AND 60");
+    Run("UPDATE ev SET created_at = 1 WHERE id BETWEEN 300 AND 330");
+    Run("DELETE FROM ev WHERE id BETWEEN 500 AND 560");
+    const std::string ranged =
+        "SELECT id FROM ev WHERE user_id = 2 AND created_at BETWEEN 10 AND 100 "
+        "ORDER BY created_at DESC";
+    ExpectElidedWindowAgainst(ranged, ranged + ", id DESC", 30, 5, "index_desc");
+    const std::string whole = "SELECT id, created_at FROM ev ORDER BY created_at DESC";
+    ExpectElidedWindowAgainst(whole, whole + ", id DESC", 40, 100, "index_desc");
+    ExpectElidedWindowAgainst(whole, whole + ", id DESC", 2000, 0, "index_desc");
+    // A direction against the written tuple key keeps the sort.
+    const std::string plan =
+        Run("ANALYZE SELECT id FROM ev ORDER BY created_at DESC, id LIMIT 5");
+    EXPECT_EQ(plan.find("order=index"), std::string::npos) << plan;
+}
+
+TEST_F(OrderedIndexWalkTest, AReverseWalkOverAnEmptyAOneLeafAndAnInvertedRange) {
+    Run("CREATE TABLE s (id int64, v int64)");
+    Run("CREATE INDEX s_v ON s (v)");
+    const std::string all = "SELECT id, v FROM s ORDER BY v DESC";
+    ExpectElidedWindowAgainst(all, all + ", id DESC", 5, 0, "index_desc");
+    Run("INSERT INTO s VALUES (1, 40)");
+    ExpectElidedWindowAgainst(all, all + ", id DESC", 5, 0, "index_desc");
+    for (const char* row : {"(2, 10)", "(3, 40)", "(4, 25)"}) {
+        Run(std::string("INSERT INTO s VALUES ") + row);
+    }
+    ExpectElidedWindowAgainst(all, all + ", id DESC", 3, 1, "index_desc");
+    // Every entry above the high bound, and a range whose ends cross.
+    const std::string above = "SELECT id FROM s WHERE v BETWEEN 1 AND 5 ORDER BY v DESC";
+    ExpectElidedWindowAgainst(above, above + ", id DESC", 5, 0, "index_desc");
+    const std::string inverted = "SELECT id FROM s WHERE v BETWEEN 100 AND 10 ORDER BY v DESC";
+    ExpectElidedWindowAgainst(inverted, inverted + ", id DESC", 5, 0, "index_desc");
 }
 
 TEST_F(OrderedIndexWalkTest, AJoinKeepsTheOrderedDriversOrder) {

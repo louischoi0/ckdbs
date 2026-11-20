@@ -455,3 +455,61 @@ On worktree `cv-ordered-index-walk`, over `dd1d3f4a`.
   the plan-pin cells - the rig interleaves on one core, and the pins are
   read against `ArmPin` in the review rather than tested here.
 - **Suite**: 0 failed of 4,892 (`ctest -LE bs-nightly`) on S2's tree after the review's fixes.
+
+### CV-S3 - O3, the reverse ordered index walk (2026-11-20)
+
+On worktree `cv-ordered-index-walk`, over `10e7b0a4`.
+
+- **The choice**: S2's, for a descending order too
+  (`EmitOrder::kIndexKeyBackward`, `IsIndexOrder`); a last tuple key key
+  must be descending as well, and mixed directions keep the sort.
+- **The run** (`RunReverseOrderedIndexStep`): from the probe's high bound
+  down, a leaf a step; each leaf's entries at or below the bound collected
+  under its hold from the last down, the next bound the leaf's first entry
+  less one - the greatest byte string below it - sought with
+  `index::IndexFetchLeafAtOrBelow`, which moves right under the leaf's
+  hold while a divide has moved that range past the descent (CV-R3, CV-Q1
+  (a): no left link, no format change). A leaf's first entry never changes
+  (a divide keeps the lower half; no entry is removed) but the leftmost's,
+  which only gains entries below it, each newer than the walk's view. It ends at the low
+  bound or when the descent returns the leaf it just read (the leftmost),
+  and yields every `pages_per_slice` leaves (CV-R4). The batch's resolve,
+  key check and seen set are the forward run's (`ResolveBatch`); the
+  decline reverses its sorted records.
+- **CV-Q4 (a)**: ties by descending tuple key; `parser-v2.md` I12 amended
+  and the manual says it, with the advice to write the tuple key last.
+- **Tests**: `OrderedIndexWalkTest`'s two descending cells, each against
+  the sort of the same statement with `, id DESC` appended (CV-Q4's rule
+  made the reference): latest rows at six windows over four users, a
+  reverse range, the whole index under moved and deleted rows; the index
+  contract suite's six descending statements (each total, because `plain`
+  sorts its ties ascending) across every configuration, two descending
+  shapes in its CV-R2 cell, two in its taken-or-not cell; a rig cell (a
+  yield, divides, moved keys inside a reverse ordered walk's suspensions).
+  The sim's `ORDER BY v DESC, id DESC` (S1) reaches the walk wherever the
+  workload made its index on `v`.
+- **Specs moved** (CV-R6): `index.md` IX8c's descending paragraph and
+  IX9's rule; `parser-v2.md` I11 and I12; the manual.
+- Overhead not measured; measured at the milestone's close.
+- **Review** (`critics-developer`): no correctness defect - no skip,
+  repeat, early stop or loop under divides, stale descents or a stale root;
+  the decrement, the at-or-below cut and the tie order (walk and decline)
+  exact. **Applied**: the sentence "a leaf's first entry never changes"
+  corrected in the code, `index.md` and this entry - the leftmost leaf's
+  does change, gaining only entries newer than the walk's view, and the
+  walk ends there by id; `IndexFetchLeafAtOrBelow` starts from the
+  descent's own held leaf instead of fetching it twice, returns the
+  `PageRef` (its `page_id()`) instead of a struct, and loses its one-value
+  access parameter; the decrement is `index::PrecedingSortKey`, next to the
+  coverage rule it rests on, its comment's reason corrected; the entry
+  filter both runs copied is one `CollectEntry`; cells for the decline's
+  descending ties against `indexes = off`, and a reverse walk over an
+  empty, a one-row and a one-leaf index, every entry above the high bound,
+  and an inverted range. **Recorded, not built**: CV §2's "one descent per
+  leaf" in the reverse walks' price - `EstimateChain` adds none, which the
+  gaps now say; the reverse runs count the leaf they read, not the leaves
+  the move right passes. **Not applied**: a second-core root growth under
+  a reverse walk, and an insert below the leftmost leaf's first entry while
+  the walk is parked there - the rig interleaves on one core, and the
+  second needs a walk placed at the leftmost leaf by timing.
+- **Suite**: 0 failed of 4,897 (`ctest -LE bs-nightly`) on S3's tree after the review's fixes.

@@ -364,6 +364,33 @@ TEST_F(WalkSliceRigTest, AnOrderedIndexWalkYieldsAndMissesAndRepeatsNoRowUnderDi
         << "the ordered walk read under its own view, in its order, every row once";
 }
 
+TEST_F(WalkSliceRigTest, AReverseOrderedIndexWalkYieldsAndMissesAndRepeatsNoRowUnderDivides) {
+    LoadOrdered(d(), kRows);
+    const std::string ordered = "SELECT id FROM o ORDER BY k DESC LIMIT 100000";
+    ASSERT_NE(d().Dispatch("ANALYZE " + ordered).response.find("order=index_desc"),
+              std::string::npos);
+    Script walk{&long_, {ordered}};
+    Script writer{&other_, {"SELECT id FROM o WHERE id = 5"}};
+    for (int i = 0; i < kRows; ++i) {
+        writer.lines.push_back("INSERT INTO o VALUES (" + std::to_string(kRows + 1 + i) + ", " +
+                               std::to_string(2 * i + 1) + ", 'x')");
+    }
+    writer.lines.push_back("UPDATE o SET k = 99999 WHERE id BETWEEN 1500 AND 1600");
+    std::atomic<bool> walk_running{false};
+    writer.after = [&] { walk_running.store(walk.done.load() == 0); };
+    RunBoth(walk, writer);
+
+    ASSERT_TRUE(walk_running.load()) << "the walk ended before the writes: nothing yielded";
+    for (const DispatchOutcome& out : writer.outs) {
+        ASSERT_EQ(out.response.rfind("ERR", 0), std::string::npos) << out.response;
+    }
+    ASSERT_TRUE(walk.outs[0].status.ok()) << walk.outs[0].response;
+    std::vector<std::int64_t> expected;
+    for (int i = 1; i <= kRows; ++i) expected.push_back(i);  // k = 2 * (kRows + 1 - id)
+    EXPECT_EQ(Ids(walk.outs[0].response), expected)
+        << "the reverse ordered walk read under its own view, in order, every row once";
+}
+
 TEST_F(WalkSliceRigTest, APurgedKeyNamedAgainIsReadAtItsNewKeyOnly) {
     // The purged rows' entries stay (IX1) and name tuple keys a named INSERT
     // binds again, under another order value: each row comes out once, at

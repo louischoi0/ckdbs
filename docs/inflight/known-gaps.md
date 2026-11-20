@@ -2653,6 +2653,11 @@ Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
   sibling link exists, so each step left is a seek from the last leaf's
   `min_key`. The join planner prices an elided chain at the rows its LIMIT
   lets out and does not add those descents.
+- **The reverse walks are priced without their descents**: CV §2 asked
+  `EstimateChain` to add one descent per leaf for a reverse walk (O2, O3);
+  it adds none, pricing an elided chain at the rows its LIMIT lets out, as
+  a forward one. And a reverse run's `pages_fetched` counts the leaf it
+  reads, not those its move right passes over.
 - **`ORDER BY <tuple key> DESC` without a `LIMIT` is still a sort**
   (CV-Q2 (a)), and so is one over a key set, a build or a Cabin arm.
 - **An ordered index step's decline holds every match** (CV-S2, `index.md`

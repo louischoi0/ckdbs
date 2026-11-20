@@ -421,6 +421,20 @@ so the descents walk the tree forwards instead of jumping.
 > every `pages_per_slice` leaves while it is the statement's outermost
 > walk, holding no page.
 
+**Descending (CV O3)**, the same entries from the high end down, ties by
+descending tuple key (CV-Q4 (a), `parser-v2.md` I12). An index leaf links
+forward only (CV-Q1 (a)), so a step left is a descent: once a leaf is read,
+the next holds the greatest entries below its first, sought for that entry
+less one - the greatest byte string below it - and the leaf found is asked,
+under its hold, whether its right sibling's first entry is above that key,
+moving right while it is not (`index::IndexFetchLeafAtOrBelow`). A leaf's
+first entry never changes - a divide keeps the lower half and no entry is
+removed - but the leftmost's, which only gains entries below it, each newer
+than the walk's view; so each step is a seek by key. The walk ends at the
+low bound, or when the descent returns the leaf it just read: the leftmost.
+**Not priced**: the join planner prices an elided chain at the rows its
+LIMIT lets out, and adds no descent per leaf for either reverse walk.
+
 Two checks at each entry are a correctness statement `[quiet-wrong]`
 (CV-R2):
 
@@ -602,14 +616,17 @@ Two rules that keep every existing proof standing:
   key columns are exactly the equality prefix the ladder's own index choice
   used, in any order, followed by the `ORDER BY` keys - one direction, a
   last key on the tuple key allowed - the lowest `index_oid` is taken and
-  the sort dropped (IX8c). It never displaces a lookup, a key set, a
+  the sort dropped (IX8c), walked forward for an ascending order and from
+  the high end down for a descending one. It never displaces a lookup, a key set, a
   correlated probe or a longer prefix, and it reads no statistic. Over a
   bare walk the prefix is empty, and the index is taken only where the step
   carries no conjunct at all. **A string order key keeps its sort**
   (CV-Q7 (a)): IX6 truncates it, and values sharing the prefix sit in tuple
   key order. A key the prefix also binds by equality keeps the sort too.
   Because the keys after the prefix are exactly the `ORDER BY`'s, ties come
-  out by ascending tuple key, the sort's tie order over IX8a's emission.
+  out by ascending tuple key, the sort's tie order over IX8a's emission -
+  and by descending tuple key under a descending order (`parser-v2.md`
+  I12).
 
 The compiler asks the relation's cached index list (`TableAccess::IndexOn`,
 §12), which answers for an index's **leading** key column only — exactly the

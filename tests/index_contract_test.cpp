@@ -285,6 +285,16 @@ const std::vector<std::string>& Queries() {
         "ORDER BY a.qty LIMIT 5",
         // A string key keeps its sort (CV-Q7 (a)).
         "SELECT id, sym FROM b ORDER BY sym LIMIT 5",
+        // The reverse walk (CV O3), each order total - the tuple key
+        // written last - because `plain` sorts its ties ascending and an
+        // elided `DESC` returns them descending (CV-Q4 (a)).
+        "SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty DESC, id DESC LIMIT 4",
+        "SELECT id, qty FROM b WHERE owner = 0 ORDER BY qty DESC, id DESC LIMIT 20",
+        "SELECT id, owner, qty FROM b WHERE owner BETWEEN 1 AND 3 "
+        "ORDER BY owner DESC, qty DESC, id DESC LIMIT 9 OFFSET 2",
+        "SELECT id, owner FROM b ORDER BY owner DESC, id DESC LIMIT 15",
+        "SELECT id, code FROM b ORDER BY code DESC LIMIT 6",
+        "SELECT id, code FROM b WHERE code BETWEEN 10 AND 200 ORDER BY code DESC LIMIT 5",
     };
     return kQueries;
 }
@@ -466,9 +476,11 @@ TEST(IndexContractTest, AnOrderedWalkIsTakenWhereItsIndexHoldsTheOrder) {
              "SELECT id FROM b ORDER BY owner LIMIT 12",
              "SELECT id FROM b ORDER BY code LIMIT 6",
              "SELECT id FROM b WHERE owner = 1 ORDER BY qty, id LIMIT 4",
+             "SELECT id FROM b WHERE owner = 1 ORDER BY qty DESC LIMIT 4",
+             "SELECT id FROM b ORDER BY code DESC LIMIT 6",
          }) {
         const std::string plan = db.Run("ANALYZE " + sql);
-        EXPECT_NE(plan.find("order=index_asc"), std::string::npos) << sql << ": " << plan;
+        EXPECT_NE(plan.find("order=index_"), std::string::npos) << sql << ": " << plan;
         EXPECT_EQ(plan.find("sorted="), std::string::npos) << sql << ": " << plan;
     }
     // CV-Q3 (a): `by_owner` is the lower oid and IX9's choice for the
@@ -501,13 +513,15 @@ TEST(IndexContractTest, AnOrderedWalkEmitsEachRowWhereItsViewFilesIt) {
         {"SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty", " LIMIT 50"},
         {"SELECT id, owner, qty FROM b ORDER BY owner, qty", " LIMIT 100"},
         {"SELECT id, owner FROM b ORDER BY owner", " LIMIT 100"},
+        {"SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty DESC, id DESC", " LIMIT 50"},
+        {"SELECT id, owner FROM b ORDER BY owner DESC, id DESC", " LIMIT 100"},
     };
     const auto same = [&](Session* s, const char* when) {
         for (const auto& [base, limit] : shapes) {
             const std::string sorted = s != nullptr ? db.Run(*s, base) : db.Run(base);
             const std::string walked = s != nullptr ? db.Run(*s, base + limit) : db.Run(base + limit);
             EXPECT_EQ(walked, sorted) << when << ": " << base;
-            EXPECT_NE(db.Run("ANALYZE " + base + limit).find("order=index_asc"),
+            EXPECT_NE(db.Run("ANALYZE " + base + limit).find("order=index_"),
                       std::string::npos)
                 << base;
         }
@@ -543,6 +557,26 @@ TEST(IndexContractTest, AnOrderedWalkUnderAViewOlderThanItsIndex) {
     EXPECT_NE(db.Run(reader, "ANALYZE " + sql).find("order=index_asc"), std::string::npos);
     EXPECT_EQ(db.Run(reader, sql), sorted);
     ASSERT_EQ(db.Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+}
+
+// The decline keeps the walk's tie order (CV-Q4 (a)): a descending order
+// with ties, which `plain` sorts ascending within each tie and so cannot
+// stand beside it, against `indexes = off`, whose step declines to the
+// walk that sorts into the index's order reversed.
+TEST(IndexContractTest, TheDeclineReturnsAReverseWalksTiesAsTheWalkDoes) {
+    Instance maintained(/*indexes=*/true);
+    Instance ignored(/*indexes=*/false);
+    LoadMaintained(maintained);
+    LoadMaintained(ignored);
+    for (const std::string sql : {
+             "SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty DESC LIMIT 6",
+             "SELECT id, owner FROM b ORDER BY owner DESC LIMIT 25",
+             "SELECT id, owner, qty FROM b ORDER BY owner DESC, qty DESC LIMIT 30 OFFSET 4",
+             "SELECT id, owner FROM b ORDER BY owner LIMIT 25",
+         }) {
+        EXPECT_NE(maintained.Run("ANALYZE " + sql).find("order=index_"), std::string::npos) << sql;
+        EXPECT_EQ(maintained.Run(sql), ignored.Run(sql)) << sql;
+    }
 }
 
 TEST(IndexContractTest, AnOldSnapshotFindsItsVersionThroughTheStaleEntry) {

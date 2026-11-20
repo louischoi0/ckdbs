@@ -212,6 +212,24 @@ StatusOr<PageId> IndexSeekLeaf(storage::PageStore& store, PageId root, const Ind
 StatusOr<storage::PageRef> IndexFetchLeaf(storage::PageStore& store, PageId leaf,
                                           const IndexLayout& layout, storage::PageAccess access);
 
+// The leaf that holds the greatest entries at or below `sort_key`, fetched
+// for read and **held** (CV O3, the reverse ordered walk's step). A read
+// descent lands at or left of `sort_key`'s leaf (`IndexSeekLeaf`), so
+// the leaf is asked, while it is held, whether its right sibling's first
+// entry is above `sort_key` - a leaf covers `[its separator, the right
+// sibling's first entry)`, which holds while no entry is removed (above) -
+// and the walk moves right until it is. Holding a leaf and asking its right
+// neighbour is a forward walk's order. Every entry at or below `sort_key`
+// the tree held before the call is in the leaf returned or to its left.
+StatusOr<storage::PageRef> IndexFetchLeafAtOrBelow(storage::PageStore& store, PageId root,
+                                                   const IndexLayout& layout,
+                                                   std::span<const std::byte> sort_key);
+
+// `key` made, in place, the greatest sort key of its width below it - the
+// reverse walk's next bound below a leaf's first entry. `key` must not be
+// all zeros, which no caller's is: it is above the walk's low bound.
+void PrecedingSortKey(std::span<std::byte> key);
+
 // Calls `fn` once per entry of every leaf from `first_leaf` rightwards -
 // which is key order. Signature and contract match heap::ChainVisit and
 // btree::BtreeVisit deliberately: `kStop` ends the walk with Status::OK()
