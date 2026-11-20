@@ -832,7 +832,7 @@ private:
     std::function<Status(std::uint64_t)> select_row_emitted_for_test_;
 
     // ---- Transaction control (docs/spec/txn.md sections 1, 6) ----------------
-    DispatchOutcome HandleBegin(std::string_view args, Session& session);
+    DispatchOutcome HandleBegin(std::string_view line, std::string_view args, Session& session);
     // `BEGIN ... READ ONLY` (CS): a held view and its lease, no transaction.
     DispatchOutcome BeginReadOnly(txn::IsolationLevel level, Session& session);
     DispatchOutcome HandleCommit(Session& session);

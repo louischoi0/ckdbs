@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <limits>
 #include <utility>
 
 namespace kds::parser {
@@ -89,6 +90,26 @@ bool AggFuncOf(std::string_view name, AggFunc& out) noexcept {
     if (IEquals(name, "MAX")) { out = AggFunc::kMax; return true; }
     if (IEquals(name, "AVG")) { out = AggFunc::kAvg; return true; }
     return false;
+}
+
+// The value of a non-negative integer literal, decoded from its digits and
+// not from `int_val`: the signed decode wraps past 64 bits (token.hpp), and
+// a wrapped value silently means a number the client did not write, so
+// past-uint64 refuses at the literal's byte instead. `what` names the
+// literal in the refusal. The caller has checked `tok` is a kIntLit
+// written without a sign.
+StatusOr<std::uint64_t> DecodeUnsignedDigits(const Token& tok, std::string_view what) {
+    // The lexer guarantees a non-empty ASCII digit run, so the only way
+    // from_chars fails here is overflow.
+    const std::string_view digits = tok.digits();
+    std::uint64_t value = 0;
+    if (std::from_chars(digits.data(), digits.data() + digits.size(), value).ec !=
+        std::errc()) {
+        return Status::InvalidArgument(std::string(what) + " '" + std::string(digits) +
+                                        "' does not fit in 64 bits (byte " +
+                                        std::to_string(tok.byte_offset) + ")");
+    }
+    return value;
 }
 
 }  // namespace
@@ -221,12 +242,16 @@ StatusOr<std::uint32_t> Parser::ParseTypeArgument(std::string_view what) {
     }
     // The *bounds* are the type registry's business (TY2), not this
     // layer's; what a syntax layer can say is that the digits fit at all.
-    if (tok.int_val < 0 || tok.int_val > 0xFFFF) {
-        return Status::InvalidArgument(std::string(what) + " " + std::to_string(tok.int_val) +
+    // Decoded from the digits, so a literal past 64 bits cannot wrap into
+    // the plausible range.
+    auto value = DecodeUnsignedDigits(tok, what);
+    if (!value.ok()) return value.status();
+    if (value.value() > 0xFFFF) {
+        return Status::InvalidArgument(std::string(what) + " " + std::to_string(value.value()) +
                                         " is implausible at byte " +
                                         std::to_string(tok.byte_offset));
     }
-    return static_cast<std::uint32_t>(tok.int_val);
+    return static_cast<std::uint32_t>(value.value());
 }
 
 void Parser::ConsumeOptionalSemicolon() {
@@ -1758,10 +1783,6 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
 
     if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
 
-    if (stmt.columns.empty()) {
-        return Status::InvalidArgument("CREATE TABLE requires at least one column");
-    }
-
     // Optional trailing words: the storage clause (HEAP | BTREE) and the
     // vestigial key-mode word (docs/spec/heap-and-tuple.md §4.1). Both are facts
     // about the whole relation, both are matched as identifiers and neither
@@ -2278,7 +2299,7 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
     stmt.op = op.value();
 
     const Token bound = lexer_.Peek();
-    if (bound.type != TokenType::kIntLit || bound.negative || bound.int_val < 0) {
+    if (bound.type != TokenType::kIntLit || bound.negative) {
         // §3.1: a non-negative integer *literal*, no expressions (TY3
         // conservatism). A negative one is caught by the same test, which is
         // why the message names both halves.
@@ -2286,8 +2307,20 @@ StatusOr<AssertionStmt> Parser::ParseAssertion(bool drop) {
             "an assertion's bound is a non-negative integer literal, got '" +
             std::string(Describe(bound)) + "' (byte " + std::to_string(bound.byte_offset) + ")");
     }
+    // From the digits, not `int_val`, which wraps: a bound past 64 bits
+    // would otherwise be enforced as a number the declaration never wrote.
+    auto bound_value = DecodeUnsignedDigits(bound, "an assertion's bound");
+    if (!bound_value.ok()) return bound_value.status();
+    if (bound_value.value() >
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        return Status::InvalidArgument(
+            "an assertion's bound " + std::string(bound.digits()) +
+            " exceeds the largest int64, " +
+            std::to_string(std::numeric_limits<std::int64_t>::max()) + " (byte " +
+            std::to_string(bound.byte_offset) + ")");
+    }
     lexer_.Next();
-    stmt.bound = bound.int_val;
+    stmt.bound = static_cast<std::int64_t>(bound_value.value());
     stmt.bound_byte_offset = bound.byte_offset;
 
     // ---- Degenerate predicates (§3.1) -----------------------------------
@@ -3186,17 +3219,7 @@ StatusOr<std::uint64_t> Parser::ParsePaginationCount(std::string_view clause) {
                                         std::string(Describe(tok)) + "' at byte " +
                                         std::to_string(tok.byte_offset));
     }
-    // The lexer guarantees a non-empty ASCII digit run, so the only way
-    // from_chars fails here is overflow.
-    const std::string_view digits = tok.digits();
-    std::uint64_t value = 0;
-    if (std::from_chars(digits.data(), digits.data() + digits.size(), value).ec !=
-        std::errc()) {
-        return Status::InvalidArgument(std::string(clause) + " count '" + std::string(digits) +
-                                        "' does not fit in 64 bits (byte " +
-                                        std::to_string(tok.byte_offset) + ")");
-    }
-    return value;
+    return DecodeUnsignedDigits(tok, std::string(clause) + " count");
 }
 
 // No `depth`: a join's relations are relation references, and a relation
@@ -3231,7 +3254,8 @@ Status Parser::ParseJoins(SelectStmt& stmt) {
         const Token& on = lexer_.Peek();
         if (on.type != TokenType::kKeyword || on.kw != Keyword::kOn) {
             return Status::InvalidArgument("expected ON after JOIN, got '" +
-                                            std::string(Describe(on)) + "'");
+                                            std::string(Describe(on)) + "'" +
+                                            At(on.byte_offset));
         }
         lexer_.Next();
 
@@ -3732,7 +3756,7 @@ StatusOr<Statement> Parser::Parse() {
     }
     if (tok.type != TokenType::kIdent) {
         return Status::InvalidArgument("expected SQL keyword, got '" + std::string(tok.text) +
-                                        "'");
+                                        "'" + At(tok.byte_offset));
     }
 
     Statement stmt;
@@ -3880,7 +3904,8 @@ StatusOr<Statement> Parser::Parse() {
     } else {
         return Status::InvalidArgument(
             "unknown SQL keyword '" + std::string(tok.text) +
-            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX)");
+            "' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX)" +
+            At(tok.byte_offset));
     }
 
     // After a successful parse, only EOF may remain (a trailing semicolon
