@@ -1,6 +1,13 @@
 # Work order DH - the page image's price: what an owed image costs where pages are written often, and which lever buys it back, measured before anything is built
 
-Status: **OPEN since 2026-11-20; DH-S0 done.** Written on `main` at `673f025d`
+Status: **CLOSED 2026-11-20 on the operator's word** (`raft-marks-2026-11-20.md`
+§18): *"For now, end the test right now and close the milestone; push no
+verify."* and *"Accept the 21 % that remains under pool pressure and the
+recovery of 0.19 s to 0.72 s."* DH-S0, S1a, S1b and S2 are built; the close's
+measurement was stopped part-way on that word (§7, DH-S3: five A/B cells and
+one recovery round measured, the controls not), the two costs it found are
+the operator's to accept and are accepted, and the close step was not
+reviewed and the merged tree not suite-run. Written on `main` at `673f025d`
 (`v3.4.14-30-g673f025d`) on the operator's word of 2026-11-20
 (`raft-marks-2026-11-20.md` §1). The letter DH is CLA's proposal.
 **Opened on the operator's standing go-ahead of 2026-11-20
@@ -390,7 +397,7 @@ open to the operator's own mark.
 |---|---|---|
 | DH-Q0 | (a) | exploratory: nothing was built before DH-S0 priced it |
 | DH-Q1 | (a), cut to the budget | scenario 2 at four shapes and DB's two cells ran; scenario 1 was cut, the `insert` cell standing in for its insert shape (S0's file says what else) |
-| DH-Q2 | (a) | **no bar is set**: the operator names one with the close's numbers; DH-R7 is the only gate until then |
+| DH-Q2 | (a), then **the operator's own word at the close** | no bar was set under the standing word. At the close the operator, shown the numbers, named no percentage and **accepted the two costs that stand**: the image's price under pool pressure (B 19.5 % under the no-image bound at one core, 1M rows, pool 2,048; 20.7 % on the one round the operator was shown, spoken of as "the 21 %") and the mount after a crash at eight cores (0.19 s to 0.72 s, one round). `raft-marks-2026-11-20.md` §18 |
 | DH-Q3 `[quiet-wrong]` | (a), premise re-read | "recovers more than L3 alone" was shown at S0 on bytes only, so the spike measured throughput before the format event was admitted: 44 to 55 % of the price in the pressure cell and 44 % at one core, where L3 removes nothing. The spike is a stand-in and some of its runs had another session's server beside them (§7); the close measures the built packer |
 | DH-Q4 `[quiet-wrong]` | (a), premise re-read | the census was made (§1.7) and CLA read the two sites the premise rests on (`src/wal/analysis.cpp:156-168`, `src/server/superblock_checkpoint_anchor.cpp:38-63`): it holds for the instance's period and not for a records-only run, which is dropped |
 | DH-Q5 | (a) | no switch |
@@ -647,6 +654,105 @@ tears were healed, and from which record, was not collected.
 the fuzzers, the differential and the nightly corpus). Overhead not
 measured; measured at the milestone's close.
 
+### DH-S3 - the close (2026-11-20)
+
+On `dh-page-image-volume`; the code that closes DH is `22818e44`
+(`v3.4.15-5-g22818e44`), measured against `f4138860`
+(`v3.4.15-1-gf4138860`), the commit DH opened from. Documents, bench and
+tools only.
+
+**The measurement** (`bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`; `ck-tester`, Release, interleaved, data on
+ext4). A: `f4138860`. B: `22818e44`. B3: B's code with images logged
+verbatim (L3 alone). A0: B's code with the image debt never paid, the
+bound no lever passes. **It is partial.** The host was shared with other
+sessions' builds, suites and measurements throughout; a run with a
+foreign process before, during or after it was discarded (20 were) and
+30 were kept. **The operator stopped it at 06:48 UTC** (*"end the test
+right now"*) with the cells below measured and the rest not.
+
+| cell | A | B | B against A | floor | reading |
+|---|---|---|---|---|---|
+| update 100K rows, 4 cores x 4 clients, group | 4,604 stmt/s | 4,888 stmt/s | +6.2 % | 2.4 % | B faster, outside the floor |
+| update 100K rows, 8 cores x 8 clients, group | 7,595 stmt/s | 8,747 stmt/s | +15.2 % | 2.2 % | B faster, outside the floor |
+| update 100K rows, 1 core x 4 clients, group | 3,906 stmt/s | 3,945 stmt/s | +1.0 % | 8.2 % | inside the floor: DH-R4 holds on this cell, on a wide floor |
+| update 1M rows, pool 2,048 frames, 1 core x 4 clients, group | 2,515 stmt/s | 2,887 stmt/s | +14.8 % | 3.0 % | B faster, outside the floor |
+| update 10K rows, 1 core x 4 clients, group (control) | 4,205 stmt/s | 4,187 stmt/s | -0.4 % | not known (one round) | no reading |
+
+**What each lever bought**, as the share of the gap between A and A0:
+
+| cell | gap A to A0 | recovered by B | by L3 (B3) | by L2 on top |
+|---|---|---|---|---|
+| 100K rows, 4 cores | +8.4 % | 74 % | 20 % | 54 % |
+| 100K rows, 8 cores | +15.7 % | 96 % | 59 % | 38 % |
+| 1M rows, pool 2,048, 1 core | +42.5 % | 35 % | 3 % | 32 % |
+
+At eight cores B is inside a floor of A0; at four it is 2 % under. **Under
+pool pressure the price stands**: B is 19.5 % under A0 (2,887 against
+3,585 stmt/s) where A was 29.8 % under. The image is owed there by the
+fault-in, 0.81 images a statement in A and in B alike, which the cadence
+does not touch (§2.1); the pack takes the bytes a statement logs from
+about 6,900 B to about 3,080 B and no further. Checkpoint runs in a 15 s
+window: A 11 at four cores and 21 at eight, B 3 at either, cores 0, 1 and
+2 once each.
+
+**What L3 costs, measured once** (eight cores x eight clients, 100K rows,
+50 s of updates, then `kill -9` and a timed mount; one round, so no floor):
+
+| | A | B |
+|---|---|---|
+| checkpoint runs in the 50 s | 72 runs (nine a core) | 9 runs |
+| log written in the window | 544.8 MB | 136.6 MB |
+| WAL directory at the kill | 201.3 MB (3 files) | 268.4 MB (4 files) |
+| records recovery read | 161,207 records | 1,456,727 records |
+| mount, exec to first connection | 0.19 s | 0.72 s |
+
+B writes a quarter of the log and replays nine times the records: the
+fold is as old as the design said (§7, DH-S1a, "What it costs"), and this
+is its first number.
+
+**Not measured**, each by name: `select-pk` at one and eight cores,
+`insert` at four cores, scenario 2 (`s4a`, `s4b`), the four-core pressure
+cell (where DH-S0 read B faster than A0 and left it unexplained), the
+`strict` cell, the second recovery round, the second round of the 10K
+control, and A0 and B3 on the one-core 100K cell. **"No cell slower"
+is therefore not claimed**: it holds on the five cells above and is
+unknown elsewhere. The cause is the host and then the operator's stop,
+not the engine.
+
+**The operator's ruling** (`raft-marks-2026-11-20.md` §18): *"Accept the
+21 % that remains under pool pressure and the recovery of 0.19 s to
+0.72 s."* The 21 % is the 20.7 % CLA reported on B's first round of the
+pressure cell; with its second round the cell reads 19.5 %. DH-Q2 is so
+answered by the operator's own word: no percentage named, the two costs
+accepted.
+
+**Moved to the owning documents**: `wal.md` §10 and §11 (the packed image,
+the instance's cadence and its measured price), `page.md`, `backup.md`
+B8, the manual's `checkpoint_interval_ms`, `kds.conf.sample`,
+`known-gaps.md` (the price that stands under pool pressure, the longer
+mount, the cells the close did not measure), `CLAUDE.md`'s WAL row,
+`txn.md` §3.5 (an undo page is imaged since DB; the sentence that said
+otherwise corrected), the index row flipped.
+
+**The merge of `origin/main`** (`0bb2b876`, merged at `18f2e339`): it
+brought CV (`v3.4.16`), the audit's nine dead-code removals and the DI to
+DN orders. Conflicts: `include/kds/wal/redo.hpp` (`RedoStats` loses the
+two members G43 removed and keeps DH's reading of `page_images`),
+`src/storage/device_page_store.cpp` (`LogOwedImage`: DH's
+`LoggedPageImage` kept, the comment main's), this version's index and
+the day's marks file (DH's section moved from §3 to §17). **G43 removed
+redo's not-dirty filter**, which `wal.md` §10 and this log's DH-S1b entry
+name; the spec sentence is corrected, the stage log left as the history
+it is. Nothing in DH leaned on the filter: a packed image is laid by the
+page-LSN gate and the heal.
+
+**Gates, as they stand.** The suite: 0 failed of 4,883 run on the tree
+holding DH-S1b and DH-S2 (before the merge). **The merged tree
+(`18f2e339` and the close's commit over it) was not suite-run**: the
+operator's word was to close and push with the hook skipped. The close
+step was **not reviewed** by `critics-developer`, on the same word.
+`bs-nightly` cells: none run.
+
 ### Review (`critics-developer`), per step
 
 **DH-S0 and DH-S1b's premise** (documents, results files and tools; no
@@ -755,3 +861,10 @@ the multi-core crash under the rotated gate. Rejected: **asserting a
 packed image inside the PITR cell's window** - a second fixture's log
 scan for a property the simulator cell now proves on the production
 path; the gap is recorded instead.
+
+**DH-S3.** Not reviewed. The operator's word at the close was to end the
+measurement, close the milestone and push with the hook skipped; the
+close's documents and the merge's resolution went out unread by
+`critics-developer`. The measurement's driver and its report tool
+(`tools/dh_close.py`, `tools/dh_close_report.py`) are `ck-tester`'s and
+were not reviewed either.

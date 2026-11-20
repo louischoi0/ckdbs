@@ -173,3 +173,12 @@ took under them.
 | **Does not settle** | the bar (DH-Q2); any push, merge to `main`, tag or version; the options not taken, each open to the operator's own mark |
 | **Recorded at** | this file; the order's header, §4.1 and §7; the order's row in `instructions/v3.2.0/index.md` |
 
+## 18. DH closed on the operator's word, its two costs accepted
+
+| | |
+|---|---|
+| **Word** | *"For now, end the test right now and close the milestone; push no verify."* and, a few minutes later, *"Accept the 21 % that remains under pool pressure and the recovery of 0.19 s to 0.72 s."* (given in Korean; recorded in English) - after CLA's interim report of the close's measurement: B (`22818e44`) faster than A (`f4138860`) by 6.2 % and 15.2 % at four and eight cores on 100,000-row updates, inside the floor at one core, 13.0 % faster under pool pressure on B's first round and still 20.7 % under the no-image bound there, and a mount after a crash at eight cores of 0.72 s against 0.19 s, one round |
+| **Mark** | **DH is closed**, the operator's own word, on worktree `dh-page-image-volume`; its closing code is `22818e44`. **The two costs are accepted, the operator's own mark, and that answers DH-Q2**: no percentage was named. With the second round the pressure cell reads B 19.5 % under the bound (2,887 against 3,585 stmt/s), not 20.7 %; the word was spoken on the first |
+| **Skipped on that word** | the rest of the close's measurement (stopped at 06:48 UTC: `select-pk`, `insert`, scenario 2, the four-core pressure cell, `strict`, the second recovery round - "no cell slower" is not claimed); `critics-developer`'s review of the close step; the suite on the merged tree (`18f2e339`, which brought CV and the audit's removals), last run 0 failed of 4,883 before the merge; the pre-push hook |
+| **Does not settle** | a tag or a version; the options DH-Q0..Q13 did not take, each still open to the operator's own mark, DH-Q11's format event among them (`wal.md` §5.2 as amended); whether the unmeasured cells are measured later |
+| **Recorded at** | this file; the order's header, §4.1 and §7 (DH-S3); `bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`; `known-gaps.md` (WAL, Testing); the DH row and this file's row in `instructions/v3.2.0/index.md` |
