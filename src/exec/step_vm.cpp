@@ -649,6 +649,10 @@ private:
             }
             co_return co_await WalkAndBuild(steps, index, step, access);
         }
+        // An elided `ORDER BY <tuple key> DESC` rests on this walk (CV O2).
+        if (step.emit_order == EmitOrder::kTupleKeyBackward) {
+            co_return co_await RunReverseWalkStep(steps, index, step, access);
+        }
         // A kFilterScan walks exactly as a kScan does - the kind is a
         // statistics distinction, not an execution one, and there is
         // deliberately no branch for it here. If one ever appears, the
@@ -1458,37 +1462,24 @@ private:
     //     will be dropped avoid its base descent, and nothing more.
     sched::Coro RunIndexStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
+        // An elided `ORDER BY` rests on this step's index order (CV O1, O3).
+        if (step.emit_order == EmitOrder::kIndexKeyBackward) {
+            co_return co_await RunReverseOrderedIndexStep(steps, index, step, access);
+        }
+        if (step.emit_order == EmitOrder::kIndexKeyForward) {
+            co_return co_await RunOrderedIndexStep(steps, index, step, access);
+        }
         // Any reason to decline - `indexes = off` among them - takes the
         // walk the step would have compiled to had the index not existed,
         // and returns the identical rows, because the equalities are still
         // in the residual. The chain is **unchanged** (still kIndexProbe in
         // ANALYZE), which keeps the plan `f(shape, catalog)`.
-        if (!indexes_ || !step.index.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
-        const IndexProbe& probe = *step.index;
-
-        // The **live** root, not the one compiled in: a split republishes it
-        // in place on the cached entry (index.md §12a), and a chain
-        // compiled before a write may name a page that is no longer the top
-        // of the tree.
-        const catalog::TableAccess::IndexRef* ix = nullptr;
-        for (const catalog::TableAccess::IndexRef& candidate : access.indexes) {
-            if (candidate.index_oid == probe.index_oid) ix = &candidate;
-        }
-        // Dropped between compile and execution. The chain is stale, not
-        // wrong: walking answers it.
+        const catalog::TableAccess::IndexRef* ix = LiveIndexOf(step, access);
         if (ix == nullptr) co_return co_await RunWalkStep(steps, index, step, access);
-
-        index::IndexLayout layout;
-        layout.key_width = ix->key_width;
-        layout.covered_width =
-            static_cast<std::uint16_t>(ix->entry_width - ix->key_width - index::kIndexTupleKeyWidth);
+        const IndexProbe& probe = *step.index;
+        const index::IndexLayout layout = LayoutOf(*ix);
         // A bound is a whole entry, which is the sort key (index_page.hpp).
         const std::size_t entry_width = ix->entry_width;
-        if (probe.low.size() != entry_width || probe.high.size() != entry_width) {
-            // The index was redefined under a compiled chain. Same answer as
-            // a dropped one.
-            co_return co_await RunWalkStep(steps, index, step, access);
-        }
         // A key set's bounds are whole entries of this index too (CU;
         // `KeySet::bounds`), or the chain is stale in the same way.
         const KeySet* set = step.key_set.has_value() ? &*step.key_set : nullptr;
@@ -1762,6 +1753,365 @@ private:
             }
         }
         return true;
+    }
+
+    // The live index a step names, or null where the step must decline to
+    // the walk: `indexes = off`, no index on the step, an index dropped
+    // between compile and execution, or one redefined under the compiled
+    // chain (its bounds no longer its entries' width). The **live** root,
+    // not the one compiled in: a split republishes it in place on the cached
+    // entry (index.md §12a), and a chain compiled before a write may name a
+    // page that is no longer the top of the tree.
+    const catalog::TableAccess::IndexRef* LiveIndexOf(const Step& step,
+                                                      const catalog::TableAccess& access) const {
+        if (!indexes_ || !step.index.has_value()) return nullptr;
+        const IndexProbe& probe = *step.index;
+        const catalog::TableAccess::IndexRef* ix = nullptr;
+        for (const catalog::TableAccess::IndexRef& candidate : access.indexes) {
+            if (candidate.index_oid == probe.index_oid) ix = &candidate;
+        }
+        if (ix == nullptr || probe.low.size() != ix->entry_width ||
+            probe.high.size() != ix->entry_width) {
+            return nullptr;
+        }
+        return ix;
+    }
+
+    static index::IndexLayout LayoutOf(const catalog::TableAccess::IndexRef& ix) {
+        index::IndexLayout layout;
+        layout.key_width = ix.key_width;
+        layout.covered_width =
+            static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexTupleKeyWidth);
+        return layout;
+    }
+
+    // ---- The ordered index run (CV O1) ---------------------------------
+    //
+    // An elided `ORDER BY` rests on this step's index order: the entries are
+    // walked in entry order - the whole key, then the tuple key (IX4b) - a
+    // leaf at a time, each leaf's matching entries collected under its hold
+    // and resolved after its release, in that order, so a LIMIT stops the
+    // walk at the last row it lets out. IX8a's sort back into tuple key
+    // order is what this step must not do, and the compiler took the index
+    // only where its keys after the prefix are exactly the `ORDER BY`'s, so
+    // the ties come out by ascending tuple key, the sort's own tie order.
+    //
+    // **Two checks at each entry** (CV-R2, `[quiet-wrong]`):
+    //  - **the key check**: a row is emitted only from the entry whose key
+    //    equals its visible version's (`OrderedKeyMatches`). Maintenance is
+    //    append-only (IX1), so a row whose order column moved has an entry at
+    //    each value it held, and only the one the reader's view sees is in
+    //    its place;
+    //  - **the seen set**: each tuple key at most once, for the entries a
+    //    covered column's move left side by side under one key (IX4b).
+    //
+    // **A released leaf is re-sought by key, never revisited by pointer**
+    // (CV-R3): from the last entry the leaf held, which no divide moves left
+    // and no maintenance removes (index_tree.hpp), so a divide on another
+    // core between two leaves neither skips an entry nor repeats one. Within
+    // one pass a leaf that adds nothing to the batch is followed by its right
+    // sibling, as `IndexVisitFrom` follows it: every entry the view needs was
+    // in the tree before the walk began, and one above the leaf's last was
+    // already to its right when the leaf was read. It yields at the bottom of
+    // its leaf loop, holding no page, counting every leaf it reads (CV-R4).
+    sched::Coro RunOrderedIndexStep(const std::vector<Step>& steps, std::size_t index,
+                                    const Step& step, const catalog::TableAccess& access) {
+        const catalog::TableAccess::IndexRef* ix = LiveIndexOf(step, access);
+        if (ix == nullptr) co_return co_await RunOrderedDecline(steps, index, step, access);
+        const IndexProbe& probe = *step.index;
+        const index::IndexLayout layout = LayoutOf(*ix);
+        const std::size_t entry_width = ix->entry_width;
+        StepStats& step_stats = stats_.For(step.step_id);
+        const bool outermost = index == 0 && parent_ == nullptr;
+
+        std::unordered_set<std::uint64_t> emitted;
+        std::vector<std::byte> batch;
+        // The low bound, then the last entry read. No entry equals the low
+        // bound - its tuple key and padding are zero, a tuple key never is -
+        // so an entry equal to `from` is always one already read.
+        std::vector<std::byte> from(probe.low);
+        for (;;) {
+            batch.clear();
+            bool end = false;
+            {
+                NoteFetch();
+                auto first = index::IndexSeekLeaf(store_, ix->root_page_id, layout, from);
+                if (!first.ok()) co_return first.status();
+                ++step_stats.index_walks;
+                PageId cur = first.value();
+                storage::PageChainGuard guard("ordered index walk");
+                // Leaf by leaf until one holds an entry for the batch or the
+                // range ends: a seek lands at or left of the leaf it wants.
+                for (;;) {
+                    if (Status s = guard.Visit(cur); !s.ok()) co_return s;
+                    auto held = index::IndexFetchLeaf(store_, cur, layout, storage::PageAccess::kRead);
+                    if (!held.ok()) co_return held.status();
+                    NoteFetch();
+                    ++step_stats.pages_fetched;
+                    index::IndexLeafView leaf(held.value().bytes());
+                    const std::uint16_t n = leaf.entry_count();
+                    const std::uint16_t start = leaf.LowerBound(from);
+                    for (std::uint16_t at = start; at < n; ++at) {
+                        auto entry = leaf.Entry(at);
+                        if (!entry.ok()) co_return entry.status();
+                        const std::span<const std::byte> e = entry.value();
+                        if (std::memcmp(e.data(), from.data(), entry_width) == 0) {
+                            continue;  // read already: entries are unique
+                        }
+                        if (std::memcmp(e.data(), probe.high.data(), entry_width) > 0) {
+                            end = true;
+                            break;
+                        }
+                        if (Status s = CollectEntry(step, access, *ix, e, batch); !s.ok()) {
+                            co_return s;
+                        }
+                    }
+                    // Only from a leaf holding an entry at or past `from`: a
+                    // seek that lands left of a divide - its parent read
+                    // before the separator was published - reaches a leaf
+                    // whose entries all sort below `from`, and taking its
+                    // last would move `from` back over entries already read
+                    // (CV-R3) or below the low bound.
+                    if (!end && start < n) {
+                        auto last = leaf.Entry(static_cast<std::uint16_t>(n - 1));
+                        if (!last.ok()) co_return last.status();
+                        from.assign(last.value().begin(), last.value().end());
+                    }
+                    const PageId right = leaf.right_sibling();
+                    if (right == kInvalidPageId) end = true;
+                    // A slice due ends the pass too: `from` is set, so the
+                    // next seek resumes past what this leaf held.
+                    const bool slice_due = outermost && slice_ != nullptr &&
+                                           ++slice_pages_ >= slice_->pages_per_slice;
+                    if (end || !batch.empty() || slice_due) break;
+                    cur = right;
+                }
+            }
+            if (Status s = ResolveBatch(steps, index, step, access, *ix, batch, emitted); !s.ok()) {
+                co_return s;
+            }
+            if (stopped_ || end) co_return Status::OK();
+            if (outermost && slice_ != nullptr && slice_pages_ >= slice_->pages_per_slice) {
+                if (Status s = co_await YieldAtSliceBoundary(); !s.ok()) co_return s;
+            }
+        }
+    }
+
+    // **The reverse ordered index run (CV O3)**: the same entries from the
+    // high end down - so ties come out by descending tuple key (CV-Q4 (a)).
+    // An index leaf links forward only (CV-Q1 (a)), so a step left is a
+    // descent: once a leaf is read, the next holds the greatest entries
+    // below its first, found by `index::IndexFetchLeafAtOrBelow` for that
+    // entry less one (`index::PrecedingSortKey`), which moves right under
+    // the leaf's hold while a divide has moved that range past where the
+    // descent landed (CV-R3). A leaf's first entry never changes - a divide
+    // keeps the lower half, no entry is removed - but the leftmost's, which
+    // only gains entries below it, each newer than the walk's view; and the
+    // walk ends there by id: when the descent returns the leaf it just read.
+    // It ends too at the low bound.
+    // It yields every `pages_per_slice` leaves, holding no page (CV-R4).
+    sched::Coro RunReverseOrderedIndexStep(const std::vector<Step>& steps, std::size_t index,
+                                           const Step& step, const catalog::TableAccess& access) {
+        const catalog::TableAccess::IndexRef* ix = LiveIndexOf(step, access);
+        if (ix == nullptr) co_return co_await RunOrderedDecline(steps, index, step, access);
+        const IndexProbe& probe = *step.index;
+        const index::IndexLayout layout = LayoutOf(*ix);
+        const std::size_t entry_width = ix->entry_width;
+        StepStats& step_stats = stats_.For(step.step_id);
+        const bool outermost = index == 0 && parent_ == nullptr;
+
+        std::unordered_set<std::uint64_t> emitted;
+        std::vector<std::byte> batch;
+        std::vector<std::byte> bound(probe.high);  // inclusive
+        PageId previous = kInvalidPageId;
+        for (;;) {
+            batch.clear();
+            bool end = false;
+            {
+                NoteFetch();
+                auto held = index::IndexFetchLeafAtOrBelow(store_, ix->root_page_id, layout, bound);
+                if (!held.ok()) co_return held.status();
+                if (held.value().page_id() == previous) co_return Status::OK();
+                ++step_stats.index_walks;
+                ++step_stats.pages_fetched;
+                index::IndexLeafView leaf(held.value().bytes());
+                const std::uint16_t n = leaf.entry_count();
+                // The entries at or below `bound`: those below the first at
+                // or above it, and that one if it is `bound` itself.
+                std::uint16_t top = leaf.LowerBound(bound);
+                if (top < n) {
+                    auto at_bound = leaf.Entry(top);
+                    if (!at_bound.ok()) co_return at_bound.status();
+                    if (std::memcmp(at_bound.value().data(), bound.data(), entry_width) == 0) ++top;
+                }
+                for (std::uint16_t at = top; at-- > 0;) {
+                    auto entry = leaf.Entry(at);
+                    if (!entry.ok()) co_return entry.status();
+                    const std::span<const std::byte> e = entry.value();
+                    if (std::memcmp(e.data(), probe.low.data(), entry_width) < 0) {
+                        end = true;
+                        break;
+                    }
+                    if (Status s = CollectEntry(step, access, *ix, e, batch); !s.ok()) co_return s;
+                }
+                if (n == 0) {
+                    end = true;  // the empty root
+                } else {
+                    auto first = leaf.Entry(0);
+                    if (!first.ok()) co_return first.status();
+                    if (std::memcmp(first.value().data(), probe.low.data(), entry_width) <= 0) {
+                        end = true;
+                    } else {
+                        // Above the low bound, so not all zeros.
+                        bound.assign(first.value().begin(), first.value().end());
+                        index::PrecedingSortKey(bound);
+                    }
+                }
+                previous = held.value().page_id();
+            }
+            if (Status s = ResolveBatch(steps, index, step, access, *ix, batch, emitted); !s.ok()) {
+                co_return s;
+            }
+            if (stopped_ || end) co_return Status::OK();
+            if (outermost && slice_ != nullptr && ++slice_pages_ >= slice_->pages_per_slice) {
+                if (Status s = co_await YieldAtSliceBoundary(); !s.ok()) co_return s;
+            }
+        }
+    }
+
+    // One entry within an ordered run's bounds, counted, and appended to the
+    // batch unless the covering filter's verdict on it is no (§7).
+    Status CollectEntry(const Step& step, const catalog::TableAccess& access,
+                        const catalog::TableAccess::IndexRef& ix, std::span<const std::byte> e,
+                        std::vector<std::byte>& batch) {
+        StepStats& step_stats = stats_.For(step.step_id);
+        ++step_stats.index_entries_scanned;
+        if (ix.entry_width > ix.key_width + index::kIndexTupleKeyWidth) {
+            auto kept = CoveredRowSurvives(step, access, ix,
+                                           e.subspan(ix.key_width + index::kIndexTupleKeyWidth));
+            if (!kept.ok()) return kept.status();
+            if (!kept.value()) {
+                ++step_stats.index_entries_filtered;
+                return Status::OK();
+            }
+        }
+        batch.insert(batch.end(), e.begin(), e.end());
+        return Status::OK();
+    }
+
+    // A leaf's batch of entries, resolved in batch order, each tuple key at
+    // most once (CV-R2's seen set).
+    Status ResolveBatch(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                        const catalog::TableAccess& access,
+                        const catalog::TableAccess::IndexRef& ix, std::span<const std::byte> batch,
+                        std::unordered_set<std::uint64_t>& emitted) {
+        for (std::size_t off = 0; off < batch.size() && !stopped_; off += ix.entry_width) {
+            const std::span<const std::byte> e = batch.subspan(off, ix.entry_width);
+            const std::uint64_t tuple_key =
+                index::GetIndexTupleKey(e.subspan(ix.key_width, index::kIndexTupleKeyWidth));
+            if (emitted.contains(tuple_key)) continue;
+            auto matched = ResolveOrdered(steps, index, step, access, e.first(ix.key_width),
+                                          tuple_key);
+            if (!matched.ok()) return matched.status();
+            if (matched.value()) emitted.insert(tuple_key);
+        }
+        return Status::OK();
+    }
+
+    // One entry's row, resolved through the clustered tree and handed to
+    // `AcceptTupleAt` with the entry's key for the key check; whether the
+    // row's visible version holds that key. A tuple key naming no row is a
+    // skip (IX1's dangling entry), as in `RunIndexStep`.
+    StatusOr<bool> ResolveOrdered(const std::vector<Step>& steps, std::size_t index,
+                                  const Step& step, const catalog::TableAccess& access,
+                                  std::span<const std::byte> key, std::uint64_t tuple_key) {
+        StepStats& step_stats = stats_.For(step.step_id);
+        NoteFetch();
+        ++step_stats.pages_fetched;
+        ++step_stats.index_rows_resolved;
+        auto found = btree::BtreeLookup(store_, access.desc_page_id, tuple_key);
+        if (!found.ok()) {
+            if (found.status().code() == StatusCode::kNotFound) return false;
+            return found.status();
+        }
+        ordered_key_ = key;
+        ordered_matched_ = false;
+        heap::PageView page(found.value().leaf.bytes());
+        Status s = AcceptTupleAt(steps, index, step, access, found.value().page_id, page,
+                                 found.value().slot);
+        ordered_key_ = {};
+        if (!s.ok()) return s;
+        return ordered_matched_;
+    }
+
+    // **The ordered step's decline** (CV-S0's census): `indexes = off`, or an
+    // index gone or redefined under the chain, leaves the step a walk - and
+    // a walk emits tuple key order, which an elided `ORDER BY` cannot take
+    // (`[quiet-wrong]`). So the walk collects each matching row's encoded
+    // key and tuple key instead of emitting it (`OrderedKeyMatches` in its
+    // collecting form), the pairs are sorted - the index's own order, key
+    // then tuple key - and each row is resolved and emitted in that order,
+    // as the index walk would have. It holds every match at once, as IX8a's
+    // collection does.
+    sched::Coro RunOrderedDecline(const std::vector<Step>& steps, std::size_t index,
+                                  const Step& step, const catalog::TableAccess& access) {
+        std::vector<OrderedRecord> collected;
+        ordered_collect_ = &collected;
+        Status walked = co_await RunWalkStep(steps, index, step, access);
+        ordered_collect_ = nullptr;
+        if (!walked.ok()) co_return walked;
+        // The key's bytes, then the tuple key: the pair's order is the entry
+        // order, and its reverse the reverse walk's (O3, CV-Q4 (a)).
+        std::sort(collected.begin(), collected.end());
+        if (step.emit_order == EmitOrder::kIndexKeyBackward) {
+            std::reverse(collected.begin(), collected.end());
+        }
+        for (const OrderedRecord& record : collected) {
+            if (stopped_) break;
+            auto matched = ResolveOrdered(steps, index, step, access, record.first, record.second);
+            if (!matched.ok()) co_return matched.status();
+        }
+        co_return Status::OK();
+    }
+
+    // The key check (CV-R2), on a row that survived every conjunct: its
+    // visible version's index key, encoded from the decoded slots, against
+    // the entry it was reached by - or, while the decline collects, the
+    // key and tuple key recorded and the row held back.
+    StatusOr<bool> OrderedKeyMatches(const Step& step, const catalog::TableAccess& access,
+                                     std::span<const parser::AstValue> slots) {
+        const IndexProbe& probe = *step.index;
+        ordered_scratch_.assign(probe.key_width, std::byte{0});
+        std::size_t at = 0;
+        for (const std::uint16_t col : probe.key_cols) {
+            const catalog::SysColumnRow& column = access.schema.columns[col];
+            auto width = IndexKeyColumnWidth(column);
+            if (!width.ok()) return width.status();
+            if (at + width.value() > ordered_scratch_.size()) {
+                return Status::Corruption("an ordered index step's key columns encode wider than "
+                                          "its key");
+            }
+            if (Status s = EncodeIndexKeyColumn(
+                    column, slots[col], std::span<std::byte>(ordered_scratch_).subspan(at, width.value()));
+                !s.ok()) {
+                return s;
+            }
+            at += width.value();
+        }
+        if (at != ordered_scratch_.size()) {
+            return Status::Corruption("an ordered index step's key columns encode narrower than "
+                                      "its key");
+        }
+        if (ordered_collect_ != nullptr) {
+            auto tuple_key = KeystoneIdOfPayload(version_);
+            if (!tuple_key.ok()) return tuple_key.status();
+            ordered_collect_->emplace_back(ordered_scratch_, tuple_key.value());
+            return false;
+        }
+        ordered_matched_ = ordered_key_.size() == ordered_scratch_.size() &&
+                           std::memcmp(ordered_key_.data(), ordered_scratch_.data(),
+                                       ordered_scratch_.size()) == 0;
+        return ordered_matched_;
     }
 
     // Serves an observed value's entry set.
@@ -2252,20 +2602,97 @@ private:
             // is held between pages either - the yield only widens the gap.
             if (outermost && slice_ != nullptr &&
                 ++slice_pages_ >= slice_->pages_per_slice) {
-                slice_pages_ = 0;
-                if (Status s = TakeCancel(); !s.ok()) co_return s;
-                if (slice_->at_boundary) slice_->at_boundary();
-                if (slice_->resume_when != nullptr && !(*slice_->resume_when)()) {
-                    sched::WaitScope wait(stats::WaitEvent::kNetSendBackpressure);
-                    co_await sched::WaitUntil{slice_->resume_when};
-                } else {
-                    co_await sched::Yield{};
+                if (Status s = co_await YieldAtSliceBoundary(); !s.ok()) co_return s;
+            }
+        }
+    }
+
+    // **The slice boundary itself** (BA-S15): what the outermost walk does
+    // every `SlicePolicy::pages_per_slice` pages, holding no pin and no
+    // span - its read view and borrow are statement-scoped. The caller has
+    // counted the pages and holds nothing.
+    sched::Coro YieldAtSliceBoundary() {
+        slice_pages_ = 0;
+        if (Status s = TakeCancel(); !s.ok()) co_return s;
+        if (slice_->at_boundary) slice_->at_boundary();
+        if (slice_->resume_when != nullptr && !(*slice_->resume_when)()) {
+            sched::WaitScope wait(stats::WaitEvent::kNetSendBackpressure);
+            co_await sched::WaitUntil{slice_->resume_when};
+        } else {
+            co_await sched::Yield{};
+        }
+        // The note is the thread's, and other statements ran here
+        // meanwhile: what this walk ends with must be its own (BA-S14's
+        // re-run reads it).
+        storage::ClearStructuralRefusal();
+        co_return TakeCancel();
+    }
+
+    // **The reverse walk (CV O2)**: `ORDER BY <tuple key> DESC` over a walk
+    // or a tuple key range of the driving relation, read from its high end
+    // down, so the LIMIT stops it where a forward walk and a top-N heap read
+    // every row.
+    //
+    // A leaf links forward only (CV-Q1 (a): no on-disk change), so a step
+    // left is a descent: once a leaf is read, the next is the one holding
+    // the greatest keys below its `min_key`, found by
+    // `BtreeFetchLeafAtOrBelow`, which moves right while a split has moved
+    // that range past where the descent landed. **No leaf is revisited by
+    // pointer** (CV-R3): each step is a seek by key from the last leaf's
+    // `min_key`, which is immutable (invariant 2), and every key below it is
+    // in that leaf's left part of the tree - so a split on another core,
+    // or a root growth, between two steps neither skips a row nor repeats
+    // one; the view is fixed, so nothing written since is seen. A leaf's
+    // slots are read from the last down, keyed rows ascending by placement
+    // (BD-R1), and every slot above the bound is passed over.
+    //
+    // **It yields where the forward walk yields** (CV-R4), at the bottom of
+    // its leaf loop, holding its view, its borrow and the next bound - no
+    // page. A leaf it misses is a blocking read: the park DE gives the
+    // forward walk's leaf fetch is not given here (`known-gaps.md`).
+    sched::Coro RunReverseWalkStep(const std::vector<Step>& steps, std::size_t index,
+                                   const Step& step, const catalog::TableAccess& access) {
+        const std::uint64_t low = step.range.has_value() ? step.range->low : 0;
+        std::uint64_t bound = step.range.has_value() ? step.range->high : kMaxKeystoneId;
+        StepStats& step_stats = stats_.For(step.step_id);
+        const bool outermost = index == 0 && parent_ == nullptr;
+        const storage::PageAccess walk_access =
+            outermost ? storage::PageAccess::kScan : storage::PageAccess::kRead;
+        storage::PageChainGuard guard("reverse relation walk");
+        for (;;) {
+            NoteFetch();
+            auto held = btree::BtreeFetchLeafAtOrBelow(store_, access.desc_page_id, bound,
+                                                       walk_access);
+            if (!held.ok()) co_return held.status();
+            if (Status s = guard.Visit(held.value().id); !s.ok()) co_return s;
+            ++step_stats.pages_fetched;
+            heap::PageView leaf(held.value().ref.bytes());
+            const std::uint16_t n = leaf.slot_count();
+            for (std::uint16_t i = n; i-- > 0;) {
+                // A retired slot carries no row, and `AcceptTupleAt` would
+                // decline it.
+                auto payload = leaf.PayloadAt(i, n);
+                if (!payload.ok()) continue;
+                auto tuple_key = KeystoneIdOfPayload(payload.value());
+                if (!tuple_key.ok()) co_return tuple_key.status();
+                if (tuple_key.value() > bound) continue;
+                if (tuple_key.value() < low) break;  // and so `min_key <= low`
+                if (Status s = AcceptTupleAt(steps, index, step, access, held.value().id, leaf, i, n);
+                    !s.ok()) {
+                    co_return s;
                 }
-                // The note is the thread's, and other statements ran here
-                // meanwhile: what this walk ends with must be its own
-                // (BA-S14's re-run reads it).
-                storage::ClearStructuralRefusal();
-                if (Status s = TakeCancel(); !s.ok()) co_return s;
+                if (stopped_) co_return Status::OK();
+            }
+            const std::uint64_t min_key = leaf.min_key();
+            held.value().ref.Release();
+            // The one end: every key left of this leaf is below its
+            // `min_key`, so at or below `low` nothing left qualifies - and the
+            // leftmost leaf's `min_key` is 0 (`FormatRoot`; a split keeps the
+            // left page's), so the head ends it too.
+            if (min_key <= low) co_return Status::OK();
+            bound = min_key - 1;
+            if (outermost && slice_ != nullptr && ++slice_pages_ >= slice_->pages_per_slice) {
+                if (Status s = co_await YieldAtSliceBoundary(); !s.ok()) co_return s;
             }
         }
     }
@@ -2672,6 +3099,14 @@ private:
             step_stats.spill_fetches += spills_.size();
         }
 
+        // An ordered index step's key check (CV-R2): the row leaves only from
+        // the entry its visible version is filed under.
+        if (IsIndexOrder(step.emit_order)) {
+            auto matched = OrderedKeyMatches(step, access, slots);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) return Status::OK();
+        }
+
         // Counted after the residual and *before* the sub-chains: this is
         // the ordinary-predicate selectivity, and folding a sub-chain's
         // verdict into it would make a step reading ten rows to keep one
@@ -2953,6 +3388,17 @@ private:
     // re-enters RunStep - phase 2, which does, no longer touches them.
     std::vector<std::byte> corr_low_;
     std::vector<std::byte> corr_high_;
+
+    // The ordered index run's key check (CV-R2): the entry key the row in
+    // `AcceptTupleAt` was reached by, whether its visible version matched,
+    // and the encode's buffer; set around one `AcceptTupleAt` and read only
+    // by the driving step, whose `emit_order` no inner step carries. While
+    // the decline walks, `ordered_collect_` takes the rows instead.
+    std::span<const std::byte> ordered_key_;
+    bool ordered_matched_ = false;
+    std::vector<std::byte> ordered_scratch_;
+    using OrderedRecord = std::pair<std::vector<std::byte>, std::uint64_t>;
+    std::vector<OrderedRecord>* ordered_collect_ = nullptr;
 
     std::vector<Bound> bound_;
     std::vector<const catalog::Schema*> schemas_;

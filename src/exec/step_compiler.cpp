@@ -1340,6 +1340,97 @@ std::optional<IndexChoice> IndexProbeOf(const catalog::TableAccess& access, cons
     return best;
 }
 
+// ---- The ordered index walk (CV O1) ---------------------------------------
+//
+// What a statement's `ORDER BY` asks of its driving step, where an index
+// could hold it: every key a column of the step's relation, in one
+// direction, none the tuple key but a last one, under a LIMIT (CV-Q2 (a)).
+struct DriverOrder {
+    std::vector<std::uint16_t> cols;  // the keys, in written order
+    bool descending = false;
+};
+
+// The statement's `DriverOrder`, or nullopt. Resolves the keys as section 5a
+// will and refuses nothing: a key that does not resolve is 5a's to refuse.
+// A last key on the tuple key in the same direction is dropped, because an
+// entry sorts by its whole key and then its tuple key (IX4b).
+std::optional<DriverOrder> DriverOrderOf(const Scope& scope, const parser::SelectStmt& stmt) {
+    if (!stmt.limit.has_value() || stmt.order_by.empty() || stmt.aggregated()) return std::nullopt;
+    DriverOrder order;
+    order.descending = stmt.order_by.front().descending;
+    for (std::size_t k = 0; k < stmt.order_by.size(); ++k) {
+        const parser::SortKey& written = stmt.order_by[k];
+        auto ref = ResolveColumn(scope, written.key.column);
+        if (!ref.ok() || !IsOwnColumn(ref.value(), 0) || written.descending != order.descending) {
+            return std::nullopt;
+        }
+        if (IsTupleKey(ref.value())) {
+            if (k + 1 != stmt.order_by.size()) return std::nullopt;
+            break;
+        }
+        order.cols.push_back(ref.value().col_pos);
+    }
+    if (order.cols.empty()) return std::nullopt;
+    return order;
+}
+
+// Whether an index key column's order is its values' order (CV-Q7 (a)): a
+// string key is truncated (IX6), so two values sharing the prefix sit in
+// tuple key order, not their own.
+bool OrderPreservingKey(const catalog::SysColumnRow& col) {
+    return col.type_val != catalog::kTypeValChar && col.type_val != catalog::kTypeValVarchar;
+}
+
+// The index the driving step should walk in order, or nullopt (CV-Q3 (a) as
+// revised). Among the indexes whose key columns are exactly the prefix the
+// ladder's own index choice used, in any order, and then the `ORDER BY`
+// keys, the lowest oid - so it never displaces a lookup, a key set, a
+// correlated probe or a longer prefix, and it is still `f(shape, catalog)`.
+// Over a bare walk the prefix is empty, and taken only where the step
+// carries no conjunct at all: then every entry it resolves is a row the
+// reply wants (stale entries apart), where a filter would have it resolve
+// entry after entry at random to find its rows.
+//
+// The probe is `IndexChoiceOver`'s for that index - its prefix's
+// equalities and any range on the next column encoded - or, with no prefix
+// and no range, the whole index.
+std::optional<IndexProbe> OrderedIndexChoiceOf(const catalog::TableAccess& access,
+                                               const Step& step, const DriverOrder& order,
+                                               std::string_view only) {
+    std::vector<std::uint16_t> prefix;
+    const bool indexed = (step.kind == AccessKind::kIndexProbe ||
+                          step.kind == AccessKind::kIndexRange) &&
+                         step.index.has_value() && !step.index->key_from.has_value() &&
+                         !step.key_set.has_value();
+    if (indexed) {
+        prefix.assign(step.index->key_cols.begin(),
+                      step.index->key_cols.begin() + step.index->eq_prefix);
+    } else if (step.kind != AccessKind::kScan || step.build.has_value() ||
+               !step.residual.empty() || !step.fn_residual.empty() ||
+               !step.bool_residual.empty() || !step.sub_chains.empty()) {
+        return std::nullopt;
+    }
+    for (const std::uint16_t col : order.cols) {
+        if (!OrderPreservingKey(access.schema.columns[col])) return std::nullopt;
+    }
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        if (ix.building) continue;
+        if (!only.empty() && !SameName(ix.name, only)) continue;
+        const std::size_t eq = prefix.size();
+        if (ix.nkeys != eq + order.cols.size()) continue;
+        const auto keys = ix.keys();
+        if (!std::is_permutation(keys.begin(), keys.begin() + eq, prefix.begin())) continue;
+        if (!std::equal(order.cols.begin(), order.cols.end(), keys.begin() + eq)) continue;
+        if (auto choice = IndexChoiceOver(access, step, 0, ix, /*with_list=*/false, -1);
+            choice.has_value()) {
+            if (choice->probe.eq_prefix == eq) return std::move(choice->probe);
+            continue;  // an order column bound by equality too: the sort is cheap
+        }
+        if (!indexed) return ProbeOverIndex(ix);  // the whole index
+    }
+    return std::nullopt;
+}
+
 // **Which Cabins a step's Cabin ranks may take** (CX-S3b, CX-Q6 (a)). A
 // Cabin the cabin optimizer made - `auto` origin, one the engine creates
 // and drops on its own judgement - is no input to a plan unless an
@@ -3151,6 +3242,9 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // and every located row still meets the whole residual. A pin no arm
     // meets refuses this compile - the plan's order and pins - and the
     // caller runs the statement as written, unpinned.
+    //
+    // The driving step's `ORDER BY`, where an index could hold it (CV O1).
+    const std::optional<DriverOrder> driver_order = DriverOrderOf(scope, stmt);
     for (std::size_t i = 0; i < chain.steps.size(); ++i) {
         Step& step = chain.steps[i];
         static const ArmPin kNoPin;
@@ -3360,6 +3454,23 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             }
         }
 
+        // ---- The ordered index walk (CV O1) ------------------------------
+        //
+        // After the ladder, on the driving step alone: an index whose keys
+        // continue the prefix the ladder chose with the `ORDER BY` keys is
+        // walked in its order and the sort dropped (section 5a). Only where
+        // the pin admits the index class, and only the index it names.
+        if (i == 0 && index && driver_order.has_value()) {
+            if (auto ordered = OrderedIndexChoiceOf(rel, step, *driver_order, pin.name);
+                ordered.has_value()) {
+                step.kind = ordered->eq_prefix > 0 && !ordered->ranged ? AccessKind::kIndexProbe
+                                                                        : AccessKind::kIndexRange;
+                step.index = std::move(ordered);
+                step.emit_order = driver_order->descending ? EmitOrder::kIndexKeyBackward
+                                                           : EmitOrder::kIndexKeyForward;
+            }
+        }
+
         // A pin naming one class is met only by an arm of it. The walk is
         // not something the ladder is held to by taking nothing else away,
         // so `SCAN` is met by what is left when no keyed arm is admitted.
@@ -3490,12 +3601,37 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // clause answered `ORDER BY <tuple key>` over a Cabin-probed relation with
     // whatever order the entry set happened to hold - and lifting it is not
     // BB's to decide.
-    const bool one_ascending_tuple_key =
-        chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
-        chain.sort_keys[0].ref.rel_slot == 0 && IsTupleKey(chain.sort_keys[0].ref);
-    const bool driving_emits_tuple_key_order =
-        !chain.steps.empty() && EmitsTupleKeyOrder(chain.steps[0].kind);
-    if (one_ascending_tuple_key && driving_emits_tuple_key_order) {
+    //
+    // **And its reverse (CV O2)**: the same key descending, under a LIMIT
+    // (CV-Q2 (a)), over a walk or a tuple key range of the driving relation.
+    // The step reads its leaves from the high end down
+    // (`EmitOrder::kTupleKeyBackward`), so the order is the walk's and the
+    // LIMIT stops it; tuple keys are unique, so CV-Q4's tie rule is vacuous.
+    // A build keeps the sort: `RunStep` dispatches a build before it reads
+    // the order, so that test is load-bearing. A key set, an index or a
+    // Cabin arm is another kind and keeps it too.
+    const bool one_tuple_key = chain.sort_keys.size() == 1 &&
+                               chain.sort_keys[0].ref.rel_slot == 0 &&
+                               IsTupleKey(chain.sort_keys[0].ref) && !chain.steps.empty();
+    if (one_tuple_key && !chain.sort_keys[0].descending) {
+        if (EmitsTupleKeyOrder(chain.steps[0].kind)) chain.sort_keys.clear();
+    } else if (one_tuple_key && stmt.limit.has_value()) {
+        Step& driver = chain.steps[0];
+        const bool walked = driver.kind == AccessKind::kScan ||
+                            driver.kind == AccessKind::kFilterScan ||
+                            driver.kind == AccessKind::kRange;
+        if (walked && !driver.build.has_value()) {
+            driver.emit_order = EmitOrder::kTupleKeyBackward;
+            chain.sort_keys.clear();
+        }
+    }
+    // **An index order (CV O1)**: section 4 put the driving step on an index
+    // holding exactly these keys after its prefix (`OrderedIndexChoiceOf`),
+    // so the step emits them in order, ties by ascending tuple key - the
+    // sort's own tie order over IX8a's emission - or, descending (O3), from
+    // the high end down with ties by descending tuple key (CV-Q4 (a),
+    // `parser-v2.md` I12).
+    if (!chain.steps.empty() && IsIndexOrder(chain.steps[0].emit_order)) {
         chain.sort_keys.clear();
     }
     chain.limit = stmt.limit;
@@ -3534,6 +3670,13 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             (sub_chains_anywhere || !maskable)
                 ? Step::kAllColumns
                 : ReadColumnsOf(chain, step, static_cast<std::uint16_t>(i));
+        // An ordered index step checks each row's visible key against its
+        // entry's (CV-R2), so it decodes its index's key columns.
+        if (IsIndexOrder(step.emit_order) && step.read_columns != Step::kAllColumns) {
+            for (const std::uint16_t col : step.index->key_cols) {
+                step.read_columns |= std::uint64_t{1} << col;
+            }
+        }
     }
 
     return chain;

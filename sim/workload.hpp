@@ -102,7 +102,8 @@ struct Op {
         // answered by the oracle from whole relations: a join of `table`
         // and `name` (the second relation's name) on `v`, `table`'s ids in
         // `[lo, hi]`; `table` grouped by `v`; `table` ordered by `v DESC,
-        // id` to `key` rows; `table`'s rows whose `v` is in `name`'s.
+        // id`, `id DESC` or `v DESC, id DESC` (`lo` 0, 1, 2) to `key` rows;
+        // `table`'s rows whose `v` is in `name`'s.
         kSelectJoin,
         kSelectAggregate,
         kSelectOrdered,
@@ -120,7 +121,7 @@ struct Op {
     std::string sql;
     // Semantic fields the oracle needs to build its expectation.
     std::uint64_t key = 0;       // kSelectTupleKey, kInsertNamed; kUpdate/kDelete when by_tuple_key
-    std::uint64_t lo = 0;        // kSelectRange, kPurge
+    std::uint64_t lo = 0;        // kSelectRange, kPurge; kSelectOrdered's order (0..2)
     std::uint64_t hi = 0;        // kSelectRange, kPurge
     std::int64_t v = 0;          // kInsert(Named), kFilterScan; kUpdate's new v
     std::string name;            // kInsert(Named); kUpdate's new name
