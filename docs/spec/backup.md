@@ -85,7 +85,12 @@ lands in the next segment.
 `[segment(start), segment(stop)]` into the backup, under the pin, and writes
 the manifest last; the pin is released after it. Path D's log comes from the
 backup too, not the snapshot, so a separate WAL volume needs no ordered
-second snapshot.
+second snapshot. **The log is the writing build's**: since DH it can hold
+`PACKED_PAGE_IMAGE` records (`wal.md` §10), which a build that predates DH
+refuses at redo as a record type it has no applier for (`UNKNOWN`), so a backup restores on the build that wrote it or
+a later one. The manifest's superblock version does not tell the two
+apart - no superblock moved for the record kind - and B9's checks pass
+such a backup on an older build: the refusal is redo's.
 
 **B9 - A backup is a directory with a manifest** (`server/backup_manifest.hpp`):
 format version, backup id, label, path (B or D), `git describe` of the

@@ -413,6 +413,76 @@ StatusOr<std::size_t> EncodeFullPageImage(std::span<std::byte> out,
                                           std::span<const std::byte, kPageSize> page);
 StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::byte> in);
 
+// ---- PACKED_PAGE_IMAGE ---------------------------------------------------
+//
+// The write fetch's image with its zero bytes left out (DH, wal.md section
+// 10). A page of fixed-length rows is mostly the zero high bytes of small
+// integers and of 48-bit ids, scattered through it, so what is left out is
+// zero *bytes*, word by word, not a free region. Nothing but a zero is ever
+// omitted, so the page rebuilt is the page logged, byte for byte, whatever
+// its type (DH-R1).
+//
+//   offset 0  packed_len  u16  bytes of the body
+//          2  format      u8   kPackedImageZeroWords; any other is refused
+//          3  reserved    u8   0
+//          4  reserved    u32  0
+//          8  body        packed_len bytes
+//             then the envelope's alignment padding, zeros
+//
+// Body, format 1. A bitmap of `kPackedImageWords` bits - bit `w % 8` of byte
+// `w / 8` is set when the page's 8-byte word `w` holds a nonzero byte - and
+// then, for each such word in ascending order, a mask byte (bit `b` set when
+// byte `b` of the word is nonzero; never 0) and the word's nonzero bytes in
+// ascending order. A word is a position, bytes `[8w, 8w + 8)` of the page,
+// never an integer: the format has no byte order.
+//
+// The length is carried because a decoded record's payload runs to its
+// aligned end (`DecodeRecord`). The decoder refuses everything that is not
+// exactly one encoding of one page (DH-R2): another format, a nonzero
+// reserved field, a length that is not the payload's, a mask of 0, a stored
+// byte of 0, a body that ends early or late.
+
+struct PackedPageImagePrefix {
+    std::uint16_t packed_len;
+    std::uint8_t format;
+    std::uint8_t reserved8;
+    std::uint32_t reserved32;
+};
+inline constexpr std::size_t kPackedImageLenOffset = 0;
+inline constexpr std::size_t kPackedImageFormatOffset = 2;
+inline constexpr std::size_t kPackedImageReserved8Offset = 3;
+inline constexpr std::size_t kPackedImageReserved32Offset = 4;
+inline constexpr std::size_t kPackedImagePrefixSize = 8;
+static_assert(offsetof(PackedPageImagePrefix, packed_len) == kPackedImageLenOffset);
+static_assert(offsetof(PackedPageImagePrefix, format) == kPackedImageFormatOffset);
+static_assert(offsetof(PackedPageImagePrefix, reserved8) == kPackedImageReserved8Offset);
+static_assert(offsetof(PackedPageImagePrefix, reserved32) == kPackedImageReserved32Offset);
+static_assert(sizeof(PackedPageImagePrefix) == kPackedImagePrefixSize);
+
+inline constexpr std::uint8_t kPackedImageZeroWords = 1;
+// 8-byte words in a page, and the bytes of the bitmap that names them.
+inline constexpr std::size_t kPackedImageWordSize = 8;
+inline constexpr std::size_t kPackedImageWords = kPageSize / kPackedImageWordSize;  // 1,024
+inline constexpr std::size_t kPackedImageBitmapSize = kPackedImageWords / 8;        // 128
+static_assert(kPageSize % kPackedImageWordSize == 0 && kPackedImageWords % 8 == 0);
+// The largest payload a packed image is logged with: one alignment unit
+// under the page, so a packed record is always a shorter record than the
+// verbatim one. A page that packs to more is logged as FULL_PAGE_IMAGE.
+inline constexpr std::size_t kPackedImageMaxPayload = kPageSize - kRecordAlignment;
+
+// Packs `page` into `out`, which holds at least `kPackedImageMaxPayload`
+// bytes, and returns the payload's size - or 0 when the page does not pack
+// into that, and nothing of `out` is to be read. The fit is asked a word at
+// a time, for a whole word's nine bytes, so a page that would pack to
+// within eight bytes of the limit may be answered 0 as well; either answer
+// is a correct image.
+std::size_t EncodePackedPageImage(std::span<const std::byte, kPageSize> page,
+                                  std::span<std::byte> out) noexcept;
+// Rebuilds the page into `page`, every byte of it. On a refusal `page` holds
+// nothing to keep: the caller unpacks into a buffer of its own and lays the
+// image only on OK.
+Status DecodePackedPageImage(std::span<const std::byte> in, std::span<std::byte, kPageSize> page);
+
 // ---- BTREE_SPLIT ---------------------------------------------------------
 //
 // Every page one B+ tree split writes, as full images, in one record

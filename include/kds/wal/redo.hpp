@@ -61,7 +61,7 @@ struct RedoStats {
     std::uint64_t skipped_by_lsn = 0; // already reflected on the page (RV5)
     // The PW1c-2 not-dirty filter (redo.cpp carries the argument).
     std::uint64_t skipped_not_dirty = 0;
-    std::uint64_t page_images = 0;    // FULL_PAGE_IMAGEs restored
+    std::uint64_t page_images = 0;    // images restored, verbatim or packed
     std::uint64_t pages_created = 0;  // pages the log named and the store lacked
     std::uint64_t deferred_assertions = 0;  // RC07's, counted not applied
     std::uint64_t no_page = 0;        // records with no page target (txn, checkpoint)

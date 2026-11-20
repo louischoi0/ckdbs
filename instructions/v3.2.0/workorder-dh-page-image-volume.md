@@ -375,7 +375,7 @@ Binding once DH opens.
 | DH-Q8 | DH-S0's A arm. | **main with the image debt never paid**: one binary, a measurement-only switch read at mount. The order's literal A (`12887a14`, the last commit before DB's merge) is not used: main since carries DA, which moved `cores = 8` by +13.5 %, so that pair would not isolate the image | (b) the pre-DB binary, as written |
 | DH-Q9 | Which levers DH-S1 builds. | **L3, then L2**; L1 and L4 dropped under DH-R7; L5 unbuilt (§2.1) | (b) L3 alone, L2 to a later order after a census on wide and random columns; (c) nothing (L0) |
 | DH-Q10 `[quiet-wrong]` | L3's shape. | **the cadence is the instance's**: every core ticks in phase and the gate admits one cadence run a period, the turn going to the core whose last run is oldest. A core's own run comes every `cores` periods, and the fold keeps its `CHECKPOINT_BEGIN` in the replay range at that age (§1.7) | (b) per-core timers at `cores` x interval: a tick that meets a run loses a whole cycle, and runs that outlast the interval starve the same cores for good (BI-S2's defect); (c) a records-only run: four obligations and an unproven single cover (§1.7); (d) the stagger kept and a spacing added: one run every interval x (1 + 1/`cores`), which is not what the setting says |
-| DH-Q11 `[quiet-wrong]` | L2's record. | **a new record kind, 35, `PACKED_PAGE_IMAGE`**, written by the write fetch when the packed page is smaller than the page; kind 10 keeps its payload and meaning and is what is written otherwise. No superblock or segment version moves: a binary that predates DH refuses kind 35 at redo by name (`redo: no applier for record type`), and this binary reads every older log (DH-R3). **The house precedent is the other way** - kind 34 came with superblock 35 (CL-Q6 (a), `include/kds/wal/record.hpp`) - **and its reason does not reach kind 35**: an older build mounting a log that held no `ASSERT_PENDING` would have left a loser counted, a wrong answer with nothing to refuse it; an older build mounting a log that holds no packed image has lost nothing, since an image below the replay range is never read | (b) kind 10's payload changed: an older binary silently lays the first 8,192 bytes of a longer payload, so it needs a superblock bump, which refuses every older volume and backup and owes DA-S3; (c) segment format version 3 |
+| DH-Q11 `[quiet-wrong]` | L2's record. | **a new record kind, 35, `PACKED_PAGE_IMAGE`**, written by the write fetch when the packed page is smaller than the page; kind 10 keeps its payload and meaning and is what is written otherwise. No superblock or segment version moves: a binary that predates DH refuses kind 35 at redo, as a page record it has no applier for (`redo: no applier for record type UNKNOWN at lsn ...` - it has no name for the kind, so the refusal names neither it nor its number), and this binary reads every older log (DH-R3). **The house precedent is the other way** - kind 34 came with superblock 35 (CL-Q6 (a), `include/kds/wal/record.hpp`) - **and its reason does not reach kind 35**: an older build mounting a log that held no `ASSERT_PENDING` would have left a loser counted, a wrong answer with nothing to refuse it; an older build mounting a log that holds no packed image has lost nothing, since an image below the replay range is never read | (b) kind 10's payload changed: an older binary silently lays the first 8,192 bytes of a longer payload, so it needs a superblock bump, which refuses every older volume and backup and owes DA-S3; (c) segment format version 3 |
 | DH-Q12 | L2's packer. | **zero suppression by 8-byte word, no dependency**: a bitmap of the page's nonzero words, then per nonzero word a mask byte and its nonzero bytes. On DH-S0's samples 0.40 to 0.42 of a full leaf, 0.36 of scenario 2's leaves, 0.34 to 0.36 of an undo page, at 13 to 15 us a page unoptimised; exact by construction (only zero bytes are left out) and bounded (a page that does not shrink is logged verbatim) | (b) LZ4 vendored: 0.31 to 0.42, 9 to 13 us, a dependency (DH-Q6); (c) zstd: 0.13 to 0.26 at 26 to 34 us - the spike's zstd-class arm was no better than the LZ4-class one at 4 and 8 cores and 11 points better under pool pressure |
 | DH-Q13 | Which images are packed. | **the write fetch's owed image only** (the subject of DH). The whole-page records a DDL, an index build and an assertion build log through `LogFullPageImage`, and the pages a `BTREE_SPLIT` carries, stay verbatim | (b) every whole-page payload |
 
@@ -399,7 +399,7 @@ open to the operator's own mark.
 | DH-Q8 | (a) | a revision of DH-S0's stage as written, recorded here and in the results file |
 | DH-Q9 | (a) | |
 | DH-Q10 `[quiet-wrong]` | (a) | the gate and the timers decide when a core runs, never what recovery reads: a wrong choice here costs replay range or a starved core, and the fold is what keeps it from costing an answer |
-| DH-Q11 `[quiet-wrong]` | (a) | |
+| DH-Q11 `[quiet-wrong]` | (a), premise re-read after DH-S1b's review | two things the proposal said were wrong and are corrected, neither changing the choice: an older build's refusal is not "by name" (it prints `UNKNOWN`), and a cleanly shut volume's replay range is expected, not guaranteed, to hold no packed image (a failed shutdown checkpoint leaves the previous anchor). What the choice rests on stands: an older build can refuse a packed image and cannot mis-read one. **It amends `wal.md` §5.2**, which called every new type a format-version event: the spec now says a version moves when an older build could otherwise answer wrongly. Options (b) and (c) keep the old reading and are the operator's to take |
 | DH-Q12 | (a) | |
 | DH-Q13 | (a) | |
 
@@ -561,6 +561,65 @@ tree was rebuilt and the gate's, the checkpoint task's and the core
 runtime's cadence cases run again, all passing. The full suite was not
 run again for them; it runs again at DH-S1b.
 
+### DH-S1b - the packed image (2026-11-20)
+
+On `dh-page-image-volume`, over `8fc41252`. **Overhead not measured;
+measured at the milestone's close.**
+
+**Built** (DH-Q11 (a), DH-Q12 (a), DH-Q13 (a), DH-Q7 (a)).
+
+- **Record kind 35, `PACKED_PAGE_IMAGE`** (`include/kds/wal/record.hpp`),
+  and its codec (`wal/payload.hpp`, `src/wal/payload.cpp`): an 8-byte
+  prefix (the body's length, a format byte, reserved zeros), a 128-byte
+  bitmap of the page's nonzero 8-byte words, then per such word a mask
+  byte and its nonzero bytes. Only zero bytes are left out, so the page
+  rebuilt is the page logged for every page type (DH-R1). The decoder
+  refuses everything that is not exactly one encoding of one page
+  (DH-R2), and the mapping is one to one: no two payloads decode to one
+  page.
+- **The writer** (`WalManager::LogPageImage`): packs on its own stack
+  under the caller's exclusive hold of the page and appends kind 35, or
+  kind 10 verbatim when the page does not pack to under a page less one
+  alignment unit. Kind 10's payload and meaning are unchanged, and it is
+  still what a DDL's, an index build's, an assertion build's and a
+  split's whole pages are logged as.
+- **Redo** (`src/wal/redo.cpp`): unpacks into a buffer of its frame and
+  lays the result as an image, through the dirty filter, the page-LSN
+  gate and the heal of a torn page; a refusal names the page and the LSN
+  and changes no page. Analysis, the high-water scan, the scanner,
+  backup, restore, PITR, the archive and the simulator needed no change
+  (§1.7).
+- **The byte counter** (DH-R6): the gate answers the record bytes its
+  append took, the store counts them, `sys.meta` prints
+  `pool_fetch_image_bytes` beside `pool_fetch_images`.
+- **The format event** is stated in `wal.md` §10, with `wal.md` §5.2
+  amended (§4.1, DH-Q11), `backup.md` B8 and `known-gaps.md`.
+
+**Tests.** `WalPayloadTest`: the round trip through the envelope, an
+empty page, the boundary of what packs (and the one conservative answer
+beside it), 2,000 seeded pages of every density, and every refusal by
+name. `WalManagerTest`: a page that shrinks is logged as kind 35 and
+comes back itself, one that does not is logged verbatim, and the bytes
+answered are the record's. `RedoHealTest`: a packed image heals a torn
+page and the records after it land, a second redo lays nothing, and the
+page a packed image lays is byte for byte the page a verbatim one lays.
+`RedoTest`: a packed image that does not decode ends recovery by name
+with the page untouched; a page record with no applier ends recovery
+(the branch an older build takes for kind 35). `FetchImageTest`: the
+store counts the bytes its gate reports. `WalGoldenLog` is re-pinned:
+the script's write-fetch images are kind 35 and shorter, so every later
+LSN moves.
+
+**Suite.** The stage's first full run read 2 failed of 4,881: the golden
+log's pin, which was this stage's to move, and
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`. The second is
+not this stage's: repeated 200 times it fails 22 times with packing on
+and 16 times with packing switched off in the same tree, at a host load
+of 15 to 19 - the test asserts a bound the best-effort kick does not
+promise (`known-gaps.md`, Testing). After the re-pin, the review's edits
+and DH-S2's cells: **0 failed of 4,883 run** (230 s), on the tree that
+holds this stage and DH-S2's two cells as first written.
+
 ### Review (`critics-developer`), per step
 
 **DH-S0 and DH-S1b's premise** (documents, results files and tools; no
@@ -618,3 +677,34 @@ that is a timing test of two threads' timers, and a put-back stagger
 would show as a rate of 1 / (1 + 1/`cores`) of the expected, inside what
 load does to such a count. The gap is recorded in `known-gaps.md` as not
 covered. Also left: merging the gate's two refusal exits (cosmetic).
+
+**DH-S1b.** No defect found in the codec, the writer or redo: the round
+trip is exact and the encoding one to one, both functions stay inside
+their buffers (the encoder's furthest store is byte 8,183 of 8,184; a
+length of up to 65,535 is refused before a byte of the body is read), no
+reader but redo needs the kind, the two 8 KiB buffers are on ordinary
+thread stacks, and an older build can refuse kind 35 and cannot skip it.
+Applied:
+
+- **two compatibility claims were wrong.** An older build's refusal is
+  not "by name": it prints `no applier for record type UNKNOWN`. And "a
+  cleanly shut volume's replay range holds no packed image" is not
+  guaranteed: a shutdown checkpoint that fails is logged and the next
+  mount replays from the previous anchor. `wal.md` §10, `backup.md` B8,
+  `known-gaps.md`, the kind's comment and DH-Q11's record now say what
+  is true; the choice itself stands (§4.1);
+- **`wal.md` §5.2 said every new type is a format-version event** while
+  §10 moved no version: §5.2 is amended to say when a version moves,
+  recorded as part of DH-Q11's adoption for the operator to overrule;
+- a refusal case for a body longer than any the encoder writes, and a
+  pin of the encoder's one conservative answer, added; a stale comment
+  in the store's header corrected;
+- the redo cell for "a page record with no applier" added, because the
+  documents cited a test that did not exist.
+
+Rejected: **shrinking the prefix** (the length duplicates what the body
+delimits and the format byte what the kind says: four bytes an image,
+kept as the decoder's cross-check and the room a second format would
+need); **merging redo's two image arms** (five lines, and the two decode
+differently). Not built, recorded in `known-gaps.md`: an older binary
+run against a newer log.

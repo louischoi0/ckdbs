@@ -1,5 +1,6 @@
 #include "kds/wal/redo.hpp"
 
+#include <array>
 #include <cstring>
 #include <optional>
 #include <map>
@@ -535,6 +536,18 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 return image.status();
             }
             return apply_page(record, page_id, /*is_image=*/true, copy_image(image.value()));
+        }
+        if (record.type() == RecordType::kPackedPageImage) {
+            // Unpacked whole, into a buffer of this frame, before the page
+            // is touched: a refusal leaves the page as it was (DH-R2), and
+            // what is laid is an image like any other, a tear's heal
+            // included.
+            std::array<std::byte, kPageSize> unpacked;
+            if (Status s = DecodePackedPageImage(record.payload, unpacked); !s.ok()) {
+                return s.WithContext("redo: page " + std::to_string(page_id) + " at lsn " +
+                                     std::to_string(record.header.lsn));
+            }
+            return apply_page(record, page_id, /*is_image=*/true, copy_image(unpacked));
         }
         if (record.type() == RecordType::kBtreeSplit) {
             // Whole or not at all is the record's CRC's to give (a torn

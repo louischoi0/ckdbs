@@ -79,6 +79,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` fails about
+  one run in ten on a loaded host.** On `dh-page-image-volume` over
+  `8fc41252`, 2026-11-20, at a load average of 15 to 19: once in DH-S1b's
+  suite, then 22 of 200 repeats, and 16 of 200 with DH's packing switched
+  off in the same tree - the same rate, so not the packed image's. The
+  cell gives each of five `group` commits on a peer core 2 s to be woken
+  by the WAL writer's kick, in a rig whose idle block is 5 s; the kick is
+  best-effort (`sched/waker_table.hpp`: a kick that reads the
+  destination's flag before it is raised is skipped, priced at one idle
+  block), and the failures print `kicks skipped 1`. The cell asserts a
+  bound the kick does not promise. Not measured: the rate on a quiet host,
+  or how often a server's peer commit pays the 10 ms block for the same
+  race. **Owner: none.**
+
 - **The sim's constraint stream cannot kill a mutant that ignores held
   assertion contributions.** On `bs-test-hardening` at `76a2c08c`,
   `scripts/bs/mutants.sh`'s `holds-ignored` (every held contribution
@@ -266,6 +280,31 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   restart. Read on `de-page-read-off-the-reactor` at `1942cb9a`,
   2026-11-19; DE's close corrected the same claim in §5 ("Durability
   points") and left §6 as found - it is not DE's.
+- **A log this build wrote is not one a pre-DH build of the same
+  superblock can always replay.** Since DH-S1b (on `dh-page-image-volume`
+  over `8fc41252`) the write fetch's image is record kind 35,
+  `PACKED_PAGE_IMAGE`, wherever the page packs to under a page (`wal.md`
+  §10). No superblock or segment version moved (DH-Q11 (a)): a build that
+  predates DH mounts a cleanly shut volume as before (read, not tested: it
+  holds when the shutdown checkpoint completed), and refuses a crashed one,
+  one whose shutdown checkpoint failed, a backup or a PITR whose replay
+  range holds a packed image, at redo, as `no applier for record type
+  UNKNOWN` - the older build has no name for kind 35 - after its own redo has applied the records
+  before it, which a later mount on this build applies again. Nothing at
+  the door says which build a volume needs; the refusal is the statement.
+  **Not executed**: an older binary against a newer log - the claim rests on
+  reading redo's refusal of a page record it has no applier for, at
+  `f4138860` (`src/wal/redo.cpp`), and on
+  `RedoTest.APageRecordWithNoApplierEndsRecoveryByName`, which drives that
+  branch with a reserved kind, not with kind 35 on an older build. Owner:
+  `docs/spec/wal.md` §10.
+- **Only the write fetch's image is packed.** The whole pages an index
+  build, a catalog chain's link edit, an assertion build and a
+  `BTREE_SPLIT` log stay 8,192 bytes each (DH-Q13 (a)); their volume was
+  not measured by DH. A page that does not pack to under a page - random
+  or compressed bytes in wide columns - is logged verbatim and costs what
+  it did before DH; DH measured only tables of integers and scenario 2's
+  schema. Owner: `docs/spec/wal.md` §10.
 - **Above one core the replay range is up to `cores` checkpoint
   intervals, and one more for each turn a core loses.** Since DH-S1a
   (on `dh-page-image-volume` over `df0dcd70`, read and unit-tested there)

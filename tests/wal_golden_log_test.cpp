@@ -120,7 +120,13 @@ namespace {
 // so the script's stream gains one image of every bootstrap page it writes
 // after the boot's flush, each at `kNoTxnId`, and every later LSN moves. No
 // record kind is added and none changes its framing (DB-R5).
-constexpr std::uint32_t kGoldenLogCrc = 0x0124c937u;
+// **Re-pinned at DH-S1b** (on `dh-page-image-volume`,
+// `instructions/v3.2.0/workorder-dh-page-image-volume.md` DH-Q11 (a)): the
+// write fetch's image of a page that shrinks is a PACKED_PAGE_IMAGE, record
+// kind 35, so each image the script's stream gained at DB-S1 is a shorter
+// record of the new kind and every later LSN moves. FULL_PAGE_IMAGE's
+// framing is unchanged; the script images no page that fails to pack.
+constexpr std::uint32_t kGoldenLogCrc = 0x3bbc8dd8u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

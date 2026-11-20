@@ -463,9 +463,11 @@ public:
         std::uint64_t dirty_queued = 0;     // dirty victims queued for writeback
         std::uint64_t dirty_drained = 0;    // queued pages the drain wrote clean
         std::uint64_t refused = 0;          // reservations refused at the cap
-        // FULL_PAGE_IMAGEs the write fetch logged (DB-R6); each is
-        // `wal::RecordSize(kPageSize)` bytes of log.
+        // Images the write fetch logged (DB-R6), packed or verbatim, and the
+        // bytes of log their records took, counted as appended (DH-R6): an
+        // image is no fixed size since DH packs it.
         std::uint64_t fetch_images = 0;
+        std::uint64_t fetch_image_bytes = 0;
         // Fetches refused because the device would have had to be waited
         // for (DE, `miss_refusal.hpp`): each is a read that left its reactor.
         std::uint64_t would_wait = 0;
