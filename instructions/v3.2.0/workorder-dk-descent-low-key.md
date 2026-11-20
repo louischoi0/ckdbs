@@ -212,6 +212,17 @@ Priced by DK-S0; none is chosen here.
     the root; with D2 the leaf level walks right instead (DK-Q6).
   D3 is built only through CW: if CW does not open, or its V0 or V1 is
   not met, D3 closes with it (DK-Q1).
+- **D5 and D6 - the leaf's upper bound, DM's.** Added 2026-11-20 on the
+  operator's word (`raft-marks-2026-11-20.md` §12). The coverage check
+  fetches the right sibling to read the bound; **D5** remembers the
+  sibling's low key in a core-local memo checked against the link, and
+  **D6** keeps the bound on the page, a format event. Both are candidates
+  of `workorder-dm-leaf-upper-bound.md` (its U1 and U2), an exploratory
+  order of its own, and are priced and ruled there: DK changes no format
+  (§6). DK-S0's M1 and DM-S0's M1 are one run. They touch DK in two
+  places: D2's hop pays the sibling fetch once a hop, which D5 or D6
+  removes; and D6 on both trees would retire DK-R5's premise for the
+  secondary tree.
 - **D4 - rejected on paper: the low key as the only validation.** Read
   the internal levels with no latch and no version, and trust the leaf's
   coverage check to catch whatever a torn read produced. Recorded so it
@@ -316,3 +327,25 @@ Written in the main checkout on `main` at `1c7bb774`
 (`v3.4.15-4-g1c7bb774`), documents only. The letter DK is CLA's proposal;
 the exploratory standing is the operator's word (DK-Q0). No review was
 run and no suite was executed: the commit changes no build input.
+
+### Amended 2026-11-20: D5, D6 and a correction
+
+In the main checkout on `main` at `b0a824db` (`v3.4.16-2-gb0a824db`),
+documents only.
+
+- **D5 and D6 added to §2 as pointers** to
+  `workorder-dm-leaf-upper-bound.md`, on the operator's word
+  (`raft-marks-2026-11-20.md` §12).
+- **A correction to §1, which was read at `1c7bb774`.** CV, merged at
+  `fda024cf` after that reading, built a seek that already walks right:
+  `BtreeFetchLeafAtOrBelow` (`src/storage/btree/btree.cpp:1316-1334`) and
+  `IndexFetchLeafAtOrBelow` (`src/storage/index/index_tree.cpp:604-630`)
+  ask coverage under each leaf's hold and step to `next_page_id` /
+  `right_sibling` until a leaf covers the key, bounded by a
+  `PageChainGuard`; the index's takes the right neighbour before it lets
+  the leaf go. So D2's hop is not new to the tree: it exists for an
+  ordered walk's read seek, and D2 is that shape given to a write descent
+  and to a lookup's miss. §1's line citations before `btree.cpp:1316`
+  and `index_tree.cpp:590` still hold; DK-S0's census starts from these
+  two functions. DK was rebased over CV without this re-reading.
+

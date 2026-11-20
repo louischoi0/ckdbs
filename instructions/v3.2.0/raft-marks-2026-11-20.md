@@ -112,3 +112,55 @@ took under them.
 | **Outside the word** | One cell the suite showed flaky was corrected: `DropTableReclaimServingTest`'s two-core cell required every dropped page to be unallocated after a remount, and a still-serving writer takes a freed id (`page.md` §5). It failed with the old redo filter restored too. CLA changed its expectation to "free, or no longer the dropped relation's" on its own judgment; the operator may want it back as it was with an entry under `docs/inflight/bugs/` |
 | **Does not settle** | G44 and G47 (a ruling each: `page.md` §3's list of `PageRef`'s surface; whether `page_mgr` moves to a test target or is deleted with `wal.md` and `page.md` reworded); G31, G39 with G53, G50; G26-R and G21-R; whether the five duplication survivors are taken up; the overhead of the audit's fixes, not measured; the 15 unread slices |
 | **Recorded at** | this file; `docs/pending/whole-engine-audit-second-run-twelve-slices.md` §13 and its header; its row in `docs/pending/README.md`; this file's row in `instructions/v3.2.0/index.md` |
+
+## 12. DM written: a leaf's upper bound
+
+| | |
+|---|---|
+| **Word** | *"And what if it were managed by a `max_key` instead of the `min_key`?"*, then *"The pros and cons, and the cost and effect, of adding the upper bound."*, and, after CLA's account and its question whether to add the two forms to DK as candidates, *"For now add them as candidates, and write it as an exploratory milestone."* (given in Korean; recorded in English) |
+| **Mark** | **DM is written, not opened**: `instructions/v3.2.0/workorder-dm-leaf-upper-bound.md`, in the main checkout on `main` at `b0a824db` (`v3.4.16-2-gb0a824db`), documents only. **Exploratory is the operator's word (DM-Q0)**, and so is that the upper bound's two forms are candidates: U1, the right sibling's low key remembered in a core-local memo, and U2, the bound kept on the page, a format event. Replacing `min_key` by an immutable `max_key` is recorded as rejected on paper |
+| **CLA's reading, to be corrected if wrong** | The word can be read as "add them to DK" or as "write a milestone for them". CLA did both in the smallest way: DM is an order of its own, because its question ends at a format event and DK promises none, and DK's §2 names the two as D5 and D6 and points at DM. DM-Q1 (b) folds them into DK and deletes DM, if that is what was meant |
+| **Found** | Read at `b0a824db`: a coverage check fetches the right sibling with the leaf held (`btree.cpp:98-114`, `index_tree.cpp:75-95`), paid by nearly every secondary index insert, by a named key landing mid-chain, by a lookup's miss and by a write lookup; nothing makes that sibling resident, so under pool pressure it is a device read under an exclusive hold. A range walk reads one leaf past its range. **And a correction to DK**: CV's `BtreeFetchLeafAtOrBelow` and `IndexFetchLeafAtOrBelow` already walk right along the chain, so DK's D2 is an existing shape and DK's §1, read before CV merged, did not say so; DK's stage log is amended |
+| **Corrected** | CLA's figure of "0.1-0.3 us a fetch, about 1 % of an insert an index" is an estimate; the order says so and DM-S0 measures it. No sibling fetch has been counted or priced in any results file |
+| **Does not settle** | DM-Q1..Q9 - among them whether DM stands beside DK, the bars, whether a format event is admissible and when (DM-R6: never without the operator's word), U2's reach and place, whether the B-link internal node is anybody's; whether DM opens |
+| **Recorded at** | this file; the DM order's header and §0; the DK order's §2 and §7; the DM and DK rows and this file's row in `instructions/v3.2.0/index.md` |
+
+## 13. DN written: the heap redefined again, an Oracle-style heap
+
+| | |
+|---|---|
+| **Word** | *"I am going to redefine the heap table concept once more. I intend to name an Oracle-style table a heap table. That is, rows are stored at random by key but in order by rowid. Range search by key is supported through an intermediate index. A key access always goes through the index and then a lookup happens, but a full table scan scans the data pages directly with no index."* Then, to CLA's five questions: *"1. (b), assuming DD comes first."*; *"2. Where there is no PK, the engine issues a Keystone internally to tell rows apart (the rowid a value computed from the data page, so that it can be computed back in one step)."*; *"2. The key's identity: a multi-column PK, a PK of other types supported, and where no PK is created, the engine-issued Keystone in its place (in that case not seen by `SELECT *` in SQL, but its value can be read by naming the column, e.g. `keyidentity`)."*; *"3. No global order guaranteed."*; *"If the user sets no PK or makes it an int64, the engine-issued Keystone is used."* Then, asked whether a single `int64` PK is itself the Keystone, named or issued: *"(a) is right, write it."* (given in Korean; recorded in English) |
+| **Mark** | **DN is written, not opened**: `instructions/v3.2.0/workorder-dn-heap-rowid.md`, in the main checkout on `main` at `d091d096` (`v3.4.15-19-gd091d096`), documents only. **The operator's marks, DN-D1..D5**: a slot is reused only once every index entry naming it is removed, DD the prerequisite (D1); the Keystone is the row's identity and the rowid its address, computed from `(page, slot)` and back in one step (D2); a PK of any column count and type, and with none the issued Keystone, hidden from `*` and readable by an explicit name (D3); no global insertion order (D4); a single `int64` PK is the Keystone (D5). The letter and the order's exploratory standing (DN-Q0) are CLA's proposals |
+| **Reverses** | BZ's definition of 2026-10-17 (`raft-marks-2026-10-17.md` §1): the heap's storage, and "the hidden key is not nameable from SQL" (`$!a`), which DN-D3 replaces |
+| **Does not settle** | DN-Q0..Q10 - among them the hidden Keystone's name, whether a hidden-Keystone heap always has a Keystone index, whether an entry carries the Keystone beside the rowid `[quiet-wrong]`, a foreign key to a heap, a BZ heap on an existing volume; the amended invariants 2, 3, 4 and 11 (DN-R9); whether DN opens; whether DD opens first |
+| **Recorded at** | this file; the DN order's header and §0; the DN row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 14. DN: the name reserved, and invariants 2 to 4 the btree's
+
+| | |
+|---|---|
+| **Word** | *"The name for reading it (`keyidentity` or the like) as a reserved word."* and *"Invariants 2 to 4 are btree-only."* (given in Korean; recorded in English) - answers to two of the conflicts CLA listed before DN was written, given as it was pushed at `4defff7a` |
+| **Mark** | **DN-D6: the hidden Keystone's name is a reserved word** - no identifier may take it. **DN-D7: invariants 2, 3 and 4 bind a btree page and no heap data page.** The order is amended in the main checkout on `main` at `4defff7a`, documents only: §0's table, §1.4, DN-R5, DN-R9, DN-Q1 |
+| **Not done at the mark** | `CLAUDE.md`'s and `heap-and-tuple.md` §8's invariants are not edited: both state what is built, no heap data page exists, and 2 and 3 name no page class today, so whether a catalog chain page relies on either is read first (DN-S0) and the text written at DN-S1 |
+| **Does not settle** | the word's spelling ("or the like"; CLA proposes `keyidentity`) and its edges (DN-Q1: what it reads on a relation with a declared Keystone, a volume that already declares the name, the fingerprint's bump rule); invariant 11's wording for a heap; DN-Q0 and DN-Q2..Q10; whether DN opens |
+| **Recorded at** | this file; the DN order's header, §0, §1.4, §3, §4 and §7; this file's row in `instructions/v3.2.0/index.md` |
+
+## 15. DN-D7 revised: the `min_key` invariants bind a heap too
+
+| | |
+|---|---|
+| **Word** | *"But even for a heap, the `min_key` invariant is kept (applied)."* (given in Korean; recorded in English) - straight after §14's "invariants 2 to 4 are btree-only" |
+| **Mark** | **DN-D7 as revised: invariants 2 and 3 bind a heap data page; invariant 4's order is the btree leaf's alone, and a heap data page is unordered.** CLA reads "the `min_key` invariant" as 2 and 3 together. The order is amended in the main checkout on `main` at `e3b770e6`, documents only: on a heap invariant 3 becomes a rule of placement (DN-R10) - a row goes only to a page whose `min_key` is at or below its Keystone |
+| **What it costs, as read** | An issued Keystone always passes (the mark is above every key placed, so a reused slot takes a higher one). A named `int64` key (DN-D5) lower than every open page's `min_key` cannot be placed on them; keys named in descending order would open a page a row under CLA's proposal for what the field is (DN-Q11 (a)) |
+| **Does not settle** | DN-Q11 - what a heap page's `min_key` is; whether the reading of "the `min_key` invariant" as 2 and 3 is the operator's; DN-Q0..Q10 as before; whether DN opens |
+| **Recorded at** | this file; the DN order's header, §0, §1.4, §3, §4 and §7; this file's row in `instructions/v3.2.0/index.md` |
+
+## 16. A note in DD: read again with DN's consumer
+
+| | |
+|---|---|
+| **Word** | *"Leave a note so that DD is looked at again from that viewpoint."* (given in Korean; recorded in English) - after CLA's report that DN makes DD its prerequisite, and that DD's premise, weak as an index's growth, has under DN a consumer it did not have: without entry removal a heap never reuses a slot |
+| **Mark** | **The note is left**: `workorder-dd-index-entry-purge.md` §0a, with a pointer in its header and in DN §1.5, in the main checkout on `main` at `9c7d3b2e`, documents only. Eight items for DD-S0 to read again: DD-Q0's verdict rule has no arm for DN; DD-Q1 (a) keeps a delete-marked row's head entry; DD-Q3 (a) pins one slot a leaf of every index; DD-Q4 (a) makes space reuse an administrator's statement; DD purges an index where DN needs to know a slot is named by no index; DD-R1's byte-equality is about another entry; DD-S0's cells measure no heap; and CV's reverse index walk now leans on "no entry is removed" |
+| **Does not settle** | anything in DD: no DD-Q is marked, no rule or stage changed, and each of the eight is a question for DD-S0, not a finding; whether DD or DN opens; the order CLA proposes, DN-S0's census before DD-S0 |
+| **Recorded at** | this file; DD's header, §0a and §7; DN §1.5; the DD row and this file's row in `instructions/v3.2.0/index.md` |
+
