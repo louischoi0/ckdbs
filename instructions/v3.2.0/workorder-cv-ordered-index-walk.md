@@ -323,3 +323,59 @@ out), and the forward walk's ties are the sort's - ascending tuple key -
 only when the `ORDER BY` keys are every index key column after the prefix,
 so that is the shape served (an index entry sorts by its whole key, then
 its tuple key, IX4b).
+
+### CV-S1 - O2, the reverse tuple key walk (2026-11-20)
+
+On worktree `cv-ordered-index-walk`, over `3ff0b377`.
+
+- **The annotation**: `Step::emit_order` (`EmitOrder::kTupleKeyBackward`,
+  `include/kds/exec/step_chain.hpp`), set by the compiler beside the
+  ascending elision (`step_compiler.cpp`, "The reverse walk (CV O2)") for
+  one descending key on the driving relation's tuple key, under a LIMIT,
+  over a `kScan`, `kFilterScan` or `kRange` with no build and no key set.
+  The chain's `sort_keys` are dropped there, so every candidate order the
+  join planner compiles carries the elision only where its own first step
+  is such a walk, and `EstimateChain` prices it as any unsorted chain under
+  a LIMIT. `ANALYZE` prints `order=tuple_key_desc` on the step.
+- **The walk**: `RunReverseWalkStep` (`step_vm.cpp`) reads a leaf's slots
+  from the last down, passing over every key above the bound, and steps
+  left with `btree::BtreeFetchLeafAtOrBelow(min_key - 1)`, which descends
+  and then, under the leaf's hold, moves right while the right neighbour's
+  `min_key` is not above the key (CV-R3: a seek by key, never a pointer).
+  It ends at the first leaf whose `min_key` is at or below the range's
+  low end (0 without a range): the leftmost leaf's `min_key` is always 0.
+  It yields at the bottom of its leaf loop with no page
+  held (CV-R4), through `YieldAtSliceBoundary`, the forward walk's boundary
+  factored out so both call one definition.
+- **CV-Q4** is vacuous here: tuple keys are unique.
+- **Not given**: DE's park on a leaf read that would wait - a reverse
+  walk's miss is a blocking read (`known-gaps.md`, "Ordered walks (CV)").
+- **Tests**: `tests/ordered_walk_test.cpp` (CV-R1's equivalence against the
+  sort's window over 75 leaves at ten windows, ranges at and past both
+  ends, a filter, sparse named keys with deleted and updated rows, an empty
+  and a one-leaf relation, a join, and what is not elided);
+  `tests/walk_slice_rig_test.cpp`'s two reverse cells (a point read
+  answered inside the walk's yield; splits and a root growth inside its
+  suspensions, the reply checked in order). The sim's ordered read now
+  takes `ORDER BY id DESC` for one limit in three, and `ORDER BY v DESC,
+  id DESC` for another, from the limit it already drew, so no seed's
+  stream moves (`sim/workload.cpp`, `sim/loop.cpp`).
+- **Specs moved** (CV-R6): `parser-v2.md` I11 and its cost table;
+  `manual/sql/sql.md`'s ordering notes; `known-gaps.md`.
+- Overhead not measured; measured at the milestone's close.
+- **Review** (`critics-developer`, CV-S0 and CV-S1): no correctness defect
+  in S1 - splits, an append split's link order, a compaction and a root
+  growth on another core each checked against the walk, the slice
+  boundary's factoring behaviour-identical. **Applied**: the S0 results
+  file's noise-floor and CPU sentences corrected to the archive's numbers;
+  the reverse walk's four ends reduced to one (`min_key <= low`); the two
+  tuple key elisions merged and a dead key-set test dropped; five cells
+  added - updates and deletes inside a reverse walk's suspensions, purged
+  slots, a cancel, a join the planner reorders, a key set; `known-gaps.md`
+  given its commit, the stale-root cost and the unseeded one-sided bound.
+  **Not applied**: seeding the reverse walk from a one-sided bound (keyset
+  pagination) - a new access rule CV did not state, recorded as a gap;
+  saving the descent's second fetch of the leaf - left to CV-S4's
+  measurement; counting the move-right hops in `pages_fetched` - the hops
+  are rare and the meter's unit is the leaf read.
+- **Suite**: 0 failed of 4,880 (`ctest -LE bs-nightly`) on S1's tree.

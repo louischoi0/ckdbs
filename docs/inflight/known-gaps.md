@@ -2625,6 +2625,37 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
   holds no entry for a set step, which is pinned only through
   `IsTrailReplayable(const Step&)` and the absence of `replays=`.
 
+## Ordered walks (CV)
+
+Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
+`docs/spec/parser-v2.md` I11; the order is
+`instructions/v3.2.0/workorder-cv-ordered-index-walk.md`.
+
+- **A root growth on another core makes the rest of a reverse walk pay
+  hops**: the statement's memo names the root it bound, so each later step
+  descends from that root into what is now the left subtree and moves
+  right, under the leaf's hold, to the leaf it wants - one hop per leaf of
+  the subtree's right part, per step. Correct (the rig cell grows a level
+  under the walk), not measured; a LIMIT keeps it short, and a filter that
+  matches nothing walks it whole.
+- **A one-sided bound does not seed the reverse walk**: `WHERE id < ?
+  ORDER BY id DESC LIMIT 20` - keyset pagination - starts at the relation's
+  top and filters every row above the bound, because a one-sided bound is
+  no tuple key range (`TupleKeyRangeOf`). `BETWEEN` seeds it.
+
+- **A reverse walk's leaf miss is a blocking read on its reactor.** DE
+  gives the forward walk's leaf fetch a read off the reactor and a park
+  (`page.md` §12); the reverse walk (O2) fetches each leaf, and makes each
+  step's descent, as a blocking read. A resident relation pays nothing for
+  it; a cold one stops its core for each leaf it misses, as every walk did
+  before DE.
+- **A reverse walk makes one descent per leaf** (CV-Q1 (a)): no left
+  sibling link exists, so each step left is a seek from the last leaf's
+  `min_key`. The join planner prices an elided chain at the rows its LIMIT
+  lets out and does not add those descents.
+- **`ORDER BY <tuple key> DESC` without a `LIMIT` is still a sort**
+  (CV-Q2 (a)), and so is one over a key set, a build or a Cabin arm.
+
 ## Locking reads (DC)
 
 Verified on `dc-select-for-update` at `7e18598d` (DC's close). Owned by

@@ -1313,6 +1313,26 @@ Status BtreeVisitFrom(
     }
 }
 
+StatusOr<HeldLeaf> BtreeFetchLeafAtOrBelow(storage::PageStore& store, PageId root,
+                                           std::uint64_t key, storage::PageAccess access) {
+    auto first = BtreeSeekLeaf(store, root, key);
+    if (!first.ok()) return first.status();
+    PageId current = first.value();
+    storage::PageChainGuard guard("btree leaf chain");
+    for (;;) {
+        if (Status s = guard.Visit(current); !s.ok()) return s;
+        auto leaf = BtreeFetchLeaf(store, current, access);
+        if (!leaf.ok()) return leaf.status();
+        // Asked under the leaf's hold: a split of it has to write it, so the
+        // answer cannot go stale while it is held.
+        heap::PageView view(leaf.value().bytes());
+        auto covers = LeafStillCoversKey(store, view, key);
+        if (!covers.ok()) return covers.status();
+        if (covers.value()) return HeldLeaf{current, std::move(leaf.value())};
+        current = view.next_page_id();
+    }
+}
+
 StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf_id,
                                           storage::PageAccess access) {
     auto bytes = store.Fetch(leaf_id, access);

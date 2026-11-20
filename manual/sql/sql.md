@@ -1602,11 +1602,17 @@ some `n` rows of the reply. Write `ORDER BY` for a defined slice.
   had without it** — ordering refines the emission contract rather than
   replacing it, so a tie is never resolved arbitrarily and never varies
   between runs.
-- **Ordering by the tuple key ascending is free**, and only that form:
-  it names the order the engine already emits, so the compiler drops the
-  clause and the statement pays nothing. `ANALYZE` shows this as the
-  absence of a `sort` line. Every other order — including `ORDER BY <tuple key>
-  DESC` — is an output sort, which is not free; see the two notes below.
+- **Ordering by the tuple key ascending is free**: it names the order the
+  engine already emits, so the compiler drops the clause and the statement
+  pays nothing. `ANALYZE` shows this as the absence of a `sort` line.
+- **Ordering by the tuple key descending is free under a `LIMIT`**, when
+  the first relation is walked or read by a tuple key range: the engine
+  reads it from its high end down and stops at `offset + limit` rows, so
+  `SELECT * FROM t ORDER BY id DESC LIMIT 20` reads about 20 rows, not the
+  relation. `ANALYZE` shows `order=tuple_key_desc` on the step and no
+  `sort` line. Without a `LIMIT` it is an output sort.
+- Every other order is an output sort, which is not free; see the two
+  notes below.
 - **That order holds on every `BTREE` page, at any number of cores.** A
   row is placed at the position its key sorts to, whatever order keys
   arrive in (see the Keystone contract), so every page's rows sit in key
@@ -1614,8 +1620,8 @@ some `n` rows of the reply. Write `ORDER BY` for a defined slice.
   whose pages need not, does not mount (format version 20 refuses 19).
 - **A sorted statement's `LIMIT` bounds what you receive, not what the
   engine reads.** The sort must see every qualifying row before it knows
-  which comes first, so unlike an unsorted or tuple-key-ordered `LIMIT`, it
-  cannot stop the scan early; `ANALYZE`'s `examined=` shows the full
+  which comes first, so unlike an unsorted or a tuple-key-ordered `LIMIT`
+  (either direction), it cannot stop the scan early; `ANALYZE`'s `examined=` shows the full
   count. What the `LIMIT` does bound is memory — only `offset + limit`
   rows are held. For deep pagination over an ordered column, prefer keyset
   form.

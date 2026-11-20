@@ -200,6 +200,118 @@ TEST_F(WalkSliceRigTest, ASplitBetweenTwoSlicesMissesAndRepeatsNoRow) {
     EXPECT_EQ(ids, expected) << "the walk read under its own view and walked every row once";
 }
 
+// ---- The reverse walk (CV O2, CV-R3, CV-R4) --------------------------------
+//
+// `ORDER BY id DESC LIMIT <more than the relation>` is elided onto a walk
+// from the high end down, which yields where the forward walk yields and
+// steps left by a seek from the last leaf's `min_key`.
+
+int Height(CommandDispatcher& d) {
+    const std::vector<std::int64_t> h =
+        Ids(d.Dispatch("SELECT height FROM sys.relation_stats WHERE name = 't'").response);
+    return h.empty() ? 0 : static_cast<int>(h.front());
+}
+
+TEST_F(WalkSliceRigTest, AReverseWalkYieldsAndAPointReadIsAnsweredInsideIt) {
+    Load(1, 1, kRows);
+    const std::string reverse = "SELECT id FROM t ORDER BY id DESC LIMIT 100000";
+    ASSERT_NE(d().Dispatch("ANALYZE " + reverse).response.find("order=tuple_key_desc"),
+              std::string::npos);
+    Script walk{&long_, {reverse}};
+    Script point{&other_, {"SELECT id FROM t WHERE id = 5"}};
+    std::atomic<bool> walk_done_at_point{true};
+    point.after = [&] { walk_done_at_point.store(walk.done.load() == 1); };
+    RunBoth(walk, point);
+
+    EXPECT_FALSE(walk_done_at_point.load())
+        << "the point read waited for the whole reverse walk: nothing yielded";
+    EXPECT_EQ(Ids(point.outs[0].response), std::vector<std::int64_t>{5});
+    ASSERT_TRUE(walk.outs[0].status.ok()) << walk.outs[0].response;
+    std::vector<std::int64_t> expected;
+    for (int i = kRows; i >= 1; --i) expected.push_back(i);
+    EXPECT_EQ(Ids(walk.outs[0].response), expected);
+}
+
+TEST_F(WalkSliceRigTest, SplitsAndARootGrowthBehindAReverseWalkMissAndRepeatNoRow) {
+    // Even ids; the odd ones arrive inside the walk's suspensions, splitting
+    // leaves at, behind and ahead of the walk's position, and enough of them
+    // that the tree grows a level.
+    Load(2, 2, kRows);
+    const int height_before = Height(d());
+    Script walk{&long_, {"SELECT id FROM t ORDER BY id DESC LIMIT 100000"}};
+    Script writer{&other_, {}};
+    for (int i = 0; i < 2 * kRows; ++i) {
+        writer.lines.push_back("INSERT INTO t VALUES (" + std::to_string(2 * i + 1) + ", 'x')");
+    }
+    std::atomic<bool> walk_running{false};
+    writer.after = [&] { walk_running.store(walk.done.load() == 0); };
+    RunBoth(walk, writer);
+
+    ASSERT_TRUE(walk_running.load()) << "the walk ended before the splits: nothing yielded";
+    for (const DispatchOutcome& out : writer.outs) {
+        ASSERT_EQ(out.response.rfind("ERR", 0), std::string::npos) << out.response;
+    }
+    EXPECT_GT(Height(d()), height_before) << "no root growth happened under the walk";
+    ASSERT_TRUE(walk.outs[0].status.ok()) << walk.outs[0].response;
+    std::vector<std::int64_t> expected;
+    for (int i = kRows; i >= 1; --i) expected.push_back(2 * i);
+    EXPECT_EQ(Ids(walk.outs[0].response), expected)
+        << "the reverse walk read under its own view, in order, every row once";
+}
+
+TEST_F(WalkSliceRigTest, UpdatesAndDeletesInsideAReverseWalkLeaveItsViewWhole) {
+    // Rows the walk has not reached yet are updated and deleted inside its
+    // suspensions, so the walk reads them through their undo under a held
+    // leaf: it still returns every row, in order, as its view saw them.
+    Load(1, 1, kRows);
+    Script walk{&long_, {"SELECT id FROM t WHERE name = 'x' ORDER BY id DESC LIMIT 100000"}};
+    Script writer{&other_,
+                  {"UPDATE t SET name = 'y' WHERE id BETWEEN 1 AND 400",
+                   "DELETE FROM t WHERE id BETWEEN 401 AND 800",
+                   "UPDATE t SET name = 'z' WHERE id BETWEEN 1500 AND 1600"}};
+    std::atomic<bool> walk_running{false};
+    writer.after = [&] { walk_running.store(walk.done.load() == 0); };
+    RunBoth(walk, writer);
+
+    ASSERT_TRUE(walk_running.load()) << "the walk ended before the writes: nothing yielded";
+    for (const DispatchOutcome& out : writer.outs) {
+        ASSERT_EQ(out.response.rfind("ERR", 0), std::string::npos) << out.response;
+    }
+    ASSERT_TRUE(walk.outs[0].status.ok()) << walk.outs[0].response;
+    std::vector<std::int64_t> expected;
+    for (int i = kRows; i >= 1; --i) expected.push_back(i);
+    EXPECT_EQ(Ids(walk.outs[0].response), expected);
+}
+
+TEST_F(WalkSliceRigTest, PurgedSlotsAreNoRowsToAReverseWalk) {
+    Load(1, 1, 400);
+    ASSERT_EQ(d().Dispatch("DELETE FROM t WHERE id BETWEEN 100 AND 299").response.rfind("ERR", 0),
+              std::string::npos);
+    const std::string purged = d().Dispatch("PURGE FROM t WHERE id BETWEEN 100 AND 299").response;
+    ASSERT_EQ(purged.rfind("ERR", 0), std::string::npos) << purged;
+    std::vector<std::int64_t> expected;
+    for (int i = 400; i >= 300; --i) expected.push_back(i);
+    for (int i = 99; i >= 1; --i) expected.push_back(i);
+    EXPECT_EQ(Ids(d().Dispatch("SELECT id FROM t ORDER BY id DESC LIMIT 1000").response), expected);
+}
+
+TEST_F(WalkSliceRigTest, ACancelEndsAReverseWalkAtItsNextBoundary) {
+    Load(1, 1, kRows);
+    Script walk{&long_, {"BEGIN", "SELECT id FROM t ORDER BY id DESC LIMIT 100000"}};
+    Script canceller{&other_, {}};
+    std::atomic<bool> walk_running{false};
+    canceller.after = [&] {
+        walk_running.store(walk.done.load() == 1);
+        long_.RequestCancel();
+    };
+    RunBoth(walk, canceller);
+
+    ASSERT_TRUE(walk_running.load()) << "the walk ended before the cancel: nothing yielded";
+    EXPECT_EQ(walk.outs[1].status.code(), StatusCode::kCancelled) << walk.outs[1].response;
+    EXPECT_TRUE(long_.failed());
+    EXPECT_FALSE(long_.TakeCancel());
+}
+
 TEST_F(WalkSliceRigTest, ACancelEndsTheWalkAtItsNextBoundaryAndFailsTheTransaction) {
     Load(1, 1, kRows);
     Script walk{&long_, {"BEGIN", "SELECT id FROM t"}};

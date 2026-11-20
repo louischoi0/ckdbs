@@ -69,12 +69,14 @@ returned the same rows.
 | | P | 174.6 µs | 240.5 µs | 244.6 µs | 251.8 µs | 354.4 µs | 160.4 µs |
 | one point descent | D | 46.0 to 48.5 µs | 50.8 to 69.0 µs | 54.7 to 70.1 µs | 66.2 to 71.7 µs | 95.8 to 122.5 µs | 25.1 to 29.2 µs |
 
-The noise floor (|T - T2| at p50) is 2 % to 5 % for every cell but the
-100,000-row user (5.5 %).
+The noise floor (|T - T2| at p50) is 0.2 % to 1.8 % for four cells, 5.5 %
+for the 100,000-row user and 9.3 % for the 100-row user.
 
 **Wait breakdown: not taken.** Every arm is CPU on one resident core: the
-server's CPU per statement is within 10 % of its p50 latency in every T
-cell, and no read reaches the device (the relation fits the pool).
+server's CPU per statement is within 4 % of its p50 latency in every T
+cell but the 100-row user's, where it is 31 % below it (the round trip is
+a third of a 168 µs statement), and no read reaches the device (the
+relation fits the pool).
 
 ## CV-Q0's bar, read
 

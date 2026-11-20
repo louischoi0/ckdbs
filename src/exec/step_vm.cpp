@@ -649,6 +649,10 @@ private:
             }
             co_return co_await WalkAndBuild(steps, index, step, access);
         }
+        // An elided `ORDER BY <tuple key> DESC` rests on this walk (CV O2).
+        if (step.emit_order == EmitOrder::kTupleKeyBackward) {
+            co_return co_await RunReverseWalkStep(steps, index, step, access);
+        }
         // A kFilterScan walks exactly as a kScan does - the kind is a
         // statistics distinction, not an execution one, and there is
         // deliberately no branch for it here. If one ever appears, the
@@ -2252,20 +2256,97 @@ private:
             // is held between pages either - the yield only widens the gap.
             if (outermost && slice_ != nullptr &&
                 ++slice_pages_ >= slice_->pages_per_slice) {
-                slice_pages_ = 0;
-                if (Status s = TakeCancel(); !s.ok()) co_return s;
-                if (slice_->at_boundary) slice_->at_boundary();
-                if (slice_->resume_when != nullptr && !(*slice_->resume_when)()) {
-                    sched::WaitScope wait(stats::WaitEvent::kNetSendBackpressure);
-                    co_await sched::WaitUntil{slice_->resume_when};
-                } else {
-                    co_await sched::Yield{};
+                if (Status s = co_await YieldAtSliceBoundary(); !s.ok()) co_return s;
+            }
+        }
+    }
+
+    // **The slice boundary itself** (BA-S15): what the outermost walk does
+    // every `SlicePolicy::pages_per_slice` pages, holding no pin and no
+    // span - its read view and borrow are statement-scoped. The caller has
+    // counted the pages and holds nothing.
+    sched::Coro YieldAtSliceBoundary() {
+        slice_pages_ = 0;
+        if (Status s = TakeCancel(); !s.ok()) co_return s;
+        if (slice_->at_boundary) slice_->at_boundary();
+        if (slice_->resume_when != nullptr && !(*slice_->resume_when)()) {
+            sched::WaitScope wait(stats::WaitEvent::kNetSendBackpressure);
+            co_await sched::WaitUntil{slice_->resume_when};
+        } else {
+            co_await sched::Yield{};
+        }
+        // The note is the thread's, and other statements ran here
+        // meanwhile: what this walk ends with must be its own (BA-S14's
+        // re-run reads it).
+        storage::ClearStructuralRefusal();
+        co_return TakeCancel();
+    }
+
+    // **The reverse walk (CV O2)**: `ORDER BY <tuple key> DESC` over a walk
+    // or a tuple key range of the driving relation, read from its high end
+    // down, so the LIMIT stops it where a forward walk and a top-N heap read
+    // every row.
+    //
+    // A leaf links forward only (CV-Q1 (a): no on-disk change), so a step
+    // left is a descent: once a leaf is read, the next is the one holding
+    // the greatest keys below its `min_key`, found by
+    // `BtreeFetchLeafAtOrBelow`, which moves right while a split has moved
+    // that range past where the descent landed. **No leaf is revisited by
+    // pointer** (CV-R3): each step is a seek by key from the last leaf's
+    // `min_key`, which is immutable (invariant 2), and every key below it is
+    // in that leaf's left part of the tree - so a split on another core,
+    // or a root growth, between two steps neither skips a row nor repeats
+    // one; the view is fixed, so nothing written since is seen. A leaf's
+    // slots are read from the last down, keyed rows ascending by placement
+    // (BD-R1), and every slot above the bound is passed over.
+    //
+    // **It yields where the forward walk yields** (CV-R4), at the bottom of
+    // its leaf loop, holding its view, its borrow and the next bound - no
+    // page. A leaf it misses is a blocking read: the park DE gives the
+    // forward walk's leaf fetch is not given here (`known-gaps.md`).
+    sched::Coro RunReverseWalkStep(const std::vector<Step>& steps, std::size_t index,
+                                   const Step& step, const catalog::TableAccess& access) {
+        const std::uint64_t low = step.range.has_value() ? step.range->low : 0;
+        std::uint64_t bound = step.range.has_value() ? step.range->high : kMaxKeystoneId;
+        StepStats& step_stats = stats_.For(step.step_id);
+        const bool outermost = index == 0 && parent_ == nullptr;
+        const storage::PageAccess walk_access =
+            outermost ? storage::PageAccess::kScan : storage::PageAccess::kRead;
+        storage::PageChainGuard guard("reverse relation walk");
+        for (;;) {
+            NoteFetch();
+            auto held = btree::BtreeFetchLeafAtOrBelow(store_, access.desc_page_id, bound,
+                                                       walk_access);
+            if (!held.ok()) co_return held.status();
+            if (Status s = guard.Visit(held.value().id); !s.ok()) co_return s;
+            ++step_stats.pages_fetched;
+            heap::PageView leaf(held.value().ref.bytes());
+            const std::uint16_t n = leaf.slot_count();
+            for (std::uint16_t i = n; i-- > 0;) {
+                // A retired slot carries no row, and `AcceptTupleAt` would
+                // decline it.
+                auto payload = leaf.PayloadAt(i, n);
+                if (!payload.ok()) continue;
+                auto tuple_key = KeystoneIdOfPayload(payload.value());
+                if (!tuple_key.ok()) co_return tuple_key.status();
+                if (tuple_key.value() > bound) continue;
+                if (tuple_key.value() < low) break;  // and so `min_key <= low`
+                if (Status s = AcceptTupleAt(steps, index, step, access, held.value().id, leaf, i, n);
+                    !s.ok()) {
+                    co_return s;
                 }
-                // The note is the thread's, and other statements ran here
-                // meanwhile: what this walk ends with must be its own
-                // (BA-S14's re-run reads it).
-                storage::ClearStructuralRefusal();
-                if (Status s = TakeCancel(); !s.ok()) co_return s;
+                if (stopped_) co_return Status::OK();
+            }
+            const std::uint64_t min_key = leaf.min_key();
+            held.value().ref.Release();
+            // The one end: every key left of this leaf is below its
+            // `min_key`, so at or below `low` nothing left qualifies - and the
+            // leftmost leaf's `min_key` is 0 (`FormatRoot`; a split keeps the
+            // left page's), so the head ends it too.
+            if (min_key <= low) co_return Status::OK();
+            bound = min_key - 1;
+            if (outermost && slice_ != nullptr && ++slice_pages_ >= slice_->pages_per_slice) {
+                if (Status s = co_await YieldAtSliceBoundary(); !s.ok()) co_return s;
             }
         }
     }

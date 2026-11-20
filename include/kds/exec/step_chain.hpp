@@ -208,6 +208,21 @@ constexpr bool EmitsTupleKeyOrder(AccessKind kind) noexcept {
     return false;
 }
 
+// The order a driving step emits in when a statement's `ORDER BY` rests on
+// it (CV, `instructions/v3.2.0/workorder-cv-ordered-index-walk.md`). An
+// annotation, never a kind: the step keeps its kind, its residual and its
+// statistics, and a step left at `kAny` emits as it always did.
+//
+//   kTupleKeyBackward  a walk or range of the clustered tree, read from its
+//                      high end down: `ORDER BY <tuple key> DESC` (O2)
+//
+// Ascending tuple key order needs no annotation: every kind
+// `EmitsTupleKeyOrder` lists already emits it.
+enum class EmitOrder : std::uint8_t {
+    kAny = 0,
+    kTupleKeyBackward,
+};
+
 // The inclusive tuple key bounds a kRange step walks between.
 //
 // A **hint on top of the residual**, never a replacement for it: the
@@ -774,6 +789,12 @@ struct Step {
     // The value list this step descends for, on `kLookup` with no `key`
     // (see KeySet). Cold, with `build`.
     std::optional<KeySet> key_set;
+
+    // The order this step emits in where a statement's `ORDER BY` rests on
+    // it (CV, `parser-v2.md` I11): set by the compiler on the driving step
+    // only, and only where it dropped the chain's `sort_keys` for it.
+    // `kAny` is every other step, which runs as it always has.
+    EmitOrder emit_order = EmitOrder::kAny;
 };
 
 // Whether a trail may replace this step: its kind's line

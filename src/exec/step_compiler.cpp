@@ -3490,13 +3490,29 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // clause answered `ORDER BY <tuple key>` over a Cabin-probed relation with
     // whatever order the entry set happened to hold - and lifting it is not
     // BB's to decide.
-    const bool one_ascending_tuple_key =
-        chain.sort_keys.size() == 1 && !chain.sort_keys[0].descending &&
-        chain.sort_keys[0].ref.rel_slot == 0 && IsTupleKey(chain.sort_keys[0].ref);
-    const bool driving_emits_tuple_key_order =
-        !chain.steps.empty() && EmitsTupleKeyOrder(chain.steps[0].kind);
-    if (one_ascending_tuple_key && driving_emits_tuple_key_order) {
-        chain.sort_keys.clear();
+    //
+    // **And its reverse (CV O2)**: the same key descending, under a LIMIT
+    // (CV-Q2 (a)), over a walk or a tuple key range of the driving relation.
+    // The step reads its leaves from the high end down
+    // (`EmitOrder::kTupleKeyBackward`), so the order is the walk's and the
+    // LIMIT stops it; tuple keys are unique, so CV-Q4's tie rule is vacuous.
+    // A build keeps the sort: `RunStep` dispatches a build before it reads
+    // the order, so that test is load-bearing. A key set, an index or a
+    // Cabin arm is another kind and keeps it too.
+    const bool one_tuple_key = chain.sort_keys.size() == 1 &&
+                               chain.sort_keys[0].ref.rel_slot == 0 &&
+                               IsTupleKey(chain.sort_keys[0].ref) && !chain.steps.empty();
+    if (one_tuple_key && !chain.sort_keys[0].descending) {
+        if (EmitsTupleKeyOrder(chain.steps[0].kind)) chain.sort_keys.clear();
+    } else if (one_tuple_key && stmt.limit.has_value()) {
+        Step& driver = chain.steps[0];
+        const bool walked = driver.kind == AccessKind::kScan ||
+                            driver.kind == AccessKind::kFilterScan ||
+                            driver.kind == AccessKind::kRange;
+        if (walked && !driver.build.has_value()) {
+            driver.emit_order = EmitOrder::kTupleKeyBackward;
+            chain.sort_keys.clear();
+        }
     }
     chain.limit = stmt.limit;
     chain.offset = stmt.offset;
