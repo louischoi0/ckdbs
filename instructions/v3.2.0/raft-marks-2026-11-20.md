@@ -236,3 +236,20 @@ took under them.
 | **Mark** | **DJ is closed on its work branch**, worktree `dj-connections-sessions-cursors`: DJ-S0 `15cc1c0a`, DJ-S1 `69d754ae`, DJ-S2 `56855c48`, DJ-S3 `1fc21809`, DJ-S4 `5333fbb2`, the close measured (`bench/v3.4.17/results-dj-close-v3.4.17-6-g5333fbb2.md`, no delta resolved) and `origin/main` merged. Every adoption is §22's; none is the operator's own mark |
 | **Does not settle** | a push, a merge to `main`, a tag, a version; DJ-R6/R7's bar beyond "not found broken"; the options §22 lists as not taken; CN-12's O1-O4 |
 | **Recorded at** | this file; the order's header and §7; its row in `instructions/v3.2.0/index.md` |
+
+## 24. DJ landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"* |
+| **Mark** | **DJ pushed to `main`**: `56d57f16`, a `--no-ff` merge of `7435e212` onto `d436b7b1`, the hook skipped - the full suite had run 0 failed of 4,997 on that tree (`d2338bd7`'s) |
+| **Does not settle** | a tag (§25) |
+| **Recorded at** | this file; the order's header; its index row |
+
+## 25. v3.4.18 named and tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.18"* |
+| **Mark** | **`v3.4.18`**, an annotated tag on `main` at `56d57f16`: DJ's connection cap, idle-session timeout, `RESET SESSION`, slot wait and bounded reply, with what bounds them in its message. The tagged tree ran 0 failed of 4,997; `tsan` and `bs-nightly` not run |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; the order's header; its index row |

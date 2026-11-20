@@ -1,6 +1,9 @@
 # Work order DJ - connections, sessions and cursors: a connection cap and an idle-session timeout an operator sets, a session a pool can hand back clean, a wait in place of a refusal, and a reply that is bounded
 
-Status: **CLOSED 2026-11-20 on the work branch, not landed** - every
+Status: **CLOSED 2026-11-20, landed on `main` at `56d57f16` on the
+operator's word "push no verify" (hook skipped, suite 0 failed of 4,997 on
+that tree) and tagged `v3.4.18` there on "tag 3.4.18"**
+(`raft-marks-2026-11-20.md` §24, §25). Every
 stage done (§7: DJ-S1 `69d754ae`, DJ-S2 `56855c48`, DJ-S3 `1fc21809`,
 DJ-S4 `5333fbb2`, the close
 `bench/v3.4.17/results-dj-close-v3.4.17-6-g5333fbb2.md`: no delta resolved).
