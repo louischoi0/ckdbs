@@ -141,18 +141,30 @@ entries no reader can reach and no writer can need
 > re-linked, and no separator changes: a tree's page count falls only by a
 > `REINDEX`. At most one dead entry a leaf survives a purge.
 
-The statement is a sequence of attempts, each an owned transaction holding
-the relation `IX` across at most `exec::kPurgeIndexLeavesPerAttempt` (64)
-leaves; per leaf it copies the entries under a shared hold, judges each row
-it names under the row's unit with no page held, and removes the dead ones
-under the leaf's exclusive hold, logged as one `FULL_PAGE_IMAGE` at
-`kNoTxnId` under that hold - no new record kind, replayed whole, never
-undone. Every view an index is probed under is registered with the horizon
-or reads latest state, so a version the judge owes nothing is reached by
-no probe. An index flagged building is refused (its backfill appends with no
-row unit). It answers `PURGED INDEX name=<name> entries=N skipped_rows=M
-attempts=A`; a wait after its first attempt, or a refusal part-way, ends
-it with what it removed, retryable.
+The statement is a `PurgeIndexRun` (`command_dispatcher.cpp`): a run of
+slices, the `analytic` level's 16 leaves each, **yielding its core between
+two**, and holding nothing across a yield. A slice is one attempt under a
+holder of its own - a read holder's id, with no transaction, no view and
+no purge horizon held: the relation's `IX`, asked without waiting (a
+refusal skips the slice and asks again after the yield, up to the lock
+family's fault net, then refuses `TxnConflict`), and each row's tuple `U`,
+all given back when the slice returns. Per leaf it copies the entries under
+a shared hold, judges each row it names under the row's unit with no page
+held, and removes the dead ones under the leaf's exclusive hold, logged as
+one `FULL_PAGE_IMAGE` at `kNoTxnId` under that hold - no new record kind,
+replayed whole, never undone. Every view an index is probed under is
+registered with the horizon or reads latest state, so a version the judge
+owes nothing is reached by no probe. An index flagged building is refused
+(its backfill appends with no row unit), and one gone from the relation's
+indexes at a slice stops the run. It answers `PURGED INDEX name=<name>
+entries=N skipped_rows=M attempts=A`; a refusal part-way ends it with what
+it removed, retryable. A caller that cannot park runs it whole in its
+head, as a build. **The reply is not a durability point**: the images are
+at `kNoTxnId` and no commit follows, so a crash can lose a purge that
+answered, which leaves those entries in place. A DDL on the purge's own
+core passes between two slices; one on another core is not queued for, and
+gets its `X` only in the gap between a slice's release and the next one's
+`IX`.
 
 ---
 

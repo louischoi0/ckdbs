@@ -755,3 +755,56 @@ statement with a refusal where they used to check a read.
 
 Overhead not measured; measured at the milestone's close.
 
+### DD-S3 - the close, and the remedy it required, 2026-11-20
+
+**Measured** (`bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`, by `ck-tester`,
+B = `b8880f9b` (`v3.4.17-3-gb8880f9b`) against A = `054dbc5e`, a quiet host,
+`cores = 1`, `relaxed`). **DD-Q7's write-path bar is met**: an indexed
+`INSERT`, `UPDATE`s of the indexed, a covered and another column, a point
+probe and an ordered index walk, at 200, 1,000 and 10,000 rows - every
+median B - A within -0.8 % to +1.5 % and inside the in-run control's range.
+**A purged index probes as a rebuilt one**: S0's cells 1 and 5, churned
++75 % and +61-66 % over rebuilt, are within the control pair's spread once
+purged (cell 1: +0.2 % and +0.8 %), and cell 2 too. A purge leaves its
+tree's pages (841 against a rebuild's 421 for cell 2), at no probe cost,
+and one dead first entry a leaf (100,419 entries against 100,000). The
+purge itself: 2.43 us an entry removed at n = 100,000, a run with nothing
+to remove 108 ms (the walk is the floor), the longest 64-leaf attempt
+0.30-0.33 s against the 1 s net; an entry of a row `PURGE`'s window about
+20 us, eight times dearer, not isolated (`known-gaps.md`). Cut: S0's cells
+3, 4 and 6 on a purged twin, `group`/`strict`, a PostgreSQL twin, surplus
+past 2x, a cold device read.
+
+**A regression in DD's own purpose, and its remedy.** The statement ran its
+attempts back to back on its core's reactor: a writer on that core waited
+for the whole of it, 243-283 ms at n = 100,000 - longer than the 71 ms
+`REINDEX` stall DD exists to remove, and against `manual/sql/sql.md`'s
+"writes go on while it runs". **Remedy, within DD** (the skill's §3):
+`PurgeIndexRun`, a `BuildRun` modelled on `GATHER STATISTICS`'s - one
+attempt a slice of the `analytic` level's 16 leaves, yielding between
+slices, each slice's relation `IX` and row units taken under a read
+holder's id and all given back when it returns. **No transaction is held**:
+the judge needs no view, so the run holds no horizon down; a read holder
+never waits, so it is never the waiting half of a wait-for edge, and the
+writer's wait-for edge to it is no longer recorded either. A refused `IX`
+is asked again after the yield, to the fault net. `tests/index_build_slice_rig_test.cpp`'s
+`AWriterOnAPurgesCoreRunsInsideThePurgeAndItsRowIsFound` holds it: a writer
+on the purge's core is answered inside it, and its row is found after.
+
+**Reviewed by `critics-developer`**: no `[quiet-wrong]` case. **Applied**:
+the wait-for edge filtered for a read holder (the graph's own contract);
+a holder named "a positioned reader or an index purge" where it read "a
+positioned reader"; the claim that a DDL passes between slices bounded to
+its own core - one on another core is not queued for, and a long purge can
+hold it to its net (`known-gaps.md`, `index.md` §2.2, the manual); the
+memo comment - a tree another core dropped is purged as the dropped tree
+it is, harmless; the reply is stated as no durability point; the
+unwalked-run refusal merged into `Step`; `txn` renamed `holder`. **Rejected**:
+a shared partial-count helper for `PURGE` and `PURGE INDEX` - two
+statements' wordings, one line each, which a helper would couple for no
+cut; a stronger "it started" assertion in the rig cell - the `attempts=`
+assertion already carries the yield, and the start is the reactor's
+submission order. **Not re-measured**: the writer stall after the remedy -
+a slice is a quarter of the attempt measured, and the rig cell shows the
+yield; the number is owed to the next run of these cells.
+

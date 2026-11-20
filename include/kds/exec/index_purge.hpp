@@ -53,11 +53,6 @@ class WalManager;
 
 namespace kds::exec {
 
-// One attempt's run of leaves (DD §2): a walk's slice (`sched.md` §3), so
-// an attempt's relation `IX` is held for a bounded time (DD-R10). CLA's
-// proposal; DD-S2 measures the longest attempt against the 1 s fault net.
-inline constexpr std::uint32_t kPurgeIndexLeavesPerAttempt = 64;
-
 struct IndexPurgeAttempt {
     std::uint64_t removed = 0;   // entries taken out
     std::uint64_t skipped = 0;   // rows whose unit was refused: their entries stay
@@ -68,15 +63,16 @@ struct IndexPurgeAttempt {
 };
 
 // One attempt over `ix` of relation `access`, from the leaf `from` seeks to
-// (empty: the leftmost) across at most `max_leaves` leaves, by transaction
-// `txn`, whose `holdings` already carry the relation's `IX`. Each row's
+// (empty: the leftmost) across at most `max_leaves` leaves, by holder `txn`
+// (`PurgeIndexRun`'s read-holder id, no transaction), whose `holdings`
+// already carry the relation's `IX`. Each row's
 // tuple unit is asked in `U` without waiting, and every unit granted is given
 // back before the next leaf. `out` counts what was done **whatever the
 // answer**: a refusal part-way keeps every leaf already rewritten, and says
 // how many entries went (DD-R9). `wal` null logs nothing (tests).
 Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
                         const catalog::TableAccess& access, const txn::TransactionManager* txns,
-                        wal::WalManager* wal, txn::LockTable& locks, std::uint64_t txn,
+                        wal::WalManager* wal, txn::LockTable& locks, std::uint64_t holder,
                         txn::LockHoldings& holdings, const catalog::TableAccess::IndexRef& ix,
                         std::span<const std::byte> from, std::uint32_t max_leaves,
                         IndexPurgeAttempt& out);

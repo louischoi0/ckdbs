@@ -45,7 +45,7 @@ StatusOr<CopiedLeaf> CopyLeaf(storage::PageStore& store, PageId leaf,
 // unit, the dead entries taken out under the same units.
 Status PurgeCopiedLeaf(storage::PageStore& store, catalog::Catalog& catalog,
                        const catalog::TableAccess& access, const txn::TransactionManager* txns,
-                       wal::WalManager* wal, txn::LockTable& locks, std::uint64_t txn,
+                       wal::WalManager* wal, txn::LockTable& locks, std::uint64_t holder,
                        txn::LockHoldings& holdings, const catalog::TableAccess::IndexRef& ix,
                        const index::IndexLayout& layout, const std::vector<Entry>& copied,
                        IndexPurgeAttempt& out) {
@@ -56,7 +56,7 @@ Status PurgeCopiedLeaf(storage::PageStore& store, catalog::Catalog& catalog,
     }
     std::vector<Entry> dead;
     for (const auto& [tuple_key, entries] : named) {
-        auto granted = locks.TryAcquire(txn, txn::LockKey::Tuple(access.oid, tuple_key),
+        auto granted = locks.TryAcquire(holder, txn::LockKey::Tuple(access.oid, tuple_key),
                                         txn::LockMode::kUpdate, holdings);
         if (!granted.ok()) return granted.status();
         if (!granted.value()) {
@@ -93,7 +93,7 @@ Status PurgeCopiedLeaf(storage::PageStore& store, catalog::Catalog& catalog,
 
 Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
                         const catalog::TableAccess& access, const txn::TransactionManager* txns,
-                        wal::WalManager* wal, txn::LockTable& locks, std::uint64_t txn,
+                        wal::WalManager* wal, txn::LockTable& locks, std::uint64_t holder,
                         txn::LockHoldings& holdings, const catalog::TableAccess::IndexRef& ix,
                         std::span<const std::byte> from, std::uint32_t max_leaves,
                         IndexPurgeAttempt& out) {
@@ -116,7 +116,7 @@ Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
     // Every tuple unit this attempt took, given back in one ledger pass; the
     // relation's `IX` stays to the attempt's decide.
     const auto give_back = [&]() {
-        locks.ReleaseIf(txn, holdings, [](const txn::LockHoldings::Held& h) {
+        locks.ReleaseIf(holder, holdings, [](const txn::LockHoldings::Held& h) {
             return h.key.unit == txn::LockUnit::kTuple && h.mode == txn::LockMode::kUpdate;
         });
     };
@@ -126,7 +126,7 @@ Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
         if (Status s = guard.Visit(leaf); !s.ok()) return s;
         auto copied = CopyLeaf(store, leaf, layout);
         if (!copied.ok()) return copied.status();
-        const Status purged = PurgeCopiedLeaf(store, catalog, access, txns, wal, locks, txn,
+        const Status purged = PurgeCopiedLeaf(store, catalog, access, txns, wal, locks, holder,
                                               holdings, ix, layout, copied.value().entries, out);
         give_back();
         if (!purged.ok()) return purged;

@@ -3252,16 +3252,23 @@ Verified on worktree `dd-index-entry-purge` (DD-S2, 2026-11-20).
   (DD-Q4 (a)); DD-S4, a background driver, is put to the operator. Under
   DN's heap a slot is freed only by entry removal, so DN needs a driver
   that runs unasked.
-- **A statement does not yield between attempts**: its attempts run back
-  to back on its core's reactor, each bounded to 64 leaves under the
-  relation `IX`, and the core's other sessions wait for the whole
-  statement.
+- **A purge of a row `PURGE`'s window is about eight times dearer an
+  entry** (DD's close, `bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`:
+  about 20 us against 2.4 us): the judge's lookup of a purged key lands
+  on a leaf whose retired slots keep their directory entries until the
+  leaf is compacted or divided (above, PURGE). Not isolated; a slice is
+  16 leaves, so the most a writer on its core waits is one slice.
 - **A leaf's first entry is never removed** (`index.md` IX2c), so a dead
   first entry survives every purge; on a DN heap that would be one slot a
   leaf of each index never freed. DM's U2b (a bound kept on the page) is
   what would lift it.
 - **Spilled covered churn under one key is never purged**
   (`SameOwedEntry`'s spilled-cell rule, DD-S0's finding).
+- **A DDL on another core is not queued for by the purge**: its relation
+  `X` is granted only in the gap between one slice's release and the next
+  slice's `IX`, so a long `PURGE INDEX` can hold it to the lock family's
+  fault net and a retryable refusal. Neither a pace between slices nor a
+  `HolderProgress` registration is built.
 - **Not tested**: a divide forced between a leaf's copy and its removal,
   and two `PURGE INDEX` runs of one index on two cores at once; the
   descent's coverage check and the tuple unit are what make both safe.

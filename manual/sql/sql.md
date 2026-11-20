@@ -553,8 +553,9 @@ Takes out of a live index the entries `REINDEX` would leave out - rolled
 back inserts, purged rows, earlier values no running transaction can still
 read - and, unlike `REINDEX`, the entries of a deleted row once every
 running transaction sees the delete. **Writes go on while it runs**: it
-holds the relation the way a writer does, never the `REINDEX`'s exclusive
-hold, and works 64 leaves at a time.
+works 16 leaves at a time, holding the relation the way a writer does -
+never the `REINDEX`'s exclusive hold - and gives everything back and lets
+other statements on its core run between two batches.
 
 - **Admin, autocommit only.** Inside `BEGIN` it is refused
   `NOT_IMPLEMENTED`, and the transaction goes on.
@@ -566,8 +567,11 @@ hold, and works 64 leaves at a time.
   survives.
 - A spilled `COVERING` value an `UPDATE` assigned again keeps its old
   entry: such churn is never purged.
-- If it must wait after its first batch, or is refused part-way, it stops
-  with what it removed and says so; running it again goes on.
+- If a statement holds the relation exclusive for longer than the lock wait
+  limit, or it is refused part-way, it stops with what it removed and says
+  so; running it again goes on. A `DROP` or `REINDEX` of the relation from
+  another connection can in turn be refused `TXN_CONFLICT` while a long
+  purge runs; it can be run again.
 - Refused on an index still being built (`TXN_CONFLICT`), and on a server
   with no lock table (`UNSUPPORTED`).
 

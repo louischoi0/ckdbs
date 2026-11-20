@@ -2444,8 +2444,7 @@ private:
     // returned as `purge_wait`; the rows cleaned before it stay clean.
     DispatchOutcome HandlePurgeDroppedColumns(const parser::PurgeStmt& stmt, Session& session);
     // `PURGE INDEX <name>` (DD, `instructions/v3.2.0/workorder-dd-index-entry-purge.md`):
-    // a sequence of attempts, each an owned transaction holding the
-    // relation `IX` across `exec::kPurgeIndexLeavesPerAttempt` leaves.
+    // a `PurgeIndexRun`, one attempt a slice, yielding between them.
     DispatchOutcome HandlePurgeIndex(const parser::PurgeStmt& stmt, Session& session);
     // `resume_from` is where a parked walk of this statement stopped
     // (AO-S3b); an inactive cursor is a first run and starts at the head,
@@ -2931,6 +2930,7 @@ private:
     friend class IndexBuildRun;
     friend class DeclarationBuildRun;
     friend class GatherRun;
+    friend class PurgeIndexRun;
     template <typename Build>
     friend class DeclarationBuildRunOf;
 
