@@ -119,7 +119,39 @@ public:
 
     explicit Session(txn::IsolationLevel default_isolation =
                          txn::IsolationLevel::kReadCommitted) noexcept
-        : isolation_(default_isolation) {}
+        : isolation_(default_isolation), default_isolation_(default_isolation) {}
+
+    // ---- What a session's settings are, and their defaults (DJ-S2) -------
+    //
+    // **The settings a client can leave behind on a connection**: the
+    // isolation level a `SET ISOLATION LEVEL` set, the namespace a `USE`
+    // set, the durability rung a `SET DURABILITY` set and the level a
+    // `SET PRIORITY` set. Each changes what the *next* statement on the
+    // connection means, so a connection a pool hands from one borrower to
+    // the next hands them on: a borrower who inherits `SET DURABILITY
+    // RELAXED` commits at a rung it did not ask for.
+    //
+    // **`AtDefaults` and `ResetToDefaults` are one list, read twice**
+    // (DJ-R8): a setting added to this class joins both or the session
+    // reads as clean with it left behind. `RESET SESSION`
+    // (`CommandDispatcher::HandleReset`) is the reset's one caller, and it
+    // refuses inside a transaction, so neither is asked with one open.
+    //
+    // Not settings, and not touched: the role (who the session is), the
+    // acknowledged-commit bound (BA-R1c: a reset must not let the next
+    // statement miss this session's own commit), the wait statistics, the
+    // placement words and the cancel flag.
+    bool AtDefaults() const noexcept {
+        return state_ == State::kIdle && isolation_ == default_isolation_ &&
+               default_namespace_ == catalog::kNamespacePublic && !durability_.has_value() &&
+               priority_.level() == Priority::kNormal;
+    }
+    void ResetToDefaults() noexcept {
+        isolation_ = default_isolation_;
+        default_namespace_ = catalog::kNamespacePublic;
+        durability_.reset();
+        priority_.set(Priority::kNormal);
+    }
 
     // The wait statistics this session accumulates (CJ WE05), made on its
     // first statement and dropped with its last owner. The statement's
@@ -489,6 +521,9 @@ private:
     stats::TxnEnd rollback_cause_ = stats::TxnEnd::kRollback;  // DF-Q13 (a)
     std::shared_ptr<sched::SessionWaitStats> wait_stats_;
     txn::IsolationLevel isolation_ = txn::IsolationLevel::kReadCommitted;
+    // The level this session began at - the server's `isolation` - which is
+    // what `RESET SESSION` returns it to (DJ-S2).
+    txn::IsolationLevel default_isolation_ = txn::IsolationLevel::kReadCommitted;
     catalog::Oid default_namespace_ = catalog::kNamespacePublic;
     ResultSink* result_sink_ = nullptr;
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);

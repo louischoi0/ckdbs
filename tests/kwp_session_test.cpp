@@ -1,12 +1,15 @@
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/sched/core_load.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -1123,6 +1126,241 @@ TEST_F(KwpSessionTest, ACancelFrameWithNoRegistryIsAnUnexpectedFirstFrame) {
 TEST_F(KwpSessionTest, TerminateClosesInEveryPhase) {
     EXPECT_TRUE(Feed(ClientFrameType::kTerminate, {}).empty());
     EXPECT_TRUE(closed_);
+}
+
+// ---- DJ-S2: a session handed back clean -----------------------------------
+//
+// `docs/spec/protocol.md` §3, §10. `RESET SESSION` returns a session to a
+// new connection's settings, and `S_READY` says - to a client that offered
+// `SESSION_DEFAULTS` - whether it stands at them.
+
+constexpr std::uint64_t kOffersSessionDefaults =
+    static_cast<std::uint64_t>(wire::Capability::kSessionDefaults);
+
+// A `C_HELLO` offering `capabilities`.
+std::vector<std::byte> HelloOffering(std::uint64_t capabilities) {
+    wire::ClientHello h;
+    h.client_name = "test";
+    h.capabilities = capabilities;
+    return wire::EncodeClientHello(h);
+}
+
+// Whether `frames` ends in an `S_READY` carrying the session-default flag.
+::testing::AssertionResult SaysDefault(const std::vector<wire::DecodedFrame>& frames) {
+    if (frames.empty() ||
+        frames.back().type != static_cast<std::uint8_t>(ServerFrameType::kReady)) {
+        return ::testing::AssertionFailure() << "no S_READY";
+    }
+    if ((frames.back().flags & wire::kReadySessionDefaults) == 0) {
+        return ::testing::AssertionFailure() << "S_READY without the session-default flag";
+    }
+    return ::testing::AssertionSuccess();
+}
+
+TEST_F(KwpSessionTest, ReadySaysTheSessionIsAtItsDefaultsOnlyToAClientThatOfferedTheBit) {
+    // A flag on an existing frame, so a client that did not ask for it is
+    // sent the frame it always was.
+    auto plain = Feed(ClientFrameType::kHello, Hello());
+    ASSERT_EQ(plain.size(), 2u);
+    EXPECT_FALSE(SaysDefault(plain));
+    EXPECT_EQ(plain.back().flags, 0u);
+    EXPECT_FALSE(SaysDefault(Feed(ClientFrameType::kSync, {})));
+    EXPECT_TRUE(session_->AtDefaults()) << "the session is at its defaults all the same";
+}
+
+TEST_F(KwpSessionTest, EverySettingLeftBehindClearsTheFlagAndResetSessionRestoresIt) {
+    // DJ-R8 `[quiet-wrong]`: no session reads as clean with one item left.
+    // Each item a client can leave on a connection, one at a time: the flag
+    // goes, `RESET SESSION` brings it back, and the item is at its default.
+    ASSERT_EQ(Run("CREATE NAMESPACE app").rfind("ERR", 0), std::string::npos);
+    auto hello = Feed(ClientFrameType::kHello, HelloOffering(kOffersSessionDefaults));
+    ASSERT_TRUE(SaysDefault(hello));
+    auto decoded = wire::DecodeServerHello(hello[0].payload);
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_EQ(decoded.value().capabilities, kOffersSessionDefaults)
+        << "S_HELLO carries the intersection";
+
+    const auto sync = [&] { return Feed(ClientFrameType::kSync, {}); };
+    // One statement through the unnamed statement and the unnamed portal,
+    // both closed behind it - so what a cell leaves is the setting alone,
+    // and the flag's answer is about the setting.
+    const auto exec = [&](const std::string& sql) {
+        (void)Feed(ClientFrameType::kParse, Parse("", sql));
+        (void)Feed(ClientFrameType::kBind, Bind("", ""));
+        auto frames = Feed(ClientFrameType::kExecute, Execute("", 0));
+        (void)Feed(ClientFrameType::kClose, Handle(2, ""));
+        (void)Feed(ClientFrameType::kClose, Handle(1, ""));
+        return frames;
+    };
+    struct Item {
+        const char* what;
+        std::function<void()> leave;
+        std::function<bool()> at_default;
+    };
+    Session& engine = session_->session();
+    const Item items[] = {
+        {"the isolation level", [&] { (void)exec("SET ISOLATION LEVEL repeatable read"); },
+         [&] { return engine.isolation() == txn::IsolationLevel::kReadCommitted; }},
+        {"the namespace", [&] { (void)exec("USE app"); },
+         [&] { return engine.default_namespace() == catalog::kNamespacePublic; }},
+        {"the durability rung", [&] { (void)exec("SET DURABILITY strict"); },
+         [&] { return !engine.durability().has_value(); }},
+        {"the priority level", [&] { (void)exec("SET PRIORITY analytic"); },
+         [&] { return engine.priority() == Priority::kNormal; }},
+        {"a named statement",
+         [&] { (void)Feed(ClientFrameType::kParse, Parse("kept", "SELECT id FROM t")); },
+         [&] { return session_->statement_count() == 0; }},
+        {"a named portal",
+         [&] {
+             (void)Feed(ClientFrameType::kParse, Parse("", "SELECT id FROM t"));
+             (void)Feed(ClientFrameType::kBind, Bind("held", ""));
+         },
+         [&] { return session_->portal_count() == 0; }},
+    };
+    for (const Item& item : items) {
+        item.leave();
+        EXPECT_FALSE(item.at_default()) << item.what << " was not left behind";
+        EXPECT_FALSE(SaysDefault(sync())) << item.what << " left behind, and S_READY says clean";
+
+        const auto reset = exec("RESET SESSION");
+        ASSERT_EQ(Only(reset, ServerFrameType::kComplete).size(), 1u) << item.what;
+        EXPECT_TRUE(item.at_default()) << item.what << " survived RESET SESSION";
+        EXPECT_TRUE(SaysDefault(sync())) << item.what;
+    }
+    // **The empty name is a name**: a suspended unnamed portal would hand
+    // its rows to the next borrower's `C_CONTINUE ""`, and the unnamed
+    // statement its text to a `C_BIND`. Neither reads as clean until it is
+    // closed.
+    (void)Feed(ClientFrameType::kParse, Parse("", "SELECT id FROM t"));
+    (void)Feed(ClientFrameType::kBind, Bind("", ""));
+    const auto first = Feed(ClientFrameType::kExecute, Execute("", 1));
+    ASSERT_EQ(Only(first, ServerFrameType::kPortalSuspended).size(), 1u);
+    EXPECT_FALSE(SaysDefault(sync())) << "a suspended unnamed portal, and S_READY says clean";
+    (void)Feed(ClientFrameType::kClose, Handle(2, ""));
+    EXPECT_FALSE(SaysDefault(sync())) << "the unnamed statement, and S_READY says clean";
+    (void)Feed(ClientFrameType::kClose, Handle(1, ""));
+    EXPECT_TRUE(SaysDefault(sync()));
+}
+
+TEST_F(KwpSessionTest, ResetSessionReturnsTheIsolationLevelTheSessionBeganAt) {
+    // The server's `isolation`, as the connection was stamped with it - not
+    // the engine's compiled-in level. **The mutation**: reset to READ
+    // COMMITTED, and a server configured for REPEATABLE READ hands a
+    // borrower a level its operator did not set.
+    Session started_repeatable(txn::IsolationLevel::kRepeatableRead);
+    EXPECT_TRUE(started_repeatable.AtDefaults());
+    ASSERT_EQ(dispatcher_->Dispatch("SET ISOLATION LEVEL read committed", &started_repeatable)
+                  .response.rfind("ERR", 0),
+              std::string::npos);
+    EXPECT_FALSE(started_repeatable.AtDefaults());
+    EXPECT_EQ(dispatcher_->Dispatch("RESET SESSION", &started_repeatable).response,
+              "RESET SESSION");
+    EXPECT_EQ(started_repeatable.isolation(), txn::IsolationLevel::kRepeatableRead);
+    EXPECT_TRUE(started_repeatable.AtDefaults());
+}
+
+TEST_F(KwpSessionTest, ResetSessionGivesItsBatchSeatBack) {
+    // `SET PRIORITY analytic` seats the session in the instance's batch
+    // count, which is what splits the cores (`priority.hpp`); a reset that
+    // left the seat would keep the partition up for a session that is
+    // `normal` again.
+    Session& engine = session_->session();
+    const std::uint32_t before = sched::CoreLoad::BatchSessions().load();
+    ASSERT_EQ(Run("SET PRIORITY analytic").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before + 1);
+    ASSERT_EQ(Run("RESET SESSION"), "RESET SESSION");
+    EXPECT_EQ(sched::CoreLoad::BatchSessions().load(), before);
+    EXPECT_EQ(engine.priority(), Priority::kNormal);
+}
+
+TEST_F(KwpSessionTest, ResetSessionInsideAnyKindOfTransactionLeavesItAsItWas) {
+    // The three kinds, each answered by its own gate and none changed: an
+    // open `READ ONLY` one by the reset's own refusal (not the read-only
+    // gate's, which would tell the client to go and write), and a failed
+    // one by the failed-transaction gate.
+    Session& engine = session_->session();
+    ASSERT_EQ(Run("SET DURABILITY strict").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run("BEGIN READ ONLY").rfind("ERR", 0), std::string::npos);
+    const std::string in_read_only = Run("RESET SESSION");
+    EXPECT_NE(in_read_only.find("inside a transaction"), std::string::npos) << in_read_only;
+    EXPECT_TRUE(engine.in_read_only_txn()) << "the refusal ended the transaction";
+    EXPECT_FALSE(engine.failed());
+    EXPECT_TRUE(engine.durability().has_value());
+    ASSERT_EQ(Run("COMMIT").rfind("ERR", 0), std::string::npos);
+
+    ASSERT_EQ(Run("BEGIN").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(Run("INSERT INTO t VALUES (777, 1, 'a')").rfind("ERR", 0), std::string::npos);
+    // The same key again: a write that fails inside a transaction fails it.
+    ASSERT_EQ(Run("INSERT INTO t VALUES (777, 1, 'a')").rfind("ERR", 0), 0u);
+    ASSERT_TRUE(engine.failed());
+    const std::string in_failed = Run("RESET SESSION");
+    EXPECT_EQ(in_failed.rfind("ERR", 0), 0u) << in_failed;
+    EXPECT_TRUE(engine.failed());
+    EXPECT_TRUE(engine.durability().has_value());
+    ASSERT_EQ(Run("ROLLBACK").rfind("ERR", 0), std::string::npos);
+
+    EXPECT_EQ(Run("RESET SESSION"), "RESET SESSION");
+    EXPECT_FALSE(engine.durability().has_value());
+}
+
+TEST_F(KwpSessionTest, ResetSessionIsRefusedInsideATransactionAndChangesNothing) {
+    (void)Feed(ClientFrameType::kHello, HelloOffering(kOffersSessionDefaults));
+    Session& engine = session_->session();
+    ASSERT_EQ(Run("SET PRIORITY analytic").rfind("ERR", 0), std::string::npos);
+    (void)Feed(ClientFrameType::kParse, Parse("kept", "SELECT id FROM t"));
+    ASSERT_EQ(Feed(ClientFrameType::kTxnBegin, U8Payload(0)).size(), 1u);
+
+    const auto refused = RunStatement("RESET SESSION");
+    ASSERT_EQ(Only(refused, ServerFrameType::kError).size(), 1u);
+    auto err = wire::DecodeError(refused[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_NE(err.value().message.find("inside a transaction"), std::string::npos)
+        << err.value().message;
+    EXPECT_EQ(engine.priority(), Priority::kAnalytic) << "a refused reset changed a setting";
+    EXPECT_EQ(session_->statement_count(), 2u) << "a refused reset dropped a statement";
+    // An open transaction is not a clean session, whatever its settings -
+    // and it is still open: the refusal did not fail it.
+    const auto ready = Feed(ClientFrameType::kSync, {});
+    EXPECT_FALSE(SaysDefault(ready));
+    ASSERT_EQ(ready.back().payload.size(), 1u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(ready.back().payload[0]),
+              static_cast<std::uint8_t>(Session::State::kInTxn));
+
+    // Out of the transaction it is taken.
+    (void)Feed(ClientFrameType::kTxnAbort, {});
+    ASSERT_EQ(Only(RunStatement("RESET SESSION"), ServerFrameType::kComplete).size(), 1u);
+    EXPECT_EQ(engine.priority(), Priority::kNormal);
+    EXPECT_EQ(session_->statement_count(), 0u);
+    EXPECT_TRUE(SaysDefault(Feed(ClientFrameType::kSync, {})));
+}
+
+TEST_F(KwpSessionTest, ResetTakesSessionAndNothingElse) {
+    // One spelling, so nothing is read as a narrower or a wider reset than
+    // was written; each refusal carries the byte of what it refuses.
+    Session& engine = session_->session();
+    ASSERT_EQ(Run("SET DURABILITY strict").rfind("ERR", 0), std::string::npos);
+    const std::pair<const char*, const char*> refused[] = {
+        {"RESET", "(byte 5)"},
+        {"RESET ALL", "(byte 6)"},
+        {"RESET durability", "(byte 6)"},
+        {"RESET SESSION now", "(byte 14)"},
+        {"RESET ;", "(byte 6)"},
+    };
+    for (const auto& [sql, at] : refused) {
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << ": " << reply;
+        EXPECT_NE(reply.find(at), std::string::npos) << sql << ": " << reply;
+        EXPECT_TRUE(engine.durability().has_value()) << sql << " reset something";
+    }
+    for (const char* sql : {"RESET SESSION", "reset session;", "Reset Session ;"}) {
+        ASSERT_EQ(Run("SET DURABILITY strict").rfind("ERR", 0), std::string::npos);
+        EXPECT_EQ(Run(sql), "RESET SESSION") << sql;
+        EXPECT_FALSE(engine.durability().has_value()) << sql;
+    }
+    // A session's own state: the lowest role may reset it.
+    engine.set_role(Role::kReadOnly);
+    EXPECT_EQ(Run("RESET SESSION"), "RESET SESSION");
 }
 
 }  // namespace

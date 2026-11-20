@@ -67,7 +67,8 @@ std::uint32_t BatchRows(const wire::DecodedFrame& frame) {
 
 class StreamingReplyTest : public ::testing::Test {
 protected:
-    void Open(std::uint16_t port, int rows = kRows) {
+    void Open(std::uint16_t port, int rows = kRows) { OpenWith(port, rows, {}); }
+    void OpenWith(std::uint16_t port, int rows, const TcpServer::ClientSetup& setup) {
         TwoCoreRig::Options options;
         options.max_idle_block_ms = 20;
         auto opened = TwoCoreRig::Open(options);
@@ -86,7 +87,7 @@ protected:
             const std::string reply = d().Dispatch(sql).response;
             ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
         }
-        ASSERT_TRUE(rig_->core(0).ListenAndAttach(port).ok());
+        ASSERT_TRUE(rig_->core(0).ListenAndAttach(port, setup).ok());
         rig_->Start();
     }
     void TearDown() override {
@@ -293,6 +294,118 @@ TEST_F(StreamingReplyTest, AClientThatReadsAgainGetsEveryRow) {
     const Reply reply = ReadToReady(fd, decoder);
     EXPECT_FALSE(reply.error.has_value());
     EXPECT_EQ(reply.rows, static_cast<std::uint64_t>(kMany));
+}
+
+// ---- DJ-S4: the reply's bound ---------------------------------------------
+
+TEST_F(StreamingReplyTest, AWalkParkedOnAClientThatDoesNotReadIsCancelledAtTheCeiling) {
+    // DJ-Q10 (a): `txn_lifetime_ceiling_ms`'s value bounds a park, whether
+    // or not a transaction is open - here none is. **The mutation**: drop
+    // the clock test from `resume_when`, and the walk stays parked holding
+    // its borrow, so the DROP below is refused at the fault net.
+    constexpr std::uint16_t kPort = 25618;
+    constexpr int kMany = 6400;
+    TcpServer::ClientSetup setup;
+    setup.txn_lifetime_ceiling_ns = 1'000'000'000ULL;
+    OpenWith(kPort, kMany, setup);
+    std::atomic<std::uint64_t> emitted{0};
+    d().SetSelectRowEmittedForTest([&](std::uint64_t n) {
+        emitted.store(n);
+        return Status::OK();
+    });
+    wire::FrameDecoder decoder;
+    const int fd = Client(kPort, decoder, /*rcvbuf=*/16 * 1024);
+    Run(fd, "SELECT id, name FROM t");
+    ASSERT_TRUE(Within(5000ms, [&] { return emitted.load() > 0; }));
+    std::this_thread::sleep_for(300ms);
+    ASSERT_LT(emitted.load(), static_cast<std::uint64_t>(kMany)) << "the walk did not park";
+
+    // Past the ceiling the walk lets go of the relation while its client
+    // still has not read: another session's DROP is not held by it.
+    std::this_thread::sleep_for(1500ms);
+    wire::FrameDecoder other_decoder;
+    const int other = Client(kPort, other_decoder);
+    Run(other, "DROP TABLE t");
+    const Reply dropped = ReadToReady(other, other_decoder);
+    EXPECT_FALSE(dropped.error.has_value()) << "the parked walk still holds the relation";
+
+    // And the reader, reading at last, gets rows and then the cancel: no
+    // result (CE-Q3 (a)).
+    const Reply reply = ReadToReady(fd, decoder);
+    ASSERT_TRUE(reply.error.has_value());
+    auto err = wire::DecodeError(reply.error->payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kCancelled);
+    EXPECT_LT(reply.rows, static_cast<std::uint64_t>(kMany));
+}
+
+TEST_F(StreamingReplyTest, AClientThatReadsSlowlyIsNotCancelledAtTheCeiling) {
+    // The park's clock restarts at every byte the client takes - one the
+    // outbox sends, or one the kernel's queue drains - so only a client that
+    // takes none for the ceiling is cancelled. **The mutation**: drop the
+    // `SIOCOUTQ` reset, and this reader - a receive buffer every 300 ms,
+    // never freeing enough of the server's for the socket to turn writable
+    // - is cancelled at 1 s.
+    constexpr std::uint16_t kPort = 25620;
+    constexpr int kMany = 6400;
+    TcpServer::ClientSetup setup;
+    setup.txn_lifetime_ceiling_ns = 1'000'000'000ULL;
+    OpenWith(kPort, kMany, setup);
+    wire::FrameDecoder decoder;
+    const int fd = Client(kPort, decoder, /*rcvbuf=*/16 * 1024);
+    Run(fd, "SELECT id, name FROM t");
+    std::uint64_t taken = 0;
+    const auto until = std::chrono::steady_clock::now() + 3000ms;
+    while (std::chrono::steady_clock::now() < until) {
+        // A whole receive buffer a tick: a receiver reopens its window only
+        // once half its buffer is free (silly-window avoidance), so a
+        // smaller read moves nothing on the wire.
+        std::byte buf[32 * 1024];
+        const ssize_t n = ::read(fd, buf, sizeof(buf));
+        ASSERT_GT(n, 0);
+        taken += static_cast<std::uint64_t>(n);
+        ASSERT_TRUE(decoder.Feed(std::span<const std::byte>(buf, static_cast<std::size_t>(n))).ok());
+        std::this_thread::sleep_for(300ms);
+    }
+    ASSERT_LT(taken, 12'000'000u) << "the reader drained the reply; it did not read slowly";
+    const Reply reply = ReadToReady(fd, decoder);
+    EXPECT_FALSE(reply.error.has_value())
+        << "a slow reader was cancelled as one that does not read: "
+        << (reply.error.has_value() && wire::DecodeError(reply.error->payload).ok()
+                ? wire::DecodeError(reply.error->payload).value().message
+                : std::string());
+}
+
+TEST_F(StreamingReplyTest, ACappedPortalPastItsHeldBoundIsRefusedByName) {
+    // DJ-Q11 (a): a capped portal runs its statement whole into memory, and
+    // past `kMaxPortalHeldBytes` the statement is refused rather than held.
+    // ~2 KB a row: 10,000 rows are about 19 MB, a sixth past the bound.
+    constexpr std::uint16_t kPort = 25619;
+    constexpr int kMany = 10000;
+    Open(kPort, kMany);
+    wire::FrameDecoder decoder;
+    const int fd = Client(kPort, decoder);
+    Run(fd, "SELECT id, name FROM t", /*max_rows=*/100);
+    const Reply refused = ReadToReady(fd, decoder);
+    ASSERT_TRUE(refused.error.has_value()) << "a capped portal held past its bound";
+    EXPECT_EQ(refused.rows, 0u) << "a capped portal streams nothing before its end";
+    auto err = wire::DecodeError(refused.error->payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kResourceExhausted);
+    EXPECT_EQ(err.value().detail_code(),
+              static_cast<std::uint16_t>(wire::ResourceDetail::kPortalHeldBytes));
+    EXPECT_NE(err.value().message.find("kMaxPortalHeldBytes"), std::string::npos)
+        << err.value().message;
+    EXPECT_EQ(err.value().severity, wire::Severity::kError) << "the connection stands";
+
+    // Under the bound, and uncapped, the same relation is answered whole.
+    Run(fd, "SELECT id, name FROM t WHERE id <= 1000", /*max_rows=*/100);
+    const Reply capped = ReadToReady(fd, decoder);
+    EXPECT_FALSE(capped.error.has_value());
+    Run(fd, "SELECT id, name FROM t");
+    const Reply whole = ReadToReady(fd, decoder);
+    EXPECT_FALSE(whole.error.has_value());
+    EXPECT_EQ(whole.rows, static_cast<std::uint64_t>(kMany));
 }
 
 TEST_F(StreamingReplyTest, AWalkThatSealsNothingDoesNotParkOnHeldFrames) {

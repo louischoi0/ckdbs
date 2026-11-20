@@ -205,6 +205,19 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **Remedies:** Raise `buffer_pool_frames`.
 - **Sites:** None yet: registered, never booked.
 
+### res.txn_slot
+
+- **Class:** Resource
+- **Kind:** timed
+- **In DB time:** yes
+- **p1:** core — the core whose in-flight slots were all held.
+- **p2:** (unused)
+- **p3:** (unused)
+- **Meaning:** A `BEGIN`, or an autocommit write, waits for one of its core's 1,024 in-flight transaction slots (`kInFlightSlotsPerCore`): the core already publishes that many open transactions. It is admitted when one of them ends and refused `RESOURCE_EXHAUSTED` at the lock family's fault net (DJ-S3, `txn.md` §4.1).
+- **Usual causes:** More than 1,024 sessions of one core inside a transaction at once - transactions held open across client think time, or a burst of sessions the kernel placed on one core.
+- **Remedies:** Shorter transactions; fewer sessions inside one at a time (a client pool's size); more cores.
+- **Sites:** The dispatcher's wait before it re-runs a statement `Begin` refused for a slot.
+
 ### net.send_backpressure
 
 - **Class:** Network

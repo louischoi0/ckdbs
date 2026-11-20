@@ -1,0 +1,743 @@
+{
+ "args": {
+  "a": "/home/louis/dj-work/bin/kds_server.A",
+  "b": "/home/louis/dj-work/bin/kds_server.B",
+  "workdir": "/home/louis/dj-work/close-lead/run",
+  "out": "/home/louis/dj-work/close-lead/close.json",
+  "lifetimes": 4,
+  "seconds": 3.0,
+  "port": 15697,
+  "status": "/home/louis/dj-work/close-lead/status.txt",
+  "no_hold": false,
+  "lead": true
+ },
+ "sha256": {
+  "A": "3df8801d61b6cbd8f9d9c6b16693c88b6de429069865bc8f527f2f5350587cbb",
+  "B": "785e57e3d0e6782443fc37e5bfa4b4c957bb053bf5400932174b317f2a8c04aa",
+  "Bk": "785e57e3d0e6782443fc37e5bfa4b4c957bb053bf5400932174b317f2a8c04aa",
+  "A2": "3df8801d61b6cbd8f9d9c6b16693c88b6de429069865bc8f527f2f5350587cbb"
+ },
+ "cells": [
+  {
+   "stmts": 34762,
+   "server_cpu_us_per_stmt": 32.79,
+   "lat": {
+    "p25_us": 70.6,
+    "p50_us": 72.5,
+    "p75_us": 80.7,
+    "p95_us": 132.5,
+    "p99_us": 158.8,
+    "p0_us": 65.9,
+    "n": 34762
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 0,
+   "cell": "point",
+   "load": "1.11 4.82 10.99"
+  },
+  {
+   "stmts": 2267,
+   "server_cpu_us_per_stmt": 70.58,
+   "lat": {
+    "p25_us": 403.5,
+    "p50_us": 460.5,
+    "p75_us": 540.0,
+    "p95_us": 711.7,
+    "p99_us": 1444.1,
+    "p0_us": 301.8,
+    "n": 2267
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 0,
+   "cell": "insert",
+   "load": "1.26 4.79 10.95"
+  },
+  {
+   "connections": 17710,
+   "server_cpu_us_per_connection": 86.96,
+   "attempts": 1,
+   "arm": "A",
+   "life": 0,
+   "cell": "connect",
+   "load": "1.16 4.71 10.89"
+  },
+  {
+   "stmts": 31726,
+   "server_cpu_us_per_stmt": 36.56,
+   "lat": {
+    "p25_us": 78.7,
+    "p50_us": 82.3,
+    "p75_us": 86.8,
+    "p95_us": 148.5,
+    "p99_us": 160.9,
+    "p0_us": 62.1,
+    "n": 31726
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 0,
+   "cell": "point",
+   "load": "1.21 4.60 10.79"
+  },
+  {
+   "stmts": 2464,
+   "server_cpu_us_per_stmt": 73.05,
+   "lat": {
+    "p25_us": 418.7,
+    "p50_us": 476.7,
+    "p75_us": 558.0,
+    "p95_us": 728.1,
+    "p99_us": 2209.6,
+    "p0_us": 273.7,
+    "n": 2464
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 0,
+   "cell": "insert",
+   "load": "1.36 4.58 10.75"
+  },
+  {
+   "connections": 17540,
+   "server_cpu_us_per_connection": 87.8,
+   "attempts": 1,
+   "arm": "B",
+   "life": 0,
+   "cell": "connect",
+   "load": "1.49 4.55 10.70"
+  },
+  {
+   "stmts": 35620,
+   "server_cpu_us_per_stmt": 32.0,
+   "lat": {
+    "p25_us": 71.2,
+    "p50_us": 72.2,
+    "p75_us": 74.2,
+    "p95_us": 89.7,
+    "p99_us": 145.2,
+    "p0_us": 65.0,
+    "n": 35620
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 0,
+   "cell": "point",
+   "load": "1.53 4.51 10.66"
+  },
+  {
+   "stmts": 5882,
+   "server_cpu_us_per_stmt": 61.2,
+   "lat": {
+    "p25_us": 396.0,
+    "p50_us": 437.8,
+    "p75_us": 494.6,
+    "p95_us": 613.6,
+    "p99_us": 783.7,
+    "p0_us": 292.9,
+    "n": 5882
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 0,
+   "cell": "insert",
+   "load": "1.49 4.45 10.61"
+  },
+  {
+   "connections": 11803,
+   "server_cpu_us_per_connection": 106.75,
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 0,
+   "cell": "connect",
+   "load": "1.45 4.39 10.55"
+  },
+  {
+   "stmts": 33247,
+   "server_cpu_us_per_stmt": 33.99,
+   "lat": {
+    "p25_us": 72.4,
+    "p50_us": 80.1,
+    "p75_us": 85.8,
+    "p95_us": 145.8,
+    "p99_us": 168.9,
+    "p0_us": 65.8,
+    "n": 33247
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 0,
+   "cell": "point",
+   "load": "1.98 4.41 10.49"
+  },
+  {
+   "stmts": 4821,
+   "server_cpu_us_per_stmt": 68.45,
+   "lat": {
+    "p25_us": 392.6,
+    "p50_us": 441.4,
+    "p75_us": 505.6,
+    "p95_us": 628.5,
+    "p99_us": 757.7,
+    "p0_us": 288.9,
+    "n": 4821
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 0,
+   "cell": "insert",
+   "load": "1.90 4.35 10.44"
+  },
+  {
+   "connections": 15289,
+   "server_cpu_us_per_connection": 93.53,
+   "attempts": 1,
+   "arm": "A2",
+   "life": 0,
+   "cell": "connect",
+   "load": "1.99 4.33 10.40"
+  },
+  {
+   "stmts": 37099,
+   "server_cpu_us_per_stmt": 32.08,
+   "lat": {
+    "p25_us": 70.4,
+    "p50_us": 71.6,
+    "p75_us": 75.8,
+    "p95_us": 126.5,
+    "p99_us": 150.3,
+    "p0_us": 62.8,
+    "n": 37099
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 1,
+   "cell": "point",
+   "load": "1.99 4.25 10.31"
+  },
+  {
+   "stmts": 4325,
+   "server_cpu_us_per_stmt": 62.43,
+   "lat": {
+    "p25_us": 404.9,
+    "p50_us": 454.7,
+    "p75_us": 522.8,
+    "p95_us": 674.3,
+    "p99_us": 896.9,
+    "p0_us": 300.2,
+    "n": 4325
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 1,
+   "cell": "insert",
+   "load": "2.07 4.23 10.27"
+  },
+  {
+   "connections": 11083,
+   "server_cpu_us_per_connection": 111.88,
+   "attempts": 1,
+   "arm": "A",
+   "life": 1,
+   "cell": "connect",
+   "load": "1.91 4.16 10.22"
+  },
+  {
+   "stmts": 29940,
+   "server_cpu_us_per_stmt": 36.74,
+   "lat": {
+    "p25_us": 80.5,
+    "p50_us": 83.8,
+    "p75_us": 102.0,
+    "p95_us": 148.9,
+    "p99_us": 172.9,
+    "p0_us": 61.3,
+    "n": 29940
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 1,
+   "cell": "point",
+   "load": "2.16 4.14 10.14"
+  },
+  {
+   "stmts": 5591,
+   "server_cpu_us_per_stmt": 66.18,
+   "lat": {
+    "p25_us": 409.9,
+    "p50_us": 459.5,
+    "p75_us": 524.5,
+    "p95_us": 656.4,
+    "p99_us": 811.1,
+    "p0_us": 293.5,
+    "n": 5591
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 1,
+   "cell": "insert",
+   "load": "2.14 4.10 10.10"
+  },
+  {
+   "connections": 17196,
+   "server_cpu_us_per_connection": 88.39,
+   "attempts": 1,
+   "arm": "A2",
+   "life": 1,
+   "cell": "connect",
+   "load": "2.21 4.09 10.06"
+  },
+  {
+   "stmts": 38716,
+   "server_cpu_us_per_stmt": 31.25,
+   "lat": {
+    "p25_us": 69.9,
+    "p50_us": 70.9,
+    "p75_us": 73.8,
+    "p95_us": 87.8,
+    "p99_us": 151.2,
+    "p0_us": 65.5,
+    "n": 38716
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 1,
+   "cell": "point",
+   "load": "2.19 4.05 10.02"
+  },
+  {
+   "stmts": 4508,
+   "server_cpu_us_per_stmt": 66.55,
+   "lat": {
+    "p25_us": 393.7,
+    "p50_us": 444.1,
+    "p75_us": 508.1,
+    "p95_us": 645.5,
+    "p99_us": 861.1,
+    "p0_us": 292.3,
+    "n": 4508
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 1,
+   "cell": "insert",
+   "load": "2.10 4.00 9.97 "
+  },
+  {
+   "connections": 12020,
+   "server_cpu_us_per_connection": 104.83,
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 1,
+   "cell": "connect",
+   "load": "2.01 3.95 9.92 "
+  },
+  {
+   "stmts": 29924,
+   "server_cpu_us_per_stmt": 35.42,
+   "lat": {
+    "p25_us": 72.7,
+    "p50_us": 82.0,
+    "p75_us": 126.4,
+    "p95_us": 141.9,
+    "p99_us": 164.3,
+    "p0_us": 57.2,
+    "n": 29924
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 1,
+   "cell": "point",
+   "load": "2.08 3.90 9.84 "
+  },
+  {
+   "stmts": 6609,
+   "server_cpu_us_per_stmt": 60.52,
+   "lat": {
+    "p25_us": 389.1,
+    "p50_us": 430.4,
+    "p75_us": 486.0,
+    "p95_us": 602.2,
+    "p99_us": 748.6,
+    "p0_us": 292.4,
+    "n": 6609
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 1,
+   "cell": "insert",
+   "load": "2.00 3.85 9.79 "
+  },
+  {
+   "connections": 13903,
+   "server_cpu_us_per_connection": 97.1,
+   "attempts": 1,
+   "arm": "B",
+   "life": 1,
+   "cell": "connect",
+   "load": "2.16 3.86 9.76 "
+  },
+  {
+   "stmts": 36245,
+   "server_cpu_us_per_stmt": 32.83,
+   "lat": {
+    "p25_us": 70.1,
+    "p50_us": 71.7,
+    "p75_us": 81.4,
+    "p95_us": 139.2,
+    "p99_us": 160.0,
+    "p0_us": 60.6,
+    "n": 36245
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 2,
+   "cell": "point",
+   "load": "2.05 3.78 9.67 "
+  },
+  {
+   "stmts": 4504,
+   "server_cpu_us_per_stmt": 71.05,
+   "lat": {
+    "p25_us": 396.7,
+    "p50_us": 449.6,
+    "p75_us": 518.7,
+    "p95_us": 638.1,
+    "p99_us": 816.3,
+    "p0_us": 293.6,
+    "n": 4504
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 2,
+   "cell": "insert",
+   "load": "1.97 3.73 9.63 "
+  },
+  {
+   "connections": 13350,
+   "server_cpu_us_per_connection": 101.12,
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 2,
+   "cell": "connect",
+   "load": "1.97 3.70 9.59 "
+  },
+  {
+   "stmts": 32896,
+   "server_cpu_us_per_stmt": 33.44,
+   "lat": {
+    "p25_us": 70.9,
+    "p50_us": 78.2,
+    "p75_us": 89.6,
+    "p95_us": 134.4,
+    "p99_us": 149.3,
+    "p0_us": 65.2,
+    "n": 32896
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 2,
+   "cell": "point",
+   "load": "2.21 3.70 9.52 "
+  },
+  {
+   "stmts": 6403,
+   "server_cpu_us_per_stmt": 59.35,
+   "lat": {
+    "p25_us": 401.1,
+    "p50_us": 444.5,
+    "p75_us": 501.9,
+    "p95_us": 634.6,
+    "p99_us": 791.4,
+    "p0_us": 286.1,
+    "n": 6403
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 2,
+   "cell": "insert",
+   "load": "2.19 3.67 9.48 "
+  },
+  {
+   "connections": 13006,
+   "server_cpu_us_per_connection": 99.95,
+   "attempts": 1,
+   "arm": "A2",
+   "life": 2,
+   "cell": "connect",
+   "load": "2.18 3.64 9.44 "
+  },
+  {
+   "stmts": 34834,
+   "server_cpu_us_per_stmt": 33.59,
+   "lat": {
+    "p25_us": 70.5,
+    "p50_us": 78.0,
+    "p75_us": 83.7,
+    "p95_us": 143.6,
+    "p99_us": 166.5,
+    "p0_us": 65.8,
+    "n": 34834
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 2,
+   "cell": "point",
+   "load": "2.08 3.60 9.39 "
+  },
+  {
+   "stmts": 4324,
+   "server_cpu_us_per_stmt": 69.38,
+   "lat": {
+    "p25_us": 406.7,
+    "p50_us": 461.9,
+    "p75_us": 532.6,
+    "p95_us": 661.9,
+    "p99_us": 875.4,
+    "p0_us": 285.0,
+    "n": 4324
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 2,
+   "cell": "insert",
+   "load": "2.00 3.55 9.35 "
+  },
+  {
+   "connections": 15047,
+   "server_cpu_us_per_connection": 95.04,
+   "attempts": 1,
+   "arm": "A",
+   "life": 2,
+   "cell": "connect",
+   "load": "2.08 3.54 9.31 "
+  },
+  {
+   "stmts": 35577,
+   "server_cpu_us_per_stmt": 32.61,
+   "lat": {
+    "p25_us": 70.0,
+    "p50_us": 71.9,
+    "p75_us": 80.6,
+    "p95_us": 132.1,
+    "p99_us": 148.7,
+    "p0_us": 63.5,
+    "n": 35577
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 2,
+   "cell": "point",
+   "load": "1.98 3.47 9.23 "
+  },
+  {
+   "stmts": 5943,
+   "server_cpu_us_per_stmt": 60.58,
+   "lat": {
+    "p25_us": 390.1,
+    "p50_us": 431.7,
+    "p75_us": 489.8,
+    "p95_us": 611.6,
+    "p99_us": 792.0,
+    "p0_us": 294.0,
+    "n": 5943
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 2,
+   "cell": "insert",
+   "load": "2.07 3.47 9.20 "
+  },
+  {
+   "connections": 12409,
+   "server_cpu_us_per_connection": 103.15,
+   "attempts": 1,
+   "arm": "B",
+   "life": 2,
+   "cell": "connect",
+   "load": "2.14 3.46 9.16 "
+  },
+  {
+   "stmts": 36165,
+   "server_cpu_us_per_stmt": 32.9,
+   "lat": {
+    "p25_us": 70.1,
+    "p50_us": 71.8,
+    "p75_us": 81.5,
+    "p95_us": 139.9,
+    "p99_us": 162.2,
+    "p0_us": 64.6,
+    "n": 36165
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 3,
+   "cell": "point",
+   "load": "2.19 3.43 9.09 "
+  },
+  {
+   "stmts": 4450,
+   "server_cpu_us_per_stmt": 69.66,
+   "lat": {
+    "p25_us": 400.8,
+    "p50_us": 452.9,
+    "p75_us": 521.0,
+    "p95_us": 652.0,
+    "p99_us": 837.8,
+    "p0_us": 291.1,
+    "n": 4450
+   },
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 3,
+   "cell": "insert",
+   "load": "2.10 3.39 9.05 "
+  },
+  {
+   "connections": 13205,
+   "server_cpu_us_per_connection": 100.72,
+   "attempts": 1,
+   "arm": "Bk",
+   "life": 3,
+   "cell": "connect",
+   "load": "2.01 3.35 9.00 "
+  },
+  {
+   "stmts": 31859,
+   "server_cpu_us_per_stmt": 33.9,
+   "lat": {
+    "p25_us": 70.9,
+    "p50_us": 79.3,
+    "p75_us": 105.6,
+    "p95_us": 134.7,
+    "p99_us": 155.4,
+    "p0_us": 62.5,
+    "n": 31859
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 3,
+   "cell": "point",
+   "load": "2.09 3.32 8.93 "
+  },
+  {
+   "stmts": 6594,
+   "server_cpu_us_per_stmt": 59.14,
+   "lat": {
+    "p25_us": 390.1,
+    "p50_us": 432.9,
+    "p75_us": 486.7,
+    "p95_us": 608.0,
+    "p99_us": 756.1,
+    "p0_us": 284.4,
+    "n": 6594
+   },
+   "attempts": 1,
+   "arm": "B",
+   "life": 3,
+   "cell": "insert",
+   "load": "2.08 3.30 8.90 "
+  },
+  {
+   "connections": 14334,
+   "server_cpu_us_per_connection": 95.58,
+   "attempts": 1,
+   "arm": "B",
+   "life": 3,
+   "cell": "connect",
+   "load": "1.99 3.26 8.85 "
+  },
+  {
+   "stmts": 36206,
+   "server_cpu_us_per_stmt": 33.14,
+   "lat": {
+    "p25_us": 70.0,
+    "p50_us": 71.7,
+    "p75_us": 81.4,
+    "p95_us": 138.8,
+    "p99_us": 160.8,
+    "p0_us": 63.5,
+    "n": 36206
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 3,
+   "cell": "point",
+   "load": "1.91 3.22 8.81 "
+  },
+  {
+   "stmts": 4240,
+   "server_cpu_us_per_stmt": 70.75,
+   "lat": {
+    "p25_us": 409.4,
+    "p50_us": 468.6,
+    "p75_us": 542.2,
+    "p95_us": 692.4,
+    "p99_us": 972.7,
+    "p0_us": 298.9,
+    "n": 4240
+   },
+   "attempts": 1,
+   "arm": "A",
+   "life": 3,
+   "cell": "insert",
+   "load": "1.84 3.18 8.77 "
+  },
+  {
+   "connections": 13643,
+   "server_cpu_us_per_connection": 99.68,
+   "attempts": 1,
+   "arm": "A",
+   "life": 3,
+   "cell": "connect",
+   "load": "1.77 3.15 8.73 "
+  },
+  {
+   "stmts": 34079,
+   "server_cpu_us_per_stmt": 32.86,
+   "lat": {
+    "p25_us": 70.0,
+    "p50_us": 77.4,
+    "p75_us": 82.9,
+    "p95_us": 132.1,
+    "p99_us": 147.7,
+    "p0_us": 62.7,
+    "n": 34079
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 3,
+   "cell": "point",
+   "load": "1.57 3.06 8.64 "
+  },
+  {
+   "stmts": 3875,
+   "server_cpu_us_per_stmt": 72.26,
+   "lat": {
+    "p25_us": 399.7,
+    "p50_us": 460.3,
+    "p75_us": 532.2,
+    "p95_us": 680.6,
+    "p99_us": 870.7,
+    "p0_us": 292.1,
+    "n": 3875
+   },
+   "attempts": 1,
+   "arm": "A2",
+   "life": 3,
+   "cell": "insert",
+   "load": "1.61 3.04 8.60 "
+  },
+  {
+   "connections": 17091,
+   "server_cpu_us_per_connection": 88.35,
+   "attempts": 1,
+   "arm": "A2",
+   "life": 3,
+   "cell": "connect",
+   "load": "1.64 3.02 8.57 "
+  }
+ ],
+ "held_for_quiet_s": 0.4
+}

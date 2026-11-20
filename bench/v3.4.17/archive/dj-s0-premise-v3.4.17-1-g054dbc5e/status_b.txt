@@ -1,0 +1,37 @@
+08:24:42 beside rep 0 idle0
+08:27:29 beside rep 0 idle1000
+08:50:32 beside rep 0 idle10000
+08:54:37 beside rep 0 idle0_again
+08:57:25 beside rep 1 idle0
+08:57:30 beside rep 1 idle1000
+08:57:37 beside rep 1 idle10000
+08:57:43 beside rep 1 idle0_again
+08:57:50 beside rep 2 idle0
+08:57:56 beside rep 2 idle1000
+08:58:02 beside rep 2 idle10000
+08:58:08 beside rep 2 idle0_again
+08:58:16 churn_plain rep 0 S
+08:58:21 churn_plain rep 0 C
+08:58:27 churn_plain rep 0 S2
+08:58:32 churn_plain rep 0 loop alone
+08:58:37 churn_plain rep 1 S
+08:58:42 churn_plain rep 1 C
+08:58:47 churn_plain rep 1 S2
+08:58:52 churn_plain rep 1 loop alone
+08:58:57 churn_plain rep 2 S
+08:59:02 churn_plain rep 2 C
+08:59:08 churn_plain rep 2 S2
+08:59:13 churn_plain rep 2 loop alone
+08:59:24 churn_tls rep 0 S
+08:59:29 churn_tls rep 0 C
+08:59:52 churn_tls rep 0 S2
+09:03:27 churn_tls rep 0 loop alone
+09:03:32 churn_tls rep 1 S
+09:03:48 churn_tls rep 1 C
+09:12:10 churn_tls rep 1 S2
+09:12:15 churn_tls rep 1 loop alone
+09:12:20 churn_tls rep 2 S
+09:12:25 churn_tls rep 2 C
+09:12:31 churn_tls rep 2 S2
+09:12:36 churn_tls rep 2 loop alone
+09:12:41 driver finished

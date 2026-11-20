@@ -52,6 +52,7 @@
 #include "kds/sched/coro.hpp"
 
 
+#include "kds/server/connection_limits.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/sys_views.hpp"
 #include "kds/exec/catalog_view.hpp"
@@ -402,6 +403,15 @@ struct DispatchOutcome {
     };
     std::optional<Examined> examined;
     std::optional<std::uint64_t> compile_ns;
+    // **The statement was refused because its core had no in-flight slot**
+    // (DJ-S3): a `BEGIN`, or an autocommit write's own transaction, met
+    // `Begin`'s cap before it wrote anything. `DispatchAsync` parks on a
+    // slot and runs the statement again.
+    bool slot_wait = false;
+    // `RESET SESSION` ran (DJ-S2): the engine's half of the session is at
+    // its defaults, and the protocol's half - named statements and portals,
+    // which the dispatcher cannot reach - is the caller's to drop.
+    bool session_reset = false;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -838,6 +848,9 @@ private:
     DispatchOutcome HandleCommit(Session& session);
     DispatchOutcome HandleRollback(Session& session);
     DispatchOutcome HandleUse(std::string_view line, std::string_view args, Session& session);
+    // `RESET SESSION` (DJ-S2, `docs/spec/protocol.md` §10): the session's
+    // settings back to what a new connection has, whole or refused.
+    DispatchOutcome HandleReset(std::string_view line, std::string_view args, Session& session);
     DispatchOutcome HandleSetIsolation(std::string_view args, Session& session);
     // `SET DURABILITY {STRICT|GROUP|RELAXED}` (protocol-wp.md P03,
     // docs/spec/protocol.md §9). The session rung of the same chain
@@ -2220,6 +2233,14 @@ public:
     // where a surface handed them, its own otherwise (DA-R6).
     stats::AccessStats& access_stats() noexcept { return *access_stats_; }
 
+    // The instance's connection cap and its counts (DJ-S1,
+    // `connection_limits.hpp`), for `sys.meta`'s `connections` section. Read
+    // only, and null on a dispatcher no instance is behind, which prints no
+    // section: it has no answer, and zeroes would be one.
+    void set_connection_limits(const ConnectionLimits* limits) noexcept {
+        connection_limits_ = limits;
+    }
+
     // Every piece of the optimizer surface at once, as an instance hands it
     // to each core (AT-S8, `OptimizerSurface`).
     void set_optimizer_surface(const OptimizerSurface& surface) noexcept {
@@ -3112,6 +3133,10 @@ private:
     // mutates the controller under it. Null where one thread owns both.
     Latch* cabin_optimizer_view_latch_ = nullptr;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
+    const ConnectionLimits* connection_limits_ = nullptr;  // DJ-S1, set_connection_limits()
+    // DJ-S3: this statement's `Begin` was refused for want of a slot; read
+    // into `DispatchOutcome::slot_wait` by `StageStatement`, cleared there.
+    bool slot_refused_ = false;
     BackupControl* backup_ = nullptr;          // BR-S2, set_backup()
     const WalArchiver* archiver_ = nullptr;    // BR-S4, set_archiver()
 

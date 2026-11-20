@@ -124,6 +124,8 @@ ReadView TransactionManager::MintReadView(std::uint64_t own_trx_id) noexcept {
     return MintCheckView(own_trx_id);
 }
 
+bool TransactionManager::InFlightFull() const noexcept { return visibility_->InFlightFull(core_); }
+
 StatusOr<Transaction*> TransactionManager::Begin(IsolationLevel isolation,
                                                  std::uint64_t now_ns) {
     // **Refused before anything is spent** (AX-R4): a transaction this core

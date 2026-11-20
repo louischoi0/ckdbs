@@ -2314,20 +2314,26 @@ Verified on `cj-wait-events-ash` at the milestone's close
 
 ## Streamed replies (CE)
 
-Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
+Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4); the first
+bullet re-verified on `dj-connections-sessions-cursors` over `56855c48`
+(DJ-S4). Owned by
 `docs/spec/protocol.md` §7; the order is
 `instructions/v3.2.0/workorder-ce-streaming-reply.md`.
 
-- **A parked walk is bounded only by its socket.** A client that stops
-  reading holds the walk's read view (the purge horizon), its borrow (every
-  DDL taking the relation `X` waits, refused `TxnConflict` at the 1 s fault
-  net) and its core's reader-lease slot for as long as its socket lives -
-  about twice `tcp_keepalive_s`, and without bound with keepalive off and a
-  live client. Two consequences a yield of one turn never had:
-  - **the transaction lifetime ceiling does not reach it** (CE-A7):
-    `ExpireOverdueTransactions` skips a connection with a statement running
-    (`tcp_server.cpp`), so an explicit transaction outlives the 60 s
-    ceiling with it;
+- **A parked walk is bounded by the lifetime ceiling's value, 60 s by
+  default** (DJ-S4; it was bounded only by its socket). Until then a client
+  that stops reading holds the walk's read view (the purge horizon), its
+  borrow (every DDL taking the relation `X` waits, refused `TxnConflict` at
+  the 1 s fault net) and its core's reader-lease slot. Its consequences
+  within that bound:
+  - **an explicit transaction outlives the ceiling for as long as its
+    statement runs** (CE-A7): `ExpireOverdueTransactions` skips a
+    connection with a statement running, and the park's own bound counts
+    from the park's start or the client's last taken byte, not the
+    transaction's - so a client that reads slowly holds the walk without
+    bound;
+  - **the cancel says "cancelled by request"**: the client is not told the
+    ceiling ended it; the server log says so;
   - **256 parked walks fill their core's reader-lease slots**
     (`txn::kMaxRegisteredReaders`, `sched.md` §3), and a further walk's
     head on that core is refused `OutOfSpace` until one ends.
@@ -2936,10 +2942,11 @@ the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
   writer of the relation pays the all-partition probe for that long, and a
   `WHERE`-less locking read holds every writer of the relation out until
   it decides.
-- **Nothing bounds the reply** (DC-Q12 (a)): every row is encoded before
-  the statement ends - none leaves while it runs (DC-R4) - and a KWP
-  session holds the sealed batches in memory, as it does for a write's
-  `RETURNING`, which has no bound either. A row-unit read stops at the
+- **Nothing bounds the reply of an uncapped portal** (DC-Q12 (a)): every
+  row is encoded before the statement ends - none leaves while it runs
+  (DC-R4) - and a KWP session holds the sealed batches in memory, as it
+  does for a write's `RETURNING`. A capped portal is bounded at
+  `kMaxPortalHeldBytes` (DJ-S4); an uncapped one is not. A row-unit read stops at the
   lock cap's 65,536 rows; a window's is unbounded.
 - **Rows are claimed that are not returned, and nothing gives one back
   before the decide**: every key of a declared window; a row an earlier
@@ -3084,6 +3091,47 @@ and its call sites, not a census: DL-S0 is the census.
 What already meets the rule: `RefusalStats`, `TxnStats`, `IndexStats`'
 counts, the wait statistics, the contention instrument and the per-core
 load slots - single-writer words a core, read with no latch.
+
+## Connections and sessions (DJ)
+
+Verified on `dj-connections-sessions-cursors` at `69d754ae` (DJ-S1). Owned by
+`docs/spec/protocol.md` §10; the order is
+`instructions/v3.2.0/workorder-dj-connections-sessions-cursors.md`.
+
+- **`max_connections` bounds sessions, not sockets.** A connection that has
+  not finished its handshake holds no seat - so that a `C_CANCEL` is never
+  refused (DJ-R2) and a peer with no credentials cannot fill the cap - and
+  nothing counts or caps such connections. Each holds a descriptor, its
+  accept's state and at most the 4 KiB pre-auth inbox, and is ended only by
+  keepalive once its peer is gone or by `idle_session_timeout_s` where that
+  is set; with the key at `0` a live peer that never says hello stays. A
+  descriptor limit is the host's, not the engine's.
+- **A refused session has paid for its handshake**, TLS and SCRAM included:
+  the refusal is a KWP frame, given where the handshake ends. DJ-S0 priced a
+  plain connect, statement and close at about 68 us of its core.
+- **The idle close tells best effort.** The refusal is written and the
+  socket closed in one pass: a client that writes before it next reads may
+  be answered by a reset, and a connection inside its TLS handshake, or one
+  whose send buffer is full, is closed with no frame. A client is owed the
+  close, not the reason.
+- **The idle timeout is loose by a quarter**: the sweep ticks every eighth
+  of it, so a connection is closed between the timeout and one and a quarter
+  times it after its last statement ended.
+- **A debug text session is closed by the timeout and counted nowhere**:
+  `idle_session_closes` is the default port's.
+- **The three keys are boot keys** (DJ-Q7 (a)): raising the cap on a full
+  server is a restart, which the reserve exists to make an `admin` able to
+  ask for.
+- **No per-role, per-user or per-address limit** stands beside the reserve.
+- **What `connection_limits_test.cpp` and the two `expeditor_test.cpp`
+  cells do not cover**: a seat given back by keepalive's reap (the read
+  error path a hangup takes, which is covered); D19's fallback listener; a
+  session under TLS or real SCRAM (a gate that admits on one line stands in);
+  more than two cores, where "both listeners were asked" is the kernel's
+  spread over eight attempts and not a guarantee; and the clock-jump cells
+  rest on one tick running between two jumps, 100 ms against a 10 ms idle
+  block - a loaded host can fail one, not hang it. No mutation named in a
+  cell's comment was run.
 
 ## Assertion admission
 

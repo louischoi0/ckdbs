@@ -596,7 +596,18 @@ flight"). An id is in its core's table from before `Begin` returns until its
 decide retires it, and nothing else is published. Past the cap `Begin` is
 refused `ResourceExhausted` naming the cap before it issues an id or
 appends: a transaction running unpublished would read as decided on every
-other core. `Commit` retires after its window entry is in, so no instant
+other core. **A statement that refusal reaches waits for a slot instead**
+(DJ-S3): a `BEGIN`, and an autocommit write whose own transaction it was,
+having written nothing, park under `res.txn_slot` until their core has a
+slot - one of its transactions decides - and run again whole; at the lock
+family's fault net (`lock_wait_fault_net_ms`, 1 s) the refusal is answered
+as before, `RESOURCE_EXHAUSTED` with `retryable = 0`. The session is not
+moved to a core with room: the statement is past its transaction's head.
+A declaration's lock-holder transaction and a KWP load chunk are refused
+at once, as before, and so is a structural or `PURGE` re-run that meets
+the cap. A dispatcher with no clock (a socket-free test) answers the
+refusal.
+ `Commit` retires after its window entry is in, so no instant
 finds it in neither record, and after its pending-commit marker is cleared,
 so a peer that finds it gone mints a view that sees the commit; and before
 the schema word moves and its borrows are released, so a waiter woken by

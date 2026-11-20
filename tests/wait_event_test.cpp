@@ -26,6 +26,7 @@ TEST(WaitEventRegistry, TheV1EventsAreAllRegisteredByName) {
         "io.scan_ring_read",   "sysio.writeback",      "sysio.checkpoint",
         "sysio.wal_write",     "sysio.wal_roll",       "xcore.step_response",  "xcore.credit",
         "sched.run_queue",     "res.eviction_retry",   "net.send_backpressure",
+        "res.txn_slot",
         "app.lock_conflict",   "app.assertion_reservation", "idle.client",
         "idle.background"};
     for (const char* n : names) {
@@ -34,8 +35,9 @@ TEST(WaitEventRegistry, TheV1EventsAreAllRegisteredByName) {
     EXPECT_EQ(FindWaitEvent("io.nonsense"), WaitEvent::kCount);
     // The 16 of the spec, the reserved ON_CPU row and the three timed waits
     // WE04 added (CJ-Q9): `commit.ceiling_wait`, `app.lock_wait`,
-    // `app.horizon_wait`; and CZ-Q18 (a)'s `sysio.wal_roll`.
-    EXPECT_EQ(kWaitEventCount, 21u);
+    // `app.horizon_wait`; CZ-Q18 (a)'s `sysio.wal_roll`; and DJ-S3's
+    // `res.txn_slot`.
+    EXPECT_EQ(kWaitEventCount, 22u);
 }
 
 TEST(WaitEventRegistry, OnlyTheApplicationEventsAreCountersAndOnlyIdleLeavesDbTime) {

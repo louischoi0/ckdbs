@@ -263,6 +263,22 @@ Status WireResultSink::EncodeValueRow(std::span<const std::uint32_t> types,
 }
 
 Status WireResultSink::Emit(std::string_view row) {
+    // **A capped portal's result is bounded** (DJ-S4, `kMaxPortalHeldBytes`):
+    // its whole result is held until the client asks for it, so a row past
+    // the bound fails the statement - which erases the portal and frees
+    // what it held - rather than grow the buffer without one. An uncapped
+    // sink is not counted: it streams, or answers at completion as before.
+    if (batch_row_cap_ != 0) {
+        held_bytes_ += row.size();
+        if (held_too_much()) {
+            return Status::ResourceExhausted(
+                "a portal executed with max_rows = " + std::to_string(batch_row_cap_) +
+                " holds its statement's whole result until it is delivered, and this one "
+                "passed " + std::to_string(kMaxPortalHeldBytes) +
+                " bytes (kMaxPortalHeldBytes); narrow the statement with LIMIT or WHERE, or "
+                "execute it with max_rows = 0, which streams");
+        }
+    }
     // **Sealed before the row that would cross the target, not after.** A
     // batch that grew past `kRowBatchTargetBytes` and then sealed would
     // exceed the target by one row's width every time, which for a wide row
@@ -305,6 +321,7 @@ void WireResultSink::Reset() {
     open_rows_ = 0;
     rows_ = 0;
     batch_row_cap_ = 0;
+    held_bytes_ = 0;
     stream_ = nullptr;
     streamed_ = false;
 }
@@ -328,6 +345,7 @@ void WireResultSink::Rewind() {
     open_.clear();
     open_rows_ = 0;
     rows_ = 0;
+    held_bytes_ = 0;
 }
 
 void WireResultSink::AtSliceBoundary() {
@@ -365,7 +383,16 @@ void KwpSession::SendError(std::vector<std::byte>& out, const wire::WireError& e
 void KwpSession::SendReady(std::vector<std::byte>& out) {
     wire::PayloadWriter w;
     w.U8(TxnStateOf(session_));
-    Send(out, ServerFrameType::kReady, 0, w.Take());
+    // DJ-S2: the flag only to a client that offered the bit - it is a new
+    // meaning on an existing frame - and only while it is true now.
+    const bool tell =
+        (capabilities_ & static_cast<std::uint64_t>(wire::Capability::kSessionDefaults)) != 0;
+    Send(out, ServerFrameType::kReady, tell && AtDefaults() ? wire::kReadySessionDefaults : 0,
+         w.Take());
+}
+
+bool KwpSession::AtDefaults() const noexcept {
+    return session_.AtDefaults() && statements_.empty() && portals_.empty();
 }
 
 FrameAction KwpSession::Refuse(std::vector<std::byte>& out, const wire::WireError& error) {
@@ -491,6 +518,7 @@ FrameAction KwpSession::OnHello(std::span<const std::byte> payload, std::vector<
     auto outcome = wire::Negotiate(hello.value(), handshake_, auth_gate_ != nullptr,
                                    session_id_, cancel_key_);
     if (!outcome.accepted) return Refuse(out, outcome.error);
+    capabilities_ = outcome.hello.capabilities;
 
     if (outcome.auth_owed) {
         // **No `S_HELLO` yet.** The session id and the cancel key are what
@@ -498,6 +526,12 @@ FrameAction KwpSession::OnHello(std::span<const std::byte> payload, std::vector<
         // connection must not learn either.
         phase_ = Phase::kAwaitAuth;
         return FrameAction{};
+    }
+    // **The handshake ends here where no exchange is owed, and the session
+    // takes its seat** (DJ-S1, `connection_limits.hpp`). No gate stamped a
+    // role, so nothing is reserved for it.
+    if (auto refused = TakeSeat(/*gated=*/false, session_.role()); refused.has_value()) {
+        return Refuse(out, *refused);
     }
     phase_ = Phase::kReady;
     Send(out, ServerFrameType::kHello, 0, wire::EncodeServerHello(outcome.hello));
@@ -527,13 +561,24 @@ FrameAction KwpSession::OnAuth(std::span<const std::byte> payload, std::vector<s
     }
     if (!result.authenticated) return FrameAction{};
 
+    // **The seat is taken once the role is known** (DJ-S1): a connection
+    // still in its exchange holds none, so a peer with no credentials
+    // cannot fill the cap, and the reserve is asked for by the one role it
+    // is for. Refused, the session has its `S_AUTH` and this in place of
+    // `S_HELLO`.
+    if (auto refused = TakeSeat(/*gated=*/true, result.role); refused.has_value()) {
+        return Refuse(out, *refused);
+    }
+
     session_.set_role(result.role);
     auth_gate_.reset();
     phase_ = Phase::kReady;
 
     wire::ServerHello hello;
     hello.version = handshake_.max_version;
-    hello.capabilities = handshake_.capabilities;
+    // §3: the intersection, as the unauthenticated path answers - not the
+    // server's whole set, which would report a bit the client never offered.
+    hello.capabilities = capabilities_;
     hello.session_id = session_id_;
     hello.cancel_key = cancel_key_;
     hello.server_info = handshake_.server_info;
@@ -767,6 +812,13 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         //
         // No `sink.Reset()`: the whole portal goes, and `portal` dangles
         // from here on - nothing below reads it.
+        //
+        // DJ-S4: a capped portal refused for what it held names its own
+        // detail; the dispatcher never learns why the sink refused a row.
+        const std::uint16_t detail =
+            portal->sink.held_too_much()
+                ? static_cast<std::uint16_t>(ResourceDetail::kPortalHeldBytes)
+                : outcome.resource_detail;
         portals_.erase(running_portal_);
         running_portal_.clear();
         // **The detail the dispatcher named, where it named one** (AO-S6c-c).
@@ -775,7 +827,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         // status; `kNoDetail` everywhere else, which is what
         // `ErrorFromStatus` defaults to and what every refusal but the
         // borrow cap's still means.
-        (void)Refuse(out, wire::ErrorFromStatus(failed, outcome.resource_detail));
+        (void)Refuse(out, wire::ErrorFromStatus(failed, detail));
         return;
     }
 
@@ -799,6 +851,16 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     }
     Deliver(running_portal_, *portal, out);
     running_portal_.clear();
+    // **`RESET SESSION` drops the protocol's half too** (DJ-S2): every
+    // statement and portal, the portal that carried the reset included - its
+    // completion has just been written, and a `C_CLOSE` pipelined behind it
+    // closes an absent name, which is silent. After the delivery, so `portal`
+    // is not read again.
+    if (outcome.session_reset) {
+        statements_.clear();
+        portals_.clear();
+        expired_portals_.clear();
+    }
 }
 
 void KwpSession::ArmStream(WireResultSink::Stream* stream) {
@@ -1088,6 +1150,25 @@ FrameAction KwpSession::RefuseMissingPortal(std::string_view frame, const std::s
                                     "', which this session does not hold"));
 }
 
+
+std::optional<wire::WireError> KwpSession::TakeSeat(bool gated, Role role) {
+    const bool reserve = gated && role == Role::kAdmin;
+    if (seat_.Take(limits_, reserve)) return std::nullopt;
+    // DJ-R4: the key's name and value, and - where a reserve stands - which
+    // side of it this session is on.
+    std::string why = "this server holds max_connections = " +
+                      std::to_string(limits_->max_connections) + " sessions";
+    if (gated && limits_->reserved_admin_connections != 0) {
+        const std::string seats = std::to_string(limits_->reserved_admin_connections);
+        why += reserve ? " and the reserved_admin_connections = " + seats + " past them"
+                       : ", and the reserved_admin_connections = " + seats +
+                             " past them are for a session whose role is admin; this session is " +
+                             std::string(RoleName(role));
+    }
+    return wire::FatalErrorFromStatus(
+        Status::ResourceExhausted(why + "; this connection is not served"),
+        static_cast<std::uint16_t>(ResourceDetail::kConnectionLimit));
+}
 
 KwpSession::Portal* KwpSession::FindPortal(const std::string& name) {
     auto it = portals_.find(name);

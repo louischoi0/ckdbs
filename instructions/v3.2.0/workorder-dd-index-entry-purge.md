@@ -2,7 +2,7 @@
 
 Status: **OPENED 2026-11-20 on the operator's standing go-ahead
 (go-ahead-achieving-milestone), linked with DN** (`raft-marks-2026-11-20.md`
-§22), on worktree `dd-index-entry-purge` from `054dbc5e`
+§24), on worktree `dd-index-entry-purge` from `054dbc5e`
 (`v3.4.17-1-g054dbc5e`). **DD-S0's verdict is build**; DD-Q0..Q7 are
 adopted on that go-ahead, none is the operator's own mark, and DD-Q1 and
 DD-Q6 were revised against the tree before adoption (§7, "DD-S0").
