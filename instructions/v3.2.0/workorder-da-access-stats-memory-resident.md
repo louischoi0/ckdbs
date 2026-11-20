@@ -1,6 +1,6 @@
 # Work order DA - access statistics kept, their storage moved to memory: `sys.access_stats` as a memory-resident view
 
-Status: **CLOSED 2026-11-19 on the work branch, DA-S3 owed, not landed** (DA-S0 `75bbf9f2`, DA-S1 `89c26252`, DA-S2 the documents at `ffe7c501` and the close `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`; no push, merge to `main` or tag). **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
+Status: **CLOSED 2026-11-19, DA-S3 owed, and landed on `main` on the operator's word "push no verify"** (`raft-marks-2026-11-19.md` §17, the hook skipped; suite 0 failed of 4865 at `89c26252`) (DA-S0 `75bbf9f2`, DA-S1 `89c26252`, DA-S2 the documents at `ffe7c501` and the close `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`; no tag). **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
 from `origin/main` at `673f025d` (`v3.4.14-30-g673f025d`), on the
 operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone,
 `raft-marks-2026-11-19.md` §15): every unmarked item adopted as CLA

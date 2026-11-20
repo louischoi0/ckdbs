@@ -152,3 +152,12 @@ took under them.
 | **Mark** | None of the operator's own. DA-S0 (`75bbf9f2`), DA-S1 (`89c26252`) and DA-S2 (the documents at `ffe7c501` and the close, `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`) landed on `worktree-da-access-stats-memory-resident`; DA-S3 owed to the first superblock bump after 37 |
 | **Does not settle** | a push, a merge to `main`, a tag or a version; DA-S3's host |
 | **Recorded at** | this file; the DA order's header and §7; the DA row in `instructions/v3.2.0/index.md` |
+
+## 17. DA pushed with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"* - after CLA's report of DA's close at `a6f5da8d` (§16) |
+| **Mark** | **DA lands on `main`**, a `--no-ff` merge of `worktree-da-access-stats-memory-resident` pushed with `--no-verify`, the hook skipped on the operator's word: the full suite ran green at `89c26252` (0 failed of 4865, Debug, `ctest -LE bs-nightly`), and every commit after it is documents and bench only. `origin/main` was `673f025d`, DA's opening commit, so the merge brought nothing in |
+| **Does not settle** | a tag or a version; DA-S3's host |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
