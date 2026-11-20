@@ -171,8 +171,9 @@ table of single-writer words a core.
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
-One row per `(fetch_id, kind)` for the instance, the cores' parts merged at
-read: `calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`,
+One row per `(fetch_id, kind, binding)` for the instance, the cores' parts
+merged at read: `binding`, `namespace`, `relations`, `relation_oids` (below),
+`calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`,
 `plan_source`, `plan_name`, `variant`, the cost columns below
 and `shape_text`, the first statement seen, cut to 256 bytes at a character
 boundary. **`plan_source`** (CX-R11) is where the shape's join order came
@@ -198,10 +199,63 @@ Recorded once per statement at its end, timed whole - a park, a re-run and
 the group commit are one call; a refused statement is a call. A statement
 the engine issues itself (a listener's `ROLLBACK`, a KWP load's
 `BEGIN`/`COMMIT`) and a load chunk are not counted. 4096 shapes per core;
-`statement_stats_dropped`. **A shape's slot is 624 bytes** beside its key
-and its text - about 1 KB a shape with a 256-byte text - so a core's part
-holds at most about 4 MB and 64 cores' about 250 MB, each allocated on a
-shape's first statement and kept until the instance stops.
+`statement_stats_dropped`. **A shape's slot is 768 bytes** beside its
+168-byte key and its text - about 1.2 KB a shape with a 256-byte text - so
+a core's part holds at most about 5 MB and 64 cores' about 310 MB, each
+allocated on a shape's first statement and kept until the instance stops
+or the row is reclaimed (below).
+
+**A row is one binding's** (`stats/statement_binding.hpp`, DI-R2). A fetch
+id is a hash of the statement's text and holds no namespace and no oid, so
+one text is two statements wherever a name in it resolves to two relations:
+under two namespaces (`USE`, NS5), or over a relation dropped and created
+again under its name (DT2). The row's key therefore carries what the
+statement bound: **the distinct relations it declared at its binds, in
+first-declared order** - a join's, a subquery's, a write's target and then
+its subqueries', a query layer statement's as its compile describes them -
+**and the namespace its unqualified names were resolved in**. It is the
+resolution that answered: a resolve made again because a DDL moved under
+it forgets the first, and a query layer walk, which runs or not by the
+data, declares nothing into it. Two statements that resolved any
+reference differently are never one row: under one default namespace two
+written names are one relation only where they are one name, so equal
+lists are equal resolutions of every reference, and the namespace is what
+tells `a.t JOIN b.t JOIN t` under `USE a` from the same text under
+`USE b`. A statement that writes every name qualified has no namespace and
+is one row whatever namespace its session is in.
+
+- `binding`: `bound`; `none`, a statement that declared no relation -
+  refused before its bind, naming none, or of a kind with no fingerprint;
+  or `over`, a statement that declared more than 16 distinct relations,
+  whose binding is not held: every such statement of a shape is that one
+  row, and the row is no binding's.
+- `namespace`: the name of the namespace the unqualified names were
+  resolved in, `oid <n>` once it is gone; NULL where the statement wrote
+  none, and for `none` and `over`.
+- `relations`: the bound relations, each `ns.name`, or `oid <n>` once it
+  is gone, joined by `, ` as `sys.plans`' are; NULL for `none` and `over`.
+- `relation_oids`: the same relations by oid, joined the same way. **The
+  identity a reader groups and joins by**: a name moves with a rename, and
+  a relation dropped and created again reads the same name on two rows.
+
+A statement refused part way through its bind is the row of what it had
+declared by then. **A `SELECT` the native grammar does not parse has no
+fetch id** - a set operation, and every other form only the query layer
+reads - so it is kind `SELECT` at `fetch_id = 0`, one row a binding: the
+row of every such text over those relations. `plan_source`, `plan_name` and `variant` are the row's
+own binding's. The relations are not the references of a captured order's
+key (`sys.plans`' `relations`, a searched block's references with their
+repeats): for a planned block with no self-join the two are the same
+relations in the same order.
+
+**A relation that is gone gives its rows up to a new shape.** Its oid is
+never reissued, so its rows take no further call; they stay readable until
+a new shape meets its core's part full. Then, at most once per schema
+version that core has seen, the core asks its own catalog which relations
+its part's rows name are gone and drops those rows -
+`statement_stats_reclaimed` - before the new shape is recorded or, with
+nothing to reclaim, dropped and counted. No core is told of a drop, and
+nothing is asked on the path of a statement whose shape is known.
 
 **What a shape costs**, between `variant` and `shape_text`: `conflicts`,
 `rows`, `rows_examined`, `pages`, `compile_us`, `timed_calls`, `cpu_us`,
@@ -260,8 +314,9 @@ its compile.
 
 ### 6.1a `sys.statement_histogram` (`stats/statement_stats.hpp`)
 
-A shape's latency distribution: `fetch_id`, `kind`, `bucket`, `lo_us`,
-`count`. Every call's elapsed time - `total_us`'s, a refused call's
+A shape's latency distribution: `fetch_id`, `kind`, `binding`, `namespace`,
+`relation_oids` (the `sys.statement_stats` row's, the columns the two views
+join by), `bucket`, `lo_us`, `count`. Every call's elapsed time - `total_us`'s, a refused call's
 included - falls in one of `sys.wait_histogram`'s 32 buckets (§6.6): bucket
 k holds `[2^k, 2^(k+1))` microseconds, the last is open-ended, and bucket 0
 takes everything under 2 us. One row per shape and non-empty bucket, the
@@ -544,6 +599,9 @@ statement's `fetch_id`, 0 before a statement names one and for a kind that
 carries none - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE` carry one), `p1`-`p3`,
 `wait_elapsed_us`. The 64-byte record also holds `step_id`, `origin_session`
 and `trx_id`, which nothing fills yet and the view does not show.
+**`fingerprint` names a text, not a binding**: a sample joined to
+`sys.statement_stats` by it meets every binding's row of that text (§6.1),
+and nothing in the engine makes that join.
 
 A view read copies each core's ring under that ring's own latch, so a query
 during sampling sees whole records, and merges by time (ties by core, then

@@ -191,6 +191,52 @@ private:
     std::unordered_map<catalog::Oid, std::pair<catalog::Oid, std::string>> relations_;
 };
 
+// ---- A statement's binding, as `sys.statement_stats` and
+// `sys.statement_histogram` print it (DI-S1, `stats/statement_binding.hpp`) ----
+
+// `bound`, `none` (the statement declared no relation) or `over` (it declared
+// more than a binding holds, so the row is every such statement's of the
+// shape and names none of them).
+parser::AstValue BindingState(const stats::StatementBinding& b) {
+    return Str(b.over ? "over" : b.none() ? "none" : "bound");
+}
+
+// The namespace the statement's unqualified names were resolved in: its
+// spelling, `oid <n>` once it is gone, NULL where the statement wrote none.
+parser::AstValue BindingNamespace(const stats::StatementBinding& b, const RelationLabels& labels) {
+    if (b.namespace_oid == 0) return Null();
+    const parser::AstValue spelled = labels.Spelling(b.namespace_oid);
+    return spelled.type == parser::ValueType::kNull
+               ? Str("oid " + std::to_string(b.namespace_oid))
+               : spelled;
+}
+
+// The bound relations, each `ns.name` or `oid <n>` once it is gone, in the
+// binding's order, joined as `sys.plans` joins its own (`, `): a relation's
+// spelling holds no comma, so the list splits where it was joined. NULL for
+// a row with no relation to name.
+parser::AstValue BindingRelations(const stats::StatementBinding& b, const RelationLabels& labels) {
+    if (b.n == 0) return Null();
+    std::string out;
+    for (std::size_t i = 0; i < b.n; ++i) {
+        if (i != 0) out += ", ";
+        out += labels.Qualified(b.oids[i]);
+    }
+    return Str(std::move(out));
+}
+
+// The same relations by oid: the identity itself, what a reader groups and
+// joins by - a name moves with a rename, and a relation gone has none.
+parser::AstValue BindingOids(const stats::StatementBinding& b) {
+    if (b.n == 0) return Null();
+    std::string out;
+    for (std::size_t i = 0; i < b.n; ++i) {
+        if (i != 0) out += ", ";
+        out += std::to_string(b.oids[i]);
+    }
+    return Str(std::move(out));
+}
+
 // A percentage of `of`, NULL where nothing was counted: a rate over no
 // lookups is unknown, not 0.
 parser::AstValue PercentOf(std::uint64_t part, std::uint64_t of) {
@@ -1306,8 +1352,15 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
     //
     // `shape_text` is the first statement of the shape seen, cut to 256
     // bytes - last, as a value that can hold commas.
+    //
+    // **A row is one binding's** (DI-S1, `stats/statement_binding.hpp`):
+    // `binding`, `namespace`, `relations` and `relation_oids` say which.
     Define(view, {{"fetch_id", kInt},
                   {"kind", kStr},
+                  {"binding", kStr},
+                  {"namespace", kStr},
+                  {"relations", kStr},
+                  {"relation_oids", kStr},
                   {"calls", kInt},
                   {"refused", kInt},
                   {"total_us", kInt},
@@ -1330,6 +1383,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
                   {"log_bytes", kInt},
                   {"log_records", kInt},
                   {"shape_text", kStr}});
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
     for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
         // `<plan>/<variant>`: neither is a name that holds a `/`.
         const std::size_t slash = s.plan_label.find('/');
@@ -1338,7 +1393,10 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementStatsView() {
         const bool timed = s.timed_calls != 0;
         const auto when_timed = [timed](std::uint64_t v) { return timed ? Int(v) : Null(); };
         std::vector<parser::AstValue> row = {
-            Int(s.fetch_id), Str(s.kind), Int(s.calls), Int(s.refused), Int(s.total_us),
+            Int(s.fetch_id), Str(s.kind), BindingState(s.binding),
+            BindingNamespace(s.binding, labels.value()),
+            BindingRelations(s.binding, labels.value()), BindingOids(s.binding),
+            Int(s.calls), Int(s.refused), Int(s.total_us),
             Int(s.max_us), Timestamp(s.first_seen_us), Timestamp(s.last_seen_us),
             s.plan_source.empty() ? Null() : Str(s.plan_source),
             managed ? Str(s.plan_label.substr(0, slash)) : Null(),
@@ -1372,15 +1430,25 @@ StatusOr<exec::CatalogView> CommandDispatcher::StatementHistogramView() {
     // everything under 2 us. One row per shape and non-empty bucket, the
     // cores' parts merged as `sys.statement_stats`' are; a shape's counts
     // sum to its `calls`. `lo_us` is the bucket's lower bound.
+    // A row is a `sys.statement_stats` row's, so it is one binding's (DI-S1):
+    // `binding`, `namespace` and `relation_oids` are that row's, the columns
+    // a reader joins the two views by.
     Define(view, {{"fetch_id", kInt},
                   {"kind", kStr},
+                  {"binding", kStr},
+                  {"namespace", kStr},
+                  {"relation_oids", kStr},
                   {"bucket", kInt},
                   {"lo_us", kInt},
                   {"count", kInt}});
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
     for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
         for (std::size_t k = 0; k < s.latency.size(); ++k) {
             if (s.latency[k] == 0) continue;
-            view.rows.push_back({Int(s.fetch_id), Str(s.kind), Int(k),
+            view.rows.push_back({Int(s.fetch_id), Str(s.kind), BindingState(s.binding),
+                                 BindingNamespace(s.binding, labels.value()),
+                                 BindingOids(s.binding), Int(k),
                                  Int(k == 0 ? 0 : std::uint64_t{1} << k), Int(s.latency[k])});
         }
     }

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include "kds/base/latch.hpp"
 #include "kds/sched/wait_state.hpp"
 #include "kds/stats/per_core_ring.hpp"
+#include "kds/stats/statement_binding.hpp"
 #include "kds/stats/wait_event.hpp"
 
 // **`sys.statement_stats`' rows: what a statement shape costs**
@@ -20,11 +22,19 @@
 //
 // ---- The key ---------------------------------------------------------------
 //
-// `(fetch_id, kind)` (BO-Q6 (a) as revised). `kind` is the statement's first
-// keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE` carry a
-// fingerprint (`parser/fingerprint.cpp`), so every other kind is one row at
-// `fetch_id = 0`. A first word that is no statement verb is `OTHER`, so a
-// client cannot mint a row per misspelling.
+// `(fetch_id, kind, binding)` (BO-Q6 (a) as revised; the binding since DI-S1,
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-R2). `kind` is the
+// statement's first keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE`
+// carry a fingerprint (`parser/fingerprint.cpp`), so every other kind is one
+// row at `fetch_id = 0`. A first word that is no statement verb is `OTHER`,
+// so a client cannot mint a row per misspelling.
+//
+// **A row is one binding's** (`statement_binding.hpp`): a fetch id hashes a
+// statement's text, so one text under two namespaces, or over a relation
+// dropped and created again, is two statements and two rows. A statement
+// that bound nothing - refused before its bind, naming no relation, or of a
+// kind with no fingerprint - is the row with no binding; one that bound more
+// relations than a binding holds is the row whose binding is not known.
 //
 // ---- Where the rows live, and the latch protocol ---------------------------
 //
@@ -38,6 +48,16 @@
 // **A write never fails, delays or reorders the statement it describes.** A
 // new shape past `kShapesPerCore` is dropped and counted (a `sys.meta`
 // field, SV3); a shape that cannot be allocated is dropped the same way.
+//
+// **A relation that is gone gives its rows up to a new shape** (DI-Q7 (a)):
+// a dropped relation's oid is never reissued (DT2), so its rows can take no
+// further call, and they are kept and readable until a new shape meets its
+// core's part full. Then, and at most once per schema version the core has
+// seen, the recording core asks its own catalog which relations the part's
+// rows name are gone and drops those rows (`ReclaimGone`), counted in
+// `sys.meta`. No core is told of a drop, and a statement whose shape is
+// known pays nothing for any of it. A row reclaimed for a drop that is
+// then rolled back is statistics lost, never a wrong row.
 //
 // ---- What a shape costs (DF-S1) --------------------------------------------
 //
@@ -56,6 +76,7 @@ namespace kds::stats {
 struct StatementShape {
     std::uint64_t fetch_id = 0;
     std::string kind;
+    StatementBinding binding;
     std::uint64_t calls = 0;
     std::uint64_t refused = 0;
     std::uint64_t total_us = 0;
@@ -123,20 +144,38 @@ public:
     // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
     // the statement whole, re-runs included. `plan_source` is empty for a
     // statement that compiled no join block, and then the shape keeps what
-    // it had.
+    // it had. `binding` is what the statement bound, default for one that
+    // bound nothing. `full`, where given, is set instead of the drop being
+    // counted when the shape is new and the part is full: nothing was
+    // recorded, and the caller makes room (`ReclaimGone`) and records again
+    // without it.
     static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
                        bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                        std::string_view plan_source = {},
                        std::string_view plan_label = {},
-                       const StatementCost& cost = {}) noexcept;
+                       const StatementCost& cost = {},
+                       const StatementBinding& binding = {},
+                       bool* full = nullptr) noexcept;
+
+    // Drops every row of `core`'s part whose binding names a relation
+    // `gone` answers true for, and returns how many (DI-Q7 (a)). **At most
+    // one sweep per `schema_version`**: a part swept at this version already
+    // returns 0 and asks nothing, so a part full of live relations' rows
+    // costs a new shape one compare until a DDL moves the version. `gone`
+    // is called with no latch of this store held - it reads the catalog.
+    static std::size_t ReclaimGone(std::uint32_t core, std::uint64_t schema_version,
+                                   const std::function<bool(catalog::Oid)>& gone) noexcept;
 
     // Every shape, the cores' parts merged by key: every count and sum
     // added, the longest call the longest, the first statement the
-    // earliest seen. Ordered by (fetch_id, kind).
+    // earliest seen. Ordered by (fetch_id, kind, binding).
     static std::vector<StatementShape> Snapshot();
 
     // New shapes no part could take, over every core.
     static std::uint64_t Dropped() noexcept;
+    // Rows of relations that are gone, given up to a new shape, over every
+    // core.
+    static std::uint64_t Reclaimed() noexcept;
 
     // Empties every part; a test's alone.
     static void ResetForTest() noexcept;
@@ -145,6 +184,7 @@ private:
     struct Key {
         std::uint64_t fetch_id;
         std::string_view kind;  // static storage, `StatementKindOf`'s
+        StatementBinding binding;
         bool operator==(const Key&) const = default;
     };
     struct KeyHash {
@@ -154,6 +194,9 @@ private:
         Latch latch{LatchKind::kStatsRing};
         std::unordered_map<Key, StatementShape, KeyHash> shapes;
         std::uint64_t dropped = 0;
+        std::uint64_t reclaimed = 0;
+        // The schema version `ReclaimGone` last swept this part at.
+        std::optional<std::uint64_t> swept_at;
     };
     static std::array<Part, kStatsParts>& parts() noexcept;
 };

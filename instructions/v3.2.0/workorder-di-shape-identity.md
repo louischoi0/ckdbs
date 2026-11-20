@@ -7,7 +7,8 @@ operator had not marked is **adopted as CLA proposed under that word, by
 CLA and not as the operator's own mark**: DI-Q0 (a); **DI-Q3 `[quiet-wrong]`
 (a) as revised by DI-S0** (§7); DI-Q6..Q13 as their stages reach them, each
 recorded in §4 and §7. DI-S0's census and cells are committed (`92a022f8`);
-its measurement and its review's corrections follow in §7.
+its measurement and its review's corrections follow in §7. **DI-S1 landed**
+(§7): a `sys.statement_stats` row is one binding's.
 
 Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
@@ -317,8 +318,8 @@ word (§0a).** Every other item is unmarked.
 | DI-Q12 | The Cabin controller's signal (§0a). | **keyed by the pattern and its candidate together**, so one text over two relations is two signals and each relation's Cabin is priced by its own heat; `kMaxTrackedFingerprints` then bounds signals, not patterns | (b) keyed by DI-Q3's binding, as the statistics are; (c) a pattern whose candidate moved between two relations is not credited to either |
 | DI-Q13 `[quiet-wrong]` | What an opt-in names once it is in DI. | **the shape under the relations `WAYSTONE ON`'s example resolved to** - it already compiles its example under the session's namespace (`waystone-concpets.md` §4a) - so a drop ends it and another namespace's same text is not opted. A `sys.patterns` row change, so a format event (DI-Q11); `WAYSTONE OFF <select>` after a drop, which today needs no relation, is restated in DI-S0 | (b) the opt-in stays by text and the manual says so, the recording cost accepted - what "every path" rules out unless the operator re-marks |
 | DI-Q5 **marked (a)** | A renamed relation's plan reading `enabled`. | **in DI** | (b) left a known gap |
-| DI-Q6 | The views' shape. The grain of a row changes from a shape to a shape under one binding. | **`sys.statement_stats` and `sys.statement_histogram` gain `relations` (oids as bound) and `namespace`; one row per binding; no second view** | (b) the old grain kept and a second view added per binding |
-| DI-Q7 | Rows of a relation that is gone. | **kept and readable until the part is full, then the first reclaimed**; counted in `sys.meta` | (b) removed at the drop's commit on every core - a cross-core act DI-R4 does not allow on the statement path and DI-S0 would have to place; (c) kept until restart, as every row is today |
+| DI-Q6 **adopted (a) as restated at DI-S0** on the standing go-ahead | The views' shape. The grain of a row changes from a shape to a shape under one binding. | **`sys.statement_stats` and `sys.statement_histogram` gain `relations` (oids as bound) and `namespace`; one row per binding; no second view** | (b) the old grain kept and a second view added per binding |
+| DI-Q7 **adopted (a) as restated at DI-S0** on the standing go-ahead | Rows of a relation that is gone. | **kept and readable until the part is full, then the first reclaimed**; counted in `sys.meta` | (b) removed at the drop's commit on every core - a cross-core act DI-R4 does not allow on the statement path and DI-S0 would have to place; (c) kept until restart, as every row is today |
 | DI-Q8 | The bar at the close. | **DA's close cells and a point `SELECT` and keyed `INSERT` at `cores` 1 and 8: no cell slower outside its own spread**; no factor proposed, since DF's 0.5 us bar on this path was not resolvable | (b) a bar the operator names |
 | DI-Q9 | The session's published statement and ASH. | **left on the fetch id** unless DI-S0 finds a reader that joins a sample to a statistics row; then brought back | (b) the binding published beside the fingerprint - a word or more written at every statement's head |
 | DI-Q10 | Which plans-that-match-nothing DI shows, beyond the rename. | **the rename and a captured order that no longer compiles (CX-Q16's `INVALID`), by P1**; a fingerprint-version row stays the mount's | (b) the rename alone; (c) P2 |
@@ -548,8 +549,9 @@ written. **Adopted, revised, on the standing go-ahead.**
 
 **Measured**: not at this commit. The stage's four arms are built and
 their run is held at its quiet gate by another session's work on the host;
-the results and what they say of DI-Q3's width land in the stage's next
-commit, and DI-S1 does not land before them.
+the results and what they say of DI-Q3's width land when the host lets
+the run through. DI-S1 was built on the work branch before them (below);
+what the key's width costs is settled by them, or by the close.
 
 **The suite**: 0 failed of 4867 (2 disabled, 2 skipped), the hook's range
 at `-j8`, on this commit's build inputs (`1c7bb774` and the two cells).
@@ -586,3 +588,101 @@ at `-j8`, on this commit's build inputs (`1c7bb774` and the two cells).
    writers were not cited; a prepared statement also holds its pattern id;
    `ash_panel` tallies and does not group. The argument for DI-Q3, which
    stood in four places, is in this section alone.
+
+### DI-S1 - the statistics' identity, 2026-11-20
+
+On worktree `di-shape-identity`, over `f7250b89`. **DI-Q6 and DI-Q7 adopted
+(a) as DI-S0 restated them, on the standing go-ahead.** The stage's premise
+measurement had not run when the stage was built (the host did not go
+quiet); what it says of the key's width is owed before the close.
+
+**Built.**
+
+- `stats::StatementBinding` (`include/kds/stats/statement_binding.hpp`):
+  the namespace of the statement's unqualified names and up to 16 distinct
+  relations in first-declared order; `over` past the cap; a mark and a
+  rewind. 144 bytes, asserted.
+- **Where it is taken.** `exec::PositionSink::Position` carries the
+  namespace an unqualified name was resolved in; `ReadBorrow` tells every
+  declaration to the dispatcher's `statement_binding_` before anything is
+  asked of the lock table, so a dispatcher with none records the same
+  binding. Cleared at a body's head, copied onto the outcome beside the
+  fetch id, kept across the four sites that rebuild a reply over an
+  outcome. `ResolveNames` rewinds before its second resolve; a query layer
+  walk's declarations are rewound, and so are a native compile's when the
+  query layer answers in its place.
+- **The key**: `(fetch_id, kind, binding)`, in `StatementStats`' parts and
+  in `Snapshot`'s merge and order.
+- **The views** (DI-Q6): `binding`, `namespace`, `relations`,
+  `relation_oids` on `sys.statement_stats`; `binding`, `namespace`,
+  `relation_oids` on `sys.statement_histogram`. The lists are joined by
+  `, ` as `sys.plans`' are.
+- **A gone relation's rows** (DI-Q7): `StatementStats::ReclaimGone`, called
+  by `RecordStatement` when a new shape meets its core's part full, at most
+  once per schema version the core has seen; `statement_stats_reclaimed`
+  in `sys.meta`.
+
+**Found in the building.** A `SELECT` the native grammar does not parse
+has no fetch id (`parser.hpp`: a parse that stopped in the middle answers
+none), so every set operation and every other form only the query layer
+reads was one row, `(0, SELECT)`, whatever it named. The binding is
+recorded whatever the fetch id, so that row is now one a binding; it still
+sums every such text over the same relations (`known-gaps.md`). **Not
+DI's to fix and named here** (DI-R2a): giving such a statement a fetch id
+of its own.
+
+**The review** (`critics-developer`, of the working diff over `f7250b89`).
+Seven findings and five simplifications:
+
+1. **A resumed `UPDATE` lost its `SET` subqueries' relations**
+   `[quiet-wrong]`: the resume reads the parked answers and runs no
+   subquery, and the re-dispatch had cleared the binding, so a statement
+   that parked on a row was recorded as `[t]` where the same statement
+   unparked is `[t, u]`. Applied: `Session::ParkedWrite` carries the
+   binding. Pinned on the rig (`BjSingleWriteRigTest`).
+2. **The reclaim's gate was this core's own DDL count**, which a peer's
+   drop never moves, so above one core a part swept once and never again.
+   Applied: the gate is that count plus the schema word the core's cache
+   was validated at. Pinned on the rig (`StatementCostRig`).
+3. **A conflict arm's `SET` subquery was bound only where a row
+   conflicted**, so what an `INSERT ... ON CONFLICT DO UPDATE` bound
+   followed its data. Applied: the arm's subqueries are compiled once at
+   the `INSERT`'s head. Pinned on the rig (`StatementCostRig`).
+4. A native compile that declined for the query layer left its own binds
+   under the layer's. Applied: rewound.
+5. The lists were joined by a space, which a gone relation's `oid <n>`
+   holds. Applied: `sys.plans`' `, `.
+6. A re-run answered before its bind recorded the statement's fetch id
+   beside no binding. Applied: `DispatchAsync` keeps the first run's
+   binding for that case, as it keeps the fetch id.
+7. What a reclaim loses for a drop that rolls back is now said in the
+   header and in `known-gaps.md`.
+
+Simplifications: the redundant alias and the repeated namespace expression
+are gone. **Rejected, with the reason**: one helper for the four reply
+rebuilds - they carry different fields on purpose (a refused commit keeps
+`compile_ns` and drops the plan source), and unifying them would change
+what DF records; the binding stored once, in the key alone - the stored
+shape repeats its key today (`fetch_id`, `kind`) so that a snapshot is a
+plain copy, and the 144 bytes are inside the slot bound the spec states;
+a default `nullptr` for `ReadBorrow`'s binding - each site says whether its
+binds are a statement's, and a default would let a new site say nothing.
+The review's two cost notes (a 144-byte copy per `*out =` and per
+`Record`) are the close's to price.
+
+**Cells.** `tests/shape_identity_test.cpp` (the binding; one text under two
+namespaces and over a relation dropped and created again, now two rows; a
+qualified statement, one; `a.t JOIN b.t JOIN t`, two by the namespace
+alone; a write and its subqueries; a query layer statement; a refusal
+before the bind; a kind with no fingerprint; the views; a full part),
+`tests/statement_stats_test.cpp` (two bindings merged across cores, the
+overflow row, the sweep's gate), `tests/statement_cost_rig_test.cpp` (two
+namespaces on two cores, a point read and a handed-on walk; a conflict
+arm's subquery; a drop on another core),
+`tests/bj_single_write_rig_test.cpp` (a parked statement's binding).
+**Findings 1, 2 and 3 each have a mutant its cell kills**: the fix taken
+out, the cell fails; put back, it passes. **No cell** for `ResolveNames`' second resolve through a
+statement, or for a refused commit's rebuilt reply (`known-gaps.md`).
+
+**The suite**: 0 failed of 4886 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
+build inputs. Overhead not measured; measured at the milestone's close.

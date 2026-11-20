@@ -2084,6 +2084,38 @@ Owned by `docs/spec/sys-views.md` §6.2c and `docs/spec/plan-stats.md` §6.
   counts a division on a second core, drives a division that fails, or
   reaches the store's bound.
 
+### A row is one binding's (DI-S1)
+
+Verified on `di-shape-identity` (branch `worktree-di-shape-identity`) at
+DI-S1's commit. Owned by `docs/spec/sys-views.md` §6.1, §6.1a and
+`include/kds/stats/statement_binding.hpp`.
+
+- **A `SELECT` the native grammar does not parse has no fetch id.** A parse
+  that stops in the middle answers no fingerprint (`parser.hpp`), so a set
+  operation and every other form only the query layer reads is kind
+  `SELECT` at `fetch_id = 0`. Since DI-S1 that is one row a binding, so no
+  row sums statements over different relations; it still sums every such
+  text over the same relations, and its `shape_text` is the first one
+  seen. Giving such a statement its own fetch id is not built.
+- **A statement refused part way through its bind is the row of what it
+  had declared by then**, not the row its text has once it binds whole: a
+  join whose second relation does not exist is counted under its first.
+- **More than 16 distinct relations are not told apart**: one `over` row a
+  shape.
+- **A reclaim asks `InitTableAccess` and takes `NotFound` as gone.** What
+  that answers for a relation a transaction still open has dropped is not
+  pinned by a cell; a row reclaimed for a drop that then rolls back is lost
+  statistics, never a wrong row.
+- **A shape's slot grew to 768 bytes from 624 and its key to 168 from 24**,
+  so the copy a view read makes under each part's latch grew with them
+  (above), unmeasured.
+- **`sys.ash`'s `fingerprint` is the text's** (DI-Q9 (a)): a reader who
+  joins a sample to `sys.statement_stats` by it meets every binding's row.
+- **No cell** drives `ResolveNames`' second resolve through a statement
+  (the rewind is pinned on the binding alone), or a refused commit's and a
+  refused page wait's rebuilt reply carrying the binding; the walk's
+  rebuilt reply is pinned on the two-core rig.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close

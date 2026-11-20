@@ -16,6 +16,7 @@
 #include "kds/server/priority.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/role.hpp"
+#include "kds/stats/statement_binding.hpp"
 #include "kds/stats/txn_stats.hpp"
 #include "kds/txn/manager.hpp"
 
@@ -330,6 +331,13 @@ public:
         // or the rows after the park would be set from another state of the
         // database than the rows before it.
         std::vector<exec::SubqueryResult> subqueries{};
+        // What the statement had bound when it parked (DI,
+        // `stats/statement_binding.hpp`), carried for the subqueries'
+        // reason: the resume reads their answers and does not run them
+        // again, so their relations would be declared by no one, and the
+        // resumed statement would be recorded as another statement than
+        // the one that never parked.
+        stats::StatementBinding binding{};
     };
 
     // DE (`storage/miss_refusal.hpp`): how many runs of the statement now

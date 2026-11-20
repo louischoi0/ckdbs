@@ -297,6 +297,15 @@ TEST(BjSingleWriteRigTest, AParkedStatementReadsItsSubqueryAnswerFromBeforeThePa
               "v\\n5\\n5\\n5\\n5\\n5")
         << "every row was set from the answer the statement began with";
     EXPECT_EQ(d0.Dispatch("SELECT x FROM u WHERE id = 1").response, "x\\n777");
+    // DI-S1 (`stats/statement_binding.hpp`): the resume reads the subquery's
+    // answer and never runs it, so nothing declares `u` again - and the
+    // statement is still recorded as what it bound, `t` and then `u`, the
+    // row of the same statement that never parked.
+    const DispatchOutcome whole = d0.Dispatch(w.update_sql);
+    ASSERT_TRUE(StartsWith(whole.response, "UPDATED 5")) << whole.response;
+    ASSERT_EQ(whole.binding.n, 2u);
+    EXPECT_TRUE(w.update.out.binding == whole.binding)
+        << "the parked statement bound " << int{w.update.out.binding.n} << " relation(s)";
 }
 
 }  // namespace

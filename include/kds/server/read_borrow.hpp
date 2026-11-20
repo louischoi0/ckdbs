@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "kds/exec/step_compiler.hpp"
+#include "kds/stats/statement_binding.hpp"
 #include "kds/txn/lock_table.hpp"
 
 // ---- The read borrow (AO-S6e-b; AO-R12, AR2 §3's `SELECT` row; moved to
@@ -51,6 +52,12 @@
 // The cap is not special-cased for the same reason: `TryAcquire` refuses
 // at `max_locks_per_txn` and the reader carries on. The ledger holds one
 // entry per bound relation, which no statement approaches.
+//
+// **It is also where the statement's binding is taken** (DI,
+// `stats/statement_binding.hpp`): every declaration is told to `binding`,
+// where one is given, before anything is asked of the lock table and
+// whether or not there is one - what a statement bound is a fact about the
+// statement, not about a lock.
 
 namespace kds::server {
 
@@ -60,8 +67,12 @@ public:
     // read path constructs one unconditionally so the call sites carry no
     // branch of their own. `taken` counts granted relation asks, which is
     // what a cell reads to say the borrow was taken at all.
-    ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken) noexcept
-        : locks_(holder != 0 ? locks : nullptr), holder_(holder), taken_(taken) {}
+    ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken,
+               stats::StatementBinding* binding) noexcept
+        : locks_(holder != 0 ? locks : nullptr),
+          holder_(holder),
+          taken_(taken),
+          binding_(binding) {}
     // Declaring `rel` at once: what a write does at its resolve. A write
     // resolves a schema exactly as a read does and its own `IX` is taken
     // after that - before its admission for an `INSERT`, at its declared
@@ -70,11 +81,13 @@ public:
     // `SELECT`'s bind does - an `IS`, compatible with that `IX`, so the
     // writer pays nothing for it. `INSERT`, `UPDATE` and `DELETE` are the
     // three callers; the two with a `WHERE` then hand the borrow to
-    // `CompileWhere` for their subquery relations.
+    // `CompileWhere` for their subquery relations. `unqualified_in` as
+    // `Position`'s.
     ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken,
-               catalog::Oid rel) noexcept
-        : ReadBorrow(locks, holder, taken) {
-        Position(rel);
+               stats::StatementBinding* binding, catalog::Oid rel,
+               catalog::Oid unqualified_in) noexcept
+        : ReadBorrow(locks, holder, taken, binding) {
+        Position(rel, unqualified_in);
     }
     ReadBorrow(const ReadBorrow&) = delete;
     ReadBorrow& operator=(const ReadBorrow&) = delete;
@@ -82,7 +95,8 @@ public:
         if (locks_ != nullptr) locks_->Release(holder_, holdings_);
     }
 
-    void Position(catalog::Oid rel) override {
+    void Position(catalog::Oid rel, catalog::Oid unqualified_in) override {
+        if (binding_ != nullptr) binding_->Declare(rel, unqualified_in);
         if (locks_ == nullptr) return;
         // The unit a `DROP TABLE` meets, and since CP-S2a the whole of the
         // borrow. **Asked once per relation, whatever the answer**: the
@@ -104,6 +118,7 @@ private:
     txn::LockTable* locks_ = nullptr;
     std::uint64_t holder_ = 0;
     std::uint64_t* taken_ = nullptr;
+    stats::StatementBinding* binding_ = nullptr;
     txn::LockHoldings holdings_;
     // Every relation asked for, whatever the answer. A vector and a linear
     // scan: the count is the statement's relation count, small in practice

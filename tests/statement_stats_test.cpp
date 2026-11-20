@@ -51,6 +51,97 @@ TEST_F(StatementStatsTest, OneShapeOnTwoCoresIsOneRowMerged) {
     EXPECT_EQ(s.last_seen_us, 2'000);
 }
 
+TEST_F(StatementStatsTest, OneShapeUnderTwoBindingsIsTwoRowsEachMergedAcrossCores) {
+    // DI-S1 (`statement_binding.hpp`): the key holds what the statement
+    // bound, so the cores' parts merge a binding's rows and never two
+    // bindings'.
+    StatementBinding east;
+    east.Declare(40, 7);
+    StatementBinding west;
+    west.Declare(41, 8);
+    for (std::uint32_t core = 0; core < 2; ++core) {
+        StatementStats::Record(core, 77, "SELECT v FROM t WHERE id = 1", false, 10, 100, {}, {},
+                               {}, east);
+        StatementStats::Record(core, 77, "SELECT v FROM t WHERE id = 1", core == 1, 30, 200, {},
+                               {}, {}, west);
+    }
+    StatementStats::Record(0, 77, "SELECT v FROM t WHERE id = 1", true, 5, 300);  // bound nothing
+
+    const std::vector<StatementShape> shapes = StatementStats::Snapshot();
+    ASSERT_EQ(shapes.size(), 3u);
+    // Ordered within the shape: the unbound row, then by namespace.
+    EXPECT_TRUE(shapes[0].binding.none());
+    EXPECT_EQ(shapes[0].calls, 1u);
+    EXPECT_TRUE(shapes[1].binding == east);
+    EXPECT_EQ(shapes[1].calls, 2u);
+    EXPECT_EQ(shapes[1].refused, 0u);
+    EXPECT_EQ(shapes[1].total_us, 20u);
+    EXPECT_TRUE(shapes[2].binding == west);
+    EXPECT_EQ(shapes[2].calls, 2u);
+    EXPECT_EQ(shapes[2].refused, 1u);
+    EXPECT_EQ(shapes[2].total_us, 60u);
+}
+
+TEST_F(StatementStatsTest, AStatementOverTheBindingsCapIsOneRowThatIsNoBindings) {
+    StatementBinding over;
+    for (std::uint64_t oid = 1; oid <= StatementBinding::kMaxRelations + 1; ++oid) {
+        over.Declare(oid, 3);
+    }
+    StatementBinding other;
+    for (std::uint64_t oid = 50; oid <= 50 + StatementBinding::kMaxRelations; ++oid) {
+        other.Declare(oid, 4);
+    }
+    StatementStats::Record(0, 9, "SELECT 1", false, 1, 1, {}, {}, {}, over);
+    StatementStats::Record(0, 9, "SELECT 1", false, 1, 1, {}, {}, {}, other);
+    StatementStats::Record(0, 9, "SELECT 1", false, 1, 1);
+
+    const std::vector<StatementShape> shapes = StatementStats::Snapshot();
+    ASSERT_EQ(shapes.size(), 2u);
+    EXPECT_TRUE(shapes[0].binding.none());
+    EXPECT_EQ(shapes[0].calls, 1u);
+    EXPECT_TRUE(shapes[1].binding.over);
+    EXPECT_EQ(shapes[1].binding.n, 0u);
+    EXPECT_EQ(shapes[1].calls, 2u);
+}
+
+TEST_F(StatementStatsTest, ASweepForGoneRelationsRunsOnceASchemaVersion) {
+    StatementBinding gone;
+    gone.Declare(40, 1);
+    StatementBinding kept;
+    kept.Declare(41, 1);
+    StatementBinding both;
+    both.Declare(41, 1);
+    both.Declare(40, 1);
+    StatementStats::Record(0, 1, "SELECT 1", false, 1, 1, {}, {}, {}, gone);
+    StatementStats::Record(0, 2, "SELECT 1", false, 1, 1, {}, {}, {}, kept);
+    StatementStats::Record(0, 3, "SELECT 1", false, 1, 1, {}, {}, {}, both);
+    StatementStats::Record(0, 4, "SELECT 1", false, 1, 1);
+    StatementStats::Record(1, 5, "SELECT 1", false, 1, 1, {}, {}, {}, gone);
+
+    std::vector<std::uint64_t> asked;
+    const auto is_gone = [&asked](std::uint64_t oid) {
+        asked.push_back(oid);
+        return oid == 40;
+    };
+    // Core 0's part alone, every row naming the gone relation, each
+    // relation asked about once.
+    EXPECT_EQ(StatementStats::ReclaimGone(0, 12, is_gone), 2u);
+    EXPECT_EQ(asked, (std::vector<std::uint64_t>{40, 41}));
+    EXPECT_EQ(StatementStats::Reclaimed(), 2u);
+    std::vector<std::uint64_t> left;
+    for (const StatementShape& s : StatementStats::Snapshot()) left.push_back(s.fetch_id);
+    EXPECT_EQ(left, (std::vector<std::uint64_t>{2, 4, 5}));
+
+    // The same version again asks nothing; another version sweeps again.
+    asked.clear();
+    EXPECT_EQ(StatementStats::ReclaimGone(0, 12, is_gone), 0u);
+    EXPECT_TRUE(asked.empty());
+    EXPECT_EQ(StatementStats::ReclaimGone(0, 13, is_gone), 0u);
+    EXPECT_EQ(asked, (std::vector<std::uint64_t>{41}));
+    EXPECT_EQ(StatementStats::ReclaimGone(1, 13, is_gone), 1u);
+    EXPECT_EQ(StatementStats::Reclaimed(), 3u);
+}
+
 TEST_F(StatementStatsTest, KindsWithNoFingerprintAreOneRowEachAtFetchIdZero) {
     StatementStats::Record(0, 0, "PURGE FROM t WHERE id = 1", false,
                            1, 1);

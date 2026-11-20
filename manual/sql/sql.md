@@ -2090,8 +2090,15 @@ newline protocol.
 `SELECT` (nor do `sys.types` and `sys.objects`):
 
 - `sys.statement_stats`: what each statement shape costs, one row per
-  `(fetch_id, kind)` - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE`
-  each have a shape, every other kind is one row. `calls`, `refused`,
+  `(fetch_id, kind)` and per **binding** - a `SELECT`, an `INSERT`, an
+  `UPDATE` and a `DELETE` each have a shape, every other kind is one row.
+  A `fetch_id` is the statement's text, so the same text run under two
+  namespaces (`USE`), or over a table dropped and created again, is two
+  statements and two rows: `relations` names the relations the statement
+  resolved to (`relation_oids` their oids, the columns to group and join
+  by) and `namespace` the namespace its unqualified names meant; `binding`
+  is `bound`, `none` (it resolved no relation - a refusal before that, for
+  one) or `over` (more than 16 relations, not told apart). `calls`, `refused`,
   `total_us`, `max_us`, `first_seen`, `last_seen`, where its join order
   came from, and the first statement seen; and what the shape cost:
   `conflicts` (the calls refused `TXN_CONFLICT`), `rows` (answered or
@@ -2103,7 +2110,8 @@ newline protocol.
   be counted for a shape is NULL, not 0**: an `INSERT`, an `UPDATE` and a
   `DELETE` have no `rows_examined` or `pages`.
 - `sys.statement_histogram`: a shape's latency distribution, one row per
-  `(fetch_id, kind)` and non-empty bucket - bucket k counts the calls that
+  `sys.statement_stats` row (`fetch_id`, `kind`, `binding`, `namespace`,
+  `relation_oids`) and non-empty bucket - bucket k counts the calls that
   took `[2^k, 2^(k+1))` microseconds; a shape's counts sum to its `calls`.
 - `sys.refusal_stats`: how statements were refused - one row per core and
   error code (`TXN_CONFLICT`, `ALREADY_EXISTS`, ...), its `count` and
@@ -2146,6 +2154,7 @@ newline protocol.
 These seven are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
 (`statement_stats_dropped`, `relation_stats_dropped`, `index_stats_dropped`,
+`statement_stats_reclaimed` - rows of dropped tables given up to new shapes -
 `leaf_stats_dropped`, `lock_waits_*`,
 `checkpoints_*`); `sys.refusal_stats` is bounded by the error codes,
 `sys.txn_histogram` by its buckets, and neither gives up any.

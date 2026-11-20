@@ -46,8 +46,21 @@ std::string_view StatementKindOf(std::string_view line) noexcept {
 std::size_t StatementStats::KeyHash::operator()(const Key& k) const noexcept {
     // The kind's pointer is its identity: every key's kind is a `kKinds`
     // entry or `kOther`.
-    return std::hash<std::uint64_t>{}(k.fetch_id) ^
-           (std::hash<const void*>{}(k.kind.data()) << 1);
+    std::uint64_t h = std::hash<std::uint64_t>{}(k.fetch_id) ^
+                      (std::hash<const void*>{}(k.kind.data()) << 1);
+    // The binding, folded word by word (splitmix64's finalizer constants):
+    // one text's bindings differ in a namespace or an oid, each a small
+    // integer, so they are spread before they are mixed in. An unbound
+    // statement - every kind with no fingerprint - folds nothing.
+    const auto fold = [&h](std::uint64_t word) noexcept {
+        word *= 0xBF58476D1CE4E5B9ULL;
+        h = (h ^ word ^ (word >> 31)) * 0x94D049BB133111EBULL;
+    };
+    const StatementBinding& b = k.binding;
+    if (b.over) fold(~std::uint64_t{0});
+    if (b.namespace_oid != 0) fold(b.namespace_oid);
+    for (std::size_t i = 0; i < b.n; ++i) fold(b.oids[i]);
+    return static_cast<std::size_t>(h);
 }
 
 std::array<StatementStats::Part, kStatsParts>& StatementStats::parts() noexcept {
@@ -59,17 +72,23 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
                             bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                             std::string_view plan_source,
                             std::string_view plan_label,
-                            const StatementCost& cost) noexcept {
+                            const StatementCost& cost,
+                            const StatementBinding& binding,
+                            bool* full) noexcept {
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);
     Part& part = parts()[core % kStatsParts];
     const LatchGuard held(&part.latch);
-    const Key key{fetch_id, kind};
+    const Key key{fetch_id, kind, binding};
     auto found = part.shapes.find(key);
     if (found == part.shapes.end()) {
         if (part.shapes.size() >= kShapesPerCore) {
-            ++part.dropped;
+            if (full != nullptr) {
+                *full = true;
+            } else {
+                ++part.dropped;
+            }
             return;
         }
         // The one allocation, on a shape's first statement; a failure drops
@@ -78,6 +97,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
             StatementShape shape;
             shape.fetch_id = fetch_id;
             shape.kind = std::string(kind);
+            shape.binding = binding;
             shape.first_seen_us = now_us;
             // Cut at a character boundary: a UTF-8 continuation byte
             // (`10xxxxxx`) at the cut moves it back, so the text stays
@@ -172,9 +192,65 @@ std::vector<StatementShape> StatementStats::Snapshot() {
     out.reserve(merged.size());
     for (auto& [key, shape] : merged) out.push_back(std::move(shape));
     std::sort(out.begin(), out.end(), [](const StatementShape& a, const StatementShape& b) {
-        return a.fetch_id != b.fetch_id ? a.fetch_id < b.fetch_id : a.kind < b.kind;
+        if (a.fetch_id != b.fetch_id) return a.fetch_id < b.fetch_id;
+        if (a.kind != b.kind) return a.kind < b.kind;
+        // The unbound row first, then by namespace and relations, the row
+        // whose binding is not known last.
+        if (a.binding.over != b.binding.over) return b.binding.over;
+        if (a.binding.namespace_oid != b.binding.namespace_oid) {
+            return a.binding.namespace_oid < b.binding.namespace_oid;
+        }
+        return std::lexicographical_compare(
+            a.binding.oids.begin(), a.binding.oids.begin() + a.binding.n,
+            b.binding.oids.begin(), b.binding.oids.begin() + b.binding.n);
     });
     return out;
+}
+
+std::size_t StatementStats::ReclaimGone(std::uint32_t core, std::uint64_t schema_version,
+                                        const std::function<bool(catalog::Oid)>& gone) noexcept {
+    Part& part = parts()[core % kStatsParts];
+    try {
+        // The relations the part's rows name, taken under the latch and
+        // asked about outside it: `gone` reads the catalog.
+        std::vector<catalog::Oid> named;
+        {
+            const LatchGuard held(&part.latch);
+            if (part.swept_at == schema_version) return 0;
+            part.swept_at = schema_version;
+            for (const auto& [key, shape] : part.shapes) {
+                named.insert(named.end(), key.binding.oids.begin(),
+                             key.binding.oids.begin() + key.binding.n);
+            }
+        }
+        std::sort(named.begin(), named.end());
+        named.erase(std::unique(named.begin(), named.end()), named.end());
+        std::erase_if(named, [&gone](catalog::Oid oid) { return !gone(oid); });
+        if (named.empty()) return 0;
+
+        const LatchGuard held(&part.latch);
+        const std::size_t reclaimed = std::erase_if(part.shapes, [&named](const auto& entry) {
+            const StatementBinding& b = entry.first.binding;
+            return std::any_of(b.oids.begin(), b.oids.begin() + b.n, [&named](catalog::Oid oid) {
+                return std::binary_search(named.begin(), named.end(), oid);
+            });
+        });
+        part.reclaimed += reclaimed;
+        return reclaimed;
+    } catch (const std::bad_alloc&) {
+        // Nothing reclaimed: the new shape is dropped and counted, as it
+        // would have been.
+        return 0;
+    }
+}
+
+std::uint64_t StatementStats::Reclaimed() noexcept {
+    std::uint64_t total = 0;
+    for (Part& part : parts()) {
+        const LatchGuard held(&part.latch);
+        total += part.reclaimed;
+    }
+    return total;
 }
 
 std::uint64_t StatementStats::Dropped() noexcept {
@@ -191,6 +267,8 @@ void StatementStats::ResetForTest() noexcept {
         const LatchGuard held(&part.latch);
         part.shapes.clear();
         part.dropped = 0;
+        part.reclaimed = 0;
+        part.swept_at.reset();
     }
 }
 
