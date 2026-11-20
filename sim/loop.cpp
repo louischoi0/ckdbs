@@ -922,6 +922,16 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             }
             ++it.verdict.indexes_created;
             break;
+        case Op::Kind::kPurgeIndex:
+            // A purge changes no result (DD): what it takes out is checked by
+            // every read after it. Without a lock table it is refused by
+            // name, never answered a count (DD-R8).
+            if (reply.rfind("PURGED INDEX", 0) != 0 &&
+                reply.find("PURGE INDEX needs the lock table") == std::string::npos) {
+                Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: " + reply);
+                return false;
+            }
+            break;
         case Op::Kind::kFilterScan:
             if (!CheckRead(it, op, reply, it.oracle.ExpectFilter(op.table, op.v),
                            /*ordered=*/false, op_index)) {
@@ -1386,6 +1396,10 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     options.cabins = toggles.cabins;
     options.access_statistics = toggles.access_statistics;
     options.read_off_reactor = toggles.read_off_reactor;
+    // DD: a lock table on one seed in four, so a `PURGE INDEX` the workload
+    // draws runs - and is crashed under - instead of being refused for want
+    // of one; the other three keep the shape every earlier corpus ran.
+    options.lock_table = config.seed % 4 == 3;
     // A cap per seed (BE-Q2): two of the three sit near the floor (128
     // system pages plus a working minimum of 256), so a seed's workload runs
     // against reclaim, and the third leaves room, so the corpus keeps the
@@ -1944,6 +1958,7 @@ bool SameOutcome(const Op& op, const std::string& bare, const std::string& full)
         case Op::Kind::kCreateTable:
         case Op::Kind::kCreateCabin:
         case Op::Kind::kCreateIndex:
+        case Op::Kind::kPurgeIndex:  // its count is the tree's, not a row's
         case Op::Kind::kCreateAssertion:
         case Op::Kind::kDropTable:  // its reply names an oid the features move
             return IsErr(bare) == IsErr(full);

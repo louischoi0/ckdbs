@@ -195,6 +195,7 @@ add_library(kds
     src/exec/bound_cabin.cpp
     src/exec/cabin_optimizer_exec.cpp
     src/exec/index_maintain.cpp
+    src/exec/index_purge.cpp
     src/sched/clock.cpp
     src/sched/scheduler.cpp
     src/sched/coro.cpp

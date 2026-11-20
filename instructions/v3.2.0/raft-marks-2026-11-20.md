@@ -253,3 +253,16 @@ took under them.
 | **Word** | *"tag 3.4.18"* |
 | **Mark** | **`v3.4.18`**, an annotated tag on `main` at `56d57f16`: DJ's connection cap, idle-session timeout, `RESET SESSION`, slot wait and bounded reply, with what bounds them in its message. The tagged tree ran 0 failed of 4,997; `tsan` and `bs-nightly` not run |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; the order's header; its index row |
+
+## 26. DD opened on the standing go-ahead, linked with DN
+
+| | |
+|---|---|
+| **Word** | *"5 hours 30 minutes from now, /go-ahead-achieving-milestone DD"*, then *"link the work that will start later with /go-ahead-achieving-milestone DN"*, then the skill invoked with `DD`, its argument naming the link, and *"go ahead"* (the first two given in Korean; recorded in English) |
+| **Mark** | **DD is opened**, on worktree `dd-index-entry-purge` from `054dbc5e` (`v3.4.17-1-g054dbc5e`), and DN is to follow it in the same session on the same go-ahead once DD closes. **No item below is the operator's own mark**: each is CLA's proposal, adopted by CLA on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone) |
+| **Adopted at DD-S0** | **DD-Q0 (a)** as written, its verdict **build** (cells 1 and 5 of `bench/v3.4.17/dd-s0-premise-v3.4.17-1-g054dbc5e.md`). **DD-Q1 `[quiet-wrong]` (b), revised from (a) against the tree**: a delete-marked row whose deleter every reader sees is owed nothing, since a heap and a Transition-governed relation refuse the row `PURGE` (a) waited for. **DD-Q2 `[quiet-wrong]` (a)** and **DD-Q3 `[quiet-wrong]` (a)**, their premises read again and holding. **DD-Q4 (a)**, **DD-Q5 (a)**, **DD-Q6 (a)** spelled `PURGE INDEX <name>` (an index has no namespace qualifier), **DD-Q7 (a)** |
+| **Adopted at the close** | **DD-Q7 (a)**: S0's cells again, purged against rebuilt, and the write path A/B - the bar met (`bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`). A regression in DD's own purpose found there - the statement held a writer on its core for its whole length, longer than the `REINDEX` stall it removes - remedied within DD as the skill's §3 says: a sliced run that yields (the order's §7, DD-S3) |
+| **Found at DD-S0** | **DD-R1's premise is false as written**: an `UPDATE` assigning a spilled covered value it already held appends no entry while its cell names a new spill. Fixed in the judge's comparison, not in the write path (the order's §7) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DD-S4, put to the operator at the close |
+| **Recorded at** | this file; the DD order's header and §7; the DD row in `instructions/v3.2.0/index.md` |
+

@@ -100,6 +100,12 @@ struct SimInstanceOptions {
     // request. Nothing real waits; what runs is the refusal, the discard and
     // the run-again, under every crash the harness takes.
     bool read_off_reactor = false;
+
+    // **The lock family, as a server has it** (DD): a lock table given to the
+    // transaction manager and the dispatcher, so a statement whose fence is
+    // a row's tuple unit - `PURGE INDEX` - runs here instead of being refused
+    // for want of one. Off by default: every corpus seed ran without it.
+    bool lock_table = false;
 };
 
 // A base backup the harness took (BR-S8): the data pages as the fuzzy copy
@@ -315,6 +321,7 @@ private:
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<txn::TrxIdSequence> trx_ids_;
     std::optional<txn::UndoLog> undo_;
+    std::unique_ptr<txn::LockTable> locks_;
     std::optional<txn::TransactionManager> txn_;
     std::optional<stats::TrailRecorder> trail_recorder_;
     std::optional<stats::CabinStore> cabin_store_;
