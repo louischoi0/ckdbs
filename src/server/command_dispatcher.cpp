@@ -57,6 +57,7 @@
 #include "kds/exec/assertion_catalog.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/index_ddl.hpp"
+#include "kds/exec/index_purge.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
 #include "kds/exec/clean_dropped.hpp"
@@ -15002,6 +15003,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     }
     const auto& stmt = std::get<parser::PurgeStmt>(parsed.value());
     if (stmt.dropped_columns) return HandlePurgeDroppedColumns(stmt, session);
+    if (stmt.index) return HandlePurgeIndex(stmt, session);
     const std::string at_name = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
 
     // A system relation never resolves (`Catalog::ResolveRelation` refuses
@@ -15190,6 +15192,112 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     stats::RelationStats::Record(core_id_, ta.oid, stats::RelationWrite::kPurge, purged);
     if (!keyed.ok()) return ended(Refused(partly(keyed, purged)));
     return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
+}
+
+DispatchOutcome CommandDispatcher::HandlePurgeIndex(const parser::PurgeStmt& stmt,
+                                                     Session& session) {
+    const std::string name_at = " (byte " + std::to_string(stmt.table_byte_offset) + ")";
+    // DD-R8: the fence is a row's tuple unit (DD-R3), and the judge's horizon
+    // the transaction manager's. Without either nothing keeps a writer off a
+    // row while its entries go, so the statement is refused, never answered
+    // a count of 0.
+    if (locks_ == nullptr || txn_ == nullptr) {
+        return Refused(Status::Unsupported(
+            "PURGE INDEX needs the lock table and the transaction manager, and this dispatcher "
+            "has " +
+            std::string(locks_ == nullptr ? "no lock table" : "no transaction manager") +
+            ": no unit would fence a row's writer while its entries are removed" + name_at));
+    }
+    auto named = ResolveNames(
+        session, [&](const txn::ReadView* v) -> StatusOr<std::optional<catalog::SysIndexRow>> {
+            return catalog_.LookupIndexByName(stmt.table_name, v);
+        });
+    if (!named.ok()) return Refused(named.status());
+    if (!named.value().has_value()) {
+        return Refused(Status::NotFound("no index named '" + stmt.table_name + "'" + name_at));
+    }
+    const catalog::Oid index_oid = named.value()->index_oid;
+    const catalog::Oid rel_oid = named.value()->table_oid;
+
+    std::uint64_t removed = 0;
+    std::uint64_t skipped = 0;
+    std::uint32_t attempts = 0;
+    std::vector<std::byte> resume;
+    const auto partly = [&](const Status& s) {
+        if (removed == 0) return s;
+        return s.WithMessage(s.message() + "; this PURGE INDEX removed " + std::to_string(removed) +
+                             " entr" + (removed == 1 ? "y" : "ies") +
+                             " before it, and running it again goes on");
+    };
+    do {
+        // **An owned transaction per attempt** (DD §2, as `PURGE`'s BH-R5):
+        // between attempts nothing is held - no `IX` keeping a DDL out, no
+        // unit keeping a writer off.
+        auto opened = BeginWrite(session);
+        if (!opened.ok()) return Refused(partly(opened.status()));
+        WriteScope scope = opened.value();
+        const auto ended = [&](const Status& verdict) -> DispatchOutcome {
+            (void)EndWrite(session, scope, verdict);
+            return Refused(partly(verdict));
+        };
+        // DD-R10: the relation's `IX` for the attempt, which a DDL's `X` and
+        // an online build's drain wait for.
+        if (std::optional<Status> held = BorrowOrWait(scope, txn::LockKey::Relation(rel_oid),
+                                                      RepeatableReadWait::kCapable)) {
+            // A park re-runs the statement from its first leaf. Before any
+            // attempt that is free; after one it would throw away the walk
+            // done, and steady catalog churn could restart it for ever, so the
+            // statement ends here with its count and says to run it again
+            // (DD-R9).
+            if (attempts > 0 && lock_wait_.has_value()) {
+                locks_->DropWake(lock_wait_->key, lock_wait_->slot);
+                lock_wait_.reset();
+            }
+            return ended(*held);
+        }
+        auto access = catalog_.InitTableAccess(rel_oid);
+        if (!access.ok()) return ended(access.status());
+        const catalog::TableAccess& ta = *access.value();
+        const catalog::TableAccess::IndexRef* ix = nullptr;
+        for (const auto& candidate : ta.indexes) {
+            if (candidate.index_oid == index_oid) ix = &candidate;
+        }
+        if (ix == nullptr) {
+            return ended(Status::TxnConflict("index '" + stmt.table_name +
+                                             "' was dropped while the statement ran" + name_at));
+        }
+        // DD-R8: an online build's backfill appends to its own index with no
+        // row unit (DD-S0's census), so that index is not purged until its
+        // build ends.
+        if (ix->building) {
+            return ended(Status::TxnConflict("index '" + stmt.table_name +
+                                             "' is still being built; PURGE INDEX can be run "
+                                             "once its CREATE INDEX finishes" +
+                                             name_at));
+        }
+        exec::IndexPurgeAttempt attempt;
+        Status ran = Status::OK();
+        {
+            const storage::DrainOnPressure drain(page_store_);
+            ran = exec::PurgeIndexLeaves(page_store_, catalog_, ta, txn_, wal_, *locks_,
+                                         scope.txn->id(), scope.txn->borrows(), *ix, resume,
+                                         exec::kPurgeIndexLeavesPerAttempt, attempt);
+        }
+        // Counted whatever the answer: a refused attempt keeps every leaf it
+        // rewrote (DD-R9).
+        removed += attempt.removed;
+        skipped += attempt.skipped;
+        resume = std::move(attempt.resume);
+        ++attempts;
+        if (!ran.ok()) return ended(ran);
+        if (Status s = EndWrite(session, scope, Status::OK()); !s.ok()) {
+            return Refused(partly(s));
+        }
+    } while (!resume.empty());
+    return {"PURGED INDEX name=" + stmt.table_name + " entries=" + std::to_string(removed) +
+                " skipped_rows=" + std::to_string(skipped) +
+                " attempts=" + std::to_string(attempts),
+            false, removed};
 }
 
 DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::PurgeStmt& stmt,

@@ -12,6 +12,7 @@
 #include "kds/storage/insert_placement.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/index/index_tree.hpp"
+#include "kds/storage/tagged_cell.hpp"
 #include "kds/txn/visibility.hpp"
 
 namespace kds::exec {
@@ -57,12 +58,39 @@ bool Moved(const catalog::TableAccess& access, std::span<const parser::AstValue>
                           parser::CompareOp::kEq);
 }
 
-index::IndexLayout LayoutOf(const catalog::TableAccess::IndexRef& ix) {
-    index::IndexLayout layout;
-    layout.key_width = ix.key_width;
-    layout.covered_width =
-        static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexTupleKeyWidth);
-    return layout;
+// The covered half of an entry, verbatim from the encoded tuple `row` -
+// byte-identical to the page by construction, spill pointer included - into
+// `out`, exactly `covered_width` bytes. The one copy the write hook and the
+// purge's judge both make (DD-R1).
+Status CopyCoveredInto(const catalog::TableAccess& access,
+                       const catalog::TableAccess::IndexRef& ix, std::span<const std::byte> row,
+                       std::span<std::byte> out) {
+    std::size_t at = 0;
+    for (std::uint16_t col : ix.covered()) {
+        auto width = catalog::RowLayout::ColumnWidth(access.schema.columns[col],
+                                                      access.layout.inline_cell_width);
+        if (!width.ok()) return width.status();
+        const std::size_t offset = access.layout.offsets[col];
+        if (offset + width.value() > row.size() || at + width.value() > out.size()) {
+            return Status::Corruption("index '" + std::to_string(ix.index_oid) +
+                                      "' covered column " + std::to_string(col) +
+                                      " does not fit the row it was written from");
+        }
+        std::memcpy(out.data() + at, row.data() + offset, width.value());
+        at += width.value();
+    }
+    // The covered half's twin of the key's check in `EncodeKeyInto`. The
+    // loop refuses an overrun only; an underrun - a damaged `sys.indexes`
+    // row covering less than its `entry_width` counts - would leave the
+    // tail of the caller's buffer uninitialized for `IndexInsert` to store
+    // (the audit's G36; index.md §4.2).
+    if (at != out.size()) {
+        return Status::Corruption("index '" + std::to_string(ix.index_oid) +
+                                  "' covered columns encoded to " + std::to_string(at) +
+                                  " bytes, but its catalog row declares " +
+                                  std::to_string(out.size()));
+    }
+    return Status::OK();
 }
 
 // Encodes `ix`'s key from `values` into `out` (`key_width` bytes), and
@@ -133,7 +161,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::span<const parser::AstValue> previous,
                                   const IndexWriteLog* log, catalog::Catalog* publish) {
     const bool is_update = !previous.empty();
-    const index::IndexLayout layout = LayoutOf(ix);
+    const index::IndexLayout layout = IndexLayoutOf(ix);
 
     // Uninitialized on purpose: every byte of the key is written by the
     // encoder, which errors if the widths disagree, and zeroing 4 KB per
@@ -155,41 +183,14 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     // would drop a row that now matches.
     std::array<std::byte, index::kMaxIndexEntryWidth> covered_buf;
     std::span<std::byte> covered(covered_buf.data(), layout.covered_width);
-    std::size_t covered_at = 0;
-    for (std::uint16_t col : ix.covered()) {
-        auto width = catalog::RowLayout::ColumnWidth(access.schema.columns[col],
-                                                      access.layout.inline_cell_width);
-        if (!width.ok()) return width.status();
-
-        const std::size_t offset = access.layout.offsets[col];
-        if (offset + width.value() > row.size() ||
-            covered_at + width.value() > covered.size()) {
-            return Status::Corruption("index '" + std::to_string(ix.index_oid) +
-                                      "' covered column " + std::to_string(col) +
-                                      " does not fit the row it was written from");
-        }
-        // Verbatim from the encoded tuple - byte-identical to the page
-        // by construction, spill pointer included.
-        std::memcpy(covered.data() + covered_at, row.data() + offset, width.value());
-        covered_at += width.value();
-
-        if (is_update && !touched) {
+    if (Status s = CopyCoveredInto(access, ix, row, covered); !s.ok()) return s;
+    if (is_update && !touched) {
+        for (std::uint16_t col : ix.covered()) {
             auto value = ValueFor(access, values, first_col_pos, col);
             if (!value.ok()) return value.status();
             touched = Moved(access, previous, col, value.value());
+            if (touched) break;
         }
-    }
-    // The covered half's twin of the key's check in `EncodeKeyInto`. The
-    // loop refuses an overrun only; an underrun - a damaged `sys.indexes`
-    // row covering less than its `entry_width` counts - would leave the
-    // tail of `covered_buf` uninitialized stack for `IndexInsert` to store
-    // (the audit's G36; index.md §4.2). Ahead of the untouched return, as
-    // the key's is.
-    if (covered_at != covered.size()) {
-        return Status::Corruption("index '" + std::to_string(ix.index_oid) +
-                                  "' covered columns encoded to " + std::to_string(covered_at) +
-                                  " bytes, but its catalog row declares " +
-                                  std::to_string(covered.size()));
     }
 
     // **§2's rule: an UPDATE that moved nothing this index cares about
@@ -268,6 +269,60 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     return kInvalidPageId;
 }
 
+StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& access,
+                                                  const catalog::TableAccess::IndexRef& ix,
+                                                  std::span<const parser::AstValue> values,
+                                                  std::span<const std::byte> row,
+                                                  std::uint64_t tuple_key) {
+    const index::IndexLayout layout = IndexLayoutOf(ix);
+    std::array<std::byte, index::kMaxIndexEntryWidth> key_buf;
+    std::span<std::byte> key(key_buf.data(), layout.key_width);
+    auto keyed = EncodeKeyInto(access, ix, values, /*first_col_pos=*/0, /*previous=*/{}, key,
+                               /*coerced=*/nullptr);
+    if (!keyed.ok()) return keyed.status();
+    // `key || tuple key` by the tree's own composer, as `IndexInsert` makes
+    // it (the sort key is the whole entry, IX4b, its covered tail zeroed),
+    // then the covered half by the write hook's own copy.
+    std::vector<std::byte> entry(layout.leaf_entry_width());
+    const std::span<std::byte> out(entry);
+    if (Status s = index::EncodeIndexSortKey(layout, key, tuple_key, out); !s.ok()) return s;
+    if (Status s = CopyCoveredInto(access, ix, row,
+                                   out.subspan(layout.key_width + index::kIndexTupleKeyWidth));
+        !s.ok()) {
+        return s;
+    }
+    return entry;
+}
+
+bool SameOwedEntry(const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
+                   std::span<const std::byte> stored, std::span<const std::byte> owed) {
+    if (stored.size() != owed.size()) return false;
+    std::size_t at = ix.key_width + index::kIndexTupleKeyWidth;
+    if (std::memcmp(stored.data(), owed.data(), at) != 0) return false;
+    for (std::uint16_t col : ix.covered()) {
+        const catalog::SysColumnRow& column = access.schema.columns[col];
+        auto width = catalog::RowLayout::ColumnWidth(column, access.layout.inline_cell_width);
+        if (!width.ok() || at + width.value() > stored.size()) return false;
+        const auto a = stored.subspan(at, width.value());
+        const auto b = owed.subspan(at, width.value());
+        at += width.value();
+        if (std::memcmp(a.data(), b.data(), a.size()) == 0) continue;
+        if (column.type_val != catalog::kTypeValVarchar) return false;
+        // DD-S0's finding: an UPDATE that assigns a spilled value it held
+        // again moves nothing by value and appends nothing, while the
+        // version's cell names the new spill. Two spilled cells of one
+        // length are taken as one value: kept, never removed.
+        auto ca = storage::DecodeCell(a);
+        auto cb = storage::DecodeCell(b);
+        if (!ca.ok() || !cb.ok()) return false;
+        if (ca.value().tag != storage::CellTag::kSpilled ||
+            cb.value().tag != storage::CellTag::kSpilled || ca.value().len != cb.value().len) {
+            return false;
+        }
+    }
+    return at == stored.size();
+}
+
 // ---- Unique indexes (BX) --------------------------------------------------
 
 StatusOr<std::optional<UniqueKey>> EncodeUniqueKey(const catalog::TableAccess& access,
@@ -318,7 +373,7 @@ StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
                                        const catalog::TableAccess::IndexRef& ix,
                                        const UniqueKey& key, const txn::ReadView& check_view,
                                        std::uint64_t self) {
-    const index::IndexLayout layout = LayoutOf(ix);
+    const index::IndexLayout layout = IndexLayoutOf(ix);
 
     // Phase 1: the tuple keys the run names, distinct. The seek is `(key, 0)`
     // - the tuple key is the sort key's tail (IX4b) - and the walk stops at

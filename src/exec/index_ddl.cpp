@@ -88,6 +88,9 @@ struct Backfill {
     bool online = false;
     const IndexWriteLog* log = nullptr;
     std::uint64_t high_water = 0;
+    // The judge of an index entry purge (DD-R1): set, every version's entry
+    // is collected here instead of appended, and the tree is not touched.
+    std::vector<std::vector<std::byte>>* owed = nullptr;
 };
 
 // BX-R7: a unique index's build refuses a key two live rows hold. Asked of
@@ -225,6 +228,12 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
     storage::PageStore& store = cx.store;
     const catalog::TableAccess& access = cx.access;
 
+    if (cx.owed != nullptr) {
+        auto entry = EncodeIndexEntry(access, ix, row, payload, tuple_key);
+        if (!entry.ok()) return entry.status();
+        cx.owed->push_back(std::move(entry.value()));
+        return row;
+    }
     if (cx.online) {
         // CI-R6: one root, the slot's. Writers grow the tree too, and each
         // growth is published to the slot under the divide's holds, so the
@@ -407,7 +416,7 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
             }
         }
         if (!stale) {
-            if (ix.unique) {
+            if (ix.unique && cx.owed == nullptr) {
                 if (Status s = CheckBuiltKeyUnique(cx.store, cx.access, ix, row, latest.value());
                     !s.ok()) {
                     return s;
@@ -1010,6 +1019,33 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
         return s;
     }
     return row.value().index_oid;
+}
+
+StatusOr<std::vector<std::vector<std::byte>>> OwedIndexEntries(
+    storage::PageStore& store, catalog::Catalog& catalog, const catalog::TableAccess& access,
+    const txn::TransactionManager* txns, catalog::TableAccess::IndexRef ix,
+    std::uint64_t tuple_key) {
+    std::vector<std::vector<std::byte>> owed;
+    Backfill cx{store, catalog, access, txns, /*progress=*/nullptr};
+    // Online's caution (CI-R7): a head writer in flight is never trusted
+    // resolved, so its undo - the version a rollback restores - is owed too.
+    cx.online = true;
+    cx.owed = &owed;
+    auto row = ReadRowAgain(cx, tuple_key);
+    if (!row.ok()) return row.status();
+    if (!row.value().has_value()) return owed;  // no slot: owed nothing
+    StagedRow& head = *row.value();
+    // DD-Q1 (b): a delete-marked row whose deleter every reader sees is
+    // reached by no reader through any version, so it is owed nothing.
+    if (head.deleted && !head.head_in_flight && txns != nullptr &&
+        txns->ResolvedForEveryReader(head.trx_id)) {
+        return owed;
+    }
+    txn::UndoLog undo(store);
+    if (Status s = IndexStagedRow(cx, ix, undo, std::move(head)); !s.ok()) return s;
+    std::sort(owed.begin(), owed.end());
+    owed.erase(std::unique(owed.begin(), owed.end()), owed.end());
+    return owed;
 }
 
 }  // namespace kds::exec

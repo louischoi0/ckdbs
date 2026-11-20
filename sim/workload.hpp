@@ -112,6 +112,9 @@ struct Op {
         // transaction: every later read of `v` may go through it, and no
         // answer may change for it.
         kCreateIndex,
+        // `PURGE INDEX <t>_v` (DD): drawn where a `kCreateIndex` would be,
+        // once the relation has its index. Changes no row an oracle holds.
+        kPurgeIndex,
         // The asserted relation's bound (`kAsserted`), declared once, after
         // the tables.
         kCreateAssertion,

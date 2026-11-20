@@ -45,6 +45,7 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kSelectOrdered: return "select-ordered";
         case Op::Kind::kSelectSubquery: return "select-subquery";
         case Op::Kind::kCreateIndex: return "create-index";
+        case Op::Kind::kPurgeIndex: return "purge-index";
         case Op::Kind::kCreateAssertion: return "create-assertion";
     }
     return "unknown";
@@ -58,7 +59,7 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
           Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable,
           Op::Kind::kPurge, Op::Kind::kAlterColumn, Op::Kind::kSelectJoin,
           Op::Kind::kSelectAggregate, Op::Kind::kSelectOrdered, Op::Kind::kSelectSubquery,
-          Op::Kind::kCreateIndex, Op::Kind::kCreateAssertion}) {
+          Op::Kind::kCreateIndex, Op::Kind::kPurgeIndex, Op::Kind::kCreateAssertion}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
@@ -551,6 +552,14 @@ Op Workload::Query(bool ddl) {
     if (roll == 4 && indexed_.insert(a.name).second) {
         op.kind = Op::Kind::kCreateIndex;
         op.sql = "CREATE INDEX " + a.name + "_v ON " + a.name + " (v)";
+        return op;
+    }
+    if (roll == 4) {
+        // DD: the relation has its index, so the roll purges it. No draw of
+        // its own, so every generator's stream is the one it was before; the
+        // op itself replaces the aggregate read this roll fell to.
+        op.kind = Op::Kind::kPurgeIndex;
+        op.sql = "PURGE INDEX " + a.name + "_v";
         return op;
     }
     switch (roll) {

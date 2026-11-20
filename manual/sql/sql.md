@@ -542,6 +542,35 @@ not yet purged keeps its entry.
 - Queries answer exactly as before; the old tree's pages are returned as a
   dropped index's are.
 - A refused rebuild changes nothing: the old index stays and serves.
+### PURGE INDEX
+
+```
+PURGE INDEX ix_owner;
+-- PURGED INDEX name=ix_owner entries=2711 skipped_rows=0 attempts=3
+```
+
+Takes out of a live index the entries `REINDEX` would leave out - rolled
+back inserts, purged rows, earlier values no running transaction can still
+read - and, unlike `REINDEX`, the entries of a deleted row once every
+running transaction sees the delete. **Writes go on while it runs**: it
+holds the relation the way a writer does, never the `REINDEX`'s exclusive
+hold, and works 64 leaves at a time.
+
+- **Admin, autocommit only.** Inside `BEGIN` it is refused
+  `NOT_IMPLEMENTED`, and the transaction goes on.
+- **A row being written is passed over**, its entries kept, and counted in
+  `skipped_rows=`; running it again later takes them.
+- Queries answer exactly as before. The tree keeps its pages: a leaf left
+  thin is refilled by later inserts, and only `REINDEX` returns pages.
+- **Each leaf keeps its first entry**, so at most one dead entry a leaf
+  survives.
+- A spilled `COVERING` value an `UPDATE` assigned again keeps its old
+  entry: such churn is never purged.
+- If it must wait after its first batch, or is refused part-way, it stops
+  with what it removed and says so; running it again goes on.
+- Refused on an index still being built (`TXN_CONFLICT`), and on a server
+  with no lock table (`UNSUPPORTED`).
+
 - **A relation's anchor page holds at most 679 index slots**, and a dropped
   index keeps its slot until its pages are returned, so on a relation whose
   slots are all taken `REINDEX` is refused `RESOURCE_EXHAUSTED` until that

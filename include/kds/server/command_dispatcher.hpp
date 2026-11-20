@@ -2443,6 +2443,10 @@ private:
     // for every reader, or a statement still on an older schema word, is
     // returned as `purge_wait`; the rows cleaned before it stay clean.
     DispatchOutcome HandlePurgeDroppedColumns(const parser::PurgeStmt& stmt, Session& session);
+    // `PURGE INDEX <name>` (DD, `instructions/v3.2.0/workorder-dd-index-entry-purge.md`):
+    // a sequence of attempts, each an owned transaction holding the
+    // relation `IX` across `exec::kPurgeIndexLeavesPerAttempt` leaves.
+    DispatchOutcome HandlePurgeIndex(const parser::PurgeStmt& stmt, Session& session);
     // `resume_from` is where a parked walk of this statement stopped
     // (AO-S3b); an inactive cursor is a first run and starts at the head,
     // which is what every caller but `DispatchAsync`'s resume passes. Not

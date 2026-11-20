@@ -14,6 +14,7 @@
 #include <string>
 
 #include "kds/exec/index_key.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/exec/inner_build.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/tuple_verify.hpp"
@@ -1778,11 +1779,7 @@ private:
     }
 
     static index::IndexLayout LayoutOf(const catalog::TableAccess::IndexRef& ix) {
-        index::IndexLayout layout;
-        layout.key_width = ix.key_width;
-        layout.covered_width =
-            static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexTupleKeyWidth);
-        return layout;
+        return IndexLayoutOf(ix);
     }
 
     // ---- The ordered index run (CV O1) ---------------------------------

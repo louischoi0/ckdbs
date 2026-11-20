@@ -638,7 +638,9 @@ reclaim for the life of the process. So the reclaim reads two other bounds:
 the durable redo start, for replay, and the statement epoch each core
 publishes at its statement head, for readers.
 
-Two purges consume it. The catalog delete-mark purge (`ddl-transactional.md`
+Three purges consume it. `PURGE INDEX` (`index.md` §2.2) removes a
+secondary-index entry once the version it is owed for is superseded by a
+writer `ResolvedForEveryReader` answers for, or its row's delete is. The catalog delete-mark purge (`ddl-transactional.md`
 §5d) judges each mark's deleter by the two branches
 (`TransactionManager::ResolvedForEveryReader`). The **undo purge** settles a
 page by its newest writer's id against the **floor** alone — a page knows

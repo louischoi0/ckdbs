@@ -687,8 +687,9 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     divided, so a thinned leaf holds its slots until an insert needs them.
   - **A wide window collects every target before it writes**, so its
     target list grows with the window.
-  - **A purged version's secondary-index entries are never removed** (BH-Q8
-    (a)); a key placed again appends beside them (`index.md` IX4b).
+  - **A row `PURGE` removes no secondary-index entry** (BH-Q8 (a)); a key
+    placed again appends beside them (`index.md` IX4b), and `PURGE INDEX`
+    (`index.md` §2.2) takes the purged version's out.
   - **The audit claim carries the exception**: a key is never reissued
     except by an explicit, logged `PURGE`, and an external system that
     captured a Keystone id must treat a purged key as a new identity.
@@ -3245,4 +3246,28 @@ the thirteen fixes leave, each `[source-read]` unless marked.
 - **`FindIndexByName` has no caller in the engine**: the statements ask
   `LookupIndexByName`, and the `NotFound`-shaped form is kept for the cells
   that open an index by its name (about 25 call sites in 9 test files).
+
+## Index entry purge (DD)
+
+Verified on worktree `dd-index-entry-purge` (DD-S2, 2026-11-20).
+
+- **Nothing drives it**: `PURGE INDEX` runs when an administrator runs it
+  (DD-Q4 (a)); DD-S4, a background driver, is put to the operator. Under
+  DN's heap a slot is freed only by entry removal, so DN needs a driver
+  that runs unasked.
+- **A statement does not yield between attempts**: its attempts run back
+  to back on its core's reactor, each bounded to 64 leaves under the
+  relation `IX`, and the core's other sessions wait for the whole
+  statement.
+- **A leaf's first entry is never removed** (`index.md` IX2c), so a dead
+  first entry survives every purge; on a DN heap that would be one slot a
+  leaf of each index never freed. DM's U2b (a bound kept on the page) is
+  what would lift it.
+- **Spilled covered churn under one key is never purged**
+  (`SameOwedEntry`'s spilled-cell rule, DD-S0's finding).
+- **Not tested**: a divide forced between a leaf's copy and its removal,
+  and two `PURGE INDEX` runs of one index on two cores at once; the
+  descent's coverage check and the tuple unit are what make both safe.
+- **The simulator draws it on one seed in four with a lock table**; the
+  other three answer it with the refusal by name.
 
