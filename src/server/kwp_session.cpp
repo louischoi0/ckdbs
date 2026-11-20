@@ -427,7 +427,18 @@ FrameAction KwpSession::OnFrame(const wire::DecodedFrame& frame, std::vector<std
     // statement.
     if (phase_ == Phase::kReady && session_.TakeCancel()) {
         session_.Poison();
-        return Refuse(out, wire::ErrorFromStatus(Status::Cancelled("cancelled by request")));
+        FrameAction refused =
+            Refuse(out, wire::ErrorFromStatus(Status::Cancelled("cancelled by request")));
+        // **A refused `C_SYNC` is still the barrier** (§3 item 4: `S_READY`
+        // after every `C_SYNC`; §5's skip-to-sync ends at it). The frame
+        // the error would skip to is this one, so it is answered now and
+        // nothing is skipped after it - else a client that pipelined
+        // `EXECUTE, SYNC` waits for an `S_READY` only a second sync brings.
+        if (type == ClientFrameType::kSync) {
+            skipping_to_sync_ = false;
+            SendReady(out);
+        }
+        return refused;
     }
 
     // **A cancel connection** (§10): `C_CANCEL` as the first frame, matched

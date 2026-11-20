@@ -1202,9 +1202,6 @@ holds the history, and the mechanisms are `docs/spec/crosscore.md` CC1 and
   interactive session off it from its next head, but a writer that declares
   nothing leaves the partition inactive and the placement BL-S3's. Not
   re-measured since BL-S4.
-- **`TRACE ON` is per core, not per session** (`CommandDispatcher::tracing_`).
-  It always was; since BL-S3 moves sessions, a session's trace stops when it
-  moves and another session landing on the traced core is traced instead.
 - **Tools that pin a session by reconnecting until `SHOW META` names a
   core** (`tools/multicore_benchmark.py`, `lock_contention_benchmark.py`,
   `bi_checkpoint_stall.py`, `bb_concurrent_benchmark.py`, `bl_mixed.py`'s

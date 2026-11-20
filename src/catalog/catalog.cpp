@@ -35,7 +35,7 @@ namespace kds::catalog {
 // map hands out, and no two share one (well_known.hpp).
 static_assert(CatalogRootsAreDistinctAndFixed(server::kFirstUserPageId),
               "every fixed catalog root must be unique and sit below the first user page; "
-              "add a new root past the highest, in the unused ids 18..127");
+              "add a new root past the highest, in the unused ids 19..127");
 
 namespace {
 

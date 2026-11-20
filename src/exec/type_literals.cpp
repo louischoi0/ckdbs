@@ -269,16 +269,17 @@ StatusOr<Acc> ParseDecimalInto(std::string_view text, std::uint8_t precision,
 
     // A literal shorter than the scale is exact and scales up: `'12.3'` at
     // scale 2 is 1230, because the scale is part of the value's meaning.
-    for (std::size_t i = frac.size(); i < scale; ++i) {
-        unscaled *= 10;
-        ++digits;
-    }
+    // The digits it scales to are checked against the precision before any
+    // multiply: the precision is at most `digit_cap`, so a value that passes
+    // scales up inside Acc, where one refused here could overflow it.
+    digits += static_cast<std::uint32_t>(scale - frac.size());
     if (digits > precision) {
         return Status::OutOfRange("'" + std::string(text) + "' needs " +
                                    std::to_string(digits) +
                                    " significant digits, more than the column's precision " +
                                    std::to_string(precision));
     }
+    for (std::size_t i = frac.size(); i < scale; ++i) unscaled *= 10;
     return negative ? -unscaled : unscaled;
 }
 

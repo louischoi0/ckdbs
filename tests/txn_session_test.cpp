@@ -1489,6 +1489,32 @@ TEST_F(TxnSessionTest, AnExpiredSessionRefusesWithTheLifetimeDetailUntilItsRollb
     EXPECT_EQ(Run(s, "INSERT INTO t VALUES (2, 20)").substr(0, 8), "INSERTED");
 }
 
+// Every clause refusal of BEGIN names the offending token's byte in the
+// statement, and a missing token the statement's end (audit H11).
+TEST_F(TxnSessionTest, BeginsClauseRefusalsCarryTheOffendingTokensByte) {
+    Session s;
+    const auto expect_at = [&](const std::string& sql, std::size_t byte, const char* text) {
+        const std::string reply = Run(s, sql);
+        EXPECT_EQ(reply.rfind("ERR ", 0), 0u) << sql << ": " << reply;
+        EXPECT_NE(reply.find(text), std::string::npos) << sql << ": " << reply;
+        EXPECT_NE(reply.find("(byte " + std::to_string(byte) + ")"), std::string::npos)
+            << sql << ": " << reply;
+        EXPECT_EQ(s.state(), Session::State::kIdle) << sql;
+    };
+    std::string sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONYL";
+    expect_at(sql, sql.find("ONYL"), "expected ONLY or WRITE after READ");
+    sql = "BEGIN READ";
+    expect_at(sql, sql.size(), "expected ONLY or WRITE after READ");
+    sql = "BEGIN ISOLATION LEVL READ COMMITTED";
+    expect_at(sql, sql.find("LEVL"), "expected LEVEL after ISOLATION");
+    sql = "BEGIN ISOLATION LEVEL SNAPSHOT";
+    expect_at(sql, sql.find("SNAPSHOT"), "unknown isolation level");
+    sql = "BEGIN DURABILITY EVENTUAL";
+    expect_at(sql, sql.find("EVENTUAL"), "unknown durability class");
+    sql = "BEGIN TRANSACTION NOW";
+    expect_at(sql, sql.find("NOW"), "after BEGIN, got 'NOW'");
+}
+
 // **AJ-T1's six `FkPendingDeleteClearTest` cells went at AT-S5f**, with
 // the table they registered into: they pinned that a session's
 // pending-delete registrations ended when its transaction did, whatever

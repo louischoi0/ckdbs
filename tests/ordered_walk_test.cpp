@@ -2,11 +2,16 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/step_compiler.hpp"
+#include "kds/exec/step_vm.hpp"
+#include "kds/parser/parser.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 
@@ -414,6 +419,97 @@ TEST_F(OrderedIndexWalkTest, AJoinKeepsTheOrderedDriversOrder) {
         "SELECT ev.id, k.label FROM ev JOIN k ON k.id = ev.kind WHERE ev.user_id = 2 "
         "ORDER BY ev.created_at",
         17, 3, "index_asc");
+}
+
+// ---- The ordered runs at every slice size (audit H17) ----------------------
+//
+// The dispatcher slices at 16 or 64; `SlicePolicy` states no minimum. At one
+// page a slice, a forward pass that ended on a due slice re-sought to the
+// leaf it had just read - the re-read alone made the slice due again - and
+// the walk yielded forever on its first leaf. Each run here is driven to its
+// end under a bounded number of resumes and checked against the order the
+// load defines, beside the relation walk's one-page cell in
+// exec_chain_test.cpp.
+TEST_F(OrderedIndexWalkTest, AnOrderedWalkReachesItsEndAtOnePageASlice) {
+    LoadEvents();
+    Run("CREATE INDEX ev_at ON ev (created_at)");
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    const auto created_at = [](std::uint64_t id) { return (id * 389) % 1000 / 7; };
+
+    struct Walked {
+        std::vector<std::uint64_t> ids;
+        std::uint64_t leaves = 0;
+    };
+    const auto walk_at = [&](const std::string& sql, std::uint32_t pages_per_slice,
+                             exec::EmitOrder order) -> Walked {
+        Walked out;
+        auto parsed = parser::Parse(sql);
+        EXPECT_TRUE(parsed.ok()) << sql;
+        if (!parsed.ok()) return out;
+        auto chain = exec::Compile(boot_->catalog, std::get<parser::SelectStmt>(parsed.value()));
+        EXPECT_TRUE(chain.ok()) << sql << ": " << chain.status().message();
+        if (!chain.ok()) return out;
+        EXPECT_EQ(chain.value().steps.front().emit_order, order) << sql;
+        exec::ExecStats stats;
+        exec::SlicePolicy policy;
+        policy.pages_per_slice = pages_per_slice;
+        const exec::StepChain& c = chain.value();
+        sched::Coro walk = exec::ExecuteAsync(
+            boot_->catalog, store_, c,
+            [&](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+                out.ids.push_back(static_cast<std::uint64_t>(frame.Get(c.projection.front()).int_val));
+                return storage::VisitControl::kContinue;
+            },
+            &stats, exec::Budget(), /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
+            /*snapshot=*/nullptr, /*indexes=*/true, policy);
+        for (int resumes = 0; !walk.done(); ++resumes) {
+            if (resumes > 100000) {
+                ADD_FAILURE() << sql << " at " << pages_per_slice << " page(s) a slice never ended";
+                return out;
+            }
+            if (!walk.TryResumeDeepest()) {
+                ADD_FAILURE() << sql << ": the walk parked beneath a slice boundary";
+                return out;
+            }
+        }
+        EXPECT_TRUE(walk.result().ok()) << sql << ": " << walk.result().message();
+        out.leaves = stats.Total().pages_fetched;
+        return out;
+    };
+
+    const struct {
+        std::string sql;
+        exec::EmitOrder order;
+        bool (*admits)(int);
+    } cases[] = {
+        {"SELECT id FROM ev ORDER BY created_at LIMIT 5000", exec::EmitOrder::kIndexKeyForward,
+         [](int) { return true; }},
+        {"SELECT id FROM ev WHERE user_id = 3 ORDER BY created_at LIMIT 5000",
+         exec::EmitOrder::kIndexKeyForward, [](int i) { return i % 31 != 0 && i % 3 != 0; }},
+        {"SELECT id FROM ev ORDER BY created_at DESC LIMIT 5000",
+         exec::EmitOrder::kIndexKeyBackward, [](int) { return true; }},
+    };
+    for (const auto& one : cases) {
+        const bool descending = one.order == exec::EmitOrder::kIndexKeyBackward;
+        // The load's own order: by created_at, ties by tuple key, both
+        // reversed for a descending walk (CV-Q4 (a)).
+        std::vector<std::uint64_t> want;
+        for (int i = 1; i <= 930; ++i) {
+            if (one.admits(i)) want.push_back(static_cast<std::uint64_t>(i));
+        }
+        std::stable_sort(want.begin(), want.end(), [&](std::uint64_t a, std::uint64_t b) {
+            return created_at(a) < created_at(b);
+        });
+        if (descending) std::reverse(want.begin(), want.end());
+
+        const Walked wide = walk_at(one.sql, 64, one.order);
+        ASSERT_GE(wide.leaves, 2u) << one.sql << ": the run never left its first leaf";
+        EXPECT_EQ(wide.ids, want) << one.sql << " at 64 pages a slice";
+        for (const std::uint32_t pages : {1u, 2u}) {
+            EXPECT_EQ(walk_at(one.sql, pages, one.order).ids, want)
+                << one.sql << " at " << pages << " page(s) a slice";
+        }
+    }
 }
 
 }  // namespace

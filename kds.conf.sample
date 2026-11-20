@@ -3,7 +3,8 @@
 # Copy to kds.conf (or anywhere) and pass with:  kds_server --config <path>
 #
 # Format is `key = value`, one per line. `#` starts a comment. Quote a value
-# to keep surrounding whitespace or a literal '#'.
+# to keep surrounding whitespace or a literal '#'; after the closing quote
+# only whitespace or a `#` comment may follow, and anything else is refused.
 #
 # Precedence: built-in defaults, then this file, then command-line flags.
 # A later source wins, so a flag can override a deployed file for one run.

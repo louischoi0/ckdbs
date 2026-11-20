@@ -61,6 +61,36 @@ TEST(ConfigFileTest, QuotesPreserveWhitespaceAndHashes) {
     EXPECT_EQ(config.GetString("log_dir").value(), "/var/log/my db");
 }
 
+// A quoted value runs to its matching quote: a '#' inside it is the value's,
+// and a trailing comment after it is still a comment.
+TEST(ConfigFileTest, AQuotedHashIsKeptAndATrailingCommentIsStripped) {
+    ConfigFile config = ParseOk(
+        "log_file = \"kdb#1.log\"   # per instance\n"
+        "wal_dir = '#wal'\n"
+        "data_file = \"  spaced  \"#tight comment\n"
+        "users_file = \"a#b\"\n");
+    EXPECT_EQ(config.GetString("log_file").value(), "kdb#1.log");
+    EXPECT_EQ(config.GetString("wal_dir").value(), "#wal");
+    EXPECT_EQ(config.GetString("data_file").value(), "  spaced  ");
+    EXPECT_EQ(config.GetString("users_file").value(), "a#b");
+}
+
+TEST(ConfigFileTest, TextAfterAClosingQuoteIsRejectedWithItsLine) {
+    auto config = ConfigFile::Parse("port = 1\nlog_file = \"kdb.log\" extra\n", "test.conf");
+    ASSERT_FALSE(config.ok());
+    EXPECT_EQ(config.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(config.status().message().find("test.conf:2"), std::string::npos)
+        << config.status().message();
+}
+
+TEST(ConfigFileTest, AnUnterminatedQuoteIsRejectedWithItsLine) {
+    auto config = ConfigFile::Parse("log_file = \"kdb#1.log   # per instance\n", "test.conf");
+    ASSERT_FALSE(config.ok());
+    EXPECT_EQ(config.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(config.status().message().find("test.conf:1"), std::string::npos)
+        << config.status().message();
+}
+
 TEST(ConfigFileTest, MissingFileIsNotFoundNotAnEmptyConfig) {
     auto config = ConfigFile::Load("/nonexistent/kds/does-not-exist.conf");
     EXPECT_FALSE(config.ok());

@@ -174,6 +174,31 @@ TEST(TypeLiteralsTest, AValueTooLargeForItsPrecisionIsRefused) {
     EXPECT_TRUE(ParseDecimalLiteral("9.99", 3, 2).ok());
 }
 
+// Audit H16: a literal whose digits fit the accumulator but whose scale-up
+// would not is refused on its precision before any multiply - the scaled
+// value of 18 nines at scale 2 passes INT64_MAX, and of 38 at scale 2 the
+// Int128's ceiling, so a multiply first is signed overflow.
+TEST(TypeLiteralsTest, ALiteralTooLargeOnceScaledIsRefusedBeforeItScales) {
+    for (const char* text : {"999999999999999999", "-999999999999999999", "99999999999999999.9",
+                             "99999999999999999"}) {
+        auto refused = ParseDecimalLiteral(text, 18, 2);
+        ASSERT_FALSE(refused.ok()) << text;
+        EXPECT_EQ(refused.status().code(), StatusCode::kOutOfRange) << text;
+        EXPECT_NE(refused.status().message().find("precision 18"), std::string::npos)
+            << refused.status().message();
+    }
+    const auto fits = ParseDecimalLiteral("9999999999999999.99", 18, 2);
+    ASSERT_TRUE(fits.ok()) << fits.status().message();
+    EXPECT_EQ(fits.value(), 999999999999999999);
+    EXPECT_EQ(ParseDecimalLiteral("9999999999999999", 18, 2).value(), 999999999999999900);
+
+    const std::string nines(38, '9');
+    auto wide = ParseDecimalLiteralWide(nines, 38, 2);
+    ASSERT_FALSE(wide.ok());
+    EXPECT_EQ(wide.status().code(), StatusCode::kOutOfRange);
+    EXPECT_TRUE(ParseDecimalLiteralWide(std::string(36, '9'), 38, 2).ok());
+}
+
 TEST(TypeLiteralsTest, PrecisionAndScaleBoundsAreTheSpecs) {
     // TY2: 1 <= p <= 18, 0 <= s <= p. Beyond 18 is a *future separate
     // type* carrying an int128, never a widening of this one.

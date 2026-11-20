@@ -71,13 +71,6 @@ bool LookupKeyword(std::string_view text, Keyword& out) noexcept {
     return false;
 }
 
-std::string_view KeywordText(Keyword kw) noexcept {
-    for (const KeywordRow& row : kKeywords) {
-        if (row.kw == kw) return row.text;
-    }
-    return "<keyword>";
-}
-
 void Lexer::SkipWhitespaceAndComments() {
     for (;;) {
         while (pos_ < src_.size() && std::isspace(static_cast<unsigned char>(src_[pos_]))) {

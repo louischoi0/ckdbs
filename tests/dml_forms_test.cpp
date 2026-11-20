@@ -156,10 +156,12 @@ TEST_F(DmlFormsTest, InsertSelectIsTypedAndAtomic) {
     ExpectRefused("INSERT INTO w SELECT id + 300, tier, region, tier FROM cust",
                   "no implicit conversion");
     ExpectRefused("INSERT INTO w SELECT id + 300, name FROM cust", "name no row");
-    // A duplicate key on the third row unwinds the first two.
+    // A duplicate key on the seventh row unwinds the six before it. The
+    // literal side is the columns' types (audit H8), so the refusal is the
+    // duplicate key's, not the set operation's.
     ExpectRefused("INSERT INTO w SELECT id + 400, name, region, tier FROM cust "
                   "UNION ALL SELECT 401, 'dup', 'EU', 1",
-                  "");
+                  "duplicate tuple key");
     ExpectRows("SELECT COUNT(*) FROM w", {"count(*)", "6"});
 }
 
