@@ -92,6 +92,9 @@ TEST(KwpErrorRegistryTest, TheDetailNumberingIsFrozenToo) {
     // `idle_session_timeout_s`.
     EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kConnectionLimit), 6);
     EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kIdleSessionTimeout), 7);
+    // Appended by DJ-S4 (`server/kwp_session.hpp`): a capped portal past
+    // `kMaxPortalHeldBytes`.
+    EXPECT_EQ(static_cast<std::uint16_t>(ResourceDetail::kPortalHeldBytes), 8);
 
     // `kNoDetail` is not a detail and must never collide with one, or a
     // category carrying no detail would read as carrying the first.

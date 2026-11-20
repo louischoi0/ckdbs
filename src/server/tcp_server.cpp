@@ -6,6 +6,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <linux/sockios.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -752,12 +754,47 @@ void TcpServer::SubmitStatement(int client_fd, Connection& conn) {
         // **A cancel resumes it too**: `C_CANCEL` arrives on another
         // connection and kicks nothing, so a parked walk reads the flag
         // here - read, not taken - and takes it at the boundary's check.
+        //
+        // **A park is bounded** (DJ-S4, DJ-Q10 (a)): a walk that has waited
+        // on a client that does not read for `txn_lifetime_ceiling_ms` - the
+        // ceiling's value, whether or not a transaction is open, so no new
+        // key (DJ-R5) - is cancelled and resumes to its cancel, giving up
+        // its view, its borrow and its reader lease. The ceiling sweep skips
+        // a connection with a statement in flight, so this is the bound such
+        // a park had none of; keepalive's user timeout was the only other.
         conn.stream.resume_when = [this, client_fd] {
             auto it = clients_.find(client_fd);
             if (it == clients_.end()) return true;
-            const Connection& c = it->second;
-            return c.closing || c.outbox.empty() || !c.want_writable ||
-                   c.session.cancel_flag()->load(std::memory_order_acquire);
+            Connection& c = it->second;
+            if (c.closing || c.outbox.empty() || !c.want_writable ||
+                c.session.cancel_flag()->load(std::memory_order_acquire)) {
+                c.parked_since_ns = 0;
+                return true;
+            }
+            const sched::MonoTimeNs now = scheduler_->clock().Now();
+            // The kernel's queue is the client's progress the server can
+            // see: it drains as the peer reads and acknowledges, while the
+            // socket stays unwritable until a third of it is free. One
+            // `ioctl` a poll, and only while parked; a failed one reads as
+            // no progress.
+            int unsent = 0;
+            if (::ioctl(client_fd, SIOCOUTQ, &unsent) != 0) unsent = c.parked_unsent;
+            if (c.parked_since_ns == 0 || unsent < c.parked_unsent) {
+                c.parked_since_ns = now;
+                c.parked_unsent = unsent;
+                return false;
+            }
+            c.parked_unsent = unsent;
+            if (now - c.parked_since_ns < txn_lifetime_ceiling_ns_) return false;
+            c.parked_since_ns = 0;
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("client", "fd=" + std::to_string(client_fd) +
+                                         " cancelled a walk parked on its unread reply for "
+                                         "txn_lifetime_ceiling_ms = " +
+                                         std::to_string(txn_lifetime_ceiling_ns_ / 1'000'000));
+            }
+            c.session.RequestCancel();
+            return true;
         };
         conn.kwp->ArmStream(&conn.stream);
     }
@@ -862,6 +899,10 @@ bool TcpServer::FlushOutbox(int client_fd, Connection& conn) {
         return false;
     }
     conn.outbox.erase(0, sent);
+    // A client that took a byte is reading: a parked walk's bound (DJ-S4)
+    // counts from the last byte taken, so it ends a client that does not
+    // read and never one that reads slowly.
+    if (sent != 0) conn.parked_since_ns = 0;
     return true;
 }
 

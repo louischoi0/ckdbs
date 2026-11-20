@@ -160,6 +160,13 @@ enum class ResourceDetail : std::uint16_t {
     // close, so a pool can tell a timeout from a failure: nothing was lost
     // and reconnecting is the whole remedy.
     kIdleSessionTimeout = 7,
+    // A capped portal's statement held more than `kMaxPortalHeldBytes` of
+    // undelivered rows (DJ-S4, `server/kwp_session.hpp`), and was refused:
+    // `max_rows` bounds delivery, not execution, so a capped portal runs
+    // its statement whole into memory. Not fatal. The client's fix is a
+    // narrower statement - a `LIMIT`, a tighter `WHERE` - or an uncapped
+    // portal, which streams.
+    kPortalHeldBytes = 8,
 };
 
 // ---- The mapping ---------------------------------------------------------

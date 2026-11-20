@@ -263,6 +263,22 @@ Status WireResultSink::EncodeValueRow(std::span<const std::uint32_t> types,
 }
 
 Status WireResultSink::Emit(std::string_view row) {
+    // **A capped portal's result is bounded** (DJ-S4, `kMaxPortalHeldBytes`):
+    // its whole result is held until the client asks for it, so a row past
+    // the bound fails the statement - which erases the portal and frees
+    // what it held - rather than grow the buffer without one. An uncapped
+    // sink is not counted: it streams, or answers at completion as before.
+    if (batch_row_cap_ != 0) {
+        held_bytes_ += row.size();
+        if (held_too_much()) {
+            return Status::ResourceExhausted(
+                "a portal executed with max_rows = " + std::to_string(batch_row_cap_) +
+                " holds its statement's whole result until it is delivered, and this one "
+                "passed " + std::to_string(kMaxPortalHeldBytes) +
+                " bytes (kMaxPortalHeldBytes); narrow the statement with LIMIT or WHERE, or "
+                "execute it with max_rows = 0, which streams");
+        }
+    }
     // **Sealed before the row that would cross the target, not after.** A
     // batch that grew past `kRowBatchTargetBytes` and then sealed would
     // exceed the target by one row's width every time, which for a wide row
@@ -305,6 +321,7 @@ void WireResultSink::Reset() {
     open_rows_ = 0;
     rows_ = 0;
     batch_row_cap_ = 0;
+    held_bytes_ = 0;
     stream_ = nullptr;
     streamed_ = false;
 }
@@ -328,6 +345,7 @@ void WireResultSink::Rewind() {
     open_.clear();
     open_rows_ = 0;
     rows_ = 0;
+    held_bytes_ = 0;
 }
 
 void WireResultSink::AtSliceBoundary() {
@@ -783,6 +801,13 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         //
         // No `sink.Reset()`: the whole portal goes, and `portal` dangles
         // from here on - nothing below reads it.
+        //
+        // DJ-S4: a capped portal refused for what it held names its own
+        // detail; the dispatcher never learns why the sink refused a row.
+        const std::uint16_t detail =
+            portal->sink.held_too_much()
+                ? static_cast<std::uint16_t>(ResourceDetail::kPortalHeldBytes)
+                : outcome.resource_detail;
         portals_.erase(running_portal_);
         running_portal_.clear();
         // **The detail the dispatcher named, where it named one** (AO-S6c-c).
@@ -791,7 +816,7 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
         // status; `kNoDetail` everywhere else, which is what
         // `ErrorFromStatus` defaults to and what every refusal but the
         // borrow cap's still means.
-        (void)Refuse(out, wire::ErrorFromStatus(failed, outcome.resource_detail));
+        (void)Refuse(out, wire::ErrorFromStatus(failed, detail));
         return;
     }
 

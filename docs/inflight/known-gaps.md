@@ -2316,20 +2316,26 @@ Verified on `cj-wait-events-ash` at the milestone's close
 
 ## Streamed replies (CE)
 
-Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4). Owned by
+Verified on `ce-streaming-reply` at `9e568b44` (CE-S1..S4); the first
+bullet re-verified on `dj-connections-sessions-cursors` over `56855c48`
+(DJ-S4). Owned by
 `docs/spec/protocol.md` §7; the order is
 `instructions/v3.2.0/workorder-ce-streaming-reply.md`.
 
-- **A parked walk is bounded only by its socket.** A client that stops
-  reading holds the walk's read view (the purge horizon), its borrow (every
-  DDL taking the relation `X` waits, refused `TxnConflict` at the 1 s fault
-  net) and its core's reader-lease slot for as long as its socket lives -
-  about twice `tcp_keepalive_s`, and without bound with keepalive off and a
-  live client. Two consequences a yield of one turn never had:
-  - **the transaction lifetime ceiling does not reach it** (CE-A7):
-    `ExpireOverdueTransactions` skips a connection with a statement running
-    (`tcp_server.cpp`), so an explicit transaction outlives the 60 s
-    ceiling with it;
+- **A parked walk is bounded by the lifetime ceiling's value, 60 s by
+  default** (DJ-S4; it was bounded only by its socket). Until then a client
+  that stops reading holds the walk's read view (the purge horizon), its
+  borrow (every DDL taking the relation `X` waits, refused `TxnConflict` at
+  the 1 s fault net) and its core's reader-lease slot. Its consequences
+  within that bound:
+  - **an explicit transaction outlives the ceiling for as long as its
+    statement runs** (CE-A7): `ExpireOverdueTransactions` skips a
+    connection with a statement running, and the park's own bound counts
+    from the park's start or the client's last taken byte, not the
+    transaction's - so a client that reads slowly holds the walk without
+    bound;
+  - **the cancel says "cancelled by request"**: the client is not told the
+    ceiling ended it; the server log says so;
   - **256 parked walks fill their core's reader-lease slots**
     (`txn::kMaxRegisteredReaders`, `sched.md` §3), and a further walk's
     head on that core is refused `OutOfSpace` until one ends.
@@ -2938,10 +2944,11 @@ the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
   writer of the relation pays the all-partition probe for that long, and a
   `WHERE`-less locking read holds every writer of the relation out until
   it decides.
-- **Nothing bounds the reply** (DC-Q12 (a)): every row is encoded before
-  the statement ends - none leaves while it runs (DC-R4) - and a KWP
-  session holds the sealed batches in memory, as it does for a write's
-  `RETURNING`, which has no bound either. A row-unit read stops at the
+- **Nothing bounds the reply of an uncapped portal** (DC-Q12 (a)): every
+  row is encoded before the statement ends - none leaves while it runs
+  (DC-R4) - and a KWP session holds the sealed batches in memory, as it
+  does for a write's `RETURNING`. A capped portal is bounded at
+  `kMaxPortalHeldBytes` (DJ-S4); an uncapped one is not. A row-unit read stops at the
   lock cap's 65,536 rows; a window's is unbounded.
 - **Rows are claimed that are not returned, and nothing gives one back
   before the decide**: every key of a declared window; a row an earlier

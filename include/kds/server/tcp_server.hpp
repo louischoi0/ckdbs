@@ -364,6 +364,17 @@ private:
         bool worked = false;
         sched::MonoTimeNs idle_since_ns = 0;
 
+        // **When this connection's running walk parked on its socket**, or
+        // the client last took a byte since (DJ-S4, P5a); 0 while it is not
+        // parked. Set by the walk's `resume_when`, cleared there and by
+        // `FlushOutbox`'s progress: the clock is read only while a walk is
+        // parked, never on a statement's path. `parked_unsent` is the
+        // kernel's unacknowledged send queue at that instant (`SIOCOUTQ`):
+        // a client that reads drains it long before the socket turns
+        // writable again, so a drain is the client's progress too.
+        sched::MonoTimeNs parked_since_ns = 0;
+        int parked_unsent = 0;
+
         // The finished statement's reply, waiting to be appended to the
         // outbox. Owned by the connection because the coroutine writes
         // through a pointer to it and may outlive the call that started it.

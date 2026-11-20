@@ -102,6 +102,19 @@ inline constexpr sched::MonoTimeNs kPortalIdleTimeoutNs = 60ull * 1000 * 1000 * 
 // help. The cap is per **session**, so it bounds one connection's state and
 // not the server's; what bounds the server is the connection count.
 inline constexpr std::size_t kMaxSessionStatements = 64;
+
+// **What one capped portal may hold** (DJ-S4, DJ-Q11 (a)): the encoded rows
+// a `C_EXECUTE {max_rows > 0}`'s statement has produced and not yet
+// delivered. A capped portal runs its statement whole into the buffer
+// (`protocol.md` §7) - DJ-S0 measured 4.4 MiB held for a 100,000-row
+// result asked for 100 rows at a time - so past this the statement is
+// refused `RESOURCE_EXHAUSTED` / `kPortalHeldBytes` rather than grown
+// without bound. `kMaxFrame`, 16 MiB: one frame's ceiling, so a capped
+// portal holds no more than one frame could carry. `[provisional]`
+// (DJ-R10): the derivation is the protocol's, not a measured need. An
+// uncapped portal is not bounded by it: it streams, or answers at
+// completion as before.
+inline constexpr std::size_t kMaxPortalHeldBytes = wire::kMaxFrame;
 inline constexpr std::size_t kMaxSessionPortals = 64;
 
 // The result sink that produces `S_ROW_DESC` and `S_ROW_BATCH` payloads.
@@ -134,6 +147,9 @@ public:
     //
     // 0 is no cap, which is `max_rows`'s own meaning (§7).
     void set_batch_row_cap(std::uint32_t rows) noexcept { batch_row_cap_ = rows; }
+
+    // A capped sink refused a row for `kMaxPortalHeldBytes` (DJ-S4).
+    bool held_too_much() const noexcept { return held_bytes_ > kMaxPortalHeldBytes; }
 
     // Seals whatever is still open. Call once, after the statement.
     void Finish();
@@ -183,6 +199,8 @@ private:
     std::uint16_t open_rows_ = 0;
     std::uint64_t rows_ = 0;
     std::uint32_t batch_row_cap_ = 0;
+    // The encoded row bytes a capped sink holds (DJ-S4).
+    std::size_t held_bytes_ = 0;
     Stream* stream_ = nullptr;
     bool streamed_ = false;
 };
