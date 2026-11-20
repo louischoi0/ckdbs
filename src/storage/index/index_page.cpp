@@ -122,8 +122,6 @@ StatusOr<IndexLeafView> IndexLeafView::CreateEmpty(std::span<std::byte, kPageSiz
 }
 
 std::uint16_t IndexLeafView::entry_count() const { return ReadHeader().nr_entries; }
-std::uint16_t IndexLeafView::key_width() const { return ReadHeader().key_width; }
-std::uint16_t IndexLeafView::entry_width() const { return ReadHeader().entry_width; }
 PageId IndexLeafView::right_sibling() const { return ReadHeader().right_sibling; }
 
 void IndexLeafView::set_right_sibling(PageId page_id) {
@@ -331,15 +329,8 @@ StatusOr<IndexInternalView> IndexInternalView::CreateEmpty(std::span<std::byte, 
 }
 
 std::uint16_t IndexInternalView::entry_count() const { return ReadHeader().nr_entries; }
-std::uint16_t IndexInternalView::key_width() const { return ReadHeader().key_width; }
 std::uint16_t IndexInternalView::level() const { return ReadHeader().level; }
 PageId IndexInternalView::leftmost_child() const { return ReadHeader().leftmost_child; }
-
-void IndexInternalView::set_leftmost_child(PageId page_id) {
-    IndexInternalHeaderFields h = ReadHeader();
-    h.leftmost_child = page_id;
-    WriteHeader(h);
-}
 
 StatusOr<std::span<const std::byte>> IndexInternalView::Separator(std::uint16_t idx) const {
     const IndexInternalHeaderFields h = ReadHeader();

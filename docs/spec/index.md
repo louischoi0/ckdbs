@@ -264,8 +264,9 @@ is deeper for it.
 > **IX5 — a key is one order-preserving byte string, compared with
 > `memcmp`.**
 
-One function, `exec::EncodeIndexKey`, walks the index's key columns in
-declared order and appends per column:
+One function, `exec::EncodeIndexKeyColumn`, encodes one column's value, and
+every encoder walks the index's key columns in declared order and appends
+per column:
 
 | column type | encoding | bytes |
 |---|---|---|

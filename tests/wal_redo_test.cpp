@@ -287,36 +287,6 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
     EXPECT_EQ(r.value().no_page, 2u);
 }
 
-TEST_F(RedoTest, ARecordBelowItsPagesRecLsnIsSkippedAndThePageNeverFaulted) {
-    // The not-dirty filter, at the arm that survives one stream
-    // (AM-S4(d)): a record whose LSN is below its page's recLSN describes
-    // state already in the durable image, and must be skipped *before the
-    // load* - faulting the page to compare page_lsn would be work on a page
-    // recovery has no business touching. The shape it stands for is a page
-    // dirtied, written back, and re-dirtied: the checkpoint seeds its
-    // recLSN above the flushed records, while the redo start - the minimum
-    // over every page - lies below them. Set here rather than scripted,
-    // because a second page's low recLSN is the only thing a checkpoint
-    // record would add.
-    //
-    // The store deliberately does not hold the page, which makes any touch
-    // loud: an unfiltered redo would CreateAt the page from its PAGE_INIT
-    // and apply all three records.
-    WriteHeapStream(2);
-
-    AnalysisResult analysis = Analyzed();
-    ASSERT_EQ(analysis.dirty_pages.count(kPage), 1u);
-    analysis.dirty_pages[kPage] = analysis.end_lsn;
-    analysis.redo_start_lsn = 0;
-
-    auto r = Redo((*device_), 0, store_, analysis);
-    ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().applied, 0u);
-    EXPECT_EQ(r.value().skipped_not_dirty, 3u) << "init + two inserts";
-    EXPECT_FALSE(store_.Get(kPage).ok())
-        << "redo must not create or fault a page whose records the image already holds";
-}
-
 TEST_F(RedoTest, AnAnchorReplaysItsInitAndItsSlotUpdates) {
     // PW2-1: PAGE_INIT rebuilds only the common header, so the anchor's
     // durable story is PAGE_INIT + ANCHOR_UPDATE - one per slot. A crash

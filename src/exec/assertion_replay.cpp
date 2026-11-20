@@ -236,13 +236,11 @@ Status ReplayAssertionRecord(const wal::DecodedRecord& record, storage::PageStor
             // A checkpoint's statement of whose a counted reservation is: no
             // page and no directory change. Assertion recovery reads it
             // itself (CL-R1); the fold has nothing to apply.
+        case wal::RecordType::kAssertDrop:
+            // Never folded: the assertions recovered are the catalog's, and
+            // one it lists was not dropped (`assertion.md` §7). An assertion
+            // record all the same, so OK and not the refusal below.
             return Status::OK();
-        case wal::RecordType::kAssertDrop: {
-            auto decoded = wal::DecodeAssertDrop(record.payload);
-            if (!decoded.ok()) return decoded.status();
-            context.Drop(decoded.value().assertion_id);
-            return Status::OK();
-        }
         default:
             return Status::InvalidArgument(std::string("assert replay: not an assertion record: ") +
                                            wal::RecordTypeName(record.type()));

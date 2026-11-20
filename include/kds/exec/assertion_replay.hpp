@@ -7,7 +7,7 @@
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/record.hpp"
 
-// Replay of the five assertion records (docs/spec/assertion.md §7, workplan
+// Replay of the six assertion records (docs/spec/assertion.md §7, workplan
 // AST05): the fold that turns a stream of ASSERT_* records back into the
 // Bound Cabin state that emitted them - entry pages restored through the
 // store, the memory-resident group directory rebuilt beside them.
@@ -38,11 +38,18 @@
 //
 // A record whose assertion the context does not resolve is **skipped whole,
 // page half included**, and that is a correctness rule rather than lenience:
-// the one legitimate way an id becomes unknown is ASSERT_DROP further down
-// the stream, and a dropped assertion's pages are no longer its own to
-// write - were they ever freed and reused, touching one would corrupt an
-// unrelated page. The context is where "unknown because dropped" and
-// "unknown because the catalog is gone" are told apart; this fold cannot.
+// the one legitimate way an id becomes unknown is that the assertion was
+// dropped - the catalog, read after undo, no longer lists it - and a
+// dropped assertion's pages are no longer its own to write: were they ever
+// freed and reused, touching one would corrupt an unrelated page. The
+// context is where "unknown because dropped" and "unknown because the
+// catalog is gone" are told apart; this fold cannot.
+//
+// **ASSERT_DROP and ASSERT_PENDING are the fold's to recognise and not to
+// apply**: which assertions exist is the catalog's answer, read after undo,
+// so a drop is never folded (`assertion.md` §7), and a pending record is
+// read by assertion recovery itself (CL-R1). Each is answered OK with
+// nothing done.
 //
 // Concurrency: mount-time, before the listener binds, so nothing contends
 // for the directories it folds into (§6.1).
@@ -59,13 +66,9 @@ public:
     // The live directory for `assertion_id`, or nullptr to have the record
     // skipped whole.
     virtual BoundCabin* CabinOf(std::uint64_t assertion_id) = 0;
-
-    // ASSERT_DROP: forget everything held for `assertion_id`. Called even
-    // when CabinOf answers nullptr, so dropping twice is the owner's no-op.
-    virtual void Drop(std::uint64_t assertion_id) = 0;
 };
 
-// True for the five record types this fold handles.
+// True for the six record types this fold recognises.
 bool IsAssertionRecord(wal::RecordType type) noexcept;
 
 // Which halves of a record `ReplayAssertionRecord` applies. `kPageOnly` is

@@ -24,7 +24,7 @@ namespace kds::server {
 
 namespace {
 
-// Refused before any file is opened.
+// Refused before the device is read.
 Status CheckWindow(const RestoreWindow& window) {
     if (window.start_lsn == 0 || window.start_lsn >= window.stop_lsn) {
         return Status::InvalidArgument("restore: start lsn " + std::to_string(window.start_lsn) +
@@ -38,17 +38,6 @@ Status CheckWindow(const RestoreWindow& window) {
 }
 
 }  // namespace
-
-Status MarkRestoreOwed(const std::string& data_file, const RestoreWindow& window,
-                       std::uint64_t* lineage) {
-    if (Status s = CheckWindow(window); !s.ok()) return s;
-    auto device = storage::FilePageDevice::Open(data_file);
-    if (!device.ok()) return device.status();
-    if (Status s = MarkRestoreOwedOn(*device.value(), window, lineage); !s.ok()) {
-        return s.WithMessage("restore: " + data_file + ": " + s.message());
-    }
-    return Status::OK();
-}
 
 Status MarkRestoreOwedOn(storage::PageDevice& device, const RestoreWindow& window,
                          std::uint64_t* lineage) {
@@ -194,7 +183,6 @@ Status WalkDataFile(storage::PageDevice& device, bool forget, DataFileCheck* out
             if (!system && forget && unwritten) {
                 storage::FreeMapRelease(map, index);
                 changed = true;
-                ++check.pages_forgotten;
             }
         }
         if (changed) {
@@ -223,13 +211,10 @@ Status WalkDataFile(storage::PageDevice& device, bool forget, DataFileCheck* out
     return Status::OK();
 }
 
-}  // namespace
-
-Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out) {
-    return WalkDataFile(device, /*forget=*/true, out);
+// restore.hpp's first half of "what a restored volume cannot trust".
+Status ForgetUnwrittenPages(storage::PageDevice& device) {
+    return WalkDataFile(device, /*forget=*/true, nullptr);
 }
-
-namespace {
 
 // A data file read and nothing else: `O_RDONLY`, so a backup on read-only
 // media can be checked, and every write refused.

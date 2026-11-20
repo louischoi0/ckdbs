@@ -124,14 +124,4 @@ StatusOr<std::uint32_t> IndexKeyWidth(std::span<const catalog::SysColumnRow> key
 Status EncodeIndexKeyColumn(const catalog::SysColumnRow& col, const parser::AstValue& value,
                             std::span<std::byte> out);
 
-// Encodes a whole composite key. `values` is positionally aligned with
-// `key_cols`, and `out` must be exactly `IndexKeyWidth(key_cols)` bytes.
-//
-// A caller holding fewer values than columns - a probe on a key *prefix* -
-// passes the prefix and a correspondingly shorter `out`; the encoding of a
-// prefix is a byte-prefix of the whole key by construction, which is what
-// makes prefix seeks work with no second code path.
-Status EncodeIndexKey(std::span<const catalog::SysColumnRow> key_cols,
-                      std::span<const parser::AstValue> values, std::span<std::byte> out);
-
 }  // namespace kds::exec

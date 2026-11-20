@@ -27,12 +27,6 @@ Status RequireType(std::span<const std::byte, kPageSize> page, PageId page_id, P
                               std::to_string(static_cast<std::uint8_t>(want)));
 }
 
-// A fetched page back at its true fixed extent. The store hands out dynamic
-// spans; anything reaching here is exactly one page long.
-std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
-    return std::span<std::byte, kPageSize>(bytes.data(), kPageSize);
-}
-
 // The root-to-leaf path an insert descended, so a split can walk back up.
 // path[0] is the root; path[depth] is the leaf.
 struct Descent {
@@ -82,7 +76,7 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
     if (Status s = RequireType(bytes.value().bytes(), right, PageType::kIndexLeaf); !s.ok()) {
         return s;
     }
-    IndexLeafView sibling(AsPage(bytes.value().bytes()));
+    IndexLeafView sibling(bytes.value().bytes());
     if (Status s = sibling.CheckAgainst(layout, right); !s.ok()) return s;
     auto low = sibling.Entry(0);
     if (!low.ok()) {
@@ -147,7 +141,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
 
             if (IsLeafPage(bytes.value().bytes())) {
                 if (Status s =
-                        IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, current);
+                        IndexLeafView(bytes.value().bytes()).CheckAgainst(layout, current);
                     !s.ok()) {
                     return s;
                 }
@@ -162,7 +156,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
                 bytes.value().Release();
                 auto writable = store.Get(current);
                 if (!writable.ok()) return writable.status();
-                const IndexLeafView relatched(AsPage(writable.value().bytes()));
+                const IndexLeafView relatched(writable.value().bytes());
                 auto covers = LeafStillCoversKey(store, relatched, layout, sort_key);
                 if (!covers.ok()) return covers.status();
                 if (!covers.value()) {
@@ -177,7 +171,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
                 !s.ok()) {
                 return s;
             }
-            IndexInternalView node(AsPage(bytes.value().bytes()));
+            IndexInternalView node(bytes.value().bytes());
             if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
 
             current = node.ChildFor(sort_key);
@@ -306,7 +300,7 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
         if (IsLeafPage(bytes.value().bytes())) {
-            if (Status s = IndexLeafView(AsPage(bytes.value().bytes())).CheckAgainst(layout, current);
+            if (Status s = IndexLeafView(bytes.value().bytes()).CheckAgainst(layout, current);
                 !s.ok()) {
                 return s;
             }
@@ -315,7 +309,7 @@ StatusOr<PageId> LeftmostLeaf(storage::PageStore& store, PageId root, const Inde
         if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexInternal); !s.ok()) {
             return s;
         }
-        IndexInternalView node(AsPage(bytes.value().bytes()));
+        IndexInternalView node(bytes.value().bytes());
         if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
         current = node.leftmost_child();
     }
@@ -470,8 +464,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     new_leaf.value().set_right_sibling(left.right_sibling());
     left.set_right_sibling(new_leaf_id);
 
-    out.Record(new_leaf_id, /*is_new_page=*/true);
-    out.Record(leaf_id, /*is_new_page=*/false);
+    out.Record(new_leaf_id);
+    out.Record(leaf_id);
     // The new leaf is written; the descent's hold on the old one is what
     // keeps a descent from outrunning the promotion, so this pin goes now.
     new_leaf_bytes_ref.Release();
@@ -501,7 +495,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 
         if (!parent.IsFull(layout)) {
             if (Status s = parent.InsertEntry(layout, sep, child); !s.ok()) return s;
-            out.Record(parent_id, /*is_new_page=*/false);
+            out.Record(parent_id);
             hand_out();
             return out;  // absorbed; the tree did not grow
         }
@@ -527,8 +521,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
             std::memcmp(sep.data(), pushed.data(), sort_key_len) < 0 ? parent : new_node.value();
         if (Status s = into.InsertEntry(layout, sep, child); !s.ok()) return s;
 
-        out.Record(new_node_id, /*is_new_page=*/true);
-        out.Record(parent_id, /*is_new_page=*/false);
+        out.Record(new_node_id);
+        out.Record(parent_id);
 
         std::memcpy(sep.data(), pushed.data(), sort_key_len);
         child = new_node_id;
@@ -557,7 +551,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
         IndexInternalView(parents.value().held[parents.value().count - 1].bytes())
             .MarkGrownOver();
     }
-    out.Record(new_root_id, /*is_new_page=*/true);
+    out.Record(new_root_id);
     out.new_root = new_root_id;
     hand_out();
     return out;
@@ -604,7 +598,7 @@ Status IndexVisitFrom(
         if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexLeaf); !s.ok()) {
             return s;
         }
-        IndexLeafView leaf(AsPage(bytes.value().bytes()));
+        IndexLeafView leaf(bytes.value().bytes());
         if (Status s = leaf.CheckAgainst(layout, current); !s.ok()) return s;
 
         const std::uint16_t n = leaf.entry_count();
@@ -637,7 +631,7 @@ StatusOr<std::uint16_t> IndexHeight(storage::PageStore& store, PageId root,
     if (IsLeafPage(bytes.value().bytes())) return std::uint16_t{1};
     if (Status s = RequireType(bytes.value().bytes(), root, PageType::kIndexInternal); !s.ok()) return s;
 
-    IndexInternalView node(AsPage(bytes.value().bytes()));
+    IndexInternalView node(bytes.value().bytes());
     if (Status s = node.CheckAgainst(layout, root); !s.ok()) return s;
     return static_cast<std::uint16_t>(node.level() + 1);
 }
@@ -656,7 +650,7 @@ StatusOr<std::uint32_t> IndexLeafCount(storage::PageStore& store, PageId root,
         if (!bytes.ok()) return bytes.status();
         ++leaves;
 
-        const PageId next = IndexLeafView(AsPage(bytes.value().bytes())).right_sibling();
+        const PageId next = IndexLeafView(bytes.value().bytes()).right_sibling();
         if (next == kInvalidPageId) return leaves;
         current = next;
     }

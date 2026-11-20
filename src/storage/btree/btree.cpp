@@ -61,13 +61,6 @@ struct Descent {
     storage::PageRef leaf;
 };
 
-// A descent's leaf bytes back at their true fixed extent. The span is
-// dynamic only because Descent needs an unset state; anything that reaches
-// here came from a store fetch and is exactly one page long.
-std::span<std::byte, kPageSize> AsPage(std::span<std::byte> bytes) {
-    return std::span<std::byte, kPageSize>(bytes.data(), kPageSize);
-}
-
 // **Does this leaf still hold the top of `key`'s range?** (AT-S5c.)
 //
 // A leaf covers `[min_key, right sibling's min_key)`. Both ends are
@@ -346,8 +339,8 @@ StatusOr<InternalDivision> DivideInternalNode(storage::PageClaims& claims,
         }
     }
 
-    out.Record(right_id, /*is_new_page=*/false, 0);
-    out.Record(node_id, /*is_new_page=*/false, 0);
+    out.Record(right_id);
+    out.Record(node_id);
     return InternalDivision{median.sep_key, right_id};
 }
 
@@ -520,7 +513,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageClaims& claims,
 
         if (!parent.IsFull()) {
             if (Status s = parent.InsertEntry(sep, child); !s.ok()) return s;
-            out.Record(parent_id, /*is_new_page=*/false, 0);
+            out.Record(parent_id);
             return out;  // absorbed; the tree did not grow
         }
 
@@ -563,12 +556,12 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageClaims& claims,
         auto new_node = InternalView::CreateEmpty(new_node_bytes, level, child, owner_oid);
         if (!new_node.ok()) return new_node.status();
 
-        out.Record(new_node_id, /*is_new_page=*/false, 0);
+        out.Record(new_node_id);
         // A right-split writes nothing into this node - unless it is the
         // root, which the growth below marks, and whose image is then owed.
         // (A divided node records itself; a leaf root's split path records
         // the leaf.)
-        if (i + 1 == parents.count) out.Record(parent_id, /*is_new_page=*/false, 0);
+        if (i + 1 == parents.count) out.Record(parent_id);
         child = new_node_id;
         old_root_level = level;
     }
@@ -597,7 +590,7 @@ StatusOr<storage::InsertPlacement> PromoteSeparator(storage::PageClaims& claims,
     } else {
         InternalView(parents.held[parents.count - 1].bytes()).MarkGrownOver();
     }
-    out.Record(new_root_id, /*is_new_page=*/false, 0);
+    out.Record(new_root_id);
     out.new_root = new_root_id;
     return out;
 }
@@ -697,7 +690,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
     const PageId next = leaf.next_page_id();
     const std::uint64_t epoch = leaf.PageEpoch();
     const bool grown_over = leaf.grown_over();
-    const std::span<std::byte, kPageSize> bytes = AsPage(descent.leaf.bytes());
+    const std::span<std::byte, kPageSize> bytes = descent.leaf.bytes();
     const std::uint64_t owner = storage::GetOwnerOid(bytes);
     auto rebuilt = heap::PageView::CreateEmptyAs(bytes, min_key, PageType::kBtreeLeaf, owner);
     if (!rebuilt.ok()) return rebuilt.status();
@@ -717,7 +710,7 @@ StatusOr<std::optional<storage::InsertPlacement>> CompactLeafAndInsert(
     }
     rebuilt.value().set_next_page_id(next);
     storage::SetPageEpoch(bytes, epoch + 1);
-    out.Record(leaf_id, /*is_new_page=*/false, 0);
+    out.Record(leaf_id);
     out.held.push_back(std::move(descent.leaf));
     return std::optional<storage::InsertPlacement>{std::move(out)};
 }
@@ -836,7 +829,7 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageClaims& claim
     // Written through the descent's own hold: a held frame is never a
     // victim and its bytes do not move, so CreateNew() above cannot have
     // left them stale.
-    const std::span<std::byte, kPageSize> old_bytes = AsPage(descent.leaf.bytes());
+    const std::span<std::byte, kPageSize> old_bytes = descent.leaf.bytes();
 
     // `min_key` goes back **unchanged**, which is invariant 2 and the reason
     // a division is legal at all: the low bound a reader may have pruned by
@@ -884,8 +877,8 @@ StatusOr<storage::InsertPlacement> SplitLeafAndInsert(storage::PageClaims& claim
     // Both pages are logged as images, in the split's one record
     // (`BTREE_SPLIT`, BD-R12), with the incoming row already in whichever
     // half took it - so no insert record follows (BD-R3 E2).
-    out.Record(new_leaf_id, /*is_new_page=*/false, 0);
-    out.Record(leaf_id, /*is_new_page=*/false, 0);
+    out.Record(new_leaf_id);
+    out.Record(leaf_id);
 
     // The new leaf is written; the descent's hold on the old one is what
     // keeps a descent from outrunning the promotion, so this pin goes now
@@ -1116,7 +1109,7 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // which carries the link mid-chain and the row in it: a PAGE_INIT plus
     // the row's insert could not carry the link (AT-S21's survey), and two
     // records could be cut apart.
-    out.Record(new_leaf_id, /*is_new_page=*/false, /*min_key=*/id);
+    out.Record(new_leaf_id);
 
     // ---- The separator first, the sibling link last (H9) -----------------
     //
@@ -1164,7 +1157,7 @@ StatusOr<storage::InsertPlacement> PlaceUnderHold(storage::PageStore& store, Des
     // order among them was "not load-bearing" only while nothing could end
     // the log between them, which a run of separate records allowed
     // (BD-S1's `SortedLeafCrashTest.ALogCutInsideAnAppendSplit...`).
-    promoted.value().Record(leaf_id, /*is_new_page=*/false, 0);
+    promoted.value().Record(leaf_id);
     hand_out(promoted.value());
     return promoted;
 }
