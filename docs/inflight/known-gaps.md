@@ -2824,6 +2824,51 @@ Verified on `da-access-stats-memory-resident` at DA-S1
 - **A dropped relation's shapes stay until a restart** and count against
   their cores' bounds, as they stayed until a mount before.
 
+## Statistics that can queue a statement (DL)
+
+Verified in the main checkout on `main` at `1aaafe1b` by reading; nothing
+here is measured. The rules are `docs/rules/rules.md` §3a's two; the milestone that
+closes these is `instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md`,
+whose §1.2 carries the `path:line` of each. A first reading of `src/stats/`
+and its call sites, not a census: DL-S0 is the census.
+
+- **Every successful `SELECT` with an identity takes one latch for the
+  instance to note itself to the Cabin controller's collector**
+  (`OptimizerSignals::NoteExecution`), on every core, whether or not
+  `cabin_optimizer` is on - it is off by default, and only the wait sample
+  asks the switch. Under that latch a new fingerprint past 4,096 evicts by
+  a scan of the whole table, and the controller's tick copies and sorts
+  every entry. Breaks clauses (a) and (c), and the second rule: the consumer is
+  off and the statement still builds an identity and notes for it. Its cost is inside every
+  `cores = 8` number of DA's results files and separated in none.
+- **A Cabin probe's hit or miss takes three shared latches to count
+  itself**: the cabin's partition latch a second time, the instance's one
+  `stats_latch_`, and the collector's latch above (`CabinStore::NoteHit`,
+  `NoteMiss`). Reached by a statement whose plan names a Cabin. Breaks (a).
+- **A record into a per-core statistics part waits for a reader's copy of
+  that part**, and the latch is a `std::mutex`, so the wait sleeps the
+  core's reactor and every session on it: `StatementStats` (whose
+  `Snapshot` merges and allocates under the latch, up to 4,096 shapes a
+  part, and whose `sys.meta` drop count takes every part's latch),
+  `RelationStats`, `LeafStats` (counted under a leaf's page hold),
+  `AccessStats`, `LockWaitLog`, `CheckpointLog`, `AshRing`, and
+  `PlanStats`' parts (the steward's `Merge` allocates under the latch over
+  a 1,024-slot table). Allowed by DF-R2 and DA-R3 as written; breaks (b),
+  the strict end state, and for the two allocating readers (c). The BO
+  entry above ("A view's read delays the writer of each part it copies")
+  is the same gap, older.
+- **A core's first compile after a plan-statistics publish takes the
+  instance's `publish_latch_`**, which an install holds across the
+  snapshot's construction (`PlanStats::Current`, `InstallLocked`). Breaks
+  (d).
+- **`SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build**:
+  the entry under "Multi-core state, continued". Within the rule if the
+  controller's view is a statistic (DL-Q0).
+
+What already meets the rule: `RefusalStats`, `TxnStats`, `IndexStats`'
+counts, the wait statistics, the contention instrument and the per-core
+load slots - single-writer words a core, read with no latch.
+
 ## Assertion admission
 
 - **A departure that raises a SUM is never admitted** `[quiet-wrong]` (a
