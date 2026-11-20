@@ -520,6 +520,41 @@ TEST_F(AnalysisTest, ACheckpointSeedsALosersUndoChainHead) {
         << "the head a checkpoint recorded is what undo starts from";
 }
 
+// DH-S1a's premise (wal.md §11): with one cadence run a period for the
+// instance, a core's own checkpoint comes every `cores` periods, and the
+// runs between are other cores', whose begin records carry *their* active
+// tables. A transaction a core left open below the scan is found through
+// that core's own begin - which the fold keeps in range - and a later begin
+// that does not list it, another core's, says nothing about it.
+TEST_F(AnalysisTest, ALaterBeginThatDoesNotListATransactionDoesNotClearIt) {
+    const std::uint64_t kHead = 0x00020038ull;
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        const CheckpointActiveTxn core1[] = {{77, kHead}};
+        // A page dirty at that run and at no later one's snapshot: its
+        // recLSN is kept, since the first one seen is the oldest record
+        // redo owes it.
+        const CheckpointDirtyPage core1_dirty[] = {{700, 4096 + 64}};
+        AppendCheckpointBegin(*s.value(), core1, core1_dirty);
+        // Three more runs, each another core's: one lists its own
+        // transaction, none lists 77.
+        const CheckpointActiveTxn core0[] = {{90, 0x00030040ull}};
+        AppendCheckpointBegin(*s.value(), {}, {});
+        AppendCheckpointBegin(*s.value(), core0, {});
+        AppendCheckpointBegin(*s.value(), {}, {});
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto r = Run();
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().transactions.at(77).outcome, TxnOutcome::kLoser);
+    EXPECT_EQ(r.value().transactions.at(77).last_undo_ptr, kHead);
+    EXPECT_EQ(r.value().transactions.at(90).outcome, TxnOutcome::kLoser);
+    ASSERT_EQ(r.value().dirty_pages.count(700), 1u);
+    EXPECT_EQ(r.value().dirty_pages.at(700), 4096u + 64u);
+}
+
 TEST_F(AnalysisTest, AnUndoWriteInRangeAdvancesTheHeadPastTheCheckpoints) {
     // The scan is forward, so the newest record wins: a checkpoint's head
     // describes what the transaction wrote *before* the scan, and anything

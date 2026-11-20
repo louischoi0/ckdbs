@@ -79,6 +79,56 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **DH's close measured five cells and one recovery round; the controls
+  were not measured.** On `dh-page-image-volume`, 2026-11-20
+  (`bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`): the operator
+  stopped the measurement part-way, after a host shared with other
+  sessions' builds had let 30 clean runs through in about three and a half
+  hours. Not measured, A against B: `select-pk` at one and eight cores,
+  `insert` at four cores, scenario 2, the four-core pressure cell (where
+  DH-S0 read the image's build faster than the no-image one and left it
+  unexplained), `strict`; the 10K-row update control has one round and no
+  floor, and the recovery cell one round. "No cell slower for DH" is
+  known for the five cells in the file and for no other. **The tree
+  that merged DH with `origin/main` at `18f2e339` (CV, the audit's
+  dead-code removals) was not suite-run before it was pushed**; DH's own
+  tree ran 0 failed of 4,883 before that merge. **Owner: none.**
+- **No cell crashes a multi-core instance under the rotated checkpoint
+  gate and mounts it.** On `dh-page-image-volume` over `76fe6777`
+  (DH-S2), 2026-11-20. Since DH-S1a a core's own checkpoint comes every
+  `cores` periods, and recovery finds a transaction that core left open
+  through that core's `CHECKPOINT_BEGIN`, which the anchor's fold keeps
+  in the replay range (`wal.md` §11). That chain is pinned in pieces -
+  the gate's turns (`CheckpointGateCadenceTest`), the fold
+  (`SuperBlockFoldTest`), analysis seeding from every begin and keeping
+  what a later begin does not list
+  (`AnalysisTest.ALaterBeginThatDoesNotListATransactionDoesNotClearIt`) -
+  and by no cell end to end: the simulator is one core, the two-core rig's
+  gate is not rotated, and `SetRotation` is reached only by a running
+  server. The order's "a crash between every pair of runs with a live
+  transaction on each core" was not built; it needs a multi-core crash
+  harness that does not exist. **Owner: none.**
+- **Restore and PITR over a log of packed images are covered only
+  implicitly.** Same commit. The simulator's backup cell
+  (`SimLoop.ABackupTakenAcrossTheRunRestoresToItsStopOnEveryCommittedSeed`)
+  and `PointInTimeTest.ARestoreToAnLsnPastTheStopEndsJustBeforeIt` run
+  with the write fetch's image on, so their logs can hold
+  `PACKED_PAGE_IMAGE` records; neither asserts that one lies in the
+  window it restores over. **Owner: none.**
+- **`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` fails about
+  one run in ten on a loaded host.** On `dh-page-image-volume` over
+  `8fc41252`, 2026-11-20, at a load average of 15 to 19: once in DH-S1b's
+  suite, then 22 of 200 repeats, and 16 of 200 with DH's packing switched
+  off in the same tree - the same rate, so not the packed image's. The
+  cell gives each of five `group` commits on a peer core 2 s to be woken
+  by the WAL writer's kick, in a rig whose idle block is 5 s; the kick is
+  best-effort (`sched/waker_table.hpp`: a kick that reads the
+  destination's flag before it is raised is skipped, priced at one idle
+  block), and the failures print `kicks skipped 1`. The cell asserts a
+  bound the kick does not promise. Not measured: the rate on a quiet host,
+  or how often a server's peer commit pays the 10 ms block for the same
+  race. **Owner: none.**
+
 - **The sim's constraint stream cannot kill a mutant that ignores held
   assertion contributions.** On `bs-test-hardening` at `76a2c08c`,
   `scripts/bs/mutants.sh`'s `holds-ignored` (every held contribution
@@ -266,6 +316,74 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   restart. Read on `de-page-read-off-the-reactor` at `1942cb9a`,
   2026-11-19; DE's close corrected the same claim in §5 ("Durability
   points") and left §6 as found - it is not DE's.
+- **A log this build wrote is not one a pre-DH build of the same
+  superblock can always replay.** Since DH-S1b (on `dh-page-image-volume`
+  over `8fc41252`) the write fetch's image is record kind 35,
+  `PACKED_PAGE_IMAGE`, wherever the page packs to under a page (`wal.md`
+  §10). No superblock or segment version moved (DH-Q11 (a)): a build that
+  predates DH mounts a cleanly shut volume as before (read, not tested: it
+  holds when the shutdown checkpoint completed), and refuses a crashed one,
+  one whose shutdown checkpoint failed, a backup or a PITR whose replay
+  range holds a packed image, at redo, as `no applier for record type
+  UNKNOWN` - the older build has no name for kind 35 - after its own redo has applied the records
+  before it, which a later mount on this build applies again. Nothing at
+  the door says which build a volume needs; the refusal is the statement.
+  **Not executed**: an older binary against a newer log - the claim rests on
+  reading redo's refusal of a page record it has no applier for, at
+  `f4138860` (`src/wal/redo.cpp`), and on
+  `RedoTest.APageRecordWithNoApplierEndsRecoveryByName`, which drives that
+  branch with a reserved kind, not with kind 35 on an older build. Owner:
+  `docs/spec/wal.md` §10.
+- **Only the write fetch's image is packed.** The whole pages an index
+  build, a catalog chain's link edit, an assertion build and a
+  `BTREE_SPLIT` log stay 8,192 bytes each (DH-Q13 (a)); their volume was
+  not measured by DH. A page that does not pack to under a page - random
+  or compressed bytes in wide columns - is logged verbatim and costs what
+  it did before DH; DH measured only tables of integers and scenario 2's
+  schema. Owner: `docs/spec/wal.md` §10.
+- **Where pages are faulted in often, a write still pays most of the
+  image's price.** On `dh-page-image-volume`, closing code `22818e44`,
+  measured 2026-11-20 (`bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`).
+  With a table three times the pool (1M rows, 2,048 frames, one core) a
+  statement logs 0.81 images, each owed by the page's fault-in, which the
+  instance's cadence does not reduce; the pack halves their bytes (about
+  6,900 B to about 3,080 B a statement) and the build is 14.8 % faster
+  than before DH and still 19.5 % under the same build with no image
+  debt. With the table resident the price is 2 % at four cores and inside
+  the floor at eight. What reduces it there is the pool's size, not a
+  setting DH added; conditioning the fault-in's debt on an image already
+  in the replay range was noted and not proposed (the order, §2.1).
+  Accepted by the operator at DH's close (`raft-marks-2026-11-20.md`
+  §18). Owner: `docs/spec/wal.md` §10.
+- **Above one core the replay range is up to `cores` checkpoint
+  intervals, and one more for each turn a core loses.** Since DH-S1a
+  (on `dh-page-image-volume` over `df0dcd70`, read and unit-tested there)
+  the cadence is the instance's: one run starts each
+  `checkpoint_interval_ms` and the cores take turns (`wal.md` §11), so a
+  core's contribution to the anchor's fold comes from a run up to `cores`
+  intervals old, its redo start about one interval below that run, where
+  the run was one interval old - about 45 s at eight cores and the
+  default. Until every core has run once after a mount the fold stays
+  where the mount's completion checkpoints put it, now for up to `cores`
+  intervals. What follows the fold follows it there: a crash replays that much log, the log keeps that
+  much from recycling, a dropped relation's pages and a dropped index's
+  wait that long to be reclaimed, and a backup's start is that far behind
+  its `BACKUP START`. **Measured once** at DH's close (eight cores, 50 s of
+  100,000-row updates, `kill -9`; one round, no floor): recovery read
+  1,456,727 records against 161,207 and the mount took 0.72 s against
+  0.19 s; the WAL directory held 268.4 MB against 201.3 MB. Accepted by
+  the operator (`raft-marks-2026-11-20.md` §18). A core whose tick meets a run in progress, or the
+  spacing rule, waits a whole period for its next ask, and its turn stays
+  owed; nothing retries sooner. A cadence checkpoint that outlasts the
+  period costs the turns its run spans: 1.2 periods halves the rate
+  (`CheckpointGateCadenceTest`). Not measured: the
+  mount time over a `cores`-interval replay range, and the log directory's
+  size at eight cores. **Not covered by the suite**: that the cores' ticks
+  are armed in phase (`src/server/core_runtime.cpp`) - the gate's cases
+  drive the gate with in-phase asks, and a stagger put back would pass
+  them, giving one run every interval x (1 + 1/`cores`); a test of two
+  reactors' timers at a 20 ms period was judged a flake on a shared host
+  and not written. Owner: `docs/spec/wal.md` §11.
 - **A refused catalog report on a new page, or a catalog row no empty page
   holds, spends one page.** Re-read on `worktree-fix-catalog-page-ceiling`
   at `0e539d46`, 2026-10-18. `InsertRow` leaves the page allocated, empty

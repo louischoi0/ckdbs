@@ -169,11 +169,10 @@ TEST(BtreeTest, EveryPageASplitCreatesCarriesTheOwnerOid) {
     }
     ASSERT_TRUE(grew) << "the tree never grew a level";
 
-    for (const auto& change : split.changes()) {
-        auto bytes = store.Get(change.page_id);
+    for (const PageId changed : split.changes()) {
+        auto bytes = store.Get(changed);
         ASSERT_TRUE(bytes.ok()) << bytes.status().message();
-        EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()), 4001u)
-            << "page " << change.page_id;
+        EXPECT_EQ(storage::GetOwnerOid(bytes.value().bytes()), 4001u) << "page " << changed;
     }
     auto root_again = store.Get(root);
     ASSERT_TRUE(root_again.ok()) << root_again.status().message();
@@ -281,32 +280,23 @@ TEST(BtreeTest, ASplitReportsTheNewLeafAndTheRelinkedOldOneToRedo) {
     // The new leaf first, holding the row. Not a PAGE_INIT the row's insert
     // fills any more: every page a split writes is an image in its one
     // BTREE_SPLIT record, which carries the row (BD-R12).
-    EXPECT_EQ(changes[0].page_id, split.value().page_id);
-    EXPECT_FALSE(changes[0].is_new_page);
-    EXPECT_EQ(changes[0].min_key, 2u);
+    EXPECT_EQ(changes[0], split.value().page_id);
+    {
+        auto new_leaf = store.GetForRead(changes[0]);
+        ASSERT_TRUE(new_leaf.ok()) << new_leaf.status().message();
+        EXPECT_EQ(heap::PageView(new_leaf.value().bytes()).min_key(), 2u);
+    }
 
-    // The old leaf is reported too, whose forward link now reaches it. Not a
-    // new page, so it needs a FULL_PAGE_IMAGE - no record type describes a
-    // link edit. **Asserted by membership rather than by position**: the
+    // The old leaf is reported too, whose forward link now reaches it - no
+    // record type describes a link edit, so it is an image in the split's
+    // record. **Asserted by membership rather than by position**: the
     // link is written after the separator is promoted (H9), so the old leaf
     // now trails the ancestors instead of preceding them. Which page sits at
     // which index was never the contract - the images are self-contained, so
     // redo reconstructs each page whichever order it meets them in. What is
     // the contract is that no mutated page goes unrecorded.
-    std::size_t old_leaf_entries = 0;
-    for (const storage::StructuralChange& change : changes) {
-        if (change.page_id != first_leaf) continue;
-        ++old_leaf_entries;
-        EXPECT_FALSE(change.is_new_page);
-    }
-    EXPECT_EQ(old_leaf_entries, 1u) << "the relinked old leaf must be reported exactly once";
-
-    // A brand-new internal node is reported too, and also as not-new: an
-    // entry array has no PAGE_INIT that describes it. Only the leaf the
-    // tuple landed in is new.
-    for (std::size_t i = 1; i < changes.size(); ++i) {
-        EXPECT_FALSE(changes[i].is_new_page) << "change " << i;
-    }
+    EXPECT_EQ(std::count(changes.begin(), changes.end(), first_leaf), 1)
+        << "the relinked old leaf must be reported exactly once";
 }
 
 TEST(BtreeTest, TheFirstSplitGrowsTheTreeToTwoLevelsAndMovesTheRoot) {
@@ -1904,8 +1894,8 @@ TEST(BtreeTest, AGrowthRecordsTheOldRootItMarks) {
     ASSERT_NE(old_root, tree.root) << "the append must grow a level over the full root";
 
     bool recorded = false;
-    for (const storage::StructuralChange& c : grown.value().changes()) {
-        if (c.page_id == old_root) recorded = true;
+    for (const PageId changed : grown.value().changes()) {
+        if (changed == old_root) recorded = true;
     }
     EXPECT_TRUE(recorded) << "the marked old root has no image for redo";
     auto bytes = store.GetForRead(old_root);

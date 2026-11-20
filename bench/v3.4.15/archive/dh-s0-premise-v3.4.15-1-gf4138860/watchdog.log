@@ -1,0 +1,8 @@
+00:41:56 progress age 12s 00:41:44 c1r1 B update-lit:100000 c4 group: 70200 stmts 4679/s bad=0 ck=11 img=7657 load1=2.65
+00:43:42 progress age 13s 00:43:29 c1r2 B update-lit:100000 c4 group: 69296 stmts 4619/s bad=0 ck=11 img=7592 load1=2.87
+00:44:42 progress age 7s 00:44:35 c2 B update-lit:1000000 c4 group: 42297 stmts 2820/s bad=0 ck=11 img=35594 load1=2.59
+00:45:42 progress age 1s 00:45:41 c3 B update-lit:100000 c8 group: 117551 stmts 7836/s bad=0 ck=21 img=15994 load1=2.01
+00:46:42 progress age 13s 00:46:29 c3 L update-lit:100000 c8 group: 120360 stmts 8023/s bad=0 ck=2 img=1800 load1=1.72
+00:47:42 progress age 15s 00:47:27 c6 A0 update-lit:100000 c4 strict: 63223 stmts 4214/s bad=0 ck=11 img=0 load1=1.97
+00:48:42 progress age 1s 00:48:41 c8 A0 insert:0 c4 group: 77157 stmts 5143/s bad=0 ck=11 img=0 load1=1.63
+00:49:42 progress age 18s 00:49:24 s4a A0 scenario2 c8 group: rc=0 tps=2619.1328470015155 wall=24s load1=1.73

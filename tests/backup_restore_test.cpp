@@ -28,6 +28,8 @@
 #include "kds/server/expeditor.hpp"
 #include "kds/server/restore.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/storage/file_page_device.hpp"
+#include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/wal/file_log_device.hpp"
 #include "kds/wal/log_scanner.hpp"
@@ -38,6 +40,14 @@ namespace kds::server {
 namespace {
 
 namespace fs = std::filesystem;
+
+// `MarkRestoreOwedOn` on the data file at `data_file`.
+Status MarkRestoreOwed(const std::string& data_file, const RestoreWindow& window,
+                       std::uint64_t* lineage = nullptr) {
+    auto device = storage::FilePageDevice::Open(data_file);
+    if (!device.ok()) return device.status();
+    return MarkRestoreOwedOn(*device.value(), window, lineage);
+}
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
     return s.rfind(prefix, 0) == 0;
@@ -276,13 +286,17 @@ TEST(BackupRestoreTest, ARestoreWhoseLogEndsShortOfItsStopDoesNotOpen) {
     }
 }
 
-// Refused before any file is opened.
+// Refused before the device is read: its page 0 could be read, and is not.
 TEST(BackupRestoreTest, ARestoreWindowNamesABackupAndAStartBelowItsStop) {
-    const std::string nowhere = "/nonexistent/kds.db";
-    EXPECT_EQ(MarkRestoreOwed(nowhere, {900, 900, 1}).code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(MarkRestoreOwed(nowhere, {100, 0, 1}).code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(MarkRestoreOwed(nowhere, {0, 900, 1}).code(), StatusCode::kInvalidArgument);
-    EXPECT_EQ(MarkRestoreOwed(nowhere, {100, 900, 0}).code(), StatusCode::kInvalidArgument);
+    auto empty = storage::MemoryPageDevice::Create(storage::kDefaultExtentPages,
+                                                   /*initial_pages=*/1);
+    ASSERT_TRUE(empty.ok()) << empty.status().message();
+    storage::PageDevice& device = *empty.value();
+    EXPECT_EQ(MarkRestoreOwedOn(device, {900, 900, 1}).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(MarkRestoreOwedOn(device, {100, 0, 1}).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(MarkRestoreOwedOn(device, {0, 900, 1}).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(MarkRestoreOwedOn(device, {100, 900, 0}).code(), StatusCode::kInvalidArgument);
+    EXPECT_EQ(empty.value()->stats().reads, 0u);
 }
 
 // ---- BR-S2 -------------------------------------------------------------------

@@ -1340,7 +1340,6 @@ public:
     // so it filters like the other schema routes rather than reporting
     // whatever is on the page.
     StatusOr<std::vector<SysIndexRow>> ListIndexes(const txn::ReadView* view = nullptr);
-    StatusOr<std::vector<SysIndexRow>> FindIndexesForTable(Oid table_oid);
     // The index named `name`. `view` as on `ListIndexes`: `DROP INDEX`
     // resolves a name, so it must not find an index another transaction's
     // open `CREATE INDEX` wrote. **No row is an empty optional, and a

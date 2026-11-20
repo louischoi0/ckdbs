@@ -1,0 +1,1 @@
+id=k4a arm=B shape=scenario2 cores=8 clients=8 dur=group archive=1 keep_wal=1 s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"

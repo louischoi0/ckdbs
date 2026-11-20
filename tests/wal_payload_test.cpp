@@ -381,6 +381,204 @@ TEST(WalPayloadTest, FullPageImageRejectsAShortPayload) {
     EXPECT_EQ(DecodeFullPageImage(short_payload).status().code(), StatusCode::kCorruption);
 }
 
+// ---- PACKED_PAGE_IMAGE (DH) ----------------------------------------------
+
+using Page = std::array<std::byte, kPageSize>;
+
+// The payload `EncodePackedPageImage` makes of `page`, empty if it does not
+// pack.
+std::vector<std::byte> Packed(const Page& page) {
+    std::vector<std::byte> out(kPackedImageMaxPayload);
+    out.resize(EncodePackedPageImage(std::span<const std::byte, kPageSize>(page), out));
+    return out;
+}
+
+// A page of fixed-length rows of small integers: what the engine images most.
+Page RowsOfSmallIntegers() {
+    Page page{};
+    for (std::size_t at = 48; at + 64 <= kPageSize; at += 64) {
+        page[at] = static_cast<std::byte>(at / 64);          // a 48-bit id, low byte
+        page[at + 1] = static_cast<std::byte>(at / 64 >> 8);
+        page[at + 8] = std::byte{0x2A};                      // a trx id
+        page[at + 20] = static_cast<std::byte>(at & 0xFF);   // three int64 cells
+        page[at + 28] = std::byte{0x07};
+        page[at + 37] = std::byte{0x01};
+    }
+    return page;
+}
+
+TEST(WalPayloadTest, PackedPageImageRoundTripsThroughTheEnvelope) {
+    Page one_byte_first{};
+    one_byte_first[0] = std::byte{0x01};
+    Page one_byte_last{};
+    one_byte_last[kPageSize - 1] = std::byte{0xFF};
+    for (const Page& page : {Page{}, one_byte_first, one_byte_last, RowsOfSmallIntegers()}) {
+        // Through the envelope, so the decoder meets the padding a record
+        // carries: a packed payload is rarely a multiple of the alignment.
+        const auto record = ThroughEnvelope(RecordType::kPackedPageImage,
+                                            [&](std::span<std::byte> out) -> StatusOr<std::size_t> {
+            const std::size_t n =
+                EncodePackedPageImage(std::span<const std::byte, kPageSize>(page), out);
+            EXPECT_NE(n, 0u);
+            return n;
+        });
+        EXPECT_LT(record.size(), kRecordHeaderSize + kPageSize) << "a packed record is shorter";
+        Page back;
+        back.fill(std::byte{0xEE});  // every byte is the decoder's to write
+        const Status s = DecodePackedPageImage(PayloadOf(record), back);
+        ASSERT_TRUE(s.ok()) << s.message();
+        EXPECT_TRUE(back == page);
+    }
+}
+
+TEST(WalPayloadTest, PackedPageImageOfAnEmptyPageIsItsBitmap) {
+    EXPECT_EQ(Packed(Page{}).size(), kPackedImagePrefixSize + kPackedImageBitmapSize);
+    // A row page packs to a fraction of itself.
+    EXPECT_LT(Packed(RowsOfSmallIntegers()).size(), kPageSize / 4);
+}
+
+TEST(WalPayloadTest, APageThatDoesNotShrinkIsNotPacked) {
+    Page dense;
+    dense.fill(std::byte{0xFF});
+    EXPECT_TRUE(Packed(dense).empty()) << "nine bytes a word is more than the page";
+
+    // The boundary: `full` words of eight nonzero bytes cost nine bytes each
+    // on top of the prefix and the bitmap.
+    const auto with_full_words = [](std::size_t full) {
+        Page page{};
+        for (std::size_t i = 0; i < full * kPackedImageWordSize; ++i) page[i] = std::byte{0x11};
+        return page;
+    };
+    const std::size_t fixed = kPackedImagePrefixSize + kPackedImageBitmapSize;
+    const std::size_t fit = (kPackedImageMaxPayload - fixed) / (1 + kPackedImageWordSize);
+    const auto last = Packed(with_full_words(fit));
+    ASSERT_EQ(last.size(), fixed + fit * (1 + kPackedImageWordSize));
+    EXPECT_LE(last.size(), kPackedImageMaxPayload);
+    Page back{};
+    ASSERT_TRUE(DecodePackedPageImage(last, back).ok());
+    EXPECT_TRUE(back == with_full_words(fit));
+    EXPECT_TRUE(Packed(with_full_words(fit + 1)).empty());
+
+    // The fit is asked for a whole word (`payload.hpp`): one more word of a
+    // single byte would pack to exactly the limit, and is answered 0 all the
+    // same. Either answer is a correct image; this pins which one it is.
+    Page nearly = with_full_words(fit);
+    nearly[fit * kPackedImageWordSize] = std::byte{0x11};
+    ASSERT_EQ(last.size() + 2, kPackedImageMaxPayload);
+    EXPECT_TRUE(Packed(nearly).empty());
+}
+
+TEST(WalPayloadTest, PackedPageImageRoundTripsRandomPagesOfEveryDensity) {
+    // A fixed seed: 2,000 pages from nearly empty to nearly full, with zero
+    // runs of every length. Every page that packs must come back itself.
+    std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+    const auto next = [&state] {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    std::size_t packed_pages = 0;
+    for (int round = 0; round < 2000; ++round) {
+        Page page{};
+        const std::uint64_t density = next() % 100;  // percent of bytes nonzero
+        for (std::size_t i = 0; i < kPageSize; ++i) {
+            if (next() % 100 < density) page[i] = static_cast<std::byte>(1 + next() % 255);
+        }
+        const auto payload = Packed(page);
+        if (payload.empty()) continue;
+        ++packed_pages;
+        // Padded as `DecodeRecord` would hand it back.
+        std::vector<std::byte> padded = payload;
+        padded.resize((payload.size() + kRecordAlignment - 1) / kRecordAlignment * kRecordAlignment);
+        Page back;
+        back.fill(std::byte{0xEE});
+        const Status s = DecodePackedPageImage(padded, back);
+        ASSERT_TRUE(s.ok()) << "round " << round << ": " << s.message();
+        ASSERT_TRUE(back == page) << "round " << round;
+    }
+    EXPECT_GT(packed_pages, 1000u);
+}
+
+// DH-R2: an image that is not exactly one encoding of one page is refused,
+// by name, and never guessed at.
+TEST(WalPayloadTest, PackedPageImageRefusesEverythingThatIsNotOneEncoding) {
+    const std::vector<std::byte> good = Packed(RowsOfSmallIntegers());
+    ASSERT_FALSE(good.empty());
+    Page back{};
+    ASSERT_TRUE(DecodePackedPageImage(good, back).ok());
+
+    const auto refused = [&](std::vector<std::byte> payload, const char* what) {
+        Page out{};
+        const Status s = DecodePackedPageImage(payload, out);
+        EXPECT_EQ(s.code(), StatusCode::kCorruption) << what;
+        EXPECT_NE(s.message().find("PACKED_PAGE_IMAGE"), std::string::npos) << what;
+    };
+    const auto with = [&](std::size_t at, std::uint8_t value) {
+        std::vector<std::byte> payload = good;
+        payload[at] = static_cast<std::byte>(value);
+        return payload;
+    };
+    const auto with_len = [&](std::size_t len) {
+        std::vector<std::byte> payload = good;
+        payload[kPackedImageLenOffset] = static_cast<std::byte>(len & 0xFF);
+        payload[kPackedImageLenOffset + 1] = static_cast<std::byte>(len >> 8);
+        return payload;
+    };
+    const std::size_t body = good.size() - kPackedImagePrefixSize;
+
+    refused(std::vector<std::byte>(kPackedImagePrefixSize + kPackedImageBitmapSize - 1),
+            "shorter than a prefix and a bitmap");
+    refused(with(kPackedImageFormatOffset, 2), "another format");
+    refused(with(kPackedImageFormatOffset, 0), "format 0");
+    refused(with(kPackedImageReserved8Offset, 1), "reserved byte");
+    refused(with(kPackedImageReserved32Offset + 3, 1), "reserved word");
+    refused(with_len(body + 1), "a body longer than the payload");
+    refused(with_len(kPackedImageBitmapSize - 1), "a body shorter than its bitmap");
+    refused(with_len(body - 1), "a body one byte short");
+    {
+        std::vector<std::byte> longer = good;
+        longer.resize(good.size() + kRecordAlignment);  // a whole alignment unit of tail
+        refused(longer, "more tail than padding");
+    }
+    {
+        std::vector<std::byte> padded = good;
+        padded.resize((good.size() / kRecordAlignment + 1) * kRecordAlignment);
+        ASSERT_GT(padded.size(), good.size());
+        padded.back() = std::byte{0x01};
+        refused(padded, "nonzero padding");
+    }
+    {
+        // Name one more word in the bitmap than the body has bytes for.
+        std::vector<std::byte> extra_word = good;
+        extra_word[kPackedImagePrefixSize + kPackedImageBitmapSize - 1] |= std::byte{0x80};
+        refused(extra_word, "a named word with no bytes");
+    }
+    {
+        // Clear a named word's bit: its mask and bytes are left over.
+        std::vector<std::byte> leftover = good;
+        std::size_t at = kPackedImagePrefixSize;
+        while (leftover[at] == std::byte{0}) ++at;
+        leftover[at] &= static_cast<std::byte>(static_cast<std::uint8_t>(leftover[at]) - 1);
+        refused(leftover, "bytes past the last word");
+    }
+    {
+        // A body longer than any the encoder writes, in a payload that holds
+        // it: refused for its length before a byte of it is read.
+        std::vector<std::byte> oversized(kPageSize + kRecordAlignment);
+        const std::size_t len = kPackedImageMaxPayload - kPackedImagePrefixSize + 1;
+        oversized[kPackedImageLenOffset] = static_cast<std::byte>(len & 0xFF);
+        oversized[kPackedImageLenOffset + 1] = static_cast<std::byte>(len >> 8);
+        oversized[kPackedImageFormatOffset] = static_cast<std::byte>(kPackedImageZeroWords);
+        oversized.resize(kPackedImagePrefixSize + len);
+        refused(oversized, "a body past the largest packed payload");
+    }
+    // The first named word's mask byte, and its first stored byte.
+    const std::size_t first_mask = kPackedImagePrefixSize + kPackedImageBitmapSize;
+    refused(with(first_mask, 0), "a mask of zero");
+    refused(with(first_mask + 1, 0), "a stored zero byte");
+}
+
 // ---- BTREE_SPLIT ---------------------------------------------------------
 
 // The stream's floors hold a split of kMaxBtreeSplitPages and no more, so the
@@ -516,7 +714,10 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kAssertPending), 34);
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
-    EXPECT_EQ(kMaxAssignedRecordType, 34);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPackedPageImage), 35);
+    EXPECT_EQ(kMaxAssignedRecordType, 35);
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kPackedPageImage)));
+    EXPECT_STREQ(RecordTypeName(RecordType::kPackedPageImage), "PACKED_PAGE_IMAGE");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAssertPending)));
     EXPECT_STREQ(RecordTypeName(RecordType::kAssertPending), "ASSERT_PENDING");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAnchorSlotRemove)));

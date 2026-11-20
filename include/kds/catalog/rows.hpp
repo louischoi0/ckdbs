@@ -1049,17 +1049,6 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 // second catalog read, and a stored 0 keeps its one reading: the check runs.
 inline constexpr std::uint16_t kFkNullable = 1u << 0;
 
-// Deepest directory a pattern's waystones can need, and therefore the
-// largest value `dir_depth` may hold.
-//
-// Derived, not chosen: the directory is walked by digits of a 64-bit
-// `arg_hash` at a fanout of 2048 = 2^11 per level (spec section 5), so
-// ceil(64 / 11) = 6 levels address the whole key space. A seventh could
-// not be reached by any key. P07 owns the walk and may need *fewer* levels
-// than this; it cannot need more.
-inline constexpr std::uint8_t kMaxPatternDirDepth = 6;
-static_assert(kMaxPatternDirDepth * 11 >= 64, "the depth bound must cover a 64-bit arg_hash");
-
 // Whether this pattern has a waystone directory to walk. The one test for
 // it: `dir_depth`, never the root, for the reason recorded at that field.
 // A zeroed row answers false, which is the whole point.

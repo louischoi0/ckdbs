@@ -51,7 +51,6 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     }
     out.redo_applied = report.value().redo.applied;
     out.redo_skipped_by_lsn = report.value().redo.skipped_by_lsn;
-    out.redo_skipped_not_dirty = report.value().redo.skipped_not_dirty;
     out.pages_healed = report.value().redo.pages_healed;
     out.redo_start = report.value().analysis.redo_start_lsn;
     out.redo_start_floored_from = report.value().redo_start_floored_from;
@@ -78,7 +77,6 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
                           std::to_string(out.aborted) + " aborted, " + std::to_string(out.losers) +
                           " rolled back; redo applied " + std::to_string(out.redo_applied) +
                           ", skipped " + std::to_string(out.redo_skipped_by_lsn) +
-                          ", skipped-not-dirty " + std::to_string(out.redo_skipped_not_dirty) +
                           ", healed " + std::to_string(out.pages_healed) + " page(s); undo wrote " +
                           std::to_string(out.compensations) + " compensation(s)" +
                           (out.torn_tail ? "; tail was torn" : "") +

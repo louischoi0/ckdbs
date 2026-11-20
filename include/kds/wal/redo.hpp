@@ -50,8 +50,7 @@
 // (`page.md` §1); Cabins declare themselves unobserved after a restart
 // (`cabin.md` §9); both are RV7. The assertion records are recognised
 // and **left to assertion recovery** (RC07, `exec/assertion_recover.hpp`),
-// which replays them from the last checkpoint; redo counts them
-// (`deferred_assertions`) rather than dropping them silently.
+// which replays them from the last checkpoint; redo passes over them.
 
 namespace kds::wal {
 
@@ -59,11 +58,8 @@ struct RedoStats {
     std::uint64_t records = 0;        // records the scan handed to redo
     std::uint64_t applied = 0;        // records whose effect was written
     std::uint64_t skipped_by_lsn = 0; // already reflected on the page (RV5)
-    // The PW1c-2 not-dirty filter (redo.cpp carries the argument).
-    std::uint64_t skipped_not_dirty = 0;
-    std::uint64_t page_images = 0;    // FULL_PAGE_IMAGEs restored
+    std::uint64_t page_images = 0;    // images restored, verbatim or packed
     std::uint64_t pages_created = 0;  // pages the log named and the store lacked
-    std::uint64_t deferred_assertions = 0;  // RC07's, counted not applied
     std::uint64_t no_page = 0;        // records with no page target (txn, checkpoint)
 
     // Pages that failed to load with a checksum error and were healed by an
@@ -88,6 +84,19 @@ struct RedoStats {
 //
 // Redo writes no stream stamp (page.md section 2b): a formatted page's
 // flags word is 0.
+//
+// **What the caller owes: a redo start at or above the scan start**
+// (`analysis.redo_start_lsn >= analysis.scan_start_lsn`), which
+// `RecoverCore` floors it to (BC-R2). Analysis enters every page a record
+// in its scan names at that record's LSN or below - a page's entry is its
+// first nonzero LSN, and a `CHECKPOINT_BEGIN`'s recLSN is below the BEGIN -
+// so no record read from the scan start on is below its page's entry, and
+// redo keeps no filter by `dirty_pages`: `page_lsn` alone decides. Below
+// the scan start analysis has read nothing, and an unfloored caller - a
+// test - has a record there applied or passed over by `page_lsn` alone,
+// whatever became of its page since: one freed is re-created by a
+// `PAGE_INIT` or an image and refuses redo under any other record, and one
+// given to something else is written over.
 StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::PageStore& store,
                          const AnalysisResult& analysis);
 

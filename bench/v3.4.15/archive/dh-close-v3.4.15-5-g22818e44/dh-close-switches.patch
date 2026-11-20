@@ -1,0 +1,29 @@
+--- a/src/server/expeditor.cpp
++++ b/src/server/expeditor.cpp
+@@ -1312,7 +1312,10 @@
+     // it off, and every page they faulted or copied owes its image to the
+     // first write fetch after this. Before any peer and any listener.
+     if (Status s = catalog::RegisterUnloggedClasses(*expeditor->store_); !s.ok()) return s;
+-    expeditor->store_->EnableFetchImages(true);
++    // DH CLOSE, MEASUREMENT ONLY, never committed: with KDS_DH_NO_IMAGES set
++    // in the environment the image debt is never paid (arm A0). Read once,
++    // here.
++    expeditor->store_->EnableFetchImages(std::getenv("KDS_DH_NO_IMAGES") == nullptr);
+
+     // **DROP TABLE page reclamation, collected** (BF-R8): after the
+     // completion checkpoint, which is what moves `D` past this mount's scan
+--- a/src/wal/manager.cpp
++++ b/src/wal/manager.cpp
+@@ -466,7 +466,11 @@
+     // Packed first, on this stack: the caller holds the page exclusive, so
+     // the bytes packed are the bytes that would have been logged verbatim.
+     std::array<std::byte, kPackedImageMaxPayload> packed;
+-    const std::size_t packed_size = EncodePackedPageImage(page, packed);
++    // DH CLOSE, MEASUREMENT ONLY, never committed: with KDS_DH_NO_PACK set
++    // every image is logged verbatim (arm B3: the instance's cadence alone).
++    static const bool no_pack = std::getenv("KDS_DH_NO_PACK") != nullptr;
++    const std::size_t packed_size =
++        no_pack ? std::size_t{0} : EncodePackedPageImage(page, packed);
+     const bool is_packed = packed_size != 0;
+     const std::span<const std::byte> payload =
+         is_packed ? std::span<const std::byte>(packed).first(packed_size)

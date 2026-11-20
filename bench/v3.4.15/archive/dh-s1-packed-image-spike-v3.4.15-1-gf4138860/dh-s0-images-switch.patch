@@ -1,0 +1,14 @@
+--- a/src/server/expeditor.cpp
++++ b/src/server/expeditor.cpp
+@@ -1312,7 +1312,10 @@
+     // it off, and every page they faulted or copied owes its image to the
+     // first write fetch after this. Before any peer and any listener.
+     if (Status s = catalog::RegisterUnloggedClasses(*expeditor->store_); !s.ok()) return s;
+-    expeditor->store_->EnableFetchImages(true);
++    // DH-S0 MEASUREMENT ONLY, never committed: one binary serves both arms.
++    // With KDS_DH_NO_IMAGES set in the environment the image debt is never
++    // paid (arm A0); unset, this is main's behaviour (arm B). Read once, here.
++    expeditor->store_->EnableFetchImages(std::getenv("KDS_DH_NO_IMAGES") == nullptr);
+
+     // **DROP TABLE page reclamation, collected** (BF-R8): after the
+     // completion checkpoint, which is what moves `D` past this mount's scan

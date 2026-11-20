@@ -9,6 +9,11 @@ word and for the marks on §4's items. Every `[source-read]` claim below was
 read at `a4d2fb3b`, and the order was reviewed by `critics-developer`
 before it was committed (§7).
 
+**A note of 2026-11-20, to be read before DD-S0: DN gives DD a second
+consumer, and several of this order's proposals do not serve it** (§0a,
+on the operator's word, `raft-marks-2026-11-20.md` §16). Nothing below is
+re-marked or rewritten by the note.
+
 **Exploratory, and the premise is weak as measured.** The one measurement
 the tree holds on a churned index argues against part of it (§1.1), so
 DD-S0 can end the order with nothing built, or with one statement and no
@@ -63,6 +68,86 @@ divides, as the clustered tree does (BH-S5) - is not available as
 stated**: the writer holds its clustered leaf while it maintains its
 indexes, and deciding an entry is dead needs another clustered leaf
 (§1.2 G). DD-Q4 shows it as the option it is.
+
+## 0a. A note for the re-read: DN's consumer (2026-11-20)
+
+`[operator]` *"Leave a note so that DD is looked at again from that
+viewpoint."* (given in Korean; recorded in English) - after CLA's report
+that DN (`workorder-dn-heap-rowid.md`) makes DD its prerequisite and that
+DD's premise should be re-read with it.
+
+Written in the main checkout on `main` at `9c7d3b2e`
+(`v3.4.15-23-g9c7d3b2e`), documents only. **A note, not an amendment**: no
+DD-Q is marked, no rule or stage is changed, and §1's claims stay as read
+at `a4d2fb3b`. It lists what whoever opens DD-S0 reads again, and why.
+
+**The viewpoint.** DD was written for one consumer: an index that grows.
+Its premise is that the growth costs a statement something, which §1.1
+does not show, so DD may end "do not build" (DD-Q0). DN adds a consumer of
+another kind. In DN's heap an index entry names a rowid - a page and a
+slot - and the operator's mark DN-D1 is that **a slot is reused only once
+every index entry naming it is removed** (DN-R2, `[quiet-wrong]`: an entry
+that outlives its slot names another row). So on a DN heap entry removal
+is not about an index's size. **It is the only thing that ever frees a
+deleted row's space.**
+
+`[design]` What that changes in the reading, item by item. Each is a
+question for DD-S0, not a finding.
+
+1. **DD-Q0's verdict rule has no arm for it.** "Build", "narrow" and "do
+   not build" are decided on a statement's CPU, a tree's pages and a
+   `REINDEX` stall. None asks whether a consumer needs removal for
+   correctness of reuse. Under DN a "do not build" verdict means a heap
+   never reuses a slot. The rule needs a ground of its own for DN, or DD's
+   verdict is said not to bind DN.
+2. **DD-Q1 (a) keeps the entry DN most needs gone.** "A delete-marked row
+   keeps its head entry ... until a row `PURGE` retires it" - and DN's
+   heap admits `PURGE` only where the Keystone is the PK (DN-Q6 (a)). A
+   deleted heap row's slot would then wait for an entry nothing removes.
+   DD-Q1 (b) already names the case ("needed where rows cannot be purged
+   (a heap, ...)"); for DN it is the case, not an edge.
+3. **DD-Q3 (a) pins a slot per leaf.** "A leaf's first entry is never
+   removed: at most one dead entry a leaf" costs an index a few bytes
+   today. Under DN each such entry names a rowid, and that slot can never
+   be reused: one slot leaked for every leaf of every index, for as long
+   as the leaf stands. (b), the bound in the leaf header, and (c), the
+   check from the parent's separator, do not have this cost. Either is
+   also where DM's upper bound (`workorder-dm-leaf-upper-bound.md`, U2)
+   would put the same fact.
+4. **DD-Q4 (a) makes space reuse an administrator's statement.** With the
+   purge "the statement alone in S1-S3", a heap reuses nothing until an
+   admin runs `PURGE INDEX`. DN needs a driver that runs without being
+   asked, which is DD-S4, "offered only on a **build** verdict".
+5. **DD purges an index; DN needs to know a slot.** `PURGE INDEX <name>`
+   (DD-Q6 (a)) removes one index's dead entries. A slot is free only when
+   no entry of **any** index of the relation names it, as of every reader
+   that could resolve one. Nothing in §2 says who knows that, or where it
+   is recorded. DD-Q6 (c), a clause of `PURGE FROM t`, is the nearer
+   shape; whether the knowledge is a pass over every index or a state on
+   the slot is open, and is DN's to ask and DD's to answer.
+6. **DD-R1's byte-equality is about another entry.** The judge compares
+   the entry a version owes with the entry the write path appended, in
+   bytes. On a DN heap the entry is `(index key, rowid)` and perhaps the
+   Keystone (DN-Q3), not `(index key, tuple key)`. The premise is re-read
+   for that entry before it is trusted there.
+7. **DD-S0's cells measure no heap.** The seven cells price a churned
+   index against a rebuilt one. For DN the number is how long a deleted
+   row's slot waits, and how much of a churned heap is slots that wait.
+8. **Since DD was written, more code leans on "no entry is removed".**
+   DD-S0 already reads "every line that states or leans on" it. CV, which
+   landed on 2026-11-20 (`fda024cf`), added one: the reverse ordered index
+   walk's step, `IndexFetchLeafAtOrBelow`, whose comment says a leaf
+   covers `[its separator, the right sibling's first entry)` "while no
+   entry is removed" (`include/kds/storage/index/index_tree.hpp`). It is
+   on the list whether or not DN opens.
+
+**What does not change.** DD-R2 to DD-R7 are about a reader's and a
+writer's safety while an entry goes, and DN adds nothing against them;
+DN-R2 leans on them. The write path stays IX2's.
+
+**Order.** DN's own mark is DD :>> DN-S2. This note adds: **DN-S0's
+census (what DN must have from DD) :>> DD-S0**, so that DD measures and
+decides once, with both consumers in front of it.
 
 ## 1. The tree as read
 
@@ -438,3 +523,11 @@ purge changes no result" made a test; the documents and tests the review
 found missing. It found to hold: the tuple-unit fence against §1.2 F, the
 first-entry rule for the coverage check, that no reader keeps a position
 in a leaf, and the latch order. **Rejected**: none.
+
+### A note added 2026-11-20
+
+In the main checkout on `main` at `9c7d3b2e`, documents only, on the
+operator's word (`raft-marks-2026-11-20.md` §16): §0a, DN's consumer and
+the eight things DD-S0 reads again with it. No DD-Q marked, no rule or
+stage changed, nothing run.
+

@@ -1,0 +1,30 @@
+k1 46842552 8393
+k2 468522920 40513
+k3 46842872 16538
+k5 468522680 35609
+k8 6024 306
+k1: segments=3 images_in_log=8393 since_from_lsn=8393 took 1.9s
+  type 3 btree_leaf: n=8032 zero=72.34% hole=0.28% lz4=0.38 (11.6us) zstd1=0.22 (32.1us) L1=1.00
+  type 4 undo: n=361 zero=76.38% hole=8.82% lz4=0.37 (12.2us) zstd1=0.26 (33.6us) L1=0.99
+k2: segments=7 images_in_log=40513 since_from_lsn=40513 took 1.9s
+  type 3 btree_leaf: n=40206 zero=69.95% hole=0.17% lz4=0.32 (9.4us) zstd1=0.13 (26.0us) L1=1.00
+  type 4 undo: n=307 zero=75.81% hole=17.16% lz4=0.32 (9.4us) zstd1=0.21 (28.6us) L1=0.99
+k3: segments=4 images_in_log=16538 since_from_lsn=16538 took 2.3s
+  type 3 btree_leaf: n=15640 zero=69.87% hole=0.18% lz4=0.42 (13.4us) zstd1=0.26 (34.0us) L1=1.00
+  type 4 undo: n=898 zero=76.09% hole=15.36% lz4=0.40 (12.2us) zstd1=0.28 (32.7us) L1=0.99
+k5: segments=6 images_in_log=35609 since_from_lsn=35609 took 1.7s
+  type 3 btree_leaf: n=35600 zero=70.01% hole=0.17% lz4=0.31 (9.5us) zstd1=0.13 (25.8us) L1=1.00
+  type 4 undo: n=9 zero=71.95% hole=6.13% lz4=0.32 (12.9us) zstd1=0.21 (34.9us) L1=0.92
+k8: segments=1 images_in_log=306 since_from_lsn=306 took 0.3s
+  type 1 heap: n=23 zero=96.97% hole=75.04% lz4=0.06 (4.1us) zstd1=0.03 (16.2us) L1=0.25
+  type 2 btree_internal: n=15 zero=82.48% hole=45.51% lz4=0.42 (9.8us) zstd1=0.20 (28.0us) L1=0.57
+  type 3 btree_leaf: n=15 zero=85.97% hole=49.63% lz4=0.15 (6.3us) zstd1=0.08 (22.4us) L1=0.43
+  type 4 undo: n=252 zero=86.82% hole=8.14% lz4=0.21 (5.9us) zstd1=0.07 (22.8us) L1=0.99
+  type 14 type14: n=1 zero=99.87% hole=99.60% lz4=0.01 (5.2us) zstd1=0.00 (17.2us) L1=0.00
+k4a: segments=2 images_in_log=1737 since_from_lsn=1737 took 0.9s
+  type 1 heap: n=65 zero=95.57% hole=64.20% lz4=0.08 (4.0us) zstd1=0.05 (16.5us) L1=0.36
+  type 2 btree_internal: n=45 zero=90.73% hole=72.12% lz4=0.14 (5.8us) zstd1=0.08 (20.5us) L1=0.21
+  type 3 btree_leaf: n=1153 zero=72.95% hole=3.62% lz4=0.25 (12.4us) zstd1=0.14 (27.7us) L1=0.99
+  type 4 undo: n=470 zero=80.30% hole=10.33% lz4=0.34 (11.0us) zstd1=0.20 (27.7us) L1=0.99
+  type 10 varheap: n=2 zero=98.62% hole=98.30% lz4=0.02 (5.4us) zstd1=0.02 (24.6us) L1=0.02
+  type 14 type14: n=2 zero=99.87% hole=99.60% lz4=0.01 (2.7us) zstd1=0.00 (8.1us) L1=0.00

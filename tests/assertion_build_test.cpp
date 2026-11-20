@@ -275,7 +275,6 @@ TEST_F(AssertionBuildWalTest, TheEmittedRecordsRebuildTheDirectoryTheBuildProduc
         exec::BoundCabin* CabinOf(std::uint64_t assertion_id) override {
             return assertion_id == id ? cabin : nullptr;
         }
-        void Drop(std::uint64_t) override {}
     } context;
     context.cabin = &rebuilt;
 

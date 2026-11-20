@@ -1,0 +1,66 @@
+id=m4r1 arm=A shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m4r1 arm=B shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m4r2 arm=A shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m4r2 arm=B shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=rec1 arm=A shape=recovery rows=100000 cores=8 clients=8 dur=group
+id=rec1 arm=B shape=recovery rows=100000 cores=8 clients=8 dur=group
+id=m3r1 arm=A shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=m3r1 arm=B shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=m3r1 arm=B3 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=m3r1 arm=A0 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=m3r2 arm=A shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=m3r2 arm=B shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=k3r1 arm=A shape=update-lit rows=10000 cores=1 clients=4 dur=group
+id=k3r1 arm=B shape=update-lit rows=10000 cores=1 clients=4 dur=group
+id=k3r2 arm=A shape=update-lit rows=10000 cores=1 clients=4 dur=group
+id=k3r2 arm=B shape=update-lit rows=10000 cores=1 clients=4 dur=group
+id=k1r1 arm=A shape=select-pk rows=10000 cores=1 clients=4 dur=group
+id=k1r1 arm=B shape=select-pk rows=10000 cores=1 clients=4 dur=group
+id=k1r2 arm=A shape=select-pk rows=10000 cores=1 clients=4 dur=group
+id=k1r2 arm=B shape=select-pk rows=10000 cores=1 clients=4 dur=group
+id=k4r1 arm=A shape=insert rows=0 cores=4 clients=4 dur=group
+id=k4r1 arm=B shape=insert rows=0 cores=4 clients=4 dur=group
+id=k4r2 arm=A shape=insert rows=0 cores=4 clients=4 dur=group
+id=k4r2 arm=B shape=insert rows=0 cores=4 clients=4 dur=group
+id=rec2 arm=A shape=recovery rows=100000 cores=8 clients=8 dur=group
+id=rec2 arm=B shape=recovery rows=100000 cores=8 clients=8 dur=group
+id=k2r1 arm=A shape=select-pk rows=10000 cores=8 clients=8 dur=group
+id=k2r1 arm=B shape=select-pk rows=10000 cores=8 clients=8 dur=group
+id=k2r2 arm=A shape=select-pk rows=10000 cores=8 clients=8 dur=group
+id=k2r2 arm=B shape=select-pk rows=10000 cores=8 clients=8 dur=group
+id=s4ar1 arm=A shape=scenario2 cores=8 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4ar1 arm=B shape=scenario2 cores=8 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4br1 arm=A shape=scenario2 cores=1 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4br1 arm=B shape=scenario2 cores=1 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=m7r1 arm=A shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048
+id=m7r1 arm=B shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048
+id=m8r1 arm=A shape=update-lit rows=100000 cores=4 clients=4 dur=strict
+id=m8r1 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=strict
+id=m1r1 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r1 arm=A shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r1 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r1 arm=B3 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r2 arm=A shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r2 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r2 arm=B3 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m1r2 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=m2r1 arm=A shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r1 arm=B shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r1 arm=B3 shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r1 arm=A0 shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r2 arm=A shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r2 arm=B shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r2 arm=B3 shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m2r2 arm=A0 shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=m4r1 arm=B3 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m4r1 arm=A0 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m4r2 arm=B3 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m4r2 arm=A0 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=m3r2 arm=B3 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=m3r2 arm=A0 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=s4ar2 arm=A shape=scenario2 cores=8 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4ar2 arm=B shape=scenario2 cores=8 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4br2 arm=A shape=scenario2 cores=1 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4br2 arm=B shape=scenario2 cores=1 clients=8 dur=group s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=m7r1 arm=B3 shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048
+id=m7r1 arm=A0 shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048

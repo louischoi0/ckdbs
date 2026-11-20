@@ -627,8 +627,17 @@ TEST(DropTableReclaimServingTest, ATwoCoreMountReclaimsOnceEveryCoreHasCheckpoin
     auto again = Mount(dir.path, /*cores=*/1);
     ASSERT_TRUE(again.ok()) << again.status().message();
     CurrentCoreGuard as(0);
+    // **Freed, or somebody else's since.** A freed id returns through the
+    // store's free list ahead of the cursor (`page.md` §5), and `live` is
+    // still being written when the reclaim ends, so its next leaf, internal
+    // node or undo page may take one. What a dropped page may not be is the
+    // dropped relation's still.
     for (const PageId id : dropped.pages) {
-        EXPECT_FALSE(again.value()->store().IsAllocated(id)) << "page " << id;
+        if (!again.value()->store().IsAllocated(id)) continue;
+        auto bytes = again.value()->store().GetForRead(id);
+        ASSERT_TRUE(bytes.ok()) << "page " << id << ": " << bytes.status().message();
+        EXPECT_NE(storage::GetOwnerOid(bytes.value().bytes()), dropped.oid)
+            << "page " << id << " is allocated and still the dropped relation's";
     }
     EXPECT_EQ(again.value()->dispatcher().Dispatch("SELECT COUNT(*) FROM live").response,
               "count(*)\\n" + std::to_string(written));

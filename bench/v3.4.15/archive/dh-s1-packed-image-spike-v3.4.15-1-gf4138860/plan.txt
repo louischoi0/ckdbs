@@ -1,0 +1,30 @@
+id=d5r1 arm=A0 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=d5r1 arm=B shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=d5r1 arm=P1 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048 envx=KDS_DH_IMAGE_BYTES=2592;KDS_DH_IMAGE_SPIN_US=10
+id=d5r1 arm=P2 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048 envx=KDS_DH_IMAGE_BYTES=1048;KDS_DH_IMAGE_SPIN_US=26
+id=d5r2 arm=A0 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=d5r2 arm=B shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=d5r2 arm=P1 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048 envx=KDS_DH_IMAGE_BYTES=2592;KDS_DH_IMAGE_SPIN_US=10
+id=d5r2 arm=P2 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048 envx=KDS_DH_IMAGE_BYTES=1048;KDS_DH_IMAGE_SPIN_US=26
+id=d1r1 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=d1r1 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=d1r1 arm=P1 shape=update-lit rows=100000 cores=4 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=3104;KDS_DH_IMAGE_SPIN_US=12
+id=d1r1 arm=P2 shape=update-lit rows=100000 cores=4 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=1744;KDS_DH_IMAGE_SPIN_US=32
+id=d1r2 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=d1r2 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=d1r2 arm=P1 shape=update-lit rows=100000 cores=4 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=3104;KDS_DH_IMAGE_SPIN_US=12
+id=d1r2 arm=P2 shape=update-lit rows=100000 cores=4 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=1744;KDS_DH_IMAGE_SPIN_US=32
+id=d3 arm=A0 shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=d3 arm=B shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=d3 arm=P1 shape=update-lit rows=100000 cores=8 clients=8 dur=group envx=KDS_DH_IMAGE_BYTES=3104;KDS_DH_IMAGE_SPIN_US=12
+id=d3 arm=P2 shape=update-lit rows=100000 cores=8 clients=8 dur=group envx=KDS_DH_IMAGE_BYTES=1744;KDS_DH_IMAGE_SPIN_US=32
+id=d7r1 arm=A0 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=d7r1 arm=B shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=d7r1 arm=P1 shape=update-lit rows=100000 cores=1 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=3104;KDS_DH_IMAGE_SPIN_US=12
+id=d7r2 arm=A0 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=d7r2 arm=B shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=d7r2 arm=P1 shape=update-lit rows=100000 cores=1 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=3104;KDS_DH_IMAGE_SPIN_US=12
+id=d1r3 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=d1r3 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=d1r3 arm=P1 shape=update-lit rows=100000 cores=4 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=3104;KDS_DH_IMAGE_SPIN_US=12
+id=d1r3 arm=P2 shape=update-lit rows=100000 cores=4 clients=4 dur=group envx=KDS_DH_IMAGE_BYTES=1744;KDS_DH_IMAGE_SPIN_US=32

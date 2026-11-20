@@ -87,23 +87,11 @@
 
 namespace kds::index {
 
-// One page an insert created or restructured, as the WAL needs it
-// described (spec §12.1).
-struct IndexChange {
-    PageId page_id = kInvalidPageId;
-    // A brand-new page. There is no `INDEX_PAGE_INIT` record (`index.md`
-    // §12.1): a divide leaves a new sibling holding half the entries, so
-    // only a page image describes it, and the split logs every page it
-    // created or rewrote as one `BTREE_SPLIT`. Everything else - a node whose
-    // entries were divided, a leaf whose sibling link moved - is false.
-    bool is_new_page = false;
-};
-
 // A dividing split touches **two** pages per level it propagates through -
 // the node that overflowed and the sibling that took half of it - plus one
-// new root. `storage::kMaxStructuralChanges` is derived from the clustered
-// tree's split, which creates one page per level and moves nothing, so it is
-// the wrong bound here and is deliberately not reused.
+// new root. Counted from this tree's own split, and so a constant of its
+// own beside `storage::kMaxStructuralChanges`, which counts the clustered
+// tree's.
 inline constexpr std::size_t kMaxIndexChanges =
     2 * static_cast<std::size_t>(storage::kMaxBtreeDepth) + 1;
 
@@ -124,11 +112,12 @@ struct IndexInsertResult {
     // then name that entry and nothing was written.
     bool already_present = false;
 
-    // Pages the append **restructured**, which no record type describes -
-    // so a caller logs a full page image of each. Empty for the
-    // overwhelmingly common insert that just filled a slot, which the entry
-    // bytes describe completely.
-    std::array<IndexChange, kMaxIndexChanges> structural{};
+    // Pages the append **restructured** - created or rewrote - by id. No
+    // record type describes one and there is no `INDEX_PAGE_INIT`
+    // (`index.md` §12.1), so the split logs an image of each as one
+    // `BTREE_SPLIT`. Empty for the overwhelmingly common insert that just
+    // filled a slot, which the entry bytes describe completely.
+    std::array<PageId, kMaxIndexChanges> structural{};
     std::uint8_t n_structural = 0;
 
     // The pins granted for the parents below past the first; before
@@ -142,16 +131,16 @@ struct IndexInsertResult {
     // A divide that grew a root: its anchor's `UnlatchedPin`.
     storage::UnlatchedPin anchor;
 
-    std::span<const IndexChange> changes() const {
-        return std::span<const IndexChange>(structural.data(), n_structural);
+    std::span<const PageId> changes() const {
+        return std::span<const PageId>(structural.data(), n_structural);
     }
     bool restructured() const { return n_structural > 0; }
-    void Record(PageId id, bool is_new_page) {
+    void Record(PageId id) {
         // Bounded by kMaxIndexChanges above, which is a derivation and not a
         // hope. Dropping a change silently would be a page mutated with no
         // record describing it - the hole the WAL exists to close - so there
         // is deliberately no "if full, skip" arm.
-        structural[n_structural++] = IndexChange{id, is_new_page};
+        structural[n_structural++] = id;
     }
 };
 

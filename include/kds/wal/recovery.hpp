@@ -107,10 +107,6 @@ struct RecoveryReport {
     // one `workorder-bc-wal-recycling.md` §1.4 describes, and BC-S1's cells
     // show the records below the floor change no page.
     Lsn redo_start_floored_from = 0;
-
-    // Records whose page the store could not resolve to a live relation
-    // (RV3's counter). **Always 0: nothing populates it** (RC09's, unbuilt).
-    std::uint64_t orphaned_records = 0;
 };
 
 // Runs the phases above against the stream on `device`.

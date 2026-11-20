@@ -234,6 +234,18 @@ enum class RecordType : std::uint8_t {
     // build is refused at mount, since refusing the record kind alone would let
     // one mount a log whose scan holds none and leave a loser counted.
     kAssertPending = 34,
+    // **The write fetch's image, packed** (DH, wal.md section 10): the page
+    // a FULL_PAGE_IMAGE would carry verbatim, with its zero bytes left out
+    // (`payload.hpp`). Written at `kNoTxnId` for the envelope's page when
+    // the packed page is smaller than the page; a page that does not shrink
+    // is logged as kind 10, which keeps its payload and meaning. Redo
+    // rebuilds the page and lays it as an image, the heal of a torn page
+    // included. **No superblock moved for it** (DH-Q11 (a)), unlike kind 34:
+    // a log that holds none is replayed by an older build exactly as before,
+    // and one that holds any is refused by it at redo, as a page record it
+    // has no applier for (named `UNKNOWN`: it has no name for the kind) -
+    // nothing an older build could mis-read.
+    kPackedPageImage = 35,
     // INDEX_PAGE_INIT (index.md §12.1's proposal) is not assigned: a new
     // index page leaves a divide holding half the entries, so only a full
     // page image describes it.
@@ -245,7 +257,7 @@ enum class RecordType : std::uint8_t {
 // Keep it pinned to the last enumerator; the test that every named type
 // encodes proves it.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kAssertPending);
+    static_cast<std::uint8_t>(RecordType::kPackedPageImage);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 

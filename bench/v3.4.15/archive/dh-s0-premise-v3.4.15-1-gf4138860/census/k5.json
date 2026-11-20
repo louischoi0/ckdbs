@@ -1,0 +1,165 @@
+{
+ "label": "k5",
+ "wal_dirs": [
+  "wd/wal-keep/k5",
+  "wd/arch/k5"
+ ],
+ "from_lsn": 468522680,
+ "segments": 6,
+ "segment_ends": {
+  "wd/arch/k5/kds-a35249077e83d4af-6.log": "PAD",
+  "wd/arch/k5/kds-a35249077e83d4af-7.log": "PAD",
+  "wd/arch/k5/kds-a35249077e83d4af-8.log": "PAD",
+  "wd/arch/k5/kds-a35249077e83d4af-9.log": "PAD",
+  "wd/arch/k5/kds-a35249077e83d4af-10.log": "PAD",
+  "wd/wal-keep/k5/wal-0-11.log": "zero tail"
+ },
+ "crc_validated": false,
+ "records_by_type": {
+  "1": {
+   "count": 44138,
+   "bytes": 1412416
+  },
+  "2": {
+   "count": 44139,
+   "bytes": 1412448
+  },
+  "4": {
+   "count": 1133,
+   "bytes": 63448
+  },
+  "6": {
+   "count": 184463,
+   "bytes": 26005520
+  },
+  "10": {
+   "count": 35609,
+   "bytes": 292848416
+  },
+  "11": {
+   "count": 6,
+   "bytes": 41344
+  },
+  "12": {
+   "count": 6,
+   "bytes": 240
+  },
+  "14": {
+   "count": 184463,
+   "bytes": 15809608
+  },
+  "29": {
+   "count": 139759,
+   "bytes": 11180720
+  },
+  "30": {
+   "count": 847,
+   "bytes": 20878280
+  }
+ },
+ "images_in_log_all": 35609,
+ "images_since_from_lsn": 35609,
+ "raw_sample": 3000,
+ "by_type": {
+  "3": {
+   "name": "btree_leaf",
+   "count": 35600,
+   "sampled": 3000,
+   "zero_share_mean": 0.7001239013671875,
+   "hole_len_mean": 14.137666666666666,
+   "hole_len_median": 14.0,
+   "hole_len_p90": 15,
+   "hole_start_p25_p50_p75": [
+    886,
+    886,
+    886
+   ],
+   "hole_share_mean": 0.0017257893880208333,
+   "L1": {
+    "mean_bytes": 8192.0,
+    "ratio_median": 1.0,
+    "ratio_p90": 1.0
+   },
+   "L1+lz4": {
+    "mean_bytes": 2589.105,
+    "ratio_median": 0.315185546875,
+    "ratio_p90": 0.3199462890625
+   },
+   "L1+lz4_us": 9.459311647030214,
+   "zlib1": {
+    "mean_bytes": 1244.21,
+    "ratio_median": 0.1510009765625,
+    "ratio_p90": 0.156494140625
+   },
+   "zlib1_us": 105.52187364858885,
+   "lz4": {
+    "mean_bytes": 2585.105,
+    "ratio_median": 0.314697265625,
+    "ratio_p90": 0.3194580078125
+   },
+   "lz4_us": 9.456164009558657,
+   "zstd1": {
+    "mean_bytes": 1041.6706666666666,
+    "ratio_median": 0.126708984375,
+    "ratio_p90": 0.135986328125
+   },
+   "zstd1_us": 25.793641689233482,
+   "zstd3": {
+    "mean_bytes": 940.6873333333333,
+    "ratio_median": 0.11749267578125,
+    "ratio_p90": 0.1307373046875
+   },
+   "zstd3_us": 29.19894363731146
+  },
+  "4": {
+   "name": "undo",
+   "count": 9,
+   "sampled": 9,
+   "zero_share_mean": 0.7195231119791666,
+   "hole_len_mean": 502.44444444444446,
+   "hole_len_median": 661,
+   "hole_len_p90": 933,
+   "hole_start_p25_p50_p75": [
+    7463,
+    7531,
+    8142
+   ],
+   "hole_share_mean": 0.061333550347222224,
+   "L1": {
+    "mean_bytes": 7693.555555555556,
+    "ratio_median": 0.9197998046875,
+    "ratio_p90": 0.9945068359375
+   },
+   "L1+lz4": {
+    "mean_bytes": 2912.4444444444443,
+    "ratio_median": 0.3192138671875,
+    "ratio_p90": 0.482421875
+   },
+   "L1+lz4_us": 12.5466613098979,
+   "zlib1": {
+    "mean_bytes": 2081.5555555555557,
+    "ratio_median": 0.2215576171875,
+    "ratio_p90": 0.355224609375
+   },
+   "zlib1_us": 111.91621888428926,
+   "lz4": {
+    "mean_bytes": 2915.5555555555557,
+    "ratio_median": 0.3193359375,
+    "ratio_p90": 0.4827880859375
+   },
+   "lz4_us": 12.861331924796104,
+   "zstd1": {
+    "mean_bytes": 1917.2222222222222,
+    "ratio_median": 0.2099609375,
+    "ratio_p90": 0.319580078125
+   },
+   "zstd1_us": 34.91799967984358,
+   "zstd3": {
+    "mean_bytes": 1852.888888888889,
+    "ratio_median": 0.1956787109375,
+    "ratio_p90": 0.32177734375
+   },
+   "zstd3_us": 34.17277346468634
+  }
+ }
+}

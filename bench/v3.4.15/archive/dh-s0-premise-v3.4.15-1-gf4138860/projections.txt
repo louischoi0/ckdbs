@@ -1,0 +1,60 @@
+k1 mix: btree_leaf=95.7% undo=4.3%
+  images/stmt B 0.109 (896 B)  L 0.023 (186 B) removes 79.3%
+  weighted bytes/image {'L1': 8153, 'lz4': 3095, 'zstd1': 1743, 'zstd3': 1540, 'L1+lz4': 3098} 
+  projected image B/stmt {'L1': 891, 'lz4': 338, 'zstd1': 191, 'zstd3': 168, 'L1+lz4': 339} 
+  us/image {'lz4': 11.7, 'zstd1': 32.2, 'zstd3': 35.1, 'zlib1': 131.8, 'L1+lz4': 11.5}
+  type-blind hole share 0.65%, zero-byte share 72.5%
+k2 mix: btree_leaf=99.2% undo=0.8%
+  images/stmt B 0.842 (6894 B)  L 0.812 (6650 B) removes 3.5%
+  weighted bytes/image {'L1': 8181, 'lz4': 2586, 'zstd1': 1045, 'zstd3': 949, 'L1+lz4': 2590} 
+  projected image B/stmt {'L1': 6885, 'lz4': 2176, 'zstd1': 880, 'zstd3': 799, 'L1+lz4': 2180} 
+  us/image {'lz4': 9.4, 'zstd1': 26.1, 'zstd3': 29.5, 'zlib1': 106.9, 'L1+lz4': 9.3}
+  type-blind hole share 0.30%, zero-byte share 70.0%
+k3 mix: btree_leaf=94.6% undo=5.4%
+  images/stmt B 0.136 (1115 B)  L 0.015 (123 B) removes 89.0%
+  weighted bytes/image {'L1': 8124, 'lz4': 3433, 'zstd1': 2121, 'zstd3': 1861, 'L1+lz4': 3437} 
+  projected image B/stmt {'L1': 1105, 'lz4': 467, 'zstd1': 289, 'zstd3': 253, 'L1+lz4': 468} 
+  us/image {'lz4': 13.3, 'zstd1': 33.9, 'zstd3': 37.0, 'zlib1': 142.8, 'L1+lz4': 13.1}
+  type-blind hole share 1.01%, zero-byte share 70.2%
+k5 mix: btree_leaf=100.0% undo=0.0%
+  images/stmt B 0.810 (6635 B)  L - (- B) removes -%
+  weighted bytes/image {'L1': 8192, 'lz4': 2585, 'zstd1': 1042, 'zstd3': 941, 'L1+lz4': 2589} 
+  projected image B/stmt {'L1': 6635, 'lz4': 2094, 'zstd1': 844, 'zstd3': 762, 'L1+lz4': 2097} 
+  us/image {'lz4': 9.5, 'zstd1': 25.8, 'zstd3': 29.2, 'zlib1': 105.5, 'L1+lz4': 9.5}
+  type-blind hole share 0.17%, zero-byte share 70.0%
+k8 mix: heap=7.5% btree_internal=4.9% btree_leaf=4.9% undo=82.4% type14=0.3%
+  images/stmt B 0.004 (29 B)  L - (- B) removes -%
+  weighted bytes/image {'L1': 6776, 'lz4': 1563, 'zstd1': 569, 'zstd3': 566, 'L1+lz4': 1554} 
+  projected image B/stmt {'L1': 24, 'lz4': 5, 'zstd1': 2, 'zstd3': 2, 'L1+lz4': 5} 
+  us/image {'lz4': 6.0, 'zstd1': 22.5, 'zstd3': 23.2, 'zlib1': 94.9, 'L1+lz4': 5.9}
+  type-blind hole share 17.33%, zero-byte share 87.4%
+c5 server cpu delta B-A0 14.5 us/stmt, per image 17.9 us
+c2 server cpu delta B-A0 13.1 us/stmt, per image 15.6 us
+run arm cores dur log_B/stmt commits/sync log_B/sync wal_flush_us/stmt
+c1r1 A0 4 group 250 1.0 250 648
+c1r1 B 4 group 1147 1.0 1147 707
+c1r1-notick L 4 group 249 1.0 249 658
+c1r2 A0 4 group 250 1.39 348 649
+c1r1 L 4 group 423 1.0 423 722
+c1r2 B 4 group 1151 2.82 3242 722
+c1r2 L 4 group 447 1.0 447 715
+c2 A0 4 group 253 1.0 253 1319
+c2 B 4 group 7174 1.0 7174 1233
+c2 L 4 group 6926 1.0 6926 1387
+c3 A0 8 group 250 1.0 250 710
+c3 B 8 group 1369 1.0 1369 835
+c3 L 8 group 372 2.02 750 821
+c5 A0 1 group 249 2.0 498 508
+c5 B 1 group 6911 2.0 13822 735
+c6 A0 4 strict 250 0.0 0 634
+c6 B 4 strict 1302 0.0 0 723
+c7 A0 1 group 249 2.0 498 428
+c7 B 1 group 500 2.0 1001 451
+c8 A0 4 group 533 3.01 1603 652
+c8 B 4 group 562 18.14 10196 669
+k4a (scenario 2, whole run's log incl. the load; n = 1737) mix: heap=3.7% btree_internal=2.6% btree_leaf=66.4% undo=27.1% varheap=0.1% type14=0.1%
+  images/booking B 0.102 (840 B)  L - (- B) removes -%
+  weighted bytes/image {'L1': 7402, 'lz4': 2547, 'zstd1': 1437, 'zstd3': 1425, 'L1+lz4': 2541} 
+  projected image B/booking {'L1': 759, 'lz4': 261, 'zstd1': 147, 'zstd3': 146, 'L1+lz4': 261} 
+  us/image {'lz4': 11.5, 'zstd1': 27.1, 'zstd3': 29.7, 'zlib1': 106.4, 'L1+lz4': 11.6}
+  type-blind hole share 9.69%, zero-byte share 76.3%

@@ -4309,17 +4309,6 @@ StatusOr<std::vector<SysIndexRow>> Catalog::ListIndexes(const txn::ReadView* vie
     return ScanAll<SysIndexRow>(store_, kCatalogPageIndexes, view, txn_);
 }
 
-StatusOr<std::vector<SysIndexRow>> Catalog::FindIndexesForTable(Oid table_oid) {
-    auto rows = ListIndexes();
-    if (!rows.ok()) return rows.status();
-
-    std::vector<SysIndexRow> out;
-    for (const SysIndexRow& row : rows.value()) {
-        if (row.table_oid == table_oid) out.push_back(row);
-    }
-    return out;
-}
-
 StatusOr<SysIndexRow> Catalog::FindIndexByName(std::string_view name,
                                                const txn::ReadView* view) {
     auto found = LookupIndexByName(name, view);

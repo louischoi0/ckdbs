@@ -1,0 +1,2 @@
+1795147861 WARN [query] "UPDATE t SET v = 788265439 WHERE id = 49573" -> ERR TXN_CONFLICT retryable=1 row id=49573 was written by transaction 238967 in 26us
+1795147864 WARN [query] "UPDATE t SET v = 875763074 WHERE id = 36336" -> ERR TXN_CONFLICT retryable=1 row id=36336 was written by transaction 295798 in 41us

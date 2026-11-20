@@ -186,7 +186,6 @@ public:
     AssertionEnforcer(const AssertionEnforcer&) = delete;
     AssertionEnforcer& operator=(const AssertionEnforcer&) = delete;
 
-    bool empty() const;
     bool Holds(std::uint64_t assertion_id) const;
     bool AnyOn(catalog::Oid oid) const;
 
@@ -207,7 +206,6 @@ public:
     // dispatcher and again per row by the admissions below: since AZ-S3 a
     // checkpoint can mark a relation between two rows of one statement.
     static Status CannotEnforceRefusal();
-    std::size_t unenforceable() const;
 
     // The counters, copied under the latch, or nothing while the registry
     // does not hold the assertion - the caller prints nothing then, rather

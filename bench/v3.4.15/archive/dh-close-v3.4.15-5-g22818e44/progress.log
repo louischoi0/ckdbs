@@ -1,0 +1,92 @@
+03:17:38 snapshot select-pk:10000:65536 built in 1s
+03:17:39 snapshot update-lit:10000:65536 built in 1s
+03:17:39 HOLD m1r1-A: foreign ['3373571 cmake', '3374779 c++', '3374780 cc1plus']
+03:20:07 m1r1 A update-lit:100000 c4 group: 60428 stmts 4028/s bad=0 ck=11 img=7573 load1=5.48
+03:20:07 DISCARD m1r1-A attempt 1: foreign ['3376379 cmake', '3376432 c++', '3376433 c++']
+03:20:07 HOLD m1r1-A: foreign ['3376379 cmake', '3376440 c++', '3376441 c++']
+03:28:07 m1r1 A update-lit:100000 c4 group: 66463 stmts 4428/s bad=0 ck=11 img=8161 load1=5.12
+03:28:07 DISCARD m1r1-A attempt 2: foreign ['3387963 kds_A']
+03:28:07 HOLD m1r1-A: foreign ['3387963 kds_A']
+03:34:52 m1r1 A update-lit:100000 c4 group: 68259 stmts 4550/s bad=0 ck=11 img=7552 load1=6.24
+03:35:11 m1r1 B update-lit:100000 c4 group: 74100 stmts 4939/s bad=0 ck=3 img=2175 load1=5.00
+03:35:29 m1r1 B3 update-lit:100000 c4 group: 69422 stmts 4628/s bad=0 ck=3 img=2226 load1=3.93
+03:35:48 m1r1 A0 update-lit:100000 c4 group: 74069 stmts 4937/s bad=0 ck=3 img=0 load1=3.56
+03:35:48 DISCARD m1r1-A0 attempt 1: foreign ['3393128 cmake', '3393187 c++', '3393188 cc1plus']
+03:35:48 HOLD m1r1-A0: foreign ['3393128 cmake', '3393187 c++', '3393188 cc1plus']
+03:45:19 m1r1 A0 update-lit:100000 c4 group: 63710 stmts 4247/s bad=0 ck=3 img=0 load1=2.54
+03:45:19 DISCARD m1r1-A0 attempt 2: foreign ['3405714 cmake', '3405788 c++', '3405789 cc1plus']
+03:45:19 HOLD m1r1-A0: foreign ['3405714 cmake', '3405788 c++', '3405789 cc1plus']
+03:51:34 m1r1 A0 update-lit:100000 c4 group: 75788 stmts 5052/s bad=0 ck=3 img=0 load1=4.91
+03:51:34 DISCARD m1r1-A0 attempt 3: foreign ['3410387 cmake']
+03:51:34 HOLD m1r2-A: foreign ['3410393 cmake', '3410453 c++', '3410454 c++']
+03:57:25 m1r2 A update-lit:100000 c4 group: 51905 stmts 3460/s bad=0 ck=11 img=7105 load1=2.78
+03:57:25 DISCARD m1r2-A attempt 1: foreign ['3414734 kds_A', '3414748 kds_B', '3414755 kds_A2']
+03:57:25 HOLD m1r2-A: foreign ['3414734 kds_A', '3414748 kds_B', '3414755 kds_A2']
+04:03:29 m1r2 A update-lit:100000 c4 group: 69883 stmts 4659/s bad=0 ck=11 img=7787 load1=1.47
+04:03:48 m1r2 B update-lit:100000 c4 group: 72569 stmts 4837/s bad=0 ck=3 img=2161 load1=1.93
+04:04:07 m1r2 B3 update-lit:100000 c4 group: 69792 stmts 4652/s bad=0 ck=3 img=2226 load1=1.67
+04:04:07 DISCARD m1r2-B3 attempt 1: foreign ['3418943 cmake', '3419017 c++', '3419018 cc1plus']
+04:04:07 HOLD m1r2-B3: foreign ['3418943 cmake', '3419150 cmake', '3419152 c++']
+04:05:08 m1r2 B3 update-lit:100000 c4 group: 69755 stmts 4650/s bad=0 ck=3 img=2453 load1=1.54
+04:05:08 DISCARD m1r2-B3 attempt 2: foreign ['3419875 ctest', '3419877 kds_tests', '3419878 kds_tests']
+04:05:08 HOLD m1r2-B3: foreign ['3419875 ctest', '3419877 kds_tests', '3419878 kds_tests']
+04:09:32 m1r2 B3 update-lit:100000 c4 group: 71039 stmts 4736/s bad=0 ck=3 img=2371 load1=5.27
+04:09:50 m1r2 A0 update-lit:100000 c4 group: 74351 stmts 4956/s bad=0 ck=3 img=0 load1=4.97
+04:10:09 m2r1 A update-lit:100000 c8 group: 112752 stmts 7516/s bad=0 ck=21 img=15792 load1=4.56
+04:10:28 m2r1 B update-lit:100000 c8 group: 129798 stmts 8652/s bad=0 ck=3 img=2697 load1=4.37
+04:10:46 m2r1 B3 update-lit:100000 c8 group: 124468 stmts 8296/s bad=0 ck=3 img=2621 load1=4.60
+04:11:05 m2r1 A0 update-lit:100000 c8 group: 129680 stmts 8644/s bad=2 ck=3 img=0 load1=4.49
+04:11:24 m2r2 A update-lit:100000 c8 group: 115157 stmts 7675/s bad=0 ck=21 img=15897 load1=5.17
+04:11:43 m2r2 B update-lit:100000 c8 group: 132640 stmts 8841/s bad=0 ck=3 img=2550 load1=4.72
+04:12:01 m2r2 B3 update-lit:100000 c8 group: 124476 stmts 8297/s bad=0 ck=3 img=2551 load1=5.06
+04:12:20 m2r2 A0 update-lit:100000 c8 group: 95043 stmts 6334/s bad=0 ck=3 img=0 load1=4.53
+04:12:20 DISCARD m2r2-A0 attempt 1: foreign ['3431733 cmake', '3431786 c++', '3431787 cc1plus']
+04:12:20 HOLD m2r2-A0: foreign ['3431733 cmake', '3432079 c++', '3432080 cc1plus']
+04:18:27 m2r2 A0 update-lit:100000 c8 group: 134022 stmts 8934/s bad=0 ck=3 img=0 load1=5.57
+04:18:46 m3r1 A update-lit:1000000 c1 group: 33913 stmts 2261/s bad=0 ck=3 img=27509 load1=5.21
+04:18:46 DISCARD m3r1-A attempt 1: foreign ['3438015 cmake', '3438068 c++', '3438069 cc1plus']
+04:18:46 HOLD m3r1-A: foreign ['3438015 cmake', '3438130 c++', '3438131 cc1plus']
+04:54:00 HOLD m1r1-A0: foreign ['3538293 cmake', '3546746 c++', '3546747 cc1plus']
+05:06:01 m1r1 A0 update-lit:100000 c4 group: 69441 stmts 4629/s bad=0 ck=3 img=0 load1=7.10
+05:06:01 DISCARD m1r1-A0 attempt 1: foreign ['3590386 cmake', '3590458 c++', '3590459 c++']
+05:06:01 HOLD m1r1-A0: foreign ['3590386 cmake', '3590462 c++', '3590465 cc1plus']
+05:27:11 m1r1 A0 update-lit:100000 c4 group: 75365 stmts 5024/s bad=0 ck=3 img=0 load1=5.78
+05:27:30 m4r1 A update-lit:100000 c1 group: 58922 stmts 3928/s bad=0 ck=3 img=1855 load1=4.77
+05:27:30 DISCARD m4r1-A attempt 1: foreign ['3624663 kds_spike']
+05:27:30 HOLD m4r1-A: foreign ['3624789 kds_spike']
+05:43:27 restart plan3
+05:43:46 m4r1 A update-lit:100000 c1 group: 56196 stmts 3746/s bad=0 ck=3 img=1866 load1=6.31
+05:44:05 m4r1 B update-lit:100000 c1 group: 58722 stmts 3914/s bad=0 ck=3 img=1872 load1=5.35
+05:44:23 m4r2 A update-lit:100000 c1 group: 50424 stmts 3361/s bad=0 ck=3 img=1862 load1=4.37
+05:44:23 DISCARD m4r2-A attempt 1: foreign ['3644537 cmake', '3644590 c++', '3644591 c++']
+05:44:23 HOLD m4r2-A: foreign ['3644537 cmake', '3644595 c++', '3644599 cc1plus']
+05:53:10 m4r2 A update-lit:100000 c1 group: 60983 stmts 4065/s bad=0 ck=3 img=1857 load1=2.79
+05:53:28 m4r2 B update-lit:100000 c1 group: 56644 stmts 3776/s bad=0 ck=3 img=1859 load1=2.49
+05:53:28 DISCARD m4r2-B attempt 1: foreign ['3658768 cmake', '3658821 c++', '3658823 cc1plus']
+05:53:29 HOLD m4r2-B: foreign ['3658768 cmake', '3658999 c++', '3659000 cc1plus']
+06:00:26 m4r2 B update-lit:100000 c1 group: 59641 stmts 3976/s bad=0 ck=3 img=1859 load1=3.70
+06:01:17 rec1 A recovery c8: mount 0.19s wal 201MB count=100000 records=161207 redo=0 7266/s
+06:02:08 rec1 B recovery c8: mount 0.72s wal 268MB count=100000 records=1456727 redo=28691 8067/s
+06:02:29 m3r1 A update-lit:1000000 c1 group: 37963 stmts 2531/s bad=0 ck=3 img=30706 load1=3.61
+06:02:48 m3r1 B update-lit:1000000 c1 group: 40684 stmts 2712/s bad=0 ck=3 img=32899 load1=3.00
+06:02:48 DISCARD m3r1-B attempt 1: foreign ['3667257 kds_A']
+06:02:48 HOLD m3r1-B: foreign ['3667257 kds_A']
+06:13:43 m3r1 B update-lit:1000000 c1 group: 42646 stmts 2843/s bad=0 ck=3 img=34473 load1=1.33
+06:14:03 m3r1 B3 update-lit:1000000 c1 group: 37350 stmts 2490/s bad=0 ck=3 img=30280 load1=1.31
+06:14:03 DISCARD m3r1-B3 attempt 1: foreign ['3682914 kds_A']
+06:14:03 HOLD m3r1-B3: foreign ['3683009 kds_B']
+06:25:39 m3r1 B3 update-lit:1000000 c1 group: 38203 stmts 2547/s bad=0 ck=3 img=30932 load1=3.70
+06:25:59 m3r1 A0 update-lit:1000000 c1 group: 53778 stmts 3585/s bad=0 ck=3 img=0 load1=3.00
+06:26:18 m3r2 A update-lit:1000000 c1 group: 34729 stmts 2315/s bad=0 ck=3 img=28163 load1=2.50
+06:26:18 DISCARD m3r2-A attempt 1: foreign ['3692857 kds_B']
+06:26:19 HOLD m3r2-A: foreign ['3692905 kds_B']
+06:33:01 m3r2 A update-lit:1000000 c1 group: 37500 stmts 2500/s bad=0 ck=3 img=30399 load1=1.80
+06:33:21 m3r2 B update-lit:1000000 c1 group: 37415 stmts 2494/s bad=0 ck=3 img=30357 load1=1.80
+06:33:21 DISCARD m3r2-B attempt 1: foreign ['3698269 kds_A']
+06:33:21 HOLD m3r2-B: foreign ['3698310 cmake', '3698367 c++', '3698373 cc1plus']
+06:43:55 m3r2 B update-lit:1000000 c1 group: 43962 stmts 2930/s bad=0 ck=3 img=35485 load1=4.85
+06:44:14 k3r1 A update-lit:10000 c1 group: 63076 stmts 4205/s bad=0 ck=3 img=204 load1=3.89
+06:44:32 k3r1 B update-lit:10000 c1 group: 62814 stmts 4187/s bad=0 ck=3 img=204 load1=3.62
+06:44:51 k3r2 A update-lit:10000 c1 group: 55057 stmts 3670/s bad=0 ck=3 img=204 load1=2.94
+06:44:51 DISCARD k3r2-A attempt 1: foreign ['3708312 cmake', '3708367 c++', '3708368 cc1plus']
+06:44:51 HOLD k3r2-A: foreign ['3708312 cmake', '3708473 c++', '3708474 cc1plus']

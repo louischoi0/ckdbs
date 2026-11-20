@@ -128,29 +128,16 @@ public:
     // Records one resolution. Idempotent on a repeat of the same key - the
     // extraction pass deduplicates, and this is the second half of that: a
     // statement naming one parent from twenty rows resolves it once.
-    // Returns whether the key was new, so a caller can count descents.
-    bool Put(catalog::Oid parent_rel, std::uint64_t parent_tuple_key, FkVerdict verdict) {
-        return entries_.emplace(Key{parent_rel, parent_tuple_key}, verdict).second;
+    void Put(catalog::Oid parent_rel, std::uint64_t parent_tuple_key, FkVerdict verdict) {
+        entries_.emplace(Key{parent_rel, parent_tuple_key}, verdict);
     }
 
-    std::size_t size() const noexcept { return entries_.size(); }
-    bool empty() const noexcept { return entries_.empty(); }
-
-    // AK-S3: whether the tuple keys this holds were **collected** by a read-only
-    // pass over the relation rather than named by the statement. It changes
-    // what a miss in the per-row check means: for a named tuple key a miss is the
-    // caller bug above; for a collected set it is a row that became visible
-    // after the pass, which is retryable and never a fall-through.
-    void set_collected() noexcept { collected_ = true; }
-    bool collected() const noexcept { return collected_; }
-
 private:
-    // A map (AK-S3): the reverse direction keys it per collected row,
-    // thousands for one DELETE, where a linear scan made the hoist quadratic
-    // inside a reactor's synchronous span.
+    // A map: a statement can name thousands of parents, and a linear scan
+    // would make the extraction pass's dedup quadratic inside a reactor's
+    // synchronous span.
     using Key = std::pair<catalog::Oid, std::uint64_t>;
     std::map<Key, FkVerdict> entries_;
-    bool collected_ = false;
 };
 
 // What the reverse check may use to answer without walking (F6, FK-M5).

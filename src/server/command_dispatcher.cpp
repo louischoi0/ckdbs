@@ -2313,9 +2313,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        << " pool_batch_steps_background=" << pool.batch_steps_background
        << " pool_dirty_queued=" << pool.dirty_queued
        << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused
-       // DB-R6: the write fetch's images, each `wal::RecordSize(kPageSize)`
-       // bytes of log.
+       // DB-R6, DH-R6: the write fetch's images and the log bytes their
+       // records took, as appended.
        << " pool_fetch_images=" << pool.fetch_images
+       << " pool_fetch_image_bytes=" << pool.fetch_image_bytes
        << " pool_would_wait=" << pool.would_wait;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
@@ -6754,13 +6755,8 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed,
 
 Status CommandDispatcher::LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id,
                                    catalog::Oid oid, PageId anchor_page_id) {
-    std::vector<PageId> pages;
-    pages.reserve(placed.changes().size());
-    for (const storage::StructuralChange& change : placed.changes()) {
-        pages.push_back(change.page_id);
-    }
-    return LogTreeSplit(pages, placed.held, txn_id, oid, /*index_oid=*/0, placed.new_root,
-                        anchor_page_id, &placed.anchor);
+    return LogTreeSplit(placed.changes(), placed.held, txn_id, oid, /*index_oid=*/0,
+                        placed.new_root, anchor_page_id, &placed.anchor);
 }
 
 Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages,

@@ -3,10 +3,10 @@
 Status: **CLOSED 2026-11-20** - every stage built, the close measured
 (DI-Q8's bar met as written, a lean on the write path not resolved),
 `origin/main` merged - **and landed the same day on the operator's word,
-"push no verify"** (`raft-marks-2026-11-20.md` §12; §7, DI-S5). Not
+"push no verify"** (`raft-marks-2026-11-20.md` §20; §7, DI-S5). Not
 tagged: a tag and a version wait for the operator's word. **Opened 2026-11-20 on the
 operator's standing go-ahead**
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §11), on worktree
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §19), on worktree
 `di-shape-identity` from `1c7bb774` (`v3.4.15-4-g1c7bb774`). Every item the
 operator had not marked is **adopted as CLA proposed under that word, by
 CLA and not as the operator's own mark**: DI-Q0 (a); **DI-Q3 `[quiet-wrong]`
@@ -1034,7 +1034,21 @@ Query language; Waystone and Access statistics at their stages),
 `docs/spec/sys-views.md`, `known-gaps.md`, the manual, this version's
 index.
 
-**Landed on the operator's word** (`raft-marks-2026-11-20.md` §12): merged
+**A second merge, at the push.** `origin/main` had moved to `799a767d`
+while the close ran - DH (the packed page image, the instance's checkpoint
+cadence) and the audit's dead code, both with code - and was merged again.
+Four conflicts: `docs/spec/wal.md` (main's paragraph, less the page-11
+phrase DA-S3 removed), this version's `index.md`, the day's raft-marks
+(main's §11 to §18 stand; DI's two sections are §19 and §20) and
+`tests/wal_golden_log_test.cpp`, where DA-S3 and DH-S1b had each re-pinned
+the stream: the value is the two together, `0x8fd5ae2c`, read off a build
+of the merged tree. **That tree is built; 111 cells ran on it and passed**
+(the golden log, `ShapeIdentity`, `StatementStats`, the Waystone opt-in
+and mount cells, `AdminPlan`, `Superblock`, `OptimizerSignals`); **the
+full suite was not run on it** before the push - the 4933 above is the
+tree before this merge.
+
+**Landed on the operator's word** (`raft-marks-2026-11-20.md` §20): merged
 to `main` and pushed with the hook skipped. **Not done, and the
 operator's**: a tag, a version. The format moved (superblock 38): a volume
 written at 37 does not mount on this tree.

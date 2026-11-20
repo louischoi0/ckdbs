@@ -287,36 +287,6 @@ TEST_F(RedoTest, TransactionAndCheckpointRecordsChangeNoPage) {
     EXPECT_EQ(r.value().no_page, 2u);
 }
 
-TEST_F(RedoTest, ARecordBelowItsPagesRecLsnIsSkippedAndThePageNeverFaulted) {
-    // The not-dirty filter, at the arm that survives one stream
-    // (AM-S4(d)): a record whose LSN is below its page's recLSN describes
-    // state already in the durable image, and must be skipped *before the
-    // load* - faulting the page to compare page_lsn would be work on a page
-    // recovery has no business touching. The shape it stands for is a page
-    // dirtied, written back, and re-dirtied: the checkpoint seeds its
-    // recLSN above the flushed records, while the redo start - the minimum
-    // over every page - lies below them. Set here rather than scripted,
-    // because a second page's low recLSN is the only thing a checkpoint
-    // record would add.
-    //
-    // The store deliberately does not hold the page, which makes any touch
-    // loud: an unfiltered redo would CreateAt the page from its PAGE_INIT
-    // and apply all three records.
-    WriteHeapStream(2);
-
-    AnalysisResult analysis = Analyzed();
-    ASSERT_EQ(analysis.dirty_pages.count(kPage), 1u);
-    analysis.dirty_pages[kPage] = analysis.end_lsn;
-    analysis.redo_start_lsn = 0;
-
-    auto r = Redo((*device_), 0, store_, analysis);
-    ASSERT_TRUE(r.ok()) << r.status().message();
-    EXPECT_EQ(r.value().applied, 0u);
-    EXPECT_EQ(r.value().skipped_not_dirty, 3u) << "init + two inserts";
-    EXPECT_FALSE(store_.Get(kPage).ok())
-        << "redo must not create or fault a page whose records the image already holds";
-}
-
 TEST_F(RedoTest, AnAnchorReplaysItsInitAndItsSlotUpdates) {
     // PW2-1: PAGE_INIT rebuilds only the common header, so the anchor's
     // durable story is PAGE_INIT + ANCHOR_UPDATE - one per slot. A crash
@@ -750,7 +720,7 @@ protected:
         ASSERT_TRUE(pages_->WritePage(kPage, std::span<const std::byte, kPageSize>(raw)).ok());
     }
 
-    void AppendImage(WalStream& w, int rows) {
+    void AppendImage(WalStream& w, int rows, bool packed = false) {
         std::vector<std::byte> image(kPageSize, std::byte{0});
         auto view = heap::PageView::CreateEmpty(
             std::span<std::byte, kPageSize>(image.data(), kPageSize), /*min_key=*/1);
@@ -758,13 +728,142 @@ protected:
         for (int i = 0; i < rows; ++i) {
             ASSERT_TRUE(view.value().InsertTuple(Bytes(24, 0x20 + i), 3, 0).ok());
         }
+        const std::span<const std::byte, kPageSize> page(image.data(), kPageSize);
+        if (packed) {
+            std::vector<std::byte> buf(kPackedImageMaxPayload);
+            const std::size_t n = EncodePackedPageImage(page, buf);
+            ASSERT_NE(n, 0u);
+            buf.resize(n);
+            ASSERT_TRUE(w.Append({RecordType::kPackedPageImage, kNoTxnId, kPage}, buf).ok());
+            return;
+        }
         std::vector<std::byte> buf(kFullPageImagePayloadSize, std::byte{0});
-        ASSERT_TRUE(EncodeFullPageImage(
-                        buf, std::span<const std::byte, kPageSize>(image.data(), kPageSize))
-                        .ok());
+        ASSERT_TRUE(EncodeFullPageImage(buf, page).ok());
         ASSERT_TRUE(w.Append({RecordType::kFullPageImage, 3, kPage}, buf).ok());
     }
 };
+
+// DH: the write fetch's image, packed. It is an image like the verbatim
+// one to every gate redo has - the tear's heal first of all.
+TEST_F(RedoHealTest, APackedImageHealsATornPageAndTheRecordsAfterItLand) {
+    WriteTornPage();
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x30), 0u);  // poisons
+        AppendImage(*s.value(), /*rows=*/1, /*packed=*/true);           // heals
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0x40), 0u);  // lands
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto store = OpenPages();
+    ASSERT_NE(store, nullptr);
+    ASSERT_EQ(store->Get(kPage).status().code(), StatusCode::kCorruption) << "the page is not torn";
+    auto redone = Redo(*device_, 0, *store, Analyzed());
+    ASSERT_TRUE(redone.ok()) << redone.status().message();
+    EXPECT_EQ(redone.value().pages_healed, 1u);
+    EXPECT_EQ(redone.value().page_images, 1u);
+
+    auto page = store->Get(kPage);
+    ASSERT_TRUE(page.ok()) << page.status().message();
+    heap::PageView view(page.value().bytes());
+    ASSERT_EQ(view.slot_count(), 2u) << "the delta after the image did not land";
+    auto first = view.ReadTuple(0);
+    ASSERT_TRUE(first.ok());
+    EXPECT_EQ(std::vector<std::byte>(first.value().payload.begin(), first.value().payload.end()),
+              Bytes(24, 0x20))
+        << "slot 0 is not the image's";
+
+    // Recovery run twice changes nothing (DH-R1): the second pass meets the
+    // page's own LSN and lays nothing.
+    auto again = Redo(*device_, 0, *store, Analyzed());
+    ASSERT_TRUE(again.ok()) << again.status().message();
+    EXPECT_EQ(again.value().applied, 0u);
+    EXPECT_EQ(heap::PageView(store->Get(kPage).value().bytes()).slot_count(), 2u);
+}
+
+TEST_F(RedoHealTest, APackedImageIsThePageAVerbatimImageWouldHaveLaid) {
+    // The same page logged both ways, each replayed onto its own store:
+    // every byte the two leave is the same.
+    std::array<std::array<std::byte, kPageSize>, 2> laid{};
+    for (const bool packed : {false, true}) {
+        auto pages = std::move(storage::MemoryPageDevice::Create(8, 0).value());
+        auto log = std::move(MemoryLogDevice::Create(kSegmentSize).value());
+        {
+            auto s = WalStream::Open(log.get(), 0);
+            ASSERT_TRUE(s.ok()) << s.status().message();
+            AppendImage(*s.value(), /*rows=*/3, packed);
+            ASSERT_TRUE(s.value()->Sync().ok());
+        }
+        auto store = storage::DevicePageStore::Open(*pages, storage::FrameCapacity{4096},
+                                                    server::kFirstUserPageId);
+        ASSERT_TRUE(store.ok()) << store.status().message();
+        auto analysis = Analyze(*log, 0, AnalysisStart{});
+        ASSERT_TRUE(analysis.ok()) << analysis.status().message();
+        auto redone = Redo(*log, 0, *store.value(), analysis.value());
+        ASSERT_TRUE(redone.ok()) << redone.status().message();
+        ASSERT_EQ(redone.value().page_images, 1u);
+        auto page = store.value()->GetForRead(kPage);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        std::memcpy(laid[packed].data(), page.value().bytes().data(), kPageSize);
+    }
+    // The page LSN is each log's own record LSN, and the two logs' records
+    // start at the same offset: nothing is left to differ.
+    EXPECT_TRUE(laid[0] == laid[1]);
+}
+
+// wal.md §5.2, and DH-R3's statement of what an older build does with a
+// PACKED_PAGE_IMAGE: a page record redo has no applier for ends recovery by
+// name. `ALLOC` is the kind this build has none for; to a build that
+// predates kind 35 that kind reads the same way - a type its applier table
+// does not hold - and takes this branch.
+TEST_F(RedoTest, APageRecordWithNoApplierEndsRecoveryByName) {
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kAlloc, kNoTxnId, kPage}).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_EQ(r.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(r.status().message().find("no applier for record type ALLOC"), std::string::npos)
+        << r.status().message();
+}
+
+// DH-R2: a packed image that is not one encoding of one page ends recovery
+// by name and leaves the page as it was.
+TEST_F(RedoTest, APackedImageThatDoesNotDecodeIsRefusedAndThePageIsUntouched) {
+    {
+        auto created = store_.CreateAt(kPage);
+        ASSERT_TRUE(created.ok());
+        auto view = heap::PageView::CreateEmpty(created.value().bytes(), /*min_key=*/5);
+        ASSERT_TRUE(view.ok());
+        ASSERT_TRUE(view.value().InsertTuple(Bytes(16, 0xEE), 3, 0).ok());
+    }
+    std::array<std::byte, kPageSize> before{};
+    std::memcpy(before.data(), store_.Get(kPage).value().bytes().data(), kPageSize);
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok());
+        std::array<std::byte, kPageSize> image{};
+        image[100] = std::byte{0x42};
+        std::vector<std::byte> buf(kPackedImageMaxPayload);
+        const std::size_t n =
+            EncodePackedPageImage(std::span<const std::byte, kPageSize>(image), buf);
+        ASSERT_NE(n, 0u);
+        buf.resize(n);
+        buf[kPackedImageFormatOffset] = std::byte{9};  // a format this build does not read
+        ASSERT_TRUE(s.value()->Append({RecordType::kPackedPageImage, kNoTxnId, kPage}, buf).ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    ASSERT_EQ(r.status().code(), StatusCode::kCorruption);
+    EXPECT_NE(r.status().message().find("PACKED_PAGE_IMAGE"), std::string::npos)
+        << r.status().message();
+    EXPECT_EQ(std::memcmp(before.data(), store_.Get(kPage).value().bytes().data(), kPageSize), 0)
+        << "a refused image changed the page";
+}
 
 // The audit's G33: the heal was counted only when a record before the image
 // had met the tear. A torn page whose first record in range is its image -

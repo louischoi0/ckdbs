@@ -1,0 +1,20 @@
+id=c1r1 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=c1r1 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group keep_wal=1
+id=c1r1 arm=L shape=update-lit rows=100000 cores=4 clients=4 dur=group warm=12.5
+id=c1r2 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=c1r2 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group
+id=c1r2 arm=L shape=update-lit rows=100000 cores=4 clients=4 dur=group warm=12.5
+id=c2 arm=A0 shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048
+id=c2 arm=B shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048 keep_wal=1
+id=c2 arm=L shape=update-lit rows=1000000 cores=4 clients=4 dur=group frames=2048 warm=12.5
+id=c3 arm=A0 shape=update-lit rows=100000 cores=8 clients=8 dur=group
+id=c3 arm=B shape=update-lit rows=100000 cores=8 clients=8 dur=group keep_wal=1
+id=c3 arm=L shape=update-lit rows=100000 cores=8 clients=8 dur=group warm=32.5
+id=c5 arm=A0 shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048
+id=c5 arm=B shape=update-lit rows=1000000 cores=1 clients=4 dur=group frames=2048 keep_wal=1
+id=c6 arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=strict
+id=c6 arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=strict
+id=c7 arm=A0 shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=c7 arm=B shape=update-lit rows=100000 cores=1 clients=4 dur=group
+id=c8 arm=A0 shape=insert rows=0 cores=4 clients=4 dur=group
+id=c8 arm=B shape=insert rows=0 cores=4 clients=4 dur=group keep_wal=1

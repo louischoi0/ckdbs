@@ -1,5 +1,6 @@
 #include "kds/wal/redo.hpp"
 
+#include <array>
 #include <cstring>
 #include <optional>
 #include <map>
@@ -351,33 +352,17 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
     RedoStats stats;
     PoisonedPages poisoned;
 
-    // One page's share of one record: the dirty filter, the load (or the
-    // creation a whole-page record may make), the poison and `page_lsn`
-    // gates, `apply`, and the stamp. A record names one page in its
-    // envelope, except BTREE_SPLIT, whose payload names every page it
-    // writes and which runs this once per page (BD-R12).
+    // One page's share of one record: the load (or the creation a
+    // whole-page record may make), the poison and `page_lsn` gates, `apply`,
+    // and the stamp. **No record is skipped before the load**: every record
+    // read here is at or above its page's entry in `analysis.dirty_pages`
+    // (redo.hpp, "What the caller owes"), so `page_lsn` is the one gate. A
+    // record names one page in its envelope, except BTREE_SPLIT, whose
+    // payload names every page it writes and which runs this once per page
+    // (BD-R12).
     const auto apply_page =
         [&](const DecodedRecord& record, PageId page_id, bool is_image,
             FunctionRef<Status(std::span<std::byte, kPageSize>)> apply) -> Status {
-
-        // The dirty filter (PW1c-2): a record for a page analysis holds no dirty
-        // entry for - or one below that entry's recLSN - describes state
-        // already in the durable image, and is skipped **before the load**,
-        // because a page recovery owes nothing to must not even be faulted.
-        // What reaches it is the checkpoint-seeded entry: a page dirtied,
-        // written back and re-dirtied carries a recLSN above its flushed
-        // records, while the redo start is the minimum over every page and
-        // lies below them. A first-wins entry is never above its own page's
-        // records, so this skips nothing the RV5 gate
-        // would have applied. The no-entry disjunct is unreachable from any
-        // result `Analyze` produces now - every page-touching record
-        // enters its page (`note_dirty`) - and is kept for the hand-built results this
-        // function's tests pass it.
-        const auto dirty = analysis.dirty_pages.find(page_id);
-        if (dirty == analysis.dirty_pages.end() || record.header.lsn < dirty->second) {
-            ++stats.skipped_not_dirty;
-            return Status::OK();
-        }
 
         // A page the log names may not exist in the store at all - the
         // crash can have lost the allocation that created it. PAGE_INIT and
@@ -386,8 +371,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         // Dynamic extent while the branches below decide *which* page this
         // is, narrowed to the fixed extent once past them. A
         // `span<byte, kPageSize>` cannot be declared here and assigned
-        // there: a fixed-extent span has no default constructor, and the
-        // store hands back dynamic spans besides.
+        // there: a fixed-extent span has no default constructor.
         std::span<std::byte> page_bytes;
         // The pin outlives the branch that took it. A `PageRef` local
         // declared inside one of the `CreateAt` arms below would unpin at
@@ -518,9 +502,7 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
         }
         if (IsAssertionRecord(record.type())) {
             // Not redo's: `ASSERT_*` records are folded by assertion
-            // recovery (`exec/assertion_recover.hpp`, RC07). Counted so the
-            // hand-off shows in the report.
-            ++stats.deferred_assertions;
+            // recovery (`exec/assertion_recover.hpp`, RC07).
             return Status::OK();
         }
         if (record.header.page_id == kInvalidPageId) {
@@ -535,6 +517,18 @@ StatusOr<RedoStats> Redo(LogDevice& device, std::uint32_t core_id, storage::Page
                 return image.status();
             }
             return apply_page(record, page_id, /*is_image=*/true, copy_image(image.value()));
+        }
+        if (record.type() == RecordType::kPackedPageImage) {
+            // Unpacked whole, into a buffer of this frame, before the page
+            // is touched: a refusal leaves the page as it was (DH-R2), and
+            // what is laid is an image like any other, a tear's heal
+            // included.
+            std::array<std::byte, kPageSize> unpacked;
+            if (Status s = DecodePackedPageImage(record.payload, unpacked); !s.ok()) {
+                return s.WithContext("redo: page " + std::to_string(page_id) + " at lsn " +
+                                     std::to_string(record.header.lsn));
+            }
+            return apply_page(record, page_id, /*is_image=*/true, copy_image(unpacked));
         }
         if (record.type() == RecordType::kBtreeSplit) {
             // Whole or not at all is the record's CRC's to give (a torn

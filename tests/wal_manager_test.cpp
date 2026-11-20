@@ -1,8 +1,11 @@
 #include "kds/wal/manager.hpp"
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -10,6 +13,7 @@
 #include "kds/base/current_core.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 
 // The manager's job is *when*, not *where* (the stream owns where). So
@@ -479,6 +483,71 @@ TEST_F(WalManagerTest, OneSyncServesEveryClassStagedBehindIt) {
     EXPECT_TRUE(DurableHasCommitFor(1));
     EXPECT_TRUE(DurableHasCommitFor(2));
     EXPECT_TRUE(DurableHasCommitFor(3));
+}
+
+// ---- The write fetch's image (DH) ------------------------------------------
+
+// The one image record the device holds: its type and its payload.
+struct LoggedImage {
+    RecordType type = RecordType::kInvalid;
+    std::uint32_t total_len = 0;
+    std::vector<std::byte> payload;
+};
+std::optional<LoggedImage> OnlyImage(MemoryLogDevice& device) {
+    std::vector<std::byte> body(kSegmentSize - kSegmentHeaderSize);
+    EXPECT_TRUE(device.ReadAt(0, kSegmentHeaderSize, body).ok());
+    RecordReader reader(body, kSegmentHeaderSize);
+    std::optional<LoggedImage> found;
+    while (std::optional<DecodedRecord> record = reader.Next()) {
+        if (record->type() != RecordType::kFullPageImage &&
+            record->type() != RecordType::kPackedPageImage) {
+            continue;
+        }
+        EXPECT_FALSE(found.has_value()) << "more than one image";
+        found = LoggedImage{record->type(), record->header.total_len,
+                            std::vector<std::byte>(record->payload.begin(), record->payload.end())};
+    }
+    return found;
+}
+
+TEST_F(WalManagerTest, APageThatShrinksIsLoggedPackedAndComesBackItself) {
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    std::array<std::byte, kPageSize> page{};
+    for (std::size_t at = 40; at < kPageSize; at += 56) page[at] = static_cast<std::byte>(at | 1);
+
+    auto logged = wal->LogPageImage(/*page_id=*/77, page);
+    ASSERT_TRUE(logged.ok()) << logged.status().message();
+    ASSERT_NE(logged.value().lsn, kNoLsn);
+    ASSERT_TRUE(wal->Flush().ok());
+
+    const auto image = OnlyImage(*device_);
+    ASSERT_TRUE(image.has_value());
+    EXPECT_EQ(image->type, RecordType::kPackedPageImage);
+    EXPECT_EQ(logged.value().record_bytes, image->total_len) << "the bytes counted are the record's";
+    EXPECT_LT(image->total_len, kPageSize / 4);
+    std::array<std::byte, kPageSize> back{};
+    ASSERT_TRUE(DecodePackedPageImage(image->payload, back).ok());
+    EXPECT_TRUE(back == page);
+}
+
+TEST_F(WalManagerTest, APageThatDoesNotShrinkIsLoggedVerbatim) {
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    std::array<std::byte, kPageSize> page;
+    for (std::size_t i = 0; i < kPageSize; ++i) page[i] = static_cast<std::byte>(1 + i % 251);
+
+    auto logged = wal->LogPageImage(/*page_id=*/78, page);
+    ASSERT_TRUE(logged.ok()) << logged.status().message();
+    ASSERT_TRUE(wal->Flush().ok());
+
+    const auto image = OnlyImage(*device_);
+    ASSERT_TRUE(image.has_value());
+    EXPECT_EQ(image->type, RecordType::kFullPageImage);
+    EXPECT_EQ(logged.value().record_bytes, kRecordHeaderSize + kPageSize);
+    EXPECT_EQ(image->total_len, kRecordHeaderSize + kPageSize);
+    ASSERT_EQ(image->payload.size(), kPageSize);
+    EXPECT_EQ(std::memcmp(image->payload.data(), page.data(), kPageSize), 0);
 }
 
 }  // namespace
