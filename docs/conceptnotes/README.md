@@ -45,5 +45,6 @@ authority and the note is history.
 | `cn9-dedicated-mirrored-wal-device.md` | `wal_dir` on its own pair of PLP NVMe drives in md RAID1, for a KDS appliance, and the five properties of the WAL as built that bound it | CONCEPT; five operator decisions open (§9); O3 answered, C1–C5 recorded under `docs/inflight/` |
 | `cn10-unbounded-sessions-bounded-transactions.md` | Logical connections bounded only by the OS, open transactions admitted by a per-core queue, sessions moved between cores at a transaction boundary — Oracle's shared server and active session pool on a thread-per-core engine | CONCEPT; nine operator decisions open (§9); the portal-idle defect it found is fixed |
 | `cn11-templated-transaction.md` | One call is one transaction: a declared, parameterised straight-line body invoked by `CALL`, with a positional `CHECK` whose failure aborts the call, and the hold rule that keeps a passed `CHECK` true at commit | CONCEPT; ten operator decisions open (§9), O10 the one it cannot proceed without |
+| `cn12-read-resumed-by-key.md` | A read resumed by key - "after tuple key `k`, `n` rows" - under a snapshot the client carries, and the `SnapshotTooOld` contract it would have to change | CONCEPT; four operator decisions open (§7); asked for by DJ-Q11 (a) |
 
 The status cells with their dates: `git show 005c4a04:docs/conceptnotes/README.md`.

@@ -61,6 +61,36 @@ TEST(ConfigFileTest, QuotesPreserveWhitespaceAndHashes) {
     EXPECT_EQ(config.GetString("log_dir").value(), "/var/log/my db");
 }
 
+// A quoted value runs to its matching quote: a '#' inside it is the value's,
+// and a trailing comment after it is still a comment.
+TEST(ConfigFileTest, AQuotedHashIsKeptAndATrailingCommentIsStripped) {
+    ConfigFile config = ParseOk(
+        "log_file = \"kdb#1.log\"   # per instance\n"
+        "wal_dir = '#wal'\n"
+        "data_file = \"  spaced  \"#tight comment\n"
+        "users_file = \"a#b\"\n");
+    EXPECT_EQ(config.GetString("log_file").value(), "kdb#1.log");
+    EXPECT_EQ(config.GetString("wal_dir").value(), "#wal");
+    EXPECT_EQ(config.GetString("data_file").value(), "  spaced  ");
+    EXPECT_EQ(config.GetString("users_file").value(), "a#b");
+}
+
+TEST(ConfigFileTest, TextAfterAClosingQuoteIsRejectedWithItsLine) {
+    auto config = ConfigFile::Parse("port = 1\nlog_file = \"kdb.log\" extra\n", "test.conf");
+    ASSERT_FALSE(config.ok());
+    EXPECT_EQ(config.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(config.status().message().find("test.conf:2"), std::string::npos)
+        << config.status().message();
+}
+
+TEST(ConfigFileTest, AnUnterminatedQuoteIsRejectedWithItsLine) {
+    auto config = ConfigFile::Parse("log_file = \"kdb#1.log   # per instance\n", "test.conf");
+    ASSERT_FALSE(config.ok());
+    EXPECT_EQ(config.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(config.status().message().find("test.conf:1"), std::string::npos)
+        << config.status().message();
+}
+
 TEST(ConfigFileTest, MissingFileIsNotFoundNotAnEmptyConfig) {
     auto config = ConfigFile::Load("/nonexistent/kds/does-not-exist.conf");
     EXPECT_FALSE(config.ok());
@@ -678,6 +708,93 @@ TEST(ExpeditorConfigTest, AnIntervalTheNanosecondClockCannotHoldIsRefusedForEver
     Expeditor::Config config;
     ASSERT_TRUE(config.ApplyFile(WithPool("lock_wait_fault_net_ms = 86400000\n")).ok());
     EXPECT_EQ(config.lock_wait_fault_net_ns, 86'400'000ULL * 1'000'000ULL);
+}
+
+// ---- DJ-S1: the connection cap and the idle-session timeout ---------------
+
+TEST(ExpeditorConfigTest, TheConnectionCapAndTheIdleTimeoutAreOffUnlessSet) {
+    // DJ-R1: a server configured with neither key refuses no connection and
+    // closes none, which is the engine as it was.
+    Expeditor::Config config;
+    EXPECT_EQ(config.max_connections, 0u);
+    EXPECT_EQ(config.idle_session_timeout_ns, 0u);
+    EXPECT_EQ(config.ReservedAdminConnections(), 0u) << "no cap, so nothing is reserved";
+
+    ASSERT_TRUE(config
+                    .ApplyFile(WithPool("max_connections = 200\n"
+                                        "idle_session_timeout_s = 1800\n"))
+                    .ok());
+    EXPECT_EQ(config.max_connections, 200u);
+    EXPECT_EQ(config.idle_session_timeout_ns, 1800ULL * 1'000'000'000ULL);
+    // With `auth = off` every session is `admin`, so the default reserve
+    // applies to nobody and is none.
+    EXPECT_EQ(config.ReservedAdminConnections(), 0u);
+
+    // Either key at 0 is its off position, written out.
+    ASSERT_TRUE(config
+                    .ApplyFile(WithPool("max_connections = 0\n"
+                                        "idle_session_timeout_s = 0\n"))
+                    .ok());
+    EXPECT_EQ(config.max_connections, 0u);
+    EXPECT_EQ(config.idle_session_timeout_ns, 0u);
+}
+
+TEST(ExpeditorConfigTest, TheReserveActsOnlyBesideACapAndAGate) {
+    // The default, three seats, in force where it can act: a cap to be
+    // past and a gate that stamps the role it is for.
+    Expeditor::Config config;
+    ASSERT_TRUE(config
+                    .ApplyFile(WithPool("max_connections = 100\n"
+                                        "auth = scram\n"
+                                        "users_file = /etc/kds/users\n"))
+                    .ok());
+    EXPECT_EQ(kDefaultReservedAdminConnections, 3u);
+    EXPECT_EQ(config.ReservedAdminConnections(), 3u);
+
+    ASSERT_TRUE(config.ApplyFile(WithPool("reserved_admin_connections = 5\n")).ok());
+    EXPECT_EQ(config.ReservedAdminConnections(), 5u);
+    ASSERT_TRUE(config.ApplyFile(WithPool("reserved_admin_connections = 0\n")).ok());
+    EXPECT_EQ(config.ReservedAdminConnections(), 0u) << "0 reserves nothing, and says so";
+
+    // **Named where it cannot act, it is refused, not ignored**: a reserve
+    // that reserves nothing is a setting enforcing something other than
+    // what was written.
+    Expeditor::Config no_cap;
+    Status uncapped = no_cap.ApplyFile(WithPool("reserved_admin_connections = 2\n"
+                                                "auth = scram\n"
+                                                "users_file = /etc/kds/users\n"));
+    EXPECT_EQ(uncapped.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(uncapped.message().find("max_connections"), std::string::npos) << uncapped.message();
+
+    Expeditor::Config no_gate;
+    Status ungated = no_gate.ApplyFile(WithPool("max_connections = 100\n"
+                                                "reserved_admin_connections = 2\n"));
+    EXPECT_EQ(ungated.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(ungated.message().find("auth = off"), std::string::npos) << ungated.message();
+}
+
+TEST(ExpeditorConfigTest, TheConnectionKeysRefuseWhatTheyCannotKeep) {
+    Expeditor::Config config;
+    // DJ-Q4 (a): under the portal-idle timeout's 60 s the session timeout
+    // would name a bound a session holding a portal does not get.
+    Status under = config.ApplyFile(WithPool("idle_session_timeout_s = 59\n"));
+    EXPECT_EQ(under.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(under.message().find("portal"), std::string::npos) << under.message();
+    EXPECT_EQ(config.idle_session_timeout_ns, 0u) << "a refused value changes nothing";
+    ASSERT_TRUE(config.ApplyFile(WithPool("idle_session_timeout_s = 60\n")).ok());
+    EXPECT_EQ(config.idle_session_timeout_ns, 60ULL * 1'000'000'000ULL);
+
+    // Seconds that do not fit the nanosecond clock.
+    Status wraps = config.ApplyFile(WithPool("idle_session_timeout_s = 18446744074\n"));
+    EXPECT_EQ(wraps.code(), StatusCode::kInvalidArgument) << wraps.message();
+    EXPECT_EQ(config.idle_session_timeout_ns, 60ULL * 1'000'000'000ULL);
+
+    Status many = config.ApplyFile(WithPool("max_connections = 1000001\n"));
+    EXPECT_EQ(many.code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(many.message().find("max_connections"), std::string::npos) << many.message();
+    EXPECT_EQ(config.max_connections, 0u);
+    ASSERT_TRUE(config.ApplyFile(WithPool("max_connections = 1000000\n")).ok());
+    EXPECT_EQ(config.max_connections, 1'000'000u);
 }
 
 TEST(ExpeditorConfigTest, TheAshKeysTakeTheirRangesAndRefuseOutsideThem) {

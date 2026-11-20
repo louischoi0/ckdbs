@@ -150,6 +150,10 @@ public:
         // switch and the controller view. Default-constructed, the
         // dispatcher keeps its own - a fixture's shape.
         OptimizerSurface optimizer;
+        // The instance's connection cap (DJ-S1), for this core's
+        // `sys.meta`; the listener gets its own pointer in its
+        // `ClientSetup`. Null where no instance is behind the core.
+        const ConnectionLimits* connection_limits = nullptr;
 
         // Whether this core records access shapes at all. **The
         // instance's own `access_statistics` setting**, passed down rather

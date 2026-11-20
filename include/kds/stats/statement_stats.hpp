@@ -93,10 +93,11 @@ struct StatementShape {
     std::string shape_text;          // the first statement seen, cut to kShapeTextBytes
     // **Where the shape's join order last came from** (CX-R11, CX-S1b):
     // `admin`, `captured`, `searched`, `deferred`, `unkeyed`, `over_ceiling`,
-    // `declined`, `admin_declined` or `written`; empty for a shape with no
-    // join block, or none compiled yet. `plan_label` is `<plan>/<variant>`
-    // where an administrator's plan chose it. The latest compile's, on the
-    // core that saw the shape last.
+    // `declined`, `admin_declined` or `written`; empty where the latest
+    // compile's block was ordered by no planner and chosen by no plan, or
+    // none has compiled yet. `plan_label` is `<plan>/<variant>` where an
+    // administrator's plan chose it. The latest compile's, on the core that
+    // saw the shape last.
     std::string plan_source;
     std::string plan_label;
 
@@ -149,10 +150,11 @@ public:
 
     // One statement, at its end; its kind is `StatementKindOf(line)`.
     // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
-    // the statement whole, re-runs included. `plan_source` is empty for a
-    // statement that compiled no join block, and then the shape keeps what
-    // it had. `binding` is what the statement bound, default for one that
-    // bound nothing.
+    // the statement whole, re-runs included. `plan_source` is empty where
+    // no planner ordered the block and no plan chose it: a call that
+    // compiled (`cost.compiled`) then clears the shape's source, and one
+    // that compiled nothing keeps what the shape had. `binding` is what the
+    // statement bound, default for one that bound nothing.
     static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
                        bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                        std::string_view plan_source = {},

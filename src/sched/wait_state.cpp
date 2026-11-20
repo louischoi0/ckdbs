@@ -344,8 +344,8 @@ void RecordCounterEvent(stats::WaitEvent event) noexcept {
 void WaitOnPollEnter(TaskWaitState& task) noexcept {
     CoreWaitContext& c = Ctx();
     c.current = &task;
-    const MonoTimeNs now = WaitNow();
     if (task.scoped) return;  // still inside its scope: nothing of the wait ends here
+    const MonoTimeNs now = WaitNow();
     if (task.state == TaskState::kRunnable) {
         // The queue wait ends: WD9's `sched.run_queue`.
         Book(c, stats::WaitEvent::kSchedRunQueue, now - task.since_ns, task.session);

@@ -1991,6 +1991,20 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   overrides for one transaction, and the two clauses may be written in
   either order. Three rungs: the server's configured class, then the
   session's, then the transaction's.
+- **`RESET SESSION`** (verified in `HandleReset`; reply `RESET SESSION`)
+  returns the connection to what a new one has: `SET ISOLATION LEVEL`,
+  `USE`, `SET DURABILITY` and `SET PRIORITY` are undone together - the
+  server's `isolation`, the `public` namespace, no durability class of the
+  session's own, `NORMAL` - and over KWP every prepared statement and
+  portal is dropped. It is what a connection pool sends before it lends a
+  connection again, so that one borrower's `USE` or `SET DURABILITY
+  RELAXED` is not the next borrower's. Refused inside a transaction, with
+  nothing changed, the transaction included, which stays open - `COMMIT`
+  or `ROLLBACK` first. `RESET` takes `SESSION` and
+  nothing else: `RESET ALL` and `RESET <setting>` are refused with the byte
+  of the word. Any role may run it. A KWP client that offered the
+  `SESSION_DEFAULTS` capability is told in every `S_READY` whether the
+  session stands at its defaults (`docs/spec/protocol.md` §3).
 - **`SET PRIORITY {TRANSACTIONAL|NORMAL|ANALYTIC|BACKGROUND}`** (verified
   in `HandleSetPriority`; reply `SET priority=<level>`) declares the work
   this session does, `NORMAL` until it declares one, from its next
@@ -2414,7 +2428,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | Assigning the tuple key in UPDATE | `Unsupported` — `ERR UNSUPPORTED retryable=0 tuple key column '<name>' cannot be updated at byte <n>; it is the tuple's identity, not a field of it` (K2; refused at compile, so nothing is written) |
 | Unknown SET target in UPDATE | `InvalidArgument` — `ERR unknown column '<name>' at byte <n>` |
 | A column assigned twice in one UPDATE's SET list | `InvalidArgument` — `ERR column '<name>' is assigned more than once at byte <n>` (the second name's byte; refused at compile, so nothing is written) |
-| Unknown statement head | `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX)` |
+| Unknown statement head | `InvalidArgument` — `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX) (byte <n>)` |
 | `PURGE` inside a transaction | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE inside a transaction is not implemented; run it in autocommit (byte 0)`; the transaction is not poisoned |
 | `PURGE` of a system or `HEAP` relation | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… '<t>' is a heap, whose tuple key is hidden; PURGE's window names tuple keys, so it frees none on a heap (byte <n>)` |
 | `PURGE` with no `WHERE`, or a conjunct other than a tuple key comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the tuple key; … (byte <n>)`, or `… PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |

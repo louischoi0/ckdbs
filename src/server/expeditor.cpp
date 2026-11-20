@@ -87,6 +87,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "join_build_max_rows",   "scan_kernel",  "join_order",  "lock_wait_fault_net_ms",
             "max_locks_per_txn",     "tcp_keepalive_s",
             "txn_lifetime_ceiling_ms",
+            "max_connections", "reserved_admin_connections", "idle_session_timeout_s",
             "decay_half_life",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
@@ -495,6 +496,51 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         tcp_keepalive_s = static_cast<std::uint32_t>(v.value());
     }
+    // ---- DJ-S1: the connection cap and the idle-session timeout ----------
+    //
+    // Three keys, each off or inert unless set (DJ-R1). The two counts share
+    // one ceiling: their sum is compared against a 32-bit count of seats.
+    // A refusal bound, not a default: far above any count this host's
+    // descriptor limit admits (DJ-S0 opened 10,000), and well inside the
+    // 32-bit count of seats whatever the two keys sum to.
+    constexpr std::uint64_t kMaxConnectionsCeiling = 1'000'000;
+    const auto connections = [&](const char* key, std::uint32_t& out) -> Status {
+        if (!file.Has(key)) return Status::OK();
+        auto v = file.GetUint(key);
+        if (!v.ok()) return v.status();
+        if (v.value() > kMaxConnectionsCeiling) {
+            return Status::InvalidArgument(file.origin() + ": " + key + " = " +
+                                           std::to_string(v.value()) + " is past " +
+                                           std::to_string(kMaxConnectionsCeiling) +
+                                           ", the most this key takes");
+        }
+        out = static_cast<std::uint32_t>(v.value());
+        return Status::OK();
+    };
+    if (Status s = connections("max_connections", max_connections); !s.ok()) return s;
+    if (Status s = connections("reserved_admin_connections", reserved_admin_connections);
+        !s.ok()) {
+        return s;
+    }
+    if (file.Has("idle_session_timeout_s")) {
+        auto v = file.GetUint("idle_session_timeout_s");
+        if (!v.ok()) return v.status();
+        // DJ-Q4 (a): 0 is off, and a value under the portal timeout is
+        // refused rather than taken - a session holding a portal is not idle
+        // until the portal timeout releases it, so a shorter session timeout
+        // would name a bound the server does not keep for that session.
+        constexpr std::uint64_t kPortalIdleTimeoutS = kPortalIdleTimeoutNs / 1'000'000'000ULL;
+        if (v.value() != 0 && v.value() < kPortalIdleTimeoutS) {
+            return Status::InvalidArgument(
+                file.origin() + ": idle_session_timeout_s = " + std::to_string(v.value()) +
+                " is under the portal-idle timeout of " + std::to_string(kPortalIdleTimeoutS) +
+                " s, which a session holding a portal waits out first; write " +
+                std::to_string(kPortalIdleTimeoutS) + " or more, or 0 for no timeout");
+        }
+        auto ns = IntervalNs("idle_session_timeout_s", v.value(), 1'000'000'000ULL);
+        if (!ns.ok()) return ns.status();
+        idle_session_timeout_ns = ns.value();
+    }
     if (file.Has("decay_half_life")) {
         auto v = file.GetUint("decay_half_life");
         if (!v.ok()) return v.status();
@@ -733,6 +779,25 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
     // it on an authenticated server would be an ungated door to every
     // INSERT the gate protects: refused, not warned. The main port's KWP/1
     // handshake authenticates (`C_AUTH`/`S_AUTH`, P07, 2026-08-31).
+    // **A reserve that reserves nothing is refused, not ignored** (DJ-S1):
+    // the reserve is seats past `max_connections` for a session a gate
+    // stamped `admin`, so without a cap there is nothing to be past, and
+    // without a gate every session is `admin` and none can be told apart.
+    // The default applies silently only where it can act.
+    if (file.Has("reserved_admin_connections") && reserved_admin_connections != 0) {
+        if (max_connections == 0) {
+            return Status::InvalidArgument(
+                file.origin() + ": reserved_admin_connections reserves seats past "
+                                "max_connections, and max_connections is 0 (no limit); set "
+                                "max_connections, or remove the key");
+        }
+        if (!auth_scram) {
+            return Status::InvalidArgument(
+                file.origin() + ": reserved_admin_connections reserves seats for a session "
+                                "whose role is admin, and with auth = off every session is "
+                                "admin; set auth = scram, or remove the key");
+        }
+    }
     if (auth_scram && kwp_port != 0) {
         return Status::InvalidArgument(file.origin() +
                                         ": auth = scram cannot serve kwp_port - the v0 bulk-load "
@@ -1774,6 +1839,14 @@ Status Expeditor::Start() {
     client_setup.durability = config_.durability;
     client_setup.keepalive_s = config_.tcp_keepalive_s;
     client_setup.txn_lifetime_ceiling_ns = config_.txn_lifetime_ceiling_ns;
+    // **One cap for every listener on the port** (DJ-S1): each core's
+    // listener is configured from this setup, so every one of them seats
+    // its sessions in the instance's one count. Set here, before any
+    // listener attaches, and never written again.
+    connection_limits_.max_connections = config_.max_connections;
+    connection_limits_.reserved_admin_connections = config_.ReservedAdminConnections();
+    client_setup.limits = &connection_limits_;
+    client_setup.idle_session_timeout_ns = config_.idle_session_timeout_ns;
 #if KDS_WITH_TLS
     if (tls_context.has_value()) {
         client_setup.channel = [ctx = &*tls_context] { return ctx->NewChannel(); };
@@ -1815,6 +1888,9 @@ Status Expeditor::Start() {
         text_setup.protocol = Protocol::kText;
         text_setup.keepalive_s = config_.tcp_keepalive_s;
         text_setup.txn_lifetime_ceiling_ns = config_.txn_lifetime_ceiling_ns;
+        // The timeout closes an idle debug session too; the cap is the
+        // default port's alone, so no limits are handed over (DJ-Q2).
+        text_setup.idle_session_timeout_ns = config_.idle_session_timeout_ns;
         // The default port's gate, where there is one: empty without
         // credentials, and `Configure` then leaves the listener's own.
         text_setup.auth = client_setup.auth;
@@ -1847,6 +1923,7 @@ Status Expeditor::Start() {
     // on every exit by `~ServeRuntime`.
     dispatcher_->set_scheduler_view(&scheduler);
     live.scheduler_view_of = &*dispatcher_;
+    dispatcher_->set_connection_limits(&connection_limits_);
 
     // Core-local, and installed before any statement runs: from here on a
     // coroutine that suspends while holding a page span - or, since P4d-3,
@@ -1971,6 +2048,7 @@ Status Expeditor::Start() {
             // a session accepted here runs here, under the same config file.
             core_config.statement_limits = config_.Limits();
             core_config.optimizer = Optimizer();
+            core_config.connection_limits = &connection_limits_;
             // The instance's switch, on every core: a peer records into its
             // own part of the instance's store (DA-R4).
             core_config.access_statistics = config_.access_statistics;

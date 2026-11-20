@@ -385,5 +385,65 @@ TEST(PlanStatsBandTest, TheSchmittStepHoldsInsideItsMarginAndMovesPastIt) {
     EXPECT_EQ(band, 21);
 }
 
+TEST(PlanStatsStoreTest, TheMasterBoundNeverEvictsAKeyThisStepObserved) {
+    // PS4 item 2: past kMaxMasterKeys the least recently seen go. A key
+    // folded in the evicting step is the most recently seen however old its
+    // stored stamp, so it keeps its smoothed value and band, and the master
+    // ends the step at the bound, not above it (audit H13, H25).
+    storage::InMemoryPageStore store{kFirstUserPageId};
+    auto boot = bootstrap::BootstrapDatabase(store, 1000);
+    ASSERT_TRUE(boot.ok());
+    stats::PlanStats plan(1);
+    const auto observation = [](std::uint64_t fetch_id, std::uint64_t rows) {
+        stats::PlanObservation seen;
+        seen.key.fetch_id = fetch_id;
+        seen.key.n = 2;
+        seen.key.oids = {1001, 1002, 0, 0};
+        seen.rows[0b01] = rows;
+        seen.present = 1u << 0b01;
+        return seen;
+    };
+    std::uint64_t at = 0;
+    const auto step = [&] {
+        ++at;
+        ASSERT_TRUE(plan.StewardStep(boot.value().catalog, store, at * kSecond).ok());
+    };
+    // The oldest key, alone in the first step: 1000 rows, band 20.
+    const stats::PlanObservation old_key = observation(1, 1000);
+    plan.Fold(0, old_key);
+    step();
+    // Fill the master to the bound, a part's worth (kKeysPerPart / 2) a step.
+    const std::size_t per_step = stats::PlanStats::kKeysPerPart / 2;
+    std::size_t folded = 0;
+    for (std::uint64_t i = 0; i + 1 < stats::PlanStats::kMaxMasterKeys; ++i) {
+        plan.Fold(0, observation(100 + i, 10));
+        if (++folded == per_step) {
+            step();
+            folded = 0;
+        }
+    }
+    if (folded != 0) step();
+    ASSERT_EQ(plan.Current()->posteriors(), stats::PlanStats::kMaxMasterKeys);
+    ASSERT_EQ(plan.counters().part_drops, 0u);
+
+    // One step: the oldest key runs again (700 rows) and one new key arrives.
+    plan.Fold(0, observation(1, 700));
+    plan.Fold(0, observation(1'000'000, 10));
+    step();
+    const auto snapshot = plan.Current();
+    EXPECT_EQ(snapshot->posteriors(), stats::PlanStats::kMaxMasterKeys)
+        << "one victim for one new key, the bound held";
+    const auto* kept = snapshot->Find(old_key.key);
+    ASSERT_NE(kept, nullptr) << "a key observed this step is not evicted";
+    // Smoothed: 1000 + (700 - 1000) / 4 = 925, inside band 20's margin. A
+    // re-created key would read 700 alone, band 19.
+    EXPECT_EQ(kept->band[0b01], 20);
+    EXPECT_NE(snapshot->Find(observation(1'000'000, 10).key), nullptr);
+    // The victim is the least recently seen of the keys not observed: one
+    // of the first fill step's, and so not the newest fill key.
+    EXPECT_NE(snapshot->Find(observation(100 + stats::PlanStats::kMaxMasterKeys - 2, 10).key),
+              nullptr);
+}
+
 }  // namespace
 }  // namespace kds::server

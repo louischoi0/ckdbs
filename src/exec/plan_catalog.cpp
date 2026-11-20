@@ -546,11 +546,6 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
     return removed.ok() ? failed : removed.status();
 }
 
-bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row) {
-    auto tables = catalog.ListTables(nullptr);
-    return !tables.ok() || PlanRowCanMatch(catalog, row, tables.value());
-}
-
 bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
                      const std::vector<catalog::SysObjectRow>& tables) {
     if (!row.readable || row.key.n == 0) return true;

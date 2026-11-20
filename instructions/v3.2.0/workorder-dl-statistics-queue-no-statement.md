@@ -6,7 +6,7 @@ every stage built, the close measured
 regressed, the eviction cliff gone, the reader storm's tail and DL-Q4's two
 words not resolved on a contended host and left in `known-gaps.md`).
 **OPENED 2026-11-20 on the operator's standing go-ahead
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §22)**, on
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §26)**, on
 worktree `dl-statistics-queue-no-statement` from `b0a824db`
 (`v3.4.16-2-gb0a824db`). **No DL-Q item but DL-Q1 and DL-Q3 is the
 operator's own mark**: every other one is CLA's proposal, adopted on that
@@ -469,7 +469,7 @@ these are the order's.
 
 (a) is CLA's proposal in each. **DL-Q1 and DL-Q3 are the operator's own marks; every
 other mark is CLA's proposal adopted on the operator's standing go-ahead of 2026-11-20
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §22), never the operator's
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §26), never the operator's
 per-item mark.** None is tagged `[quiet-wrong]`. The options not taken stay open to the
 operator's own mark.
 
@@ -567,7 +567,7 @@ test are added. Documents only.
 ### Opened 2026-11-20, and DL-S0: the census
 
 Opened on the operator's standing go-ahead (go-ahead-achieving-milestone,
-`raft-marks-2026-11-20.md` §22) on worktree
+`raft-marks-2026-11-20.md` §26) on worktree
 `dl-statistics-queue-no-statement` from `b0a824db` (`v3.4.16-2-gb0a824db`).
 The marks are §4's column: DL-Q1 and DL-Q3 the operator's own, every other
 adopted as CLA proposed it on that standing word.
@@ -956,7 +956,7 @@ releases, merges in key order and makes room in one pass). DI's
 gate. `StatementStats` takes DI's binding in its key on DL's tried record.
 The three documents: the `known-gaps.md` section DL-S5 removed stays
 removed (main had amended it for DI-S2); the index keeps main's DK, DM and
-DN rows; DL's opening record moved from §11 to §22 of
+DN rows; DL's opening record moved from §11 to §22 (and to §26 at the second sync, below) of
 `raft-marks-2026-11-20.md`, main having taken §11..§21.
 
 **Review (`critics-developer`) of the resolution.** One defect, made by the

@@ -3,7 +3,8 @@
 # Copy to kds.conf (or anywhere) and pass with:  kds_server --config <path>
 #
 # Format is `key = value`, one per line. `#` starts a comment. Quote a value
-# to keep surrounding whitespace or a literal '#'.
+# to keep surrounding whitespace or a literal '#'; after the closing quote
+# only whitespace or a `#` comment may follow, and anything else is refused.
 #
 # Precedence: built-in defaults, then this file, then command-line flags.
 # A later source wins, so a flag can override a deployed file for one run.
@@ -154,6 +155,33 @@ listen_address = 127.0.0.1
 # that leaves a reply unread (a zero receive window) for that long is.
 # 0 turns keepalive off; above 32767 (Linux's MAX_TCP_KEEPIDLE) is refused.
 tcp_keepalive_s = 60
+
+# The **connection cap** (`max_connections`): how many sessions the default
+# port serves, on every core together. 0 - the default - is no limit. A
+# session is a connection that has finished its handshake (authenticated,
+# under auth = scram); past the cap a new one is refused with
+# RESOURCE_EXHAUSTED (connection limit), this key named, and closed. A
+# cancel connection is never refused: it is not a session and takes no
+# seat. A connection still in its handshake takes none either. The cap
+# bounds sessions, not sockets. debug_text_port and kwp_port are neither
+# counted nor capped.
+# max_connections = 0
+
+# Seats past max_connections kept for `admin` sessions, so a full server
+# does not lock out the operator who would raise the cap. Default 3. In
+# force only with max_connections set and auth = scram; with auth = off
+# every session is admin and nothing is reserved, and naming this key
+# there, or without max_connections, is refused at startup.
+# reserved_admin_connections = 3
+
+# The **idle-session timeout** (`idle_session_timeout_s`): seconds a
+# connection may sit with no statement running, no transaction open and no
+# portal held before the server tells it why and closes it. 0 - the
+# default - is no timeout; 1 to 59 is refused (a held portal is released
+# at 60 s, and a session holding one is not idle before that). A C_PING is
+# not activity: a pool that pings to keep connections open sets this to 0
+# or above its own idle period. The default port and debug_text_port.
+# idle_session_timeout_s = 0
 
 # Direct TLS on the port above (docs/spec/protocol.md §1, decided 2026-08-13).
 # With `tls = on` every connection must open with a TLS 1.3 handshake -

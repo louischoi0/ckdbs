@@ -284,6 +284,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // without them).
     runtime->dispatcher_->set_statement_limits(config.statement_limits);
     runtime->dispatcher_->set_optimizer_surface(config.optimizer);
+    runtime->dispatcher_->set_connection_limits(config.connection_limits);
     // This core's mount, for its `SHOW META` recovery block (RC09's field
     // list, docs/spec/client-manual.md) - `Expeditor::Open`'s wiring, per core
     // since PW3b. `recovery_` is declared above the dispatcher and outlives it.

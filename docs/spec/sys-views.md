@@ -738,6 +738,22 @@ each core publishes for itself, so they are a moment's view: a core in the
 middle of minting a view has lowered its bound and not yet published the
 stamp. `sys.session_state`'s `view_age_us` names the session (§6.6).
 
+**The `connections` section** (DJ-S1, `protocol.md` §10,
+`server/connection_limits.hpp`), the instance's and the same on every core:
+`max_connections` and `reserved_admin_connections`, the cap and the reserve
+as they apply (`0` and `0` for no limit; the reserve `0` where no gate
+stamps a role); `connection_sessions`, the sessions holding a seat now, on
+every core together - a session being a default-port connection from the
+end of its handshake to its close, so a cancel connection, a connection
+still in its handshake, a debug text session and a load session are not in
+it; `connection_refusals`, the sessions the cap refused since the process
+started; and
+`idle_session_closes`, the default port's connections
+`idle_session_timeout_s` closed (the debug text port's are closed and not
+counted). Read relaxed from three words written where a session is seated,
+refused or closed - a count, never a decision - and absent on a dispatcher
+with no instance behind it.
+
 ## 8. What is not here
 
 - `sys.sessions` (W2: excluded by the operator).

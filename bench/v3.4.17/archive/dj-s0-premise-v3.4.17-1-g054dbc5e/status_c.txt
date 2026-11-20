@@ -1,0 +1,3 @@
+09:13:02 portal capped_whole
+09:13:12 portal limit_100
+09:18:54 driver finished

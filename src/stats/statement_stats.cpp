@@ -140,11 +140,18 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
         ++shape.timed_calls;
         shape.timed += *cost.timed;
     }
-    // Replaced only where it moved: a shape runs one source statement after
-    // statement, so this is two compares and no allocation.
-    if (!plan_source.empty() &&
-        (row.plan == nullptr || row.plan->source != plan_source ||
-         row.plan->label != plan_label)) {
+    // **The latest compile decides the source** (sys-views.md §6.1): a call
+    // that compiled its own chain, or handed a source, writes the pair - an
+    // empty one too, so a shape a plan stopped applying to reads NULL - and
+    // a call that compiled nothing keeps what the shape had. Replaced only
+    // where it moved: a shape runs one source statement after statement, so
+    // this is two compares and no allocation.
+    if (!cost.compiled && plan_source.empty()) return;
+    if (plan_source.empty()) {
+        row.plan.reset();  // a reader's copy keeps the note it took
+        return;
+    }
+    if (row.plan == nullptr || row.plan->source != plan_source || row.plan->label != plan_label) {
         try {
             // Made whole before it is kept, so the pair never mixes.
             row.plan = std::make_shared<const PlanNote>(
