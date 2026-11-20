@@ -232,6 +232,10 @@ public:
     static constexpr std::size_t kNotedSignalsPerCore = 1024;
     static constexpr std::size_t kNotedWaitsPerCore = 256;
     static constexpr std::size_t kNotedCabinsPerCore = 256;
+    // A fold makes room for one part's newcomers at a time, so a part's
+    // worth must fit the folded map it lands in.
+    static_assert(kNotedSignalsPerCore <= kMaxTrackedFingerprints);
+    static_assert(kNotedCabinsPerCore <= kMaxTrackedCabins);
 
     // The clock and half-life bind at construction - the one site config
     // threads them through (expeditor.cpp). A null clock degrades every
@@ -267,7 +271,12 @@ public:
     // pattern's, not a candidate's (DI-Q9 (a)). Folded only for a pattern
     // with a signal by the time its part is folded - one the folded state
     // tracks, or that this part noted an execution of since the last fold:
-    // a wait alone never admits or evicts one.
+    // a wait alone never admits or evicts one. Parts fold in core order, so
+    // a wait noted on a core below the one that first ran its pattern in the
+    // same interval is not counted. A waiting pattern takes a slot of its
+    // part's wait table whether or not it ever has a signal - the sampler
+    // notes a waiting write's too - and one past the table's bound is a
+    // `full` drop.
     void NoteWaitSample(std::uint32_t core, std::uint64_t pattern_id) noexcept;
 
     // S3, forwarded by CabinStore: a probe against `cabin_id`. `served`
@@ -298,7 +307,6 @@ public:
     SnapshotCabin QualityOf(std::uint64_t cabin_id) const;
 
     std::size_t tracked_signals() const noexcept { return fingerprints_.size(); }
-    std::size_t tracked_cabins() const noexcept { return cabins_.size(); }
 
     // A part's latch, for a test that holds it as the fold does; null where
     // the parts are unarmed or there is no such part.

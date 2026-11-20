@@ -726,6 +726,87 @@ TEST(OptimizerSignalsTest, AVictimOfTheNewcomersPatternLeavesThePatternsWaitsSta
     EXPECT_EQ(snap.waits.size(), snap.fingerprints.size()) << "one signal a pattern here";
 }
 
+TEST(OptimizerSignalsTest, AKeyItsOwnPartJustNotedIsNotTheVictimMadeAgain) {
+    // The merge of DI's key onto DL's parts (its review's finding): a fold
+    // that ranked the folded map before merging what the part noted of keys
+    // already in it chose the coldest key as the victim though it had just
+    // run, then made it again - one signal over the cap, its pattern erased
+    // with its waits and never counted again.
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteWaitSample(/*core=*/0, 7);
+    signals.Fold();
+    clock.Advance(kHalfLife);
+    // The table, full, with pattern 7's one signal the coldest.
+    for (std::uint64_t id = 100; id < 100 + stats::kMaxTrackedFingerprints - 1; ++id) {
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();
+    }
+    signals.Fold();
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+
+    // One interval: the coldest signal runs again, beside a newcomer.
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteExecution(/*core=*/0, 9000, 1);
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+
+    EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints) << "over the cap";
+    std::size_t sevens = 0;
+    bool newcomer = false;
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) {
+        sevens += fp.pattern_id == 7;
+        newcomer = newcomer || fp.pattern_id == 9000;
+    }
+    EXPECT_EQ(sevens, 1u) << "the signal that just ran is ranked with that run";
+    EXPECT_TRUE(newcomer);
+    ASSERT_FALSE(snap.waits.empty());
+    EXPECT_EQ(snap.waits.front().pattern_id, 7u);
+    EXPECT_GT(snap.waits.front().wait_samples_q8, 0u) << "the pattern's waits were dropped";
+    EXPECT_EQ(snap.waits.size(), snap.fingerprints.size()) << "one signal a pattern here";
+}
+
+TEST(OptimizerSignalsTest, APartsWaitTableIsBoundedAndAFoldEmptiesIt) {
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
+    // A wait noted before its pattern's first execution, in one part and one
+    // interval: the fold merges the part's signals first, so it counts.
+    signals.NoteWaitSample(/*core=*/0, 1);
+    signals.NoteExecution(/*core=*/0, 1, 1);
+    // Patterns with no signal - a waiting write's - take the table's slots.
+    for (std::uint64_t id = 2; id <= stats::OptimizerSignals::kNotedWaitsPerCore; ++id) {
+        signals.NoteWaitSample(/*core=*/0, id);
+    }
+    EXPECT_EQ(signals.drops().full, 0u);
+    signals.NoteWaitSample(/*core=*/0, 5000);  // a new pattern past the bound
+    EXPECT_EQ(signals.drops().full, 1u);
+    signals.NoteWaitSample(/*core=*/0, 1);  // one the table holds still counts
+    EXPECT_EQ(signals.drops().full, 1u);
+
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.waits.size(), 1u) << "a wait alone admits no pattern";
+    EXPECT_EQ(snap.waits[0].pattern_id, 1u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, 2 * stats::kDecayScoreScale);
+
+    signals.NoteWaitSample(/*core=*/0, 5000);  // the fold emptied the table
+    EXPECT_EQ(signals.drops().full, 1u);
+}
+
+TEST(OptimizerSignalsTest, AWaitOnACoreBelowItsPatternsFirstExecutionIsNotCounted) {
+    // Parts fold in core order (the header): the wait's part is folded while
+    // the pattern has no signal yet. The other way round it counts.
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife, /*cores=*/2);
+    signals.NoteWaitSample(/*core=*/0, 5);
+    signals.NoteExecution(/*core=*/1, 5, 1);
+    signals.NoteExecution(/*core=*/0, 6, 1);
+    signals.NoteWaitSample(/*core=*/1, 6);
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.waits.size(), 2u);
+    EXPECT_EQ(snap.waits[0].pattern_id, 5u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, 0u);
+    EXPECT_EQ(snap.waits[1].pattern_id, 6u);
+    EXPECT_EQ(snap.waits[1].wait_samples_q8, stats::kDecayScoreScale);
+}
+
 TEST(OptimizerSignalsTest, OneTextUnderTwoNamespacesCreditsEachRelationItsOwnExecutions) {
     // Through the dispatcher: `SELECT * FROM b WHERE sym = 'x'` is a filter
     // scan whose candidate is `b.sym` - `east.b`'s under `USE east`,
