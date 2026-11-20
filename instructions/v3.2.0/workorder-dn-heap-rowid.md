@@ -5,7 +5,9 @@ Status: **WRITTEN 2026-11-20, not opened.** Written in the main checkout on
 2026-11-20 (`raft-marks-2026-11-20.md` §13). The letter DN is CLA's
 proposal. **Exploratory by CLA's proposal** (DN-Q0): the operator's words
 fix the shape; that DN-S0 measures its premise before anything is built is
-CLA's.
+CLA's. **Two more marks the same day** (`raft-marks-2026-11-20.md` §14):
+the hidden Keystone's name is a reserved word (DN-D6, which settles half of
+DN-Q1) and invariants 2 to 4 are the btree's alone (DN-D7).
 
 **DN rests on DD.** The operator's mark DN-D1 is that a slot is reused only
 once every index entry naming it is removed, and DD
@@ -56,6 +58,8 @@ answers, each recorded as a mark:
 | DN-D2 | *"2. Where there is no PK, the engine issues a Keystone internally to tell rows apart (the rowid a value computed from the data page, so that it can be computed back in one step)."* | **identity and address are two things**: the Keystone tells rows apart; the rowid is computed from `(page, slot)` and back in one step |
 | DN-D3 | *"2. The key's identity: a multi-column PK, a PK of other types supported, and where no PK is created, the engine-issued Keystone in its place (in that case not seen by `SELECT *` in SQL, but its value can be read by naming the column, e.g. `keyidentity`)."* | **a PK of any column count and type**; with none, the issued Keystone, hidden from `*` and **readable by an explicit name** |
 | DN-D4 | *"3. No global order guaranteed."* | **rowid order is not insertion order across cores** |
+| DN-D6 | *"The name for reading it (`keyidentity` or the like) as a reserved word."* | **the hidden Keystone's name is a reserved word**; its spelling is not fixed by the word ("or the like") |
+| DN-D7 | *"Invariants 2 to 4 are btree-only."* | **invariants 2, 3 and 4 bind a btree page and no heap data page** |
 | DN-D5 | *"If the user sets no PK or makes it an int64, the engine-issued Keystone is used."* and, asked whether a single `int64` PK **is** the Keystone - a value named by the `INSERT` or issued when omitted - *"(a) is right, write it."* | **a single `int64` PK column is the Keystone** (named or issued, as a btree relation's tuple key is today); any other PK is a unique index beside a hidden issued Keystone |
 
 `[design]` **Why the two words fit.** Keeping the Keystone apart from the
@@ -120,8 +124,16 @@ Not a complete census (DN-S0's):
 - **2, 3** - `min_key` immutable, "no tuple with `id < min_key(page)`":
   stated for every page that holds tuples. A heap page holds Keystones in
   no order once a slot is reused or a named `int64` key arrives (DN-D5).
+  **DN-D7: they are the btree's alone.**
 - **4** - "Tuples within a catalog chain page are unordered. A btree leaf
-  is sorted by placement": a heap data page is a third kind.
+  is sorted by placement": a heap data page is a third kind, unordered by
+  DN-D7.
+- **What DN-D7 leaves to read**: 2 and 3 are written today with no page
+  class named, and a catalog chain page holds tuples too. Whether any
+  code outside the btree reads a page's `min_key` or relies on 3 - a
+  catalog chain's growth, recovery, a checker - was not read; DN-S0 reads
+  it, so that "btree-only" takes nothing from a page that is neither a
+  btree's nor a heap's.
 - **11** - "every relation's tuple key is a unique 48-bit id, carried only
   by the Keystone word, never rebound except by `PURGE`": holds by DN-D2;
   "a declared tuple key - the first column - must be integer-typed" becomes
@@ -191,27 +203,36 @@ Binding once DN opens.
 - **DN-R4 - one answer.** A statement over a heap returns what the same
   statement returns over a btree relation with the same rows, but for
   emission order without `ORDER BY`, which is no contract.
-- **DN-R5 - the hidden Keystone is named by one name the operator marks**
-  (DN-Q1), which no user column may take, and `*` never includes it.
+- **DN-R5 - the hidden Keystone is named by one reserved word** (DN-D6),
+  which no relation, column, index or alias may take on any relation, and
+  `*` never includes it. **It is the tree's first word reserved against
+  identifiers by the operator's word**: "nothing new is reserved lightly:
+  keywords hash as identifiers" (`CLAUDE.md`, Working Rules) stands for
+  every other word, and what the reservation does to a volume that
+  already holds the name, and to a fingerprint (`fingerprint.hpp`'s bump
+  rule), is stated before it is built (DN-Q1).
 - **DN-R6 - a format event is said** (a superblock bump; DN-Q9 for a BZ
   heap on an older volume).
 - **DN-R7 - a btree relation pays nothing.** No standard cell over a btree
   relation moves outside its floor.
 - **DN-R8 - no constant without a measurement**: a rowid's bit split, a
   per-core page count, a fill threshold.
-- **DN-R9 - the invariants are amended before the code**: 2, 3, 4 and 11
-  are restated for a heap data page in `heap-and-tuple.md` §8 and
-  `CLAUDE.md`, with the operator's mark, before DN-S2 writes a heap page.
+- **DN-R9 - the invariants are amended before the code**: 2, 3 and 4 are
+  restated as the btree's (DN-D7) and 11 for a heap, in
+  `heap-and-tuple.md` §8 and `CLAUDE.md`, before DN-S2 writes a heap
+  page. **Not amended at the mark**: both files state what is built, and
+  no heap data page exists; DN-S1 writes them, after DN-S0's reading of
+  §1.4's last item.
 
 ## 4. Items for the operator (DN-Q)
 
-(a) is CLA's proposal in each. **Marked by the operator: DN-D1..D5 (§0).**
-Every item below is unmarked.
+(a) is CLA's proposal in each. **Marked by the operator: DN-D1..D7 (§0).**
+Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 
 | | item | (a) | other |
 |---|---|---|---|
 | DN-Q0 | The order's standing. | **exploratory**: DN-S0 is census and premise, and may narrow or end DN | (b) a build order |
-| DN-Q1 | The hidden Keystone's name (DN-D3). Spoken "e.g. `keyidentity`". | **`keyidentity`, a reserved column name on a heap whose Keystone is hidden**: resolved only when written, refused as a user column's name on every relation, and `CREATE TABLE` refusing it by name | (b) `$tuple_key` made nameable; (c) a pseudo-column on every relation, a btree's tuple key included |
+| DN-Q1 | The hidden Keystone's name. **That it is a reserved word is the operator's (DN-D6)**; open are its spelling and its edges. | **`keyidentity`**; refused by name wherever an identifier is declared, on every relation; on a relation whose Keystone is a declared `int64` PK it reads that column, so one spelling reads any relation's Keystone; a mount that finds the name already declared on a volume refuses by name; the fingerprint's bump rule read at DN-S0 and a bump said if it is owed | (b) another spelling the operator names; (c) on a relation with a declared Keystone the word is refused, not an alias; (d) an existing declaration of the name is kept and shadows the word |
 | DN-Q2 | The index a hidden-Keystone heap always has. | **a Keystone index**, built with the relation and dropped with it, so every path of §1.3 finds a row by its Keystone | (b) none: a heap with no PK has no Keystone path, and §1.3's consumers refuse it |
 | DN-Q3 `[quiet-wrong]` | Whether an index entry carries the Keystone beside the rowid. | **yes**, checked at the slot (DN-R3): 8 bytes an entry, and a reused slot that DD missed answers "no row" instead of another row | (b) the rowid alone, DD trusted |
 | DN-Q4 | The rowid's encoding and whether SQL sees it. | **`page_id << 16 \| slot` in 48 bits; not visible to SQL** | (b) a `ROWID` pseudo-column, read-only; (c) another split, measured |
@@ -250,3 +271,12 @@ rests on a reading of the sites in §1; nothing was run. DD is a
 prerequisite of DN-S2 and is not opened. Open with the operator: DN-Q0..Q10,
 whether DN opens, and whether DD opens first with DN's consumer in its
 premise.
+
+### Two marks, 2026-11-20
+
+In the main checkout on `main` at `4defff7a`, documents only
+(`raft-marks-2026-11-20.md` §14). DN-D6: the hidden Keystone's name is a
+reserved word; DN-R5 and DN-Q1 rewritten, the spelling and the edges left
+open. DN-D7: invariants 2 to 4 are the btree's alone; §1.4 and DN-R9
+rewritten, the two files that state the invariants not touched until
+DN-S1. Nothing was run.

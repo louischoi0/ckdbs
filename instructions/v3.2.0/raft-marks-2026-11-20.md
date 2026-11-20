@@ -135,3 +135,13 @@ took under them.
 | **Does not settle** | DN-Q0..Q10 - among them the hidden Keystone's name, whether a hidden-Keystone heap always has a Keystone index, whether an entry carries the Keystone beside the rowid `[quiet-wrong]`, a foreign key to a heap, a BZ heap on an existing volume; the amended invariants 2, 3, 4 and 11 (DN-R9); whether DN opens; whether DD opens first |
 | **Recorded at** | this file; the DN order's header and §0; the DN row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 14. DN: the name reserved, and invariants 2 to 4 the btree's
+
+| | |
+|---|---|
+| **Word** | *"The name for reading it (`keyidentity` or the like) as a reserved word."* and *"Invariants 2 to 4 are btree-only."* (given in Korean; recorded in English) - answers to two of the conflicts CLA listed before DN was written, given as it was pushed at `4defff7a` |
+| **Mark** | **DN-D6: the hidden Keystone's name is a reserved word** - no identifier may take it. **DN-D7: invariants 2, 3 and 4 bind a btree page and no heap data page.** The order is amended in the main checkout on `main` at `4defff7a`, documents only: §0's table, §1.4, DN-R5, DN-R9, DN-Q1 |
+| **Not done at the mark** | `CLAUDE.md`'s and `heap-and-tuple.md` §8's invariants are not edited: both state what is built, no heap data page exists, and 2 and 3 name no page class today, so whether a catalog chain page relies on either is read first (DN-S0) and the text written at DN-S1 |
+| **Does not settle** | the word's spelling ("or the like"; CLA proposes `keyidentity`) and its edges (DN-Q1: what it reads on a relation with a declared Keystone, a volume that already declares the name, the fingerprint's bump rule); invariant 11's wording for a heap; DN-Q0 and DN-Q2..Q10; whether DN opens |
+| **Recorded at** | this file; the DN order's header, §0, §1.4, §3, §4 and §7; this file's row in `instructions/v3.2.0/index.md` |
+
