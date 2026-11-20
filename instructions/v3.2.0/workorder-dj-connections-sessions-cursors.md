@@ -1,6 +1,10 @@
 # Work order DJ - connections, sessions and cursors: a connection cap and an idle-session timeout an operator sets, a session a pool can hand back clean, a wait in place of a refusal, and a reply that is bounded
 
-Status: **OPENED 2026-11-20 on the operator's standing go-ahead**
+Status: **CLOSED 2026-11-20 on the work branch, not landed** - every
+stage done (§7: DJ-S1 `69d754ae`, DJ-S2 `56855c48`, DJ-S3 `1fc21809`,
+DJ-S4 `5333fbb2`, the close
+`bench/v3.4.17/results-dj-close-v3.4.17-6-g5333fbb2.md`: no delta resolved).
+**OPENED 2026-11-20 on the operator's standing go-ahead**
 (`/go-ahead-achieving-milestone DJ`, `raft-marks-2026-11-20.md` §22), on
 worktree `dj-connections-sessions-cursors` from `054dbc5e`
 (`v3.4.17-1-g054dbc5e`). **DJ-S0 and DJ-S1 are done** (§7): the census and
@@ -712,3 +716,28 @@ committed apart. Suite: 0 failed of 4,981 (2 disabled, 2 skipped) on the two tog
 `56855c48` plus both stages' changes; the golden detail number 8 added
 after it, its file's 8 cells run green. Overhead not measured; measured at the
 milestone's close.
+
+### DJ-S5 - the close (2026-11-20)
+
+`bench/v3.4.17/results-dj-close-v3.4.17-6-g5333fbb2.md`: `054dbc5e` (A,
+A2) against `5333fbb2` with DJ's keys unset (B) and set (Bk: every session
+seated, the sweep armed), interleaved over four server lifetimes, release,
+twice. **No delta of DJ's resolved**: no arm's difference from A keeps its
+sign across the two runs. The first run's Bk read 1.8 us dearer on the
+point read; both of its dear cells were a lifetime's first, which reads
+dearer on this host, and the second run - every lifetime opened by a
+discarded cell - put Bk 0.6 us below A. Bk's connect loop leans 4.5 to
+5.6 us dearer, inside each run's A-to-A2 floor (4.5 and 6.4 us), not
+excluded. DJ-R1, DJ-R6 and DJ-R7 are not found broken by what was measured;
+the bar is not declared met beyond that. Not measured: `cores > 1`, TLS,
+SCRAM, idle sessions beside the cells.
+
+**The merge of `origin/main`** (`d436b7b1`, the v3.4.* audit's H fixes and
+record) into the branch merged cleanly; the merged tree's suite: **0 failed of 4,997** (2 disabled, 2 skipped) at `d2338bd7`.
+
+**DJ is closed** on the standing go-ahead: every stage of §5 landed on the
+work branch, the close measured, the documents moved - `protocol.md` §3,
+§7, §10, §11; `txn.md` §4.1; `wait-events.md`; `sys-views.md` §7;
+`client-manual.md`; `manual/server/server.md`; `manual/sql/sql.md`;
+`kds.conf.sample`; `known-gaps.md`; CN-12; `CLAUDE.md`'s rows. Not landed:
+no push, merge to `main`, tag or version.

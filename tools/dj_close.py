@@ -162,6 +162,9 @@ def main():
     p.add_argument("--port", type=int, default=15691)
     p.add_argument("--status")
     p.add_argument("--no-hold", action="store_true", help="a smoke run: no quiet gate")
+    p.add_argument("--lead", action="store_true",
+                   help="open every lifetime with a discarded A point cell, so no measured "
+                        "arm runs first (the first cell of a lifetime read dearer at DJ-S5)")
     a = p.parse_args()
     NO_HOLD[0] = a.no_hold
     os.makedirs(a.workdir, exist_ok=True)
@@ -181,6 +184,14 @@ def main():
         o = order[life % 4:] + order[:life % 4]
         if life % 2:
             o = o[::-1]
+        if a.lead:
+            lead = Server(a, f"lead{life}", a.a, False)
+            try:
+                hold()
+                statements(lead, a.seconds,
+                           lambda: f"SELECT * FROM c WHERE id = {rng.randrange(1, ROWS)}")
+            finally:
+                lead.stop()
         for arm in o:
             if a.status:
                 open(a.status, "a").write(f"{time.strftime('%H:%M:%S')} life {life} {arm}\n")
