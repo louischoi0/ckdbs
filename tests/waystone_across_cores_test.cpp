@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/server/session.hpp"
+#include "pattern_rows.hpp"
 
 namespace kds::server {
 namespace {

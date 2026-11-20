@@ -19,6 +19,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
 #include "catalog_chain_pages.hpp"
+#include "pattern_rows.hpp"
 
 // **The advisory contract** (docs/spec/waystone-concpets.md §11-3 and §11-4,
 // workplan P12). The spec calls §11-3 "the test that must never be allowed
@@ -316,7 +317,7 @@ std::vector<std::string> NotOpted(bool record, bool replay, int rounds) {
 bool IsOpted(Instance& db, const std::string& sql) {
     auto fp = parser::FingerprintOf(sql);
     if (!fp.has_value()) return false;
-    auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+    auto row = kds::testing_patterns::PatternRowOf(db.catalog(), fp->fetch_id);
     return row.ok() && (row.value().flags & catalog::kPatternWaystone) != 0;
 }
 
@@ -830,7 +831,7 @@ TEST(WaystoneContractTest, AnOptedShapeWithABuiltJoinRecordsItsLookupStepOnly) {
     ASSERT_TRUE(b_oid.ok()) << b_oid.status().message();
     auto fp = parser::FingerprintOf(sql);
     ASSERT_TRUE(fp.has_value());
-    auto pattern = db.catalog().FindOptedPattern(fp->fetch_id);
+    auto pattern = kds::testing_patterns::OptedPatternOf(db.catalog(), fp->fetch_id);
     ASSERT_TRUE(pattern.ok()) << pattern.status().message();
     ASSERT_TRUE(pattern.value()->has_waystone_directory());
     auto trail = stats::ReadTrail(db.store(), pattern.value()->waystone_root,

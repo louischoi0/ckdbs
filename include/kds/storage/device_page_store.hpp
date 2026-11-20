@@ -1826,9 +1826,9 @@ private:
     void RemoveUnlogged(std::uint64_t word) noexcept;
     bool IsUnlogged(std::uint64_t word) const noexcept;
     static constexpr std::uint64_t kUnloggedPageTag = std::uint64_t{1} << 63;
-    // Four standing entries (the two unlogged catalog chains' heads and
-    // owners) and one per fenced index build running at once; 32 leaves
-    // 28 builds, each under its own relation `X`.
+    // Two standing entries (the one unlogged catalog chain's head and
+    // owner) and one per fenced index build running at once; 32 leaves
+    // 30 builds, each under its own relation `X`.
     static constexpr std::size_t kUnloggedSlots = 32;
     std::array<std::atomic<std::uint64_t>, kUnloggedSlots> unlogged_{};
     std::atomic<bool> fetch_images_{false};

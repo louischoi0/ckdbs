@@ -11,6 +11,7 @@
 #include "kds/catalog/oid.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/stats/statement_binding.hpp"
 
 // Fixed-layout catalog rows. Each is inserted and read as a single heap
 // tuple payload (kds::heap::PageView::InsertTuple()/ReadTuple()), so no
@@ -581,13 +582,25 @@ struct SysPatternRow {
     Oid oid;
 
     // The parse-time fingerprint of the statement's fetch shape
-    // (parser/fingerprint.hpp `fetch_id`). Unique across live rows, and the
-    // key every lookup arrives with.
+    // (parser/fingerprint.hpp `fetch_id`). **With the binding below, the
+    // key every lookup arrives with** (DI-S3, superblock 38): a fetch id is
+    // a hash of the statement's text and holds no namespace and no relation,
+    // so one text is as many shapes as the relations it resolves to, and a
+    // row is one of them.
     std::uint64_t fetch_id;
 
     // Reserved: written 0, advanced by nothing (the heat note above). It
     // was the last execution's timestamp.
     std::uint64_t last_seen;
+
+    // **What the opted statement bound** (`stats/statement_binding.hpp`):
+    // the namespace its unqualified names were resolved in, 0 where it
+    // wrote none, and its `binding_n` distinct relations in first-declared
+    // order, the rest 0. Written once, by the `WAYSTONE ON` that made the
+    // row, from the compile of its example; never changed. `BindingOf` and
+    // `SetBinding` below are the only readers and writers.
+    Oid binding_namespace;
+    std::array<Oid, stats::StatementBinding::kMaxRelations> binding_oids;
 
     // Which revision of the fingerprinting algorithm produced
     // `fetch_id` (parser/fingerprint.hpp kFingerprintVersion). A row
@@ -650,24 +663,33 @@ struct SysPatternRow {
     // the last field) but would change the row's size for nothing.
     //
     // The field order below is not cosmetic. `flags` (u16) sits before
-    // `origin` (u8) because `dir_depth` ends the row at 37: a u16 next pads
-    // the struct to 38 and the u8 after it lands at 40, so both keep the
-    // offsetof static_assert this file's layout rule depends on. Reversing
-    // them puts the u16 at struct offset 40 against an on-disk 39 and the
+    // `origin` (u8) because `dir_depth` ends at an even offset: a u16 next
+    // needs no padding and the u8 after it follows at once, so both keep
+    // the offsetof static_assert this file's layout rule depends on.
+    // Reversing them puts the u16 one byte past its on-disk offset and the
     // assert stops holding.
     std::uint8_t origin;
+
+    // How many of `binding_oids` are the binding's (DI-S3). A byte after
+    // `origin`, the row's last.
+    std::uint8_t binding_n;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kFetchIdOffset = 8;
     static constexpr std::size_t kLastSeenOffset = 16;
-    static constexpr std::size_t kFingerprintVersionOffset = 24;
-    static constexpr std::size_t kWaystoneRootOffset = 28;
-    static constexpr std::size_t kUseCountOffset = 32;
-    static constexpr std::size_t kStmtClassOffset = 36;
-    static constexpr std::size_t kDirDepthOffset = 37;
-    static constexpr std::size_t kFlagsOffset = 38;
-    static constexpr std::size_t kOriginOffset = 40;
-    static constexpr std::size_t kOnDiskSize = kOriginOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kBindingNamespaceOffset = 24;
+    static constexpr std::size_t kBindingOidsOffset = 32;
+    // 32 + 16 relations of 8 bytes.
+    static constexpr std::size_t kFingerprintVersionOffset =
+        kBindingOidsOffset + stats::StatementBinding::kMaxRelations * sizeof(Oid);
+    static constexpr std::size_t kWaystoneRootOffset = kFingerprintVersionOffset + 4;
+    static constexpr std::size_t kUseCountOffset = kWaystoneRootOffset + 4;
+    static constexpr std::size_t kStmtClassOffset = kUseCountOffset + 4;
+    static constexpr std::size_t kDirDepthOffset = kStmtClassOffset + 1;
+    static constexpr std::size_t kFlagsOffset = kDirDepthOffset + 1;
+    static constexpr std::size_t kOriginOffset = kFlagsOffset + 2;
+    static constexpr std::size_t kBindingCountOffset = kOriginOffset + 1;
+    static constexpr std::size_t kOnDiskSize = kBindingCountOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysPatternRow> Decode(std::span<const std::byte> bytes);
@@ -684,7 +706,32 @@ static_assert(offsetof(SysPatternRow, stmt_class) == SysPatternRow::kStmtClassOf
 static_assert(offsetof(SysPatternRow, dir_depth) == SysPatternRow::kDirDepthOffset);
 static_assert(offsetof(SysPatternRow, flags) == SysPatternRow::kFlagsOffset);
 static_assert(offsetof(SysPatternRow, origin) == SysPatternRow::kOriginOffset);
-static_assert(SysPatternRow::kOnDiskSize == 41);
+static_assert(offsetof(SysPatternRow, binding_namespace) ==
+              SysPatternRow::kBindingNamespaceOffset);
+static_assert(offsetof(SysPatternRow, binding_oids) == SysPatternRow::kBindingOidsOffset);
+static_assert(offsetof(SysPatternRow, binding_n) == SysPatternRow::kBindingCountOffset);
+// 41 bytes until superblock 38, which added the binding's 137.
+static_assert(SysPatternRow::kOnDiskSize == 178);
+
+// The binding a row names, and the one way a row is given it. A row never
+// holds an overflow: `WAYSTONE ON` refuses a statement whose binding is not
+// held, so `binding_n` is at least 1 on every row a build wrote.
+inline stats::StatementBinding BindingOf(const SysPatternRow& row) noexcept {
+    stats::StatementBinding binding;
+    binding.namespace_oid = row.binding_namespace;
+    binding.n = static_cast<std::uint8_t>(
+        row.binding_n <= stats::StatementBinding::kMaxRelations
+            ? row.binding_n
+            : stats::StatementBinding::kMaxRelations);
+    for (std::size_t i = 0; i < binding.n; ++i) binding.oids[i] = row.binding_oids[i];
+    return binding;
+}
+inline void SetBinding(SysPatternRow& row, const stats::StatementBinding& binding) noexcept {
+    row.binding_namespace = binding.namespace_oid;
+    row.binding_n = binding.n;
+    row.binding_oids = {};
+    for (std::size_t i = 0; i < binding.n; ++i) row.binding_oids[i] = binding.oids[i];
+}
 
 // `flags` bit 0: **the shape is opted in to Waystone** (CF-S1b,
 // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3). Set by

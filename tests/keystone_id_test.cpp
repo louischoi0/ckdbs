@@ -25,6 +25,7 @@
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
 #include "view_text.hpp"
+#include "pattern_rows.hpp"
 
 // K-M1: what the engine *does* with Keystone ids today
 // (`docs/rules/keystoneid-invariant.md` §5).

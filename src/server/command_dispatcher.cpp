@@ -3757,6 +3757,20 @@ std::string StatisticsDocument(std::string_view label, const stats::RelationStat
     return doc;
 }
 
+void CommandDispatcher::EndOptInsNaming(catalog::Oid oid) {
+    // **A dropped relation ends the Waystone opt-ins that name it** (DI-S3,
+    // DI-Q13 (a)): its oid is never reissued, so the shapes can bind it no
+    // more. After the drop has committed, never inside it - a drop that
+    // rolls back keeps its opt-ins. A write that fails leaves the rows for
+    // the next mount's renewal to end, which costs a directory page until
+    // then and no answer (invariant 8).
+    if (auto ended = catalog_.EndPatternsNaming(oid); !ended.ok() && log_ != nullptr &&
+                                                      log_->enabled(LogLevel::kWarn)) {
+        log_->Warn("waystone", "the opt-ins naming dropped relation " + std::to_string(oid) +
+                                   " were not ended: " + ended.status().message());
+    }
+}
+
 void CommandDispatcher::ForgetRelationStatistics(catalog::Oid oid) {
     if (plan_stats_ == nullptr) return;
     if (plan_stats_->managed().Forget(oid)) plan_stats_->RepublishManaged();
@@ -4981,6 +4995,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             captured_plans_->ForgetRelation(oid.value());
             admin_plans_->ForgetRelation(oid.value());
             ForgetRelationStatistics(oid.value());
+            EndOptInsNaming(oid.value());
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -7110,6 +7125,12 @@ public:
     std::optional<parser::Parser> parser;
     std::optional<parser::Statement> statement;
     std::optional<ReadBorrow> borrow;
+    // What this run's own compile bound (DI, `stats/statement_binding.hpp`):
+    // the run's borrow declares into it, the statement's binding absorbs it
+    // once the compile has answered, and the Waystone gate asks the opted
+    // map with it - a `SELECT` run inside a write is opted, or not, as the
+    // `SELECT` it is.
+    stats::StatementBinding binding;
     std::optional<exec::StepChain> chain;
     TextResultSink text_sink;
     ResultSink* sink = nullptr;
@@ -9147,6 +9168,7 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
             // the table, its row kept (`exec/plan_catalog.hpp`).
             admin_plans_->ForgetRelation(owed->oid);
             ForgetRelationStatistics(owed->oid);
+            EndOptInsNaming(owed->oid);
         }
         owed = owed_drops_.erase(owed);
     }
@@ -10197,16 +10219,15 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // of the statement, which a sliced walk carries past this function
     // (BA-S15). A second compile declares into it again, which asks each
     // relation once (`ReadBorrow::Position`).
-    ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_,
-                                            &statement_binding_);
+    ReadBorrow& borrow =
+        run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_, &run->binding);
     // `join_order`, read once a statement (CX-R10): a `SET JOIN_ORDER` on
     // any core lands at the next compile.
     const exec::JoinOrder join_order = this->join_order();
-    // What the statement had bound before this compile: a compile the
-    // native path declines for the query layer forgets its own binds, so
-    // the binding is the layer's describes' and not the two together.
-    const stats::StatementBinding::Mark before_compile = statement_binding_.mark();
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+        // This resolve's binds alone: one made again because a DDL moved
+        // under it forgets the first (`statement_binding.hpp`).
+        run->binding = {};
         exec::PlanOptions plan;
         plan.join_build_max_rows = budget_.join_build_max_rows();
         plan.sort_max_rows = sort_max_rows_;
@@ -10238,13 +10259,21 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         // BU-Q9: a form the native compile declines goes to the query layer,
         // whose refusal stands only if its grammar reads the text.
         if (!analyze && !line.empty() && chain.status().code() == StatusCode::kNotImplemented) {
-            statement_binding_.Rewind(before_compile);
             if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
                 return std::move(*layered);
             }
         }
+        // Refused, and no layer answered in its place: the statement is
+        // recorded under what it had bound by then, as a write refused past
+        // its target is (`statement_binding.hpp`).
+        statement_binding_.Absorb(run->binding);
         return Refused(chain.status());
     }
+
+    // The compile answered: what it bound is the statement's. Not before -
+    // a compile declined for the query layer leaves nothing of its own
+    // under what answers in its place.
+    statement_binding_.Absorb(run->binding);
 
     // **Every read runs where the session is, walking the whole relation** (AT-S9,
     // AT-0 item 4 answered "struck"): one frame table serves every core
@@ -10329,7 +10358,11 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     const catalog::PatternAccess* opted = nullptr;
     if ((recorder_ != nullptr || replay_enabled_) && trailable && fingerprint.has_value() &&
         !catalog_.NoOptedPatterns() && exec::HasReplayableStep(compiled)) {
-        if (auto found = catalog_.FindOptedPattern(fingerprint->fetch_id); found.ok()) {
+        // **Opted under what this compile bound** (DI-S3): the shape's
+        // text opted over another namespace's relations, or over a
+        // relation since dropped and created again, is not this statement.
+        if (auto found = catalog_.FindOptedPattern(fingerprint->fetch_id, run->binding);
+            found.ok()) {
             opted = found.value();
         } else if (found.status().code() != StatusCode::kNotFound && recorder_ != nullptr) {
             recorder_->CountUnreadablePattern();
@@ -10348,7 +10381,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     if (fingerprint.has_value() &&
         (waystone_usable || optimizer_signals_ != nullptr || analyze)) {
         identity = StatementIdentity{stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
-                                     fingerprint->pattern_id};
+                                     fingerprint->pattern_id, opted != nullptr ? opted->oid : 0};
     }
 
     // The trail a previous execution of this instance recorded. Read once,
@@ -10756,7 +10789,7 @@ void CommandDispatcher::RecordTrail(const std::optional<StatementIdentity>& iden
     // empty one would replace a populated trail with nothing.
     if (recorder_ == nullptr || trail == nullptr || trail->empty()) return;
     if (!identity.has_value()) return;
-    recorder_->OnPatternResult(identity->trail, *trail);
+    recorder_->OnPatternResult(identity->trail, identity->opted_row, *trail);
 }
 
 void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
@@ -14151,6 +14184,20 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     std::uint64_t fetch_id = 0;
     std::uint8_t stmt_class = catalog::kStmtClassUnclassified;
     PageId root = kInvalidPageId;
+    // **What the example bound** (DI-S3, DI-Q13 (a)): an opt-in names the
+    // shape under the relations its example resolved to, in the session's
+    // namespace. Unset for `OFF <fetch_id>`, which clears every binding of
+    // the shape, and for an `OFF <select>` whose example resolves to nothing
+    // now - there is no opt-in it could name.
+    std::optional<stats::StatementBinding> bound;
+    bool by_number = false;
+    // `ON`'s read borrow of the example's relations, **held across its
+    // write**: released before it, a `DROP TABLE` could take its `X`, commit
+    // and end the opt-ins naming the relation in the gap, and the row
+    // written after would be opted over a dropped oid until the next mount.
+    // A lock, not a `TableAccess*`, so it may span the schema word's move.
+    stats::StatementBinding example_binding;
+    std::optional<ReadBorrow> example_borrow;
     const char first = example.front();
     if (std::isdigit(static_cast<unsigned char>(first)) != 0 || first == '-' || first == '+') {
         // **`ON` names its pattern by example only** (CF-O-Q1 (a)): a number
@@ -14169,6 +14216,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                 std::to_string(example_at) + ")"));
         }
         fetch_id = *parsed;
+        by_number = true;
     } else {
         // ---- The example's leading word, before any parse ----------------
         if (IEquals(lead, "INSERT") || IEquals(lead, "UPDATE") || IEquals(lead, "DELETE")) {
@@ -14249,9 +14297,28 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
         }
         fetch_id = fingerprint->fetch_id;
 
-        // **`OFF <select>` stops here**: it only fingerprints, so none of
-        // ON's shape, D2 or borrow refusals apply, and OFF can always clear
-        // what ON set - after a `DROP TABLE` included.
+        // **`OFF <select>` resolves its example and nothing more** (DI-S3):
+        // it clears the opt-in of what the example binds under the session's
+        // namespace, so none of ON's shape or D2 refusals apply. An example
+        // that resolves to nothing - its relation dropped, which ended the
+        // opt-in (`EndOptInsNaming`), or never there - names no opt-in, and
+        // is answered `unchanged`; `OFF <fetch_id>` is the form that needs
+        // no relation.
+        if (!on) {
+            const exec::StatementContext context = StatementContextFor(session);
+            auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+            stats::StatementBinding resolved;
+            ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &resolved);
+            auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                resolved = {};
+                return exec::Compile(catalog_, stmt, v, &borrow, &context, nullptr);
+            });
+            // Whether or not the compile answered: an example whose
+            // relations resolved names their shape, and a `?` read as a
+            // literal can be refused past the bind.
+            (void)chain;
+            if (!resolved.over && resolved.n != 0) bound = resolved;
+        }
         if (on) {
             // ---- Compile, never execute --------------------------------
             //
@@ -14262,14 +14329,17 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             // SELECT runs beside it. A refusal the compile itself answers
             // `TxnConflict` is positioned at the example.
             //
-            // **Scoped**: the chain and the borrow go before the write,
-            // which moves the schema word, and no `TableAccess*` may be held
-            // across that (catalog.hpp's `BumpVersion`).
+            // **The chain is scoped** and goes before the write, which moves
+            // the schema word: no `TableAccess*` may be held across that
+            // (catalog.hpp's `BumpVersion`). The borrow stays (above).
             const exec::StatementContext context = StatementContextFor(session);
             auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+            stats::StatementBinding& resolved = example_binding;
+            ReadBorrow& borrow =
+                example_borrow.emplace(locks_, NextReadHolder(), &read_borrows_, &resolved);
             {
-                ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
                 auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                    resolved = {};
                     return exec::Compile(catalog_, stmt, v, &borrow, &context, nullptr);
                 });
                 if (!chain.ok()) {
@@ -14321,6 +14391,15 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                 }
                 stmt_class = exec::StoredStatementClass(compiled.klass);
             }
+            // A binding that is not held names no shape to opt in
+            // (`statement_binding.hpp`): more relations than it holds.
+            if (resolved.over) {
+                return Refused(Status::NotImplemented(
+                    "WAYSTONE ON over a SELECT that binds more than " +
+                    std::to_string(stats::StatementBinding::kMaxRelations) +
+                    " relations is not implemented (byte " + std::to_string(example_at) + ")"));
+            }
+            bound = resolved;
 
             // ---- The directory, before page 9's hold --------------------
             //
@@ -14331,7 +14410,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             // with a concurrent ON is settled under the hold, and the loser's
             // page is logged as leaked there.
             if (recorder_ != nullptr) {
-                auto row = catalog_.GetSysPatternRow(fetch_id);
+                auto row = catalog_.GetSysPatternRow(fetch_id, *bound);
                 if (!row.ok() && row.status().code() != StatusCode::kNotFound) {
                     return Refused(AtByte(row.status(), 0));
                 }
@@ -14348,7 +14427,16 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
         }
     }
 
-    auto wrote = catalog_.SetPatternWaystone(fetch_id, stmt_class, on, root);
+    // `OFF <fetch_id>`: every binding of the shape. An example: the opt-in
+    // of what it bound. An `OFF` whose example binds nothing now asks with
+    // no binding, which no row holds: nothing is written and the answer is
+    // `unchanged` - **through the same hold**, so it waits, as every
+    // `unchanged` does, for whatever earlier record set the state it
+    // reports (a drop's end of the opt-in among them).
+    auto wrote = by_number ? catalog_.ClearPatternWaystone(fetch_id)
+                           : catalog_.SetPatternWaystone(
+                                 fetch_id, bound.value_or(stats::StatementBinding{}), stmt_class,
+                                 on, root);
     if (!wrote.ok()) return Refused(AtByte(wrote.status(), 0));
 
     // **The named park** (§8.3, Durability of OK): the hold is released, and

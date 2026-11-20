@@ -1485,10 +1485,11 @@ TEST_F(CoreRuntimeTest, APeerMayWriteTheStatisticsRelationsAndHasWrittenNothing)
     // `access_statistics` both default on). P6 had it off because
     // sys.patterns and sys.access_stats were catalog pages written on the
     // statement path and a peer could not write them. Since CF-S1b only
-    // sys.access_stats is written on the statement path; a peer writes
+    // sys.access_stats was written on the statement path, and since DA it is
+    // no page at all (its bootstrap left at superblock 38); a peer writes
     // sys.patterns through `WAYSTONE ON`/`OFF` alone. What the cell still
-    // pins: the store admits the peer's write to either page, and a peer
-    // that has run no statement has written nothing.
+    // pins: the store admits the peer's fetch of sys.patterns' page, and a
+    // peer that has run no statement has recorded nothing.
     auto peer = CoreRuntime::Open(ConfigFor(1), *device_, clock_, nullptr);
     ASSERT_TRUE(peer.ok()) << peer.status().message();
 

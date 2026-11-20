@@ -351,6 +351,28 @@ TEST_F(ShapeIdentityTest, AStatementRefusedBeforeItsBindIsTheRowWithNoBinding) {
     EXPECT_EQ(rows[0].refused, 2u);
 }
 
+TEST_F(ShapeIdentityTest, ASelectRefusedPartWayThroughItsBindIsTheRowOfWhatItHadBound) {
+    // The second relation does not exist: the compile is refused after the
+    // first is bound, and the statement is recorded under that one - two
+    // namespaces' refusals are not one row.
+    TwoNamespaces();
+    const std::string join =
+        "SELECT a.v FROM acct AS a JOIN nowhere AS b ON a.id = b.id WHERE a.id = 1";
+    Ok("USE east", "USE");
+    Ok(join, "ERR");
+    Ok("USE west", "USE");
+    Ok(join, "ERR");
+
+    const std::vector<StatementShape> rows = RowsOf("SELECT", join);
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(Relations(rows[0]), std::vector<catalog::Oid>{OidOf("east", "acct")});
+    EXPECT_EQ(Relations(rows[1]), std::vector<catalog::Oid>{OidOf("west", "acct")});
+    for (const StatementShape& row : rows) {
+        EXPECT_EQ(row.calls, 1u);
+        EXPECT_EQ(row.refused, 1u);
+    }
+}
+
 TEST_F(ShapeIdentityTest, AKindWithNoFingerprintIsOneRowWhateverItNames) {
     Ok("CREATE TABLE one (id int64, v int64) BTREE", "CREATED");
     Ok("CREATE TABLE two (id int64, v int64) BTREE", "CREATED");

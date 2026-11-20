@@ -46,6 +46,7 @@
 #include "reclaim_census.hpp"
 #include "sim/instance.hpp"
 #include "view_text.hpp"
+#include "pattern_rows.hpp"
 
 namespace kds::server {
 namespace {
@@ -228,7 +229,7 @@ protected:
     }
 
     std::optional<catalog::SysPatternRow> RowOf(std::uint64_t fetch_id) {
-        auto row = boot_->catalog.GetSysPatternRow(fetch_id);
+        auto row = kds::testing_patterns::PatternRowOf(boot_->catalog, fetch_id);
         if (!row.ok()) return std::nullopt;
         return row.value();
     }
@@ -354,14 +355,71 @@ TEST_F(WaystoneOptInTest, OffTakesTheFetchIdInHexAndInDecimal) {
     EXPECT_FALSE(Opted(fetch_id));
 }
 
-// `OFF <select>` only fingerprints: it clears what ON set after the
-// relation is gone, and through a `?` the literal form shares a fetch with.
-TEST_F(WaystoneOptInTest, OffByExampleNeedsNoRelationAndTakesAPlaceholder) {
+// `OFF <select>` resolves its example and clears the opt-in of what it
+// binds (DI-S3), through a `?` the literal form shares a fetch with.
+TEST_F(WaystoneOptInTest, OffByExampleClearsWhatItBindsAndTakesAPlaceholder) {
     const std::string id = std::to_string(FetchIdOf(kPoint));
     ASSERT_EQ(Run("WAYSTONE ON " + kPoint).rfind("OK WAYSTONE ON", 0), 0u);
-    Ok("DROP TABLE t");
     EXPECT_EQ(Run("WAYSTONE OFF SELECT * FROM t WHERE id = ?"), "OK WAYSTONE OFF fetch_id=" + id);
     EXPECT_FALSE(Opted(FetchIdOf(kPoint)));
+}
+
+// One text under two namespaces is two shapes: an opt-in is one of them.
+TEST_F(WaystoneOptInTest, AnOptInIsTheShapeUnderWhatItsExampleBound) {
+    Ok("CREATE NAMESPACE east");
+    Ok("CREATE NAMESPACE west");
+    Ok("CREATE TABLE east.acct (id int64, v int64) BTREE");
+    Ok("CREATE TABLE west.acct (id int64, v int64) BTREE");
+    Ok("INSERT INTO east.acct VALUES (10)");
+    Ok("INSERT INTO west.acct VALUES (10)");
+    const std::string point = "SELECT * FROM acct WHERE id = 1";
+    const std::uint64_t fetch_id = FetchIdOf(point);
+
+    Ok("USE east");
+    ASSERT_EQ(Run("WAYSTONE ON " + point).rfind("OK WAYSTONE ON", 0), 0u);
+    const stats::StatementBinding east = dispatcher_->Dispatch(point).binding;
+    Ok("USE west");
+    const stats::StatementBinding west = dispatcher_->Dispatch(point).binding;
+    ASSERT_FALSE(east == west);
+    EXPECT_TRUE(boot_->catalog.FindOptedPattern(fetch_id, east).ok());
+    EXPECT_EQ(boot_->catalog.FindOptedPattern(fetch_id, west).status().code(),
+              StatusCode::kNotFound)
+        << "the text opted under `east` opted `west`'s relation in";
+
+    // Only `east`'s statement records and replays: `west`'s, the same
+    // text, is nobody's opt-in.
+    Ok("USE east");
+    ASSERT_NE(Run(point).rfind("ERR", 0), 0u);
+    ASSERT_NE(Run(point).rfind("ERR", 0), 0u);
+    EXPECT_NE(Run("ANALYZE " + point).find("replays=1"), std::string::npos);
+    Ok("USE west");
+    ASSERT_NE(Run(point).rfind("ERR", 0), 0u);
+    ASSERT_NE(Run(point).rfind("ERR", 0), 0u);
+    EXPECT_EQ(Run("ANALYZE " + point).find("replays="), std::string::npos)
+        << "the statement over `west.acct` replayed, or recorded, under `east`'s opt-in";
+
+    // `OFF` under `west` names `west`'s shape, which was never opted;
+    // `east`'s stands.
+    EXPECT_NE(Run("WAYSTONE OFF " + point).find(" unchanged"), std::string::npos);
+    EXPECT_TRUE(boot_->catalog.FindOptedPattern(fetch_id, east).ok());
+    // Opted too, they are two rows; `OFF <fetch_id>` clears both.
+    ASSERT_EQ(Run("WAYSTONE ON " + point).rfind("OK WAYSTONE ON", 0), 0u);
+    EXPECT_EQ(boot_->catalog.opted_patterns(), 2u);
+    // **Two directories, so neither overwrites the other's trail.** Before
+    // DI-S3 one page served both: each run found the other's entries,
+    // dropped them for their `rel_oid`, descended and rewrote the page.
+    ASSERT_NE(Run(point).rfind("ERR", 0), 0u);  // west: second sighting, recorded
+    ASSERT_NE(Run(point).rfind("ERR", 0), 0u);
+    EXPECT_NE(Run("ANALYZE " + point).find("replays=1"), std::string::npos);
+    Ok("USE east");
+    EXPECT_NE(Run("ANALYZE " + point).find("replays=1"), std::string::npos)
+        << "`west`'s runs displaced `east`'s trail";
+    Ok("USE west");
+    EXPECT_NE(Run("ANALYZE " + point).find("replays=1"), std::string::npos)
+        << "`east`'s run displaced `west`'s trail";
+    EXPECT_EQ(Run("WAYSTONE OFF " + std::to_string(fetch_id)),
+              "OK WAYSTONE OFF fetch_id=" + std::to_string(fetch_id));
+    EXPECT_EQ(boot_->catalog.opted_patterns(), 0u);
 }
 
 // A lapsed opted row - another fingerprint version's - is reached by number.
@@ -561,8 +619,12 @@ TEST_F(WaystoneOptInTest, TheDirectoryIsMadeBeforeTheHoldAndAnUnusedOneIsLoggedA
     const std::uint64_t fetch_id = FetchIdOf(kPoint);
     auto theirs = stats::CreateDirPage(store_);
     ASSERT_TRUE(theirs.ok());
+    // The concurrent ON is of the same statement, so of the same binding.
+    const stats::StatementBinding bound = dispatcher_->Dispatch(kPoint).binding;
+    ASSERT_EQ(bound.n, 1u);
     store_.OnCreate([&] {
-        auto wrote = boot_->catalog.SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified,
+        auto wrote = boot_->catalog.SetPatternWaystone(fetch_id, bound,
+                                                       catalog::kStmtClassUnclassified,
                                                        /*on=*/true, theirs.value());
         ASSERT_TRUE(wrote.ok()) << wrote.status().message();
     });
@@ -763,13 +825,13 @@ TEST_F(WaystoneOptInTest, APatternCachedBeforeTheDiscardAnswersTheRenewedRoot) {
     Run(kPoint);
     Run(kPoint);
     ASSERT_NE(Run("ANALYZE " + kPoint).find("replays=1"), std::string::npos);
-    auto cached = boot_->catalog.FindOptedPattern(FetchIdOf(kPoint));
+    auto cached = kds::testing_patterns::OptedPatternOf(boot_->catalog, FetchIdOf(kPoint));
     ASSERT_TRUE(cached.ok());
     const PageId old_root = cached.value()->waystone_root;
 
     ASSERT_TRUE(DiscardAdvisoryState(boot_->catalog, /*waystone_recording=*/true).ok());
 
-    auto after = boot_->catalog.FindOptedPattern(FetchIdOf(kPoint));
+    auto after = kds::testing_patterns::OptedPatternOf(boot_->catalog, FetchIdOf(kPoint));
     ASSERT_TRUE(after.ok());
     EXPECT_NE(after.value()->waystone_root, old_root) << "the cache kept the previous root";
     EXPECT_EQ(after.value()->waystone_root, RowOf(FetchIdOf(kPoint))->waystone_root);
@@ -795,7 +857,7 @@ TEST_F(WaystoneOptInTest, ARenewalWhoseCreateFailsClearsTheRootAndKeepsTheBit) {
     ASSERT_TRUE(row.has_value());
     EXPECT_NE(row->flags & catalog::kPatternWaystone, 0) << "the bit went with the directory";
     EXPECT_FALSE(catalog::HasWaystoneDirectory(*row)) << "the previous run's root was kept";
-    auto cached = boot_->catalog.FindOptedPattern(fetch_id);
+    auto cached = kds::testing_patterns::OptedPatternOf(boot_->catalog, fetch_id);
     ASSERT_TRUE(cached.ok()) << cached.status().message();
     EXPECT_FALSE(cached.value()->has_waystone_directory()) << "the cache kept the root";
     bool logged = false;
@@ -963,12 +1025,12 @@ struct AfterMount {
 
 AfterMount Inspect(Expeditor& db, const std::string& sql) {
     AfterMount out;
-    auto row = db.catalog().GetSysPatternRow(FetchIdOf(sql));
+    auto row = kds::testing_patterns::PatternRowOf(db.catalog(), FetchIdOf(sql));
     EXPECT_TRUE(row.ok()) << row.status().message();
     if (!row.ok()) return out;
     out.opted = (row.value().flags & catalog::kPatternWaystone) != 0;
     if (catalog::HasWaystoneDirectory(row.value())) out.root = row.value().waystone_root;
-    auto cached = db.catalog().FindOptedPattern(FetchIdOf(sql));
+    auto cached = kds::testing_patterns::OptedPatternOf(db.catalog(), FetchIdOf(sql));
     if (cached.ok() && cached.value()->has_waystone_directory()) {
         out.cached_root = cached.value()->waystone_root;
     }
@@ -987,7 +1049,7 @@ PageId OptInAndRecord(Expeditor& db, const std::string& sql) {
     }
     EXPECT_NE(Reply(db, "ANALYZE " + sql).find("replays=1"), std::string::npos)
         << "nothing was recorded; the cell proves nothing";
-    auto row = db.catalog().GetSysPatternRow(FetchIdOf(sql));
+    auto row = kds::testing_patterns::PatternRowOf(db.catalog(), FetchIdOf(sql));
     EXPECT_TRUE(row.ok());
     return row.ok() ? row.value().waystone_root : kInvalidPageId;
 }
@@ -1025,7 +1087,7 @@ TEST(WaystoneMountTest, ACrashAtGroupKeepsTheBitRenewsTheDirectoryAndLosesTheTra
         }
         ASSERT_NE(Reply(db, "ANALYZE " + kMounted).find("replays=1"), std::string::npos)
             << "nothing was recorded; the cell proves nothing";
-        auto row = db.catalog().GetSysPatternRow(FetchIdOf(kMounted));
+        auto row = kds::testing_patterns::PatternRowOf(db.catalog(), FetchIdOf(kMounted));
         ASSERT_TRUE(row.ok());
         recorded = row.value().waystone_root;
         ASSERT_TRUE(db.store().WriteBack(std::span<const PageId>(&recorded, 1)).ok());
@@ -1041,6 +1103,141 @@ TEST(WaystoneMountTest, ACrashAtGroupKeepsTheBitRenewsTheDirectoryAndLosesTheTra
     EXPECT_NE(after.root, recorded) << "the previous run's directory survived the mount";
     EXPECT_EQ(after.cached_root, after.root);
     EXPECT_FALSE(after.replayed) << "a trail survived the crash";
+}
+
+// DI-Q13 (a): a committed `DROP TABLE` ends the opt-ins naming the relation.
+// Until DI-S3 the row was the text's: it survived the drop and opted the
+// relation created again under the name in. On a whole instance, since the
+// end rides the drop's commit record.
+TEST(WaystoneMountTest, ACommittedDropEndsTheOptInAndTheNameCreatedAgainIsNotOpted) {
+    TempDir live;
+    auto opened = reclaim_census::Mount(live.path);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    ASSERT_NE(OptInAndRecord(db, kMounted), kInvalidPageId);
+    const std::uint64_t fetch_id = FetchIdOf(kMounted);
+    ASSERT_EQ(db.catalog().opted_patterns(), 1u);
+
+    ASSERT_EQ(Reply(db, "DROP TABLE ws").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(db.catalog().opted_patterns(), 0u) << "the opt-in outlived the relation it named";
+    auto row = kds::testing_patterns::PatternRowOf(db.catalog(), fetch_id);
+    ASSERT_TRUE(row.ok());
+    EXPECT_FALSE(catalog::IsCurrentOptIn(row.value()));
+    EXPECT_FALSE(catalog::HasWaystoneDirectory(row.value()));
+    // The example resolves to nothing now: no opt-in it could name.
+    EXPECT_EQ(Reply(db, "WAYSTONE OFF " + kMounted),
+              "OK WAYSTONE OFF fetch_id=" + std::to_string(fetch_id) + " unchanged");
+
+    // The name again is another relation, and nobody opted it in.
+    for (const std::string& line : {std::string("CREATE TABLE ws (id int64, v int64) BTREE"),
+                                    std::string("INSERT INTO ws VALUES (5)"), kMounted, kMounted}) {
+        ASSERT_EQ(Reply(db, line).rfind("ERR", 0), std::string::npos) << line;
+    }
+    EXPECT_EQ(Reply(db, "ANALYZE " + kMounted).find("replays="), std::string::npos)
+        << "the new relation replayed under the dropped one's opt-in";
+    EXPECT_EQ(db.catalog().opted_patterns(), 0u);
+    // Opted in for itself, it is a second row: the first names the oid
+    // that is gone.
+    ASSERT_EQ(Reply(db, "WAYSTONE ON " + kMounted).rfind("OK WAYSTONE ON", 0), 0u);
+    auto rows = db.catalog().ListPatterns();
+    ASSERT_TRUE(rows.ok());
+    std::size_t of_shape = 0;
+    std::size_t opted = 0;
+    for (const catalog::SysPatternRow& r : rows.value()) {
+        if (r.fetch_id != fetch_id) continue;
+        ++of_shape;
+        opted += catalog::IsCurrentOptIn(r);
+    }
+    EXPECT_EQ(of_shape, 2u);
+    EXPECT_EQ(opted, 1u);
+}
+
+// The end rides the drop's commit, not the drop: inside an explicit
+// transaction a rolled-back drop keeps its opt-in and a committed one ends
+// it - through `EndDdlScope`, where the autocommit cell above goes through
+// the statement's own end. And a join's opt-in ends when its second
+// relation is the one dropped.
+TEST(WaystoneMountTest, ADropInATransactionEndsTheOptInAtItsCommitAndNotAtItsRollback) {
+    TempDir live;
+    auto opened = reclaim_census::Mount(live.path);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    Expeditor& db = *opened.value();
+    CurrentCoreGuard as(0);
+    const std::string join =
+        "SELECT a.v FROM ws AS a JOIN wt AS b ON b.id = a.v WHERE a.id = 5";
+    for (const std::string& line : {std::string("CREATE TABLE ws (id int64, v int64) BTREE"),
+                                    std::string("CREATE TABLE wt (id int64, v int64) BTREE"),
+                                    std::string("INSERT INTO ws VALUES (5, 7)"),
+                                    std::string("INSERT INTO wt VALUES (7, 1)"),
+                                    "WAYSTONE ON " + join}) {
+        const std::string reply = Reply(db, line);
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << line << " -> " << reply;
+    }
+    ASSERT_EQ(db.catalog().opted_patterns(), 1u);
+
+    Session session;
+    const auto run = [&](const std::string& line) {
+        return db.dispatcher().Dispatch(line, &session).response;
+    };
+    ASSERT_EQ(run("BEGIN").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(run("DROP TABLE wt").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(run("ROLLBACK").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(db.catalog().opted_patterns(), 1u) << "a drop that rolled back ended an opt-in";
+
+    ASSERT_EQ(run("BEGIN").rfind("ERR", 0), std::string::npos);
+    ASSERT_EQ(run("DROP TABLE wt").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(db.catalog().opted_patterns(), 1u) << "ended before the drop was decided";
+    ASSERT_EQ(run("COMMIT").rfind("ERR", 0), std::string::npos);
+    EXPECT_EQ(db.catalog().opted_patterns(), 0u)
+        << "the join's opt-in outlived its second relation";
+}
+
+// A crash between a drop's commit and the end of its opt-ins leaves a row
+// opted over a dropped oid: the next mount's renewal ends it, and gives it
+// no directory. The state is written by hand - an opt-in of the binding,
+// made after the drop - since no crash point sits between the two.
+TEST(WaystoneMountTest, AMountEndsAnOptInWhoseRelationWasDropped) {
+    TempDir live;
+    const std::uint64_t fetch_id = FetchIdOf(kMounted);
+    {
+        auto opened = reclaim_census::Mount(live.path);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        CurrentCoreGuard as(0);
+        for (const char* line : {"CREATE TABLE ws (id int64, v int64) BTREE",
+                                 "INSERT INTO ws VALUES (5)",
+                                 "CREATE TABLE kept (id int64, v int64) BTREE"}) {
+            ASSERT_EQ(Reply(db, line).rfind("ERR", 0), std::string::npos) << line;
+        }
+        const stats::StatementBinding gone = db.dispatcher().Dispatch(kMounted).binding;
+        const stats::StatementBinding kept =
+            db.dispatcher().Dispatch("SELECT * FROM kept WHERE id = 1").binding;
+        ASSERT_EQ(gone.n, 1u);
+        ASSERT_EQ(kept.n, 1u);
+        ASSERT_EQ(Reply(db, "DROP TABLE ws").rfind("ERR", 0), std::string::npos);
+        for (const stats::StatementBinding& bound : {gone, kept}) {
+            auto wrote = db.catalog().SetPatternWaystone(
+                fetch_id, bound, catalog::kStmtClassUnclassified, /*on=*/true, kInvalidPageId);
+            ASSERT_TRUE(wrote.ok()) << wrote.status().message();
+        }
+        ASSERT_EQ(db.catalog().opted_patterns(), 2u);
+        reclaim_census::CleanShutdownCheckpoint(db);
+    }
+    auto mounted = reclaim_census::Mount(live.path);
+    ASSERT_TRUE(mounted.ok()) << mounted.status().message();
+    CurrentCoreGuard as(0);
+    catalog::Catalog& catalog = mounted.value()->catalog();
+    EXPECT_EQ(catalog.opted_patterns(), 1u) << "the live relation's opt-in alone";
+    auto rows = catalog.ListPatterns();
+    ASSERT_TRUE(rows.ok());
+    std::size_t opted = 0;
+    for (const catalog::SysPatternRow& r : rows.value()) {
+        if (r.fetch_id != fetch_id || !catalog::IsCurrentOptIn(r)) continue;
+        ++opted;
+        EXPECT_TRUE(catalog::HasWaystoneDirectory(r)) << "the live opt-in was given no directory";
+    }
+    EXPECT_EQ(opted, 1u);
 }
 
 // `waystone_recording` off at the mount, `waystone_replay` on: the renewal

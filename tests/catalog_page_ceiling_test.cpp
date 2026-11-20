@@ -59,6 +59,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "kds/storage/page_header.hpp"
+#include "pattern_rows.hpp"
 
 namespace kds::server {
 namespace {
@@ -205,7 +206,7 @@ StatusOr<std::unique_ptr<Expeditor>> Mount(const fs::path& dir, bool waystone_re
 
 // A `sys.patterns` row, which only an opt-in writes since CF-S1b.
 Status OptIn(catalog::Catalog& catalog, std::uint64_t fetch_id, PageId root = kInvalidPageId) {
-    return catalog.SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified, /*on=*/true, root)
+    return catalog.SetPatternWaystone(fetch_id, kds::testing_patterns::AnyBinding(), catalog::kStmtClassUnclassified, /*on=*/true, root)
         .status();
 }
 
@@ -602,7 +603,7 @@ void ExpectTheMountClearsEveryPattern(int patterns, std::size_t min_pages) {
         EXPECT_FALSE(catalog::HasWaystoneDirectory(row)) << "fetch_id " << row.fetch_id;
         EXPECT_EQ(row.waystone_root, kInvalidPageId) << "fetch_id " << row.fetch_id;
         EXPECT_NE(row.flags & catalog::kPatternWaystone, 0) << "fetch_id " << row.fetch_id;
-        auto cached = db.catalog().FindOptedPattern(row.fetch_id);
+        auto cached = db.catalog().FindOptedPattern(row.fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(cached.ok()) << cached.status().message();
         EXPECT_EQ(cached.value()->waystone_root, kInvalidPageId) << "fetch_id " << row.fetch_id;
     }
@@ -626,7 +627,7 @@ TEST(CatalogPageCeilingTest, RenewingEveryWaystoneRootDropsTheCachedPatterns) {
     // id that stands for the previous run's directory, and cached.
     for (const std::uint64_t fetch_id : {std::uint64_t{1}, std::uint64_t{300}}) {
         ASSERT_TRUE(OptIn(catalog, fetch_id, kFirstUserPageId).ok());
-        auto cached = catalog.FindOptedPattern(fetch_id);
+        auto cached = catalog.FindOptedPattern(fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(cached.ok()) << cached.status().message();
         ASSERT_EQ(cached.value()->waystone_root, kFirstUserPageId);
     }
@@ -639,11 +640,11 @@ TEST(CatalogPageCeilingTest, RenewingEveryWaystoneRootDropsTheCachedPatterns) {
     EXPECT_EQ(renewed.value(), 300u);
     std::set<PageId> roots;
     for (std::uint64_t fetch_id = 1; fetch_id <= 300; ++fetch_id) {
-        auto cached = catalog.FindOptedPattern(fetch_id);
+        auto cached = catalog.FindOptedPattern(fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(cached.ok()) << cached.status().message();
         EXPECT_NE(cached.value()->waystone_root, kFirstUserPageId) << fetch_id;
         EXPECT_EQ(cached.value()->dir_depth, 1u) << fetch_id;
-        auto row = catalog.GetSysPatternRow(fetch_id);
+        auto row = catalog.GetSysPatternRow(fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(row.ok()) << row.status().message();
         EXPECT_EQ(row.value().waystone_root, cached.value()->waystone_root) << fetch_id;
         roots.insert(row.value().waystone_root);
@@ -655,7 +656,7 @@ TEST(CatalogPageCeilingTest, RenewingEveryWaystoneRootDropsTheCachedPatterns) {
     ASSERT_TRUE(cleared.ok()) << cleared.status().message();
     EXPECT_EQ(cleared.value(), 300u);
     for (const std::uint64_t fetch_id : {std::uint64_t{1}, std::uint64_t{300}}) {
-        auto cached = catalog.FindOptedPattern(fetch_id);
+        auto cached = catalog.FindOptedPattern(fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(cached.ok()) << cached.status().message();
         EXPECT_FALSE(cached.value()->has_waystone_directory()) << fetch_id;
         EXPECT_NE(cached.value()->flags & catalog::kPatternWaystone, 0) << fetch_id;

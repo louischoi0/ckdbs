@@ -10,6 +10,8 @@ recorded in §4 and §7. DI-S0's census and cells are committed (`92a022f8`);
 its measurement and its review's corrections follow in §7. **DI-S1 landed**
 (§7): a `sys.statement_stats` row is one binding's. **DI-S2 landed** (§7):
 the Cabin controller's signal is a fingerprint's and its candidate's.
+**DI-S3 landed** (§7): a Waystone opt-in is a shape under what its example
+bound, superblock 38, DA-S3 in it.
 
 Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
@@ -317,14 +319,14 @@ word (§0a).** Every other item is unmarked.
 | DI-Q3 `[quiet-wrong]` **adopted (a) as revised by DI-S0** on the standing go-ahead (§7, "DI-Q3 revised") | What the binding is. Spoken as "the plan key"; restated because the plan key exists for searched joins only (§0). | **B1**, capped at `kMaxPlannedRelations`; what a statement binding more does is DI-S0's finding, brought back before DI-S1. **Revised**: the distinct relations in first-declared order with the namespace the statement's unqualified names were resolved in; a statement over the cap is one row whose binding is not known | (b) B2; (c) B3, with a collision's merge accepted and stated; (d) as spoken: the plan key where one exists, today's row elsewhere |
 | DI-Q4 **re-marked (b)** | The Waystone opt-in's reach across namespaces and a drop. | not in DI: no result is wrong, and it is a `sys.patterns` format decision - marked first, then overruled by "every path" | **(b) in DI**, the operator's |
 | DI-Q12 **adopted (a)** on the standing go-ahead | The Cabin controller's signal (§0a). | **keyed by the pattern and its candidate together**, so one text over two relations is two signals and each relation's Cabin is priced by its own heat; `kMaxTrackedFingerprints` then bounds signals, not patterns | (b) keyed by DI-Q3's binding, as the statistics are; (c) a pattern whose candidate moved between two relations is not credited to either |
-| DI-Q13 `[quiet-wrong]` | What an opt-in names once it is in DI. | **the shape under the relations `WAYSTONE ON`'s example resolved to** - it already compiles its example under the session's namespace (`waystone-concpets.md` §4a) - so a drop ends it and another namespace's same text is not opted. A `sys.patterns` row change, so a format event (DI-Q11); `WAYSTONE OFF <select>` after a drop, which today needs no relation, is restated in DI-S0 | (b) the opt-in stays by text and the manual says so, the recording cost accepted - what "every path" rules out unless the operator re-marks |
+| DI-Q13 `[quiet-wrong]` **adopted (a) as restated at DI-S0** on the standing go-ahead | What an opt-in names once it is in DI. | **the shape under the relations `WAYSTONE ON`'s example resolved to** - it already compiles its example under the session's namespace (`waystone-concpets.md` §4a) - so a drop ends it and another namespace's same text is not opted. A `sys.patterns` row change, so a format event (DI-Q11); `WAYSTONE OFF <select>` after a drop, which today needs no relation, is restated in DI-S0 | (b) the opt-in stays by text and the manual says so, the recording cost accepted - what "every path" rules out unless the operator re-marks |
 | DI-Q5 **marked (a)** | A renamed relation's plan reading `enabled`. | **in DI** | (b) left a known gap |
 | DI-Q6 **adopted (a) as restated at DI-S0** on the standing go-ahead | The views' shape. The grain of a row changes from a shape to a shape under one binding. | **`sys.statement_stats` and `sys.statement_histogram` gain `relations` (oids as bound) and `namespace`; one row per binding; no second view** | (b) the old grain kept and a second view added per binding |
 | DI-Q7 **adopted (a) as restated at DI-S0** on the standing go-ahead | Rows of a relation that is gone. | **kept and readable until the part is full, then the first reclaimed**; counted in `sys.meta` | (b) removed at the drop's commit on every core - a cross-core act DI-R4 does not allow on the statement path and DI-S0 would have to place; (c) kept until restart, as every row is today |
 | DI-Q8 | The bar at the close. | **DA's close cells and a point `SELECT` and keyed `INSERT` at `cores` 1 and 8: no cell slower outside its own spread**; no factor proposed, since DF's 0.5 us bar on this path was not resolvable | (b) a bar the operator names |
 | DI-Q9 | The session's published statement and ASH. | **left on the fetch id** unless DI-S0 finds a reader that joins a sample to a statistics row; then brought back | (b) the binding published beside the fingerprint - a word or more written at every statement's head |
 | DI-Q10 | Which plans-that-match-nothing DI shows, beyond the rename. | **the rename and a captured order that no longer compiles (CX-Q16's `INVALID`), by P1**; a fingerprint-version row stays the mount's | (b) the rename alone; (c) P2 |
-| DI-Q11 | A format event. | **one, for DI-Q13 alone**: the statistics and the controller's signals are memory-resident and P1 persists nothing. The bump is the host DA-S3 waits for | (b) P2 admitted too |
+| DI-Q11 **adopted (a)** on the standing go-ahead | A format event. | **one, for DI-Q13 alone**: the statistics and the controller's signals are memory-resident and P1 persists nothing. The bump is the host DA-S3 waits for | (b) P2 admitted too |
 
 ## 5. Stages
 
@@ -760,3 +762,93 @@ through the dispatcher), `tests/cabin_optimizer_test.cpp` (the decision),
 
 **The suite**: 0 failed of 4892 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
 build inputs. Overhead not measured; measured at the milestone's close.
+
+### DI-S3 - the Waystone opt-in and the trail, 2026-11-20
+
+On worktree `di-shape-identity`, over `7f861cd8`, in two commits.
+**DI-Q13 `[quiet-wrong]` (a) and DI-Q11 (a) adopted on the standing
+go-ahead**, DI-Q13 as DI-S0 restated it; its premise was read again before
+the build (`WAYSTONE ON` compiles its example under the session's
+namespace and wrote no relation). **Superblock 38.**
+
+**The format event carries DA-S3** (`78468dc8`, DA-Q1 (a)):
+`sys.access_stats`' dead bootstrap is removed - oid 130 retired, page 11
+reserved and unused - as that order's own last section records. Its review
+found no code defect and ten stale texts, all corrected in the second
+commit.
+
+**Built** (the second commit):
+
+- **A `sys.patterns` row is a shape under what its example bound.**
+  `SysPatternRow` carries the binding - the namespace and up to 16
+  relations - 41 to 178 bytes; every lookup arrives with the fetch id and
+  the binding; the per-core opted map holds one entry a binding.
+- **The gate asks with what the statement's own compile bound.** A
+  `SELECT` run declares into its run's binding, started afresh at each
+  resolve, and the statement's binding absorbs it once the compile has
+  answered or been refused - which replaces DI-S1's mark and rewind around
+  the native compile. A `SELECT` run inside a write is opted, or not, as
+  the `SELECT` it is.
+- **The recorder writes through the row the gate found**
+  (`StatementIdentity::opted_row`, `Catalog::FindOptedPatternRow`) and
+  counts an instance's sightings under that row. Two opted bindings of one
+  text are two rows with two directories: the turn-by-turn overwrite DI-S0
+  found is gone.
+- **`WAYSTONE ON`** writes the binding of its example and holds its read
+  borrow across the write; over more than 16 relations it is refused
+  `NotImplemented`. **`WAYSTONE OFF <select>`** resolves its example and
+  clears that binding's opt-in; an example that binds nothing names none
+  and is answered `unchanged`, under page 9's hold like every `unchanged`.
+  **`WAYSTONE OFF <fetch_id>`** clears every binding of the shape.
+- **A committed `DROP TABLE` ends the opt-ins naming the relation**
+  (`Catalog::EndPatternsNaming`, at the two sites a committed drop forgets
+  its plans; a rolled-back drop ends nothing). **The mount ends an opt-in
+  whose binding names a dropped relation** - the relation's tombstone in
+  `sys.objects`, read once where any row is opted - which is what a crash
+  between the drop's commit and that write leaves.
+- `sys.patterns` gains `namespace`, `relation_oids`, `relations`.
+
+**What DI-S0 owed and DI-S3 read**: `WAYSTONE OFF <select>` after a drop,
+"which today needs no relation" - it has nothing to clear, since the drop
+ended the opt-in; and the trail under two bindings - they took turns
+overwriting one page, and now do not share one.
+
+**The review** (`critics-developer`, of the working diff over `78468dc8`).
+Three findings, two document findings and two simplifications, all
+applied:
+
+1. **A `SELECT` refused in its compile lost its partial binding**: the
+   run's binding was absorbed only once the compile answered, so a join
+   whose second relation does not exist was the `none` row, where DI-S1
+   had it under its first relation - and two namespaces' refusals one row.
+   Applied: absorbed at the refusal too, unless the query layer answers.
+   Pinned (`ASelectRefusedPartWayThroughItsBindIsTheRowOfWhatItHadBound`).
+2. **An `OFF` whose example binds nothing answered without the hold's
+   bound**, so it could say `unchanged` before the drop that ended the
+   opt-in was durable. Applied: it asks the one writer with no binding,
+   which writes nothing and reads the bound under the hold.
+3. **An `ON` racing a `DROP TABLE`** released its borrow before its write:
+   the drop could commit and end the relation's opt-ins in the gap, and the
+   row written after stayed opted over a dropped oid until a mount.
+   Applied: the borrow is held across the write.
+4. `sys.patterns`' new columns in `sys-views.md` §5 and the manual; the
+   binding header's "`Rewind`, in `ResolveNames`" now names both paths.
+5. One fill of the opted map for both lookups
+   (`EnsureOptedPatternsFilled`), and `StatementBinding::Holds` for the
+   two loops that asked whether a row names a relation.
+
+The three cells it named are added: a drop inside `BEGIN ... COMMIT` and
+`ROLLBACK`, over a join whose second relation is the one dropped; the
+refused partial bind.
+
+**Cells.** `tests/waystone_opt_in_test.cpp` (an opt-in is its example's
+binding - the other namespace's text neither records nor replays, and
+both opted keep their trails; `OFF` by example; a committed drop, on a
+whole instance, and the name created again; a drop in a transaction; the
+mount ending a dropped relation's opt-in), `tests/catalog_row_test.cpp`
+(the 178-byte layout), `tests/pattern_rows.hpp` (a test's row by fetch id,
+by scanning) and the calls of the opt-in API in twelve test files.
+
+**The suite**: 1 failed of 4899 at `-j8`, run beside another session's suite - `StrictParkRigTest.StrictCommitsStagedDuringOneSyncShareTheNext`, the timing cell `known-gaps.md` (Testing) names - which passed run again alone; 0 failed of 4897 on the same tree before the review's fixes (2 disabled, 2 skipped), the hook's range at `-j8`, on the second
+commit's build inputs. **`scripts/sim.sh`**: 280 runs, 0 failures, on the tree before the review's fixes, which change no logged write; not run again after them. Overhead not
+measured; measured at the milestone's close.

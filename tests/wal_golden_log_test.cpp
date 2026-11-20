@@ -123,9 +123,10 @@ namespace {
 // **Re-pinned at DA-S3** (on `di-shape-identity`,
 // `instructions/v3.2.0/workorder-da-access-stats-memory-resident.md` DA-Q1
 // (a), superblock 38): bootstrap no longer creates `sys.access_stats`, so
-// its `sys.objects` and `sys.tables` rows leave the stream, every later
-// record's LSN moves, and the script's own catalog rows land one slot
-// earlier on those two pages. No record's format changes.
+// its two logged rows - `sys.objects`' and `sys.tables`' - leave the
+// stream, every later record's LSN moves, and every later row on those two
+// pages, bootstrap's own and the script's, lands one slot earlier. No
+// record's format changes.
 constexpr std::uint32_t kGoldenLogCrc = 0x0ed962f4u;
 
 const char* const kScript[] = {

@@ -32,6 +32,7 @@
 #include "kds/wal/file_log_device.hpp"
 #include "kds/wal/log_scanner.hpp"
 #include "view_text.hpp"
+#include "pattern_rows.hpp"
 
 namespace kds::server {
 namespace {
@@ -453,7 +454,7 @@ TEST(BackupControlTest, ARestoreKeepsAWaystoneOptInAndNotItsTrail) {
             << "nothing was recorded; the cell proves nothing";
         auto fp = parser::FingerprintOf(sql);
         ASSERT_TRUE(fp.has_value());
-        auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+        auto row = kds::testing_patterns::PatternRowOf(db.catalog(), fp->fetch_id);
         ASSERT_TRUE(row.ok());
         recorded = row.value().waystone_root;
         ASSERT_TRUE(db.Sync().ok());
@@ -475,7 +476,7 @@ TEST(BackupControlTest, ARestoreKeepsAWaystoneOptInAndNotItsTrail) {
     Expeditor& db = *restored.value();
     auto fp = parser::FingerprintOf(sql);
     ASSERT_TRUE(fp.has_value());
-    auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+    auto row = kds::testing_patterns::PatternRowOf(db.catalog(), fp->fetch_id);
     ASSERT_TRUE(row.ok()) << "the opt-in was not restored: " << row.status().message();
     EXPECT_NE(row.value().flags & catalog::kPatternWaystone, 0);
     EXPECT_TRUE(catalog::HasWaystoneDirectory(row.value()));

@@ -583,6 +583,9 @@ struct TableAccess {
 struct PatternAccess {
     Oid oid = 0;
     std::uint64_t fetch_id = 0;
+    // What the opted statement bound (DI-S3, `rows.hpp`): with `fetch_id`,
+    // the entry's key.
+    stats::StatementBinding binding;
     std::uint32_t fingerprint_version = 0;
     PageId waystone_root = kInvalidPageId;
     std::uint8_t stmt_class = 0;

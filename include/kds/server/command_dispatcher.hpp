@@ -511,6 +511,10 @@ struct OptimizerSurface {
 struct StatementIdentity {
     stats::InstanceKey trail;
     std::uint64_t pattern_id = 0;
+    // The opted `sys.patterns` row the statement's gate found for what it
+    // bound, 0 where it found none (DI-S3): what the recorder writes its
+    // trail through.
+    catalog::Oid opted_row = 0;
 };
 
 class CommandDispatcher {
@@ -2337,6 +2341,8 @@ private:
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
 
+    // Ends the Waystone opt-ins naming a relation whose drop committed.
+    void EndOptInsNaming(catalog::Oid oid);
     // Hands a successful execution's trail to the recorder. Shared by the
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.

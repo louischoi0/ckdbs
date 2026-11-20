@@ -557,6 +557,11 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
     // bump and records nothing, so it reads false and its
     // `fingerprint_version` says why. It replaced `origin` and `pinned`,
     // whose stored fields are reserved and `kPatternWaystone` respectively.
+    //
+    // **A row is a shape under what its `WAYSTONE ON` bound** (DI-S3):
+    // `namespace`, `relations` and `relation_oids` are that binding, as
+    // `sys.statement_stats` prints a row's - last, as values that can hold
+    // commas.
     Define(view, {{"oid", kInt},
                   {"fetch_id", kInt},
                   {"fingerprint_version", kInt},
@@ -565,10 +570,16 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
                   {"use_count", kInt},
                   {"last_seen", kInt},
                   {"waystone_root", kInt},
-                  {"dir_depth", kInt}});
+                  {"dir_depth", kInt},
+                  {"namespace", kStr},
+                  {"relation_oids", kStr},
+                  {"relations", kStr}});
     auto patterns = catalog_.ListPatterns();
     if (!patterns.ok()) return patterns.status();
+    auto labels = RelationLabels::Read(catalog_, nullptr);
+    if (!labels.ok()) return labels.status();
     for (const catalog::SysPatternRow& p : patterns.value()) {
+        const stats::StatementBinding binding = catalog::BindingOf(p);
         // `dir_depth` is the one authority on a directory (rows.hpp): a
         // zeroed row's root reads as page 0, not as the invalid id.
         const bool directory = catalog::HasWaystoneDirectory(p);
@@ -576,7 +587,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::PatternsView() {
         view.rows.push_back({Int(p.oid), Int(p.fetch_id), Int(p.fingerprint_version),
                              Int(p.stmt_class), Bool(opted), Int(p.use_count),
                              Int(p.last_seen), directory ? Int(p.waystone_root) : Null(),
-                             directory ? Int(p.dir_depth) : Null()});
+                             directory ? Int(p.dir_depth) : Null(),
+                             BindingNamespace(binding, labels.value()), BindingOids(binding),
+                             BindingRelations(binding, labels.value())});
     }
     return view;
 }

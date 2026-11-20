@@ -1730,14 +1730,22 @@ the claim's deepening trap, the leak per mount); these are what it leaves.
   every core but the growing one), on a `CABIN AUTO` create or drop, on a
   catalog-writing resolve and on an opt-in, so it is not "per DDL". Bounded
   by the rows ever opted; not measured.
-- **An opt-in is by text.** `fetch_id` carries no namespace and no oid, so
-  one `WAYSTONE ON` applies under every `USE` whose text matches and
-  **survives `DROP TABLE`** and a re-create under the same name: no
-  `sys.patterns` writer runs on a drop. Replay stays correct through the
-  `rel_oid` check (`exec/trail_replay.cpp`), but the recording cost comes
-  back on a shape nobody opted for the new relation, and each mount renews a
-  directory for an example that no longer resolves. It must be turned off
-  explicitly (`OFF <select>` needs no relation). `manual/sql/sql.md` says so.
+- **An opt-in is a shape under what it bound** (DI-S3, superblock 38;
+  verified on `di-shape-identity` at DI-S3's commit): the row carries the
+  binding, a committed `DROP TABLE` ends the opt-ins naming the relation,
+  and two bindings of one text keep two directories. What is left:
+  - **A dispatcher with a transaction manager and no log never sees a
+    drop commit** (`EndDdlScopeById` reads the commit's LSN), so there the
+    opt-in outlives the drop until a mount; no server is built that way.
+  - **An ended row stays**, its bit and root cleared, naming a dropped oid:
+    one 178-byte row a dropped relation's opt-in, never reclaimed.
+  - **A renamed relation's opt-in is inert, not ended**: its text no longer
+    compiles, and the row waits for `OFF <fetch_id>`.
+  - **`OFF <select>` over an example that binds only part of its
+    relations** (a join whose second relation is gone) names a binding no
+    row has and answers `unchanged`.
+  - **A `SELECT` over more than 16 distinct relations cannot be opted in**
+    (`NotImplemented`).
 - **The opted path's own costs are left as built** (CF-O-Q13 (a)): every
   re-record takes the directory page exclusive, which dirties it
   (`src/stats/waystone_dir.cpp`, `LookupOrCreateWaystonePage`'s `Get`), and
@@ -2914,9 +2922,9 @@ Verified on `bs-test-hardening` from `5d58f3ca`
   naming `Corruption` - and lost to the instance until a restore:
   - **page 0 and the two map regions** (DB-Q3): read before recovery, never
     imaged, so a tear refuses the mount; no second copy exists;
-  - **a page of an unlogged class** (`sys.statistics`, page 11 - which no
-    build since DA writes - and a fenced index build's tree before its
-    `LogBuiltTree`), whose content no record describes;
+  - **a page of an unlogged class** (`sys.statistics`, and a fenced index
+    build's tree before its `LogBuiltTree`), whose content no record
+    describes;
   - **a tear of the mount's own write**: images are off through the mount
     (DB-R2), so a page redo or the mount wrote back and a crash tore before
     the completion checkpoint is refused when its last image is below the

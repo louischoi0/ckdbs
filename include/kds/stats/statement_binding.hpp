@@ -41,7 +41,8 @@
 //
 // **Two things the dispatcher keeps true for that to hold.** The list is
 // one resolution's: a resolve made a second time because a DDL moved under
-// it forgets what the first declared (`Rewind`, in `ResolveNames`) - two
+// it forgets what the first declared (a `SELECT`'s compile starts its
+// run's binding afresh; `Rewind`, in `ResolveNames`, for a write) - two
 // relations that swapped names between the two would otherwise leave one
 // list for two resolutions. And the order of first declaration is a
 // function of the text: the compiler declares a block's relations in
@@ -79,6 +80,14 @@ struct StatementBinding {
     // no relation.
     bool none() const noexcept { return n == 0 && !over; }
 
+    // Whether `rel` is one of the relations held.
+    bool Holds(catalog::Oid rel) const noexcept {
+        for (std::size_t i = 0; i < n; ++i) {
+            if (oids[i] == rel) return true;
+        }
+        return false;
+    }
+
     // One declaration. `unqualified_in` is the namespace the name was
     // resolved in where it was written unqualified, 0 for a qualified name.
     void Declare(catalog::Oid rel, catalog::Oid unqualified_in) noexcept {
@@ -93,6 +102,19 @@ struct StatementBinding {
             return;
         }
         oids[n++] = rel;
+    }
+
+    // Takes `other`'s declarations after this one's own, in their order:
+    // what one compile of a statement bound, added to what the statement
+    // had bound before it.
+    void Absorb(const StatementBinding& other) noexcept {
+        if (other.over) {
+            *this = StatementBinding{};
+            over = true;
+            return;
+        }
+        for (std::size_t i = 0; i < other.n; ++i) Declare(other.oids[i], 0);
+        if (!over && other.namespace_oid != 0) namespace_oid = other.namespace_oid;
     }
 
     // What `Rewind` returns to: the binding as it stood before a resolve

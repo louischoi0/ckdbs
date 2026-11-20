@@ -91,19 +91,32 @@ const std::vector<SysObjectRow>* CatalogCache::PutTableList(std::vector<SysObjec
     return &*table_list_;
 }
 
-const PatternAccess* CatalogCache::FindPattern(std::uint64_t fetch_id) noexcept {
+const PatternAccess* CatalogCache::FindPattern(std::uint64_t fetch_id,
+                                               const stats::StatementBinding& binding) noexcept {
     // Served from memory either way: asked only of a filled map, which is
     // complete, so an absence scanned nothing and is not one of `misses`.
     ++stats_.hits;
-    auto it = patterns_.find(fetch_id);
-    return it == patterns_.end() ? nullptr : &it->second;
+    const auto [first, last] = patterns_.equal_range(fetch_id);
+    for (auto it = first; it != last; ++it) {
+        if (it->second.binding == binding) return &it->second;
+    }
+    return nullptr;
+}
+
+const PatternAccess* CatalogCache::FindPatternRow(std::uint64_t fetch_id, Oid row) noexcept {
+    ++stats_.hits;
+    const auto [first, last] = patterns_.equal_range(fetch_id);
+    for (auto it = first; it != last; ++it) {
+        if (it->second.oid == row) return &it->second;
+    }
+    return nullptr;
 }
 
 void CatalogCache::FillOptedPatterns(std::vector<PatternAccess> opted) {
     if (patterns_filled_) return;
     for (PatternAccess& access : opted) {
         const std::uint64_t key = access.fetch_id;
-        patterns_.try_emplace(key, std::move(access));
+        patterns_.emplace(key, std::move(access));
     }
     patterns_filled_ = true;
     ++stats_.pattern_fills;

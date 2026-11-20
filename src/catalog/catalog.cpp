@@ -3030,6 +3030,7 @@ PatternAccess AccessOf(const SysPatternRow& row) noexcept {
     PatternAccess access{};
     access.oid = row.oid;
     access.fetch_id = row.fetch_id;
+    access.binding = BindingOf(row);
     access.fingerprint_version = row.fingerprint_version;
     access.waystone_root = row.waystone_root;
     access.stmt_class = row.stmt_class;
@@ -3046,12 +3047,13 @@ StatusOr<std::vector<SysPatternRow>> Catalog::ListPatterns() {
     return ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
 }
 
-StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t fetch_id) {
+StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t fetch_id,
+                                                  const stats::StatementBinding& binding) {
     auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
 
     for (const auto& row : rows.value()) {
-        if (row.fetch_id != fetch_id) continue;
+        if (row.fetch_id != fetch_id || !(BindingOf(row) == binding)) continue;
         // Rows from another fingerprint revision are invisible here, and
         // this is the only place that decision is made. Putting the filter
         // in the row lookup rather than in each caller is what stops a
@@ -3061,33 +3063,48 @@ StatusOr<SysPatternRow> Catalog::GetSysPatternRow(std::uint64_t fetch_id) {
         if (!parser::IsCurrentFingerprintVersion(row.fingerprint_version)) continue;
         return row;
     }
-    return Status::NotFound("no current sys.patterns row for this fetch_id");
+    return Status::NotFound("no current sys.patterns row for this fetch_id and binding");
 }
 
-StatusOr<const PatternAccess*> Catalog::FindOptedPattern(std::uint64_t fetch_id) {
+Status Catalog::EnsureOptedPatternsFilled() {
+    if (cache_.opted_patterns_filled()) return Status::OK();
+    // **The whole opted set, once per generation**: a fill of one entry
+    // would leave the map unable to answer a miss without a scan. The
+    // version filter is applied here, so a row from another revision
+    // never reaches the map - by construction rather than by a check
+    // every reader has to remember.
+    auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
+    if (!rows.ok()) return rows.status();
+    std::vector<PatternAccess> opted;
+    for (const SysPatternRow& row : rows.value()) {
+        if (IsCurrentOptIn(row)) opted.push_back(AccessOf(row));
+    }
+    cache_.FillOptedPatterns(std::move(opted));
+    return Status::OK();
+}
+
+StatusOr<const PatternAccess*> Catalog::FindOptedPattern(std::uint64_t fetch_id,
+                                                         const stats::StatementBinding& binding) {
     // Nothing opted on the instance: nothing fills, and the answer costs
     // the one load (CF-S1c).
     if (NoOptedPatterns()) return Status::NotFound("no pattern is opted in");
-    if (!cache_.opted_patterns_filled()) {
-        // **The whole opted set, once per generation**: a fill of one entry
-        // would leave the map unable to answer a miss without a scan. The
-        // version filter is applied here, so a row from another revision
-        // never reaches the map - by construction rather than by a check
-        // every reader has to remember.
-        auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
-        if (!rows.ok()) return rows.status();
-        std::vector<PatternAccess> opted;
-        for (const SysPatternRow& row : rows.value()) {
-            if (IsCurrentOptIn(row)) opted.push_back(AccessOf(row));
-        }
-        cache_.FillOptedPatterns(std::move(opted));
-    }
+    if (Status filled = EnsureOptedPatternsFilled(); !filled.ok()) return filled;
     // A miss is an answer, not a reason to read the page: the map is
     // complete for this generation (catalog_cache.hpp's soundness rule).
-    if (const PatternAccess* cached = cache_.FindPattern(fetch_id); cached != nullptr) {
+    if (const PatternAccess* cached = cache_.FindPattern(fetch_id, binding);
+        cached != nullptr) {
         return cached;
     }
-    return Status::NotFound("the pattern is not opted in");
+    return Status::NotFound("the pattern is not opted in under this binding");
+}
+
+StatusOr<const PatternAccess*> Catalog::FindOptedPatternRow(std::uint64_t fetch_id, Oid row) {
+    if (NoOptedPatterns()) return Status::NotFound("no pattern is opted in");
+    if (Status filled = EnsureOptedPatternsFilled(); !filled.ok()) return filled;
+    if (const PatternAccess* cached = cache_.FindPatternRow(fetch_id, row); cached != nullptr) {
+        return cached;
+    }
+    return Status::NotFound("the pattern row is not opted in");
 }
 
 void Catalog::MoveOptedCount(bool up) noexcept {
@@ -3121,13 +3138,14 @@ void Catalog::StoreOptedCount(std::uint64_t value) noexcept {
 }
 
 StatusOr<bool> Catalog::MutatePatternRow(std::uint64_t fetch_id,
+                                         const stats::StatementBinding& binding,
                                          const std::function<bool(SysPatternRow&)>& mutate) {
     bool wrote = false;
     auto acted = ForFirstRow<SysPatternRow>(
         store_, kCatalogPagePatterns,
         [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-        if (row.fetch_id != fetch_id) return false;
+        if (row.fetch_id != fetch_id || !(BindingOf(row) == binding)) return false;
         // The same version filter GetSysPatternRow() applies, and for the
         // same reason: a row from another revision names a shape that is
         // not the one it claims, so it is not this pattern and must not be
@@ -3150,9 +3168,42 @@ StatusOr<bool> Catalog::MutatePatternRow(std::uint64_t fetch_id,
     return wrote;
 }
 
-StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_t fetch_id,
-                                                                   std::uint8_t stmt_class,
-                                                                   bool on, PageId root) {
+StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(
+    std::uint64_t fetch_id, const stats::StatementBinding& binding, std::uint8_t stmt_class,
+    bool on, PageId root) {
+    // A row names what a statement bound; a binding that is not held names
+    // nothing (`statement_binding.hpp`), and the caller refuses it first.
+    if (on && (binding.over || binding.n == 0)) {
+        return Status::InvalidArgument("catalog: WAYSTONE ON needs the relations the shape bound");
+    }
+    return WritePatternWaystone(
+        fetch_id, binding, stmt_class, on, root,
+        [&](const SysPatternRow& row) {
+            return row.fetch_id == fetch_id && BindingOf(row) == binding;
+        },
+        "fetch_id " + std::to_string(fetch_id));
+}
+
+StatusOr<Catalog::PatternWaystoneWrite> Catalog::ClearPatternWaystone(std::uint64_t fetch_id) {
+    return WritePatternWaystone(
+        fetch_id, stats::StatementBinding{}, kStmtClassUnclassified, /*on=*/false, kInvalidPageId,
+        [&](const SysPatternRow& row) { return row.fetch_id == fetch_id; },
+        "every binding of fetch_id " + std::to_string(fetch_id));
+}
+
+StatusOr<Catalog::PatternWaystoneWrite> Catalog::EndPatternsNaming(Oid rel) {
+    // Nothing opted: nothing to end, and no page to read (CF-S1c's count).
+    if (NoOptedPatterns()) return PatternWaystoneWrite{};
+    return WritePatternWaystone(
+        0, stats::StatementBinding{}, kStmtClassUnclassified, /*on=*/false, kInvalidPageId,
+        [&](const SysPatternRow& row) { return BindingOf(row).Holds(rel); },
+        "every shape naming relation " + std::to_string(rel));
+}
+
+StatusOr<Catalog::PatternWaystoneWrite> Catalog::WritePatternWaystone(
+    std::uint64_t fetch_id, const stats::StatementBinding& binding, std::uint8_t stmt_class,
+    bool on, PageId root, const std::function<bool(const SysPatternRow&)>& clears,
+    std::string_view what) {
     if (!on && root != kInvalidPageId) {
         return Status::InvalidArgument("catalog: WAYSTONE OFF takes no directory root");
     }
@@ -3185,7 +3236,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
             // the write has succeeded (`MutatePatternRow` writes current
             // rows only).
             bool opts = false;
-            auto mutated = MutatePatternRow(fetch_id, [&](SysPatternRow& row) {
+            auto mutated = MutatePatternRow(fetch_id, binding, [&](SysPatternRow& row) {
                 const bool opted = (row.flags & kPatternWaystone) != 0;
                 const bool roots = root != kInvalidPageId && !HasWaystoneDirectory(row);
                 if (opted && !roots) return false;
@@ -3216,6 +3267,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                     SysPatternRow row{};
                     row.oid = oid.value();
                     row.fetch_id = fetch_id;
+                    SetBinding(row, binding);
                     row.last_seen = 0;
                     // **The version is stamped here, not passed in**: no
                     // caller has any business opting a pattern in under a
@@ -3240,7 +3292,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                 }
             }
         } else {
-            // **Every row of the `fetch_id`, of any version, in one walk**,
+            // **Every row `clears` accepts, of any version, in one walk**,
             // not `MutatePatternRow`'s first current match: after a
             // fingerprint bump a lapsed opted row and the current row a
             // re-issued ON inserted commonly share the id, and stopping at
@@ -3252,7 +3304,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
                 store_, kCatalogPagePatterns,
                 [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t slot,
                     const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-                    if (row.fetch_id != fetch_id) return false;
+                    if (!clears(row)) return false;
                     const bool opted = (row.flags & kPatternWaystone) != 0;
                     // The count holds current-version rows only: a lapsed
                     // row's bit was never in it.
@@ -3305,8 +3357,7 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::SetPatternWaystone(std::uint64_
     // ones - a later bound, never an earlier one.
     out.durable_at = append_bound();
     if (log_ != nullptr && log_->enabled(LogLevel::kInfo)) {
-        log_->Info("waystone", std::string(on ? "opted in" : "opted out") + " fetch_id " +
-                                   std::to_string(fetch_id));
+        log_->Info("waystone", std::string(on ? "opted in " : "opted out ") + std::string(what));
     }
     // OFF that met only a stray root wrote, but undid no opt-in: `unchanged`.
     if (!on && !cleared_opt_in) out.written = false;
@@ -3319,8 +3370,31 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
     if (!rows.ok()) return rows.status();
     std::unordered_set<std::uint64_t> opted_fetch_ids;  // current-version rows only
     std::vector<Oid> renew;                             // the rows to root, in page order
+    // **An opt-in naming a dropped relation ends here** (DI-S3): a
+    // `DROP TABLE` ends it once it has committed (`EndPatternsNaming`), and
+    // a crash between the two leaves the row opted over an oid no statement
+    // can bind again. Dropped is the relation's tombstone in `sys.objects`
+    // (`kTypeDroppedTable`), read once and only where a row is opted - not
+    // "no table access", which a relation that cannot be read also answers.
+    std::unordered_set<Oid> ended;
+    std::optional<std::unordered_set<Oid>> dropped;
     for (const SysPatternRow& row : rows.value()) {
         if (!IsCurrentOptIn(row)) continue;
+        if (!dropped.has_value()) {
+            auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+            if (!objects.ok()) return objects.status();
+            dropped.emplace();
+            for (const SysObjectRow& object : objects.value()) {
+                if (object.type_oid == kTypeDroppedTable) dropped->insert(object.oid);
+            }
+        }
+        const stats::StatementBinding bound = BindingOf(row);
+        const bool gone = std::any_of(bound.oids.begin(), bound.oids.begin() + bound.n,
+                                      [&](Oid rel) { return dropped->count(rel) != 0; });
+        if (gone) {
+            ended.insert(row.oid);
+            continue;
+        }
         opted_fetch_ids.insert(row.fetch_id);
         renew.push_back(row.oid);
     }
@@ -3373,10 +3447,12 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
         store_, kCatalogPagePatterns,
         [&](SysPatternRow& row, heap::PageView& page, PageId page_id, std::uint16_t slot,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-            const bool is_opted = IsCurrentOptIn(row);
+            const bool ends = ended.count(row.oid) != 0;
+            const bool is_opted = IsCurrentOptIn(row) && !ends;
             if (is_opted) ++opted;
             const auto made = is_opted ? fresh.find(row.oid) : fresh.end();
-            if (made == fresh.end() && !HasWaystoneDirectory(row)) return false;
+            if (made == fresh.end() && !HasWaystoneDirectory(row) && !ends) return false;
+            if (ends) row.flags = static_cast<std::uint16_t>(row.flags & ~kPatternWaystone);
             if (made != fresh.end()) {
                 row.waystone_root = made->second;
                 row.dir_depth = 1;

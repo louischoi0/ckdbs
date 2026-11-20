@@ -245,15 +245,19 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // relation, so this build's mount would open a relation that is not there.
 // Refused with no migration, the standing order of 2026-10-07.
 //
-// 38 (DA-S3, `instructions/v3.2.0/workorder-da-access-stats-memory-resident.md`
-// DA-Q1 (a), carried by DI's format event,
-// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q11 (a)):
-// `sys.access_stats`' dead bootstrap is gone - no page 11, no `sys.objects`
-// or `sys.tables` row for oid 130, which is retired. A version-37 volume
-// has all three, and its `sys.tables` names a relation this build has no
-// root and no row codec for; a version-37 binary on this build's volume
-// would walk a page 11 nobody made. Refused with no migration, the
-// standing order of 2026-10-07.
+// 38 (DI-S3, `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q11
+// (a), DI-Q13 (a); with it DA-S3,
+// `instructions/v3.2.0/workorder-da-access-stats-memory-resident.md` DA-Q1
+// (a)). Two things. **A `sys.patterns` row names its shape under what the
+// opted statement bound**: the row grew from 41 to 178 bytes for the
+// binding's namespace and up to 16 relations (`catalog/rows.hpp`), and a
+// lookup arrives with both. A version-37 row is a shape by its text alone,
+// which this build cannot place under any binding, and a version-37 binary
+// reads this build's rows at the wrong size. **And `sys.access_stats`'
+// dead bootstrap is gone**: no page 11, no `sys.objects` or `sys.tables`
+// row for oid 130, which is retired; a version-37 volume has all three,
+// and its `sys.tables` names a relation this build has no root and no row
+// codec for. Refused with no migration, the standing order of 2026-10-07.
 inline constexpr std::uint32_t kSuperBlockVersion = 38;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------

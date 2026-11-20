@@ -837,7 +837,8 @@ public:
     }
     bool NoOptedPatterns() const noexcept { return opted_patterns() == 0; }
 
-    // The opted pattern `fetch_id` names, or NotFound (CF-S1c). Served from
+    // The opted pattern `fetch_id` names **under `binding`**, or NotFound
+    // (CF-S1c; the binding since DI-S3). Served from
     // this core's **opted map, complete per cache generation**: while the
     // count is non-zero, the first ask after a cache drop fills it with
     // every current-version row that has `kPatternWaystone` set, in one
@@ -853,7 +854,13 @@ public:
     // pattern was never opted in (a re-issued `WAYSTONE ON` inserts a
     // current row beside it). Any answer but NotFound is a read that
     // failed.
-    StatusOr<const PatternAccess*> FindOptedPattern(std::uint64_t fetch_id);
+    StatusOr<const PatternAccess*> FindOptedPattern(std::uint64_t fetch_id,
+                                                    const stats::StatementBinding& binding);
+    // The same entry by its row: what the trail recorder asks at a
+    // statement's end with the row the gate found at its head, so the trail
+    // is written through the binding's own directory and no binding is
+    // carried across the walk. NotFound once the row is no longer opted.
+    StatusOr<const PatternAccess*> FindOptedPatternRow(std::uint64_t fetch_id, Oid row);
 
     // What `SetPatternWaystone` did, and the LSN its answer is durable at.
     struct PatternWaystoneWrite {
@@ -899,7 +906,7 @@ public:
     //   would be reissued after a restart.
     //
     // `!on` (`root` must be `kInvalidPageId`): **every** row carrying
-    // `fetch_id`, of any version, has its bit and its directory cleared, in
+    // `fetch_id` and `binding`, of any version, has its bit and its directory cleared, in
     // one whole-chain walk - a `fetch_id` is not salted by
     // `kFingerprintVersion`, so after a bump a lapsed opted row and the
     // current one commonly share it, and a first-match OFF would clear the
@@ -919,9 +926,29 @@ public:
     // concurrent ON rooted the row first, the row was found opted with a
     // root, the write failed - is logged as leaked, which is what every
     // unreferenced page here is.
+    //
+    // **A row is a shape under one binding** (DI-S3,
+    // `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q13 (a)): the
+    // row `on` finds or makes, and the rows `!on` clears, are `fetch_id`'s
+    // under `binding` and no other binding's, so the same text opted under
+    // two namespaces is two rows with two directories.
     StatusOr<PatternWaystoneWrite> SetPatternWaystone(std::uint64_t fetch_id,
+                                                      const stats::StatementBinding& binding,
                                                       std::uint8_t stmt_class, bool on,
                                                       PageId root);
+
+    // `WAYSTONE OFF <fetch_id>`: `SetPatternWaystone`'s `!on` over every
+    // binding of `fetch_id` - the form that needs no relation to resolve.
+    StatusOr<PatternWaystoneWrite> ClearPatternWaystone(std::uint64_t fetch_id);
+
+    // **A dropped relation ends the opt-ins that name it** (DI-Q13 (a)):
+    // `!on` over every row whose binding holds `rel`, of any fetch id. Its
+    // oid is never reissued, so no statement can bind it again and the rows
+    // would record nothing; left opted they would be counted, cached and
+    // given a directory at every mount. Called once a `DROP TABLE` has
+    // committed; a crash before it is caught by the mount's renewal, which
+    // ends the opt-ins naming a relation that is gone.
+    StatusOr<PatternWaystoneWrite> EndPatternsNaming(Oid rel);
 
     // **The mount's renewal of every opted pattern's directory** (CF-S1b,
     // §8.3 Mount): the discard of unlogged Waystone state
@@ -1003,7 +1030,8 @@ public:
     // did not filter would let a stale row shadow the current one. Putting
     // the filter in the row lookup rather than in each caller is what
     // makes that impossible rather than merely unlikely.
-    StatusOr<SysPatternRow> GetSysPatternRow(std::uint64_t fetch_id);
+    StatusOr<SysPatternRow> GetSysPatternRow(std::uint64_t fetch_id,
+                                             const stats::StatementBinding& binding);
 
     // A root move - the clustered tree's when `index_oid` is 0, otherwise
     // that index's - written to the relation's anchor alone, never a
@@ -1508,14 +1536,28 @@ private:
     StatusOr<const std::vector<SysTypeRow>*> EnsureTypes();
 
     // The in-place rewrite behind `WAYSTONE ON` on an existing row: finds
-    // the current-version sys.patterns row for `fetch_id`, hands it to
-    // `mutate`, and writes it back over the same slot when `mutate` answers
-    // true. Answers whether it wrote; NotFound when no current-version row
-    // carries `fetch_id`.
+    // the current-version sys.patterns row for `fetch_id` under `binding`,
+    // hands it to `mutate`, and writes it back over the same slot when
+    // `mutate` answers true. Answers whether it wrote; NotFound when no
+    // current-version row carries both.
     //
     // Does not touch the cache - the caller's `BumpVersion` drops it.
     StatusOr<bool> MutatePatternRow(std::uint64_t fetch_id,
+                                    const stats::StatementBinding& binding,
                                     const std::function<bool(SysPatternRow&)>& mutate);
+
+    // Fills this generation's opted map from one scan of `sys.patterns`,
+    // or says why the page could not be read; a no-op on a filled one.
+    Status EnsureOptedPatternsFilled();
+
+    // The one writer behind `SetPatternWaystone`, `ClearPatternWaystone` and
+    // `EndPatternsNaming`: page 9's hold, the write, the opted count, the
+    // schema word and the durable bound. `on` writes the row of
+    // `(fetch_id, binding)`; `!on` clears every row `clears` accepts.
+    StatusOr<PatternWaystoneWrite> WritePatternWaystone(
+        std::uint64_t fetch_id, const stats::StatementBinding& binding, std::uint8_t stmt_class,
+        bool on, PageId root, const std::function<bool(const SysPatternRow&)>& clears,
+        std::string_view what);
 
     // The single invalidation point: bumps the version and drops every
     // DDL-invalidatable cache entry. `what` names the mutation for the

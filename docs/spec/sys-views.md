@@ -99,7 +99,7 @@ returns only what it names, so that conjunct is not compared again.
 | `columns` | schema | `rel_name`, checked | a live, visible column of a relation (no dropped column, no heap's hidden key) |
 | `objects` | schema | - | a table object of `sys.objects` |
 | `types` | engine | - | a registered type |
-| `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
+| `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`, and what the row's `WAYSTONE ON` bound (DI-S3) - `namespace`, `relation_oids`, `relations`, as §6.1 prints a statistics row's. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
 | `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, how often it served a read (§6.2b) and how often its leaves split (§6.2c) |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
@@ -239,7 +239,9 @@ is one row whatever namespace its session is in.
   a relation dropped and created again reads the same name on two rows.
 
 A statement refused part way through its bind is the row of what it had
-declared by then. **A `SELECT` the native grammar does not parse has no
+declared by then - a `SELECT` refused in its compile, a write refused past
+its target - unless the query layer answers in a native compile's place,
+whose binds are then no part of it. **A `SELECT` the native grammar does not parse has no
 fetch id** - a set operation, and every other form only the query layer
 reads - so it is kind `SELECT` at `fetch_id = 0`, one row a binding: the
 row of every such text over those relations. `plan_source`, `plan_name` and `variant` are the row's

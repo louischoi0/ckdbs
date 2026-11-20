@@ -240,6 +240,9 @@ std::array<std::byte, SysPatternRow::kOnDiskSize> SysPatternRow::Encode() const 
     std::memcpy(base + kOidOffset, &oid, sizeof(oid));
     std::memcpy(base + kFetchIdOffset, &fetch_id, sizeof(fetch_id));
     std::memcpy(base + kLastSeenOffset, &last_seen, sizeof(last_seen));
+    std::memcpy(base + kBindingNamespaceOffset, &binding_namespace, sizeof(binding_namespace));
+    std::memcpy(base + kBindingOidsOffset, binding_oids.data(), sizeof(binding_oids));
+    std::memcpy(base + kBindingCountOffset, &binding_n, sizeof(binding_n));
     std::memcpy(base + kFingerprintVersionOffset, &fingerprint_version,
                 sizeof(fingerprint_version));
     std::memcpy(base + kWaystoneRootOffset, &waystone_root, sizeof(waystone_root));
@@ -259,6 +262,10 @@ StatusOr<SysPatternRow> SysPatternRow::Decode(std::span<const std::byte> bytes) 
     std::memcpy(&row.oid, base + kOidOffset, sizeof(row.oid));
     std::memcpy(&row.fetch_id, base + kFetchIdOffset, sizeof(row.fetch_id));
     std::memcpy(&row.last_seen, base + kLastSeenOffset, sizeof(row.last_seen));
+    std::memcpy(&row.binding_namespace, base + kBindingNamespaceOffset,
+                sizeof(row.binding_namespace));
+    std::memcpy(row.binding_oids.data(), base + kBindingOidsOffset, sizeof(row.binding_oids));
+    std::memcpy(&row.binding_n, base + kBindingCountOffset, sizeof(row.binding_n));
     std::memcpy(&row.fingerprint_version, base + kFingerprintVersionOffset,
                 sizeof(row.fingerprint_version));
     std::memcpy(&row.waystone_root, base + kWaystoneRootOffset, sizeof(row.waystone_root));

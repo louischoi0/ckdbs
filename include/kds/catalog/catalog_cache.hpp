@@ -147,8 +147,12 @@ public:
     // `PatternCatalogTest.TheOptedMapIsCompletePerGenerationAndMissesWithNoScan`
     // pins it.
 
-    // nullptr while unfilled, and for a fetch_id the filled map lacks.
-    const PatternAccess* FindPattern(std::uint64_t fetch_id) noexcept;
+    // nullptr while unfilled, and for a `(fetch_id, binding)` the filled map
+    // lacks: an entry of the same text under another binding is not it.
+    const PatternAccess* FindPattern(std::uint64_t fetch_id,
+                                     const stats::StatementBinding& binding) noexcept;
+    // The entry of `fetch_id` whose row is `row`, on the same terms.
+    const PatternAccess* FindPatternRow(std::uint64_t fetch_id, Oid row) noexcept;
     bool opted_patterns_filled() const noexcept { return patterns_filled_; }
     // The whole map at once; a no-op on a filled one, so an entry handed out
     // earlier keeps its address (node-based, like PutTableAccess()).
@@ -274,8 +278,9 @@ private:
 
     // Node-based for the same reference-stability reason as table_access_:
     // the trail recorder holds an entry across its write. Opted rows only,
-    // and complete once `patterns_filled_` is set (CF-S1c).
-    std::unordered_map<std::uint64_t, PatternAccess> patterns_;
+    // and complete once `patterns_filled_` is set (CF-S1c). By fetch id,
+    // one entry a binding (DI-S3): a text opted under two bindings is two.
+    std::unordered_multimap<std::uint64_t, PatternAccess> patterns_;
     bool patterns_filled_ = false;
 
     // A vector with a linear scan, not a map: sys.types has ten rows and
@@ -300,7 +305,7 @@ private:
         std::unordered_map<Oid, TableAccess> table_access;
         std::unordered_map<Oid, NameMap> name_to_oid;
         std::optional<std::vector<SysObjectRow>> table_list;
-        std::unordered_map<std::uint64_t, PatternAccess> patterns;
+        std::unordered_multimap<std::uint64_t, PatternAccess> patterns;
     };
     std::uint64_t generation_ = 0;
     std::vector<Pins> pins_;
