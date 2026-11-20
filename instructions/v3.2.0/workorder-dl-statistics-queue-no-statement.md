@@ -671,3 +671,34 @@ defaults were measured against: the controller's, not this order's.
 **Suite.** 0 failed of 4,911 (2 disabled, 2 skipped) on the committed
 tree. **`tsan`**: 115 cells of the collector, the counter table, the Cabin store, the sampler, the decay score and the controller under gcc 14's thread sanitizer (`build-tsan/`; BS's own `tsan` configuration is clang's, which this host does not have) - 0 reports. The two-core rigs have no cell that drives the collector: DL-S5 adds the suite's. **Overhead not measured;
 measured at the milestone's close.**
+
+### DL-S0: the premise measured
+
+`bench/v3.4.16/results-dl-s0-premise-v3.4.16-2-gb0a824db.md`, by
+`ck-tester`, of `b0a824db` plus a measurement-only spike that is on no
+branch (four environment switches; the patches are in the file's archive).
+Run 2026-11-20 05:27-05:38 UTC, 58 server lifetimes, inside the stage's
+20 minutes. **The host was not quiet**: another session's measurement
+driver ran on the same eight CPUs for ten of the run's eleven minutes -
+the quiet gate looked for builds and suites, not for drivers - and a
+second pass waited 63 minutes and never ran, held in part by this
+session's own builds. So at `cores = 8` a delta under about 6-9 us of
+server CPU a statement, or 40 % of throughput, is not a finding.
+
+| question | reading |
+|---|---|
+| **P1's eviction scan** (`evict8`: 16 clients over 6,000 statement shapes, the collector set against unset) | **resolved, and the one cell that is**: 202.8 us against 51.9 us of server CPU a statement (+150.9 us, 3 of 3 lifetimes, the arms' ranges apart), 6,298 against 46,656 statements a second (-85.8 %), each statement waiting 0.65 times on the collector's latch for 970 us; p99 9,891 us against 1,235 us. With `cabin_optimizer` off - the shipped default |
+| **M1, the waits as counted** | the collector's latch is the only one of the three a plain point `SELECT` waits on: 0.0201 waits and 0.62 us a statement at `cores = 8`, **exactly 0 with the collector unset** and 0 at `cores = 1`; `stats_ring` 0 without a reader and 0.0006 waits a statement beside one; `cabin_stats` 0.0033 and the collector 0.052 a Cabin probe. An insert waits on none of them |
+| **M2, the collector on a point `SELECT`** | not resolved: +0.94 us at `cores = 1` and +1.28 us at `cores = 8`, 3 of 4 lifetimes slower each, inside the spread |
+| **M3, the reader's tail and the tick's** | not resolved: p99 1,224 us beside a reader making about 1,300 view reads a second against 982 us without, inside the quiet arm's own range; the tick, nothing |
+| **M4, the Cabin store's counters on a probe** | not resolved in CPU (+0.92 us, 2 of 4); counted, they add about 0.65 us of latch wait a probe |
+| **DL-Q4, the pool's hit count** | not resolved: +1.87 us mean, +0.71 us median, 3 of 3 slower, inside a 6 us spread |
+| **DL-Q4, the captured plans' served count** | **not priced: the cell did not exercise its path** - its join was never captured (no prior was published in the window), so both arms ran the same code, and still differed by 3.7 us and 33 % in 3 of 3 rounds: the host's contention, which is what sets this run's floor |
+
+**What it orders.** P1 first, which DL-S1 is; nothing else is ordered by
+price, because nothing else was resolved, and the order's own sequence
+stands. **What it leaves owed**: M2, M3, M4 and DL-Q4's two words on a
+quiet host - carried to DL-S6's close, whose gate also looks for another
+session's driver and during which this session builds nothing. **No word
+of DL-Q4's list moves on this run**: (a) moves one priced above the
+cell's floor, and none is priced.
