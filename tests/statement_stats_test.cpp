@@ -104,44 +104,6 @@ TEST_F(StatementStatsTest, AStatementOverTheBindingsCapIsOneRowThatIsNoBindings)
     EXPECT_EQ(shapes[1].calls, 2u);
 }
 
-TEST_F(StatementStatsTest, ASweepForGoneRelationsRunsOnceASchemaVersion) {
-    StatementBinding gone;
-    gone.Declare(40, 1);
-    StatementBinding kept;
-    kept.Declare(41, 1);
-    StatementBinding both;
-    both.Declare(41, 1);
-    both.Declare(40, 1);
-    StatementStats::Record(0, 1, "SELECT 1", false, 1, 1, {}, {}, {}, gone);
-    StatementStats::Record(0, 2, "SELECT 1", false, 1, 1, {}, {}, {}, kept);
-    StatementStats::Record(0, 3, "SELECT 1", false, 1, 1, {}, {}, {}, both);
-    StatementStats::Record(0, 4, "SELECT 1", false, 1, 1);
-    StatementStats::Record(1, 5, "SELECT 1", false, 1, 1, {}, {}, {}, gone);
-
-    std::vector<std::uint64_t> asked;
-    const auto is_gone = [&asked](std::uint64_t oid) {
-        asked.push_back(oid);
-        return oid == 40;
-    };
-    // Core 0's part alone, every row naming the gone relation, each
-    // relation asked about once.
-    EXPECT_EQ(StatementStats::ReclaimGone(0, 12, is_gone), 2u);
-    EXPECT_EQ(asked, (std::vector<std::uint64_t>{40, 41}));
-    EXPECT_EQ(StatementStats::Reclaimed(), 2u);
-    std::vector<std::uint64_t> left;
-    for (const StatementShape& s : StatementStats::Snapshot()) left.push_back(s.fetch_id);
-    EXPECT_EQ(left, (std::vector<std::uint64_t>{2, 4, 5}));
-
-    // The same version again asks nothing; another version sweeps again.
-    asked.clear();
-    EXPECT_EQ(StatementStats::ReclaimGone(0, 12, is_gone), 0u);
-    EXPECT_TRUE(asked.empty());
-    EXPECT_EQ(StatementStats::ReclaimGone(0, 13, is_gone), 0u);
-    EXPECT_EQ(asked, (std::vector<std::uint64_t>{41}));
-    EXPECT_EQ(StatementStats::ReclaimGone(1, 13, is_gone), 1u);
-    EXPECT_EQ(StatementStats::Reclaimed(), 3u);
-}
-
 TEST_F(StatementStatsTest, KindsWithNoFingerprintAreOneRowEachAtFetchIdZero) {
     StatementStats::Record(0, 0, "PURGE FROM t WHERE id = 1", false,
                            1, 1);

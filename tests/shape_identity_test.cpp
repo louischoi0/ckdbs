@@ -450,9 +450,12 @@ TEST_F(ShapeIdentityTest, ADroppedRelationsRowKeepsItsOidAndSaysTheRelationIsGon
     EXPECT_EQ(view.Find("relation_oids", first, "calls"), "1") << reply;
 }
 
-// ---- A full part (DI-Q7) ------------------------------------------------------
+// ---- A full part (DI-Q7 (c)) --------------------------------------------------
 
-TEST_F(ShapeIdentityTest, AFullPartGivesAGoneRelationsRowsToANewShape) {
+TEST_F(ShapeIdentityTest, AFullPartDropsANewShapeAndKeepsADroppedRelationsRows) {
+    // `rules.md` §3a: a record does nothing but record. A part full of rows
+    // - a dropped relation's among them - gives none up to a new shape; the
+    // shape is dropped and counted.
     Ok("CREATE TABLE gone (id int64, v int64) BTREE", "CREATED");
     Ok("CREATE TABLE kept (id int64, v int64) BTREE", "CREATED");
     const catalog::Oid gone = OidOf("public", "gone");
@@ -460,8 +463,6 @@ TEST_F(ShapeIdentityTest, AFullPartGivesAGoneRelationsRowsToANewShape) {
     Ok("DROP TABLE gone", "DROPPED");
     StatementStats::ResetForTest();
 
-    // The part, filled: three shapes over the dropped relation, the rest
-    // over the live one.
     StatementBinding over_gone;
     over_gone.Declare(gone, catalog::kNamespacePublic);
     StatementBinding over_kept;
@@ -473,32 +474,15 @@ TEST_F(ShapeIdentityTest, AFullPartGivesAGoneRelationsRowsToANewShape) {
     ASSERT_EQ(StatementStats::Snapshot().size(), StatementStats::kShapesPerCore);
     ASSERT_EQ(StatementStats::Dropped(), 0u);
 
-    // A new shape arrives: the dropped relation's three rows go, and it is
-    // recorded.
     const std::string read = "SELECT v FROM kept WHERE id = 1";
     Ok(read, "v");
-    EXPECT_EQ(RowsOf("SELECT", read).size(), 1u);
-    EXPECT_EQ(StatementStats::Dropped(), 0u);
-    EXPECT_EQ(StatementStats::Reclaimed(), 3u);
-    for (const StatementShape& s : StatementStats::Snapshot()) {
-        EXPECT_FALSE(s.binding.n == 1 && s.binding.oids[0] == gone) << s.fetch_id;
-    }
-    // Two more new shapes fit the room left, and the fourth - with nothing
-    // gone to reclaim - is dropped and counted, as before DI. (A shape is
-    // its statement without its select list, so each differs in its WHERE.)
-    Ok("SELECT v FROM kept WHERE id >= 1", "v");
-    Ok("SELECT v FROM kept WHERE v = 1", "v");
-    EXPECT_EQ(StatementStats::Dropped(), 0u);
-    Ok("SELECT v FROM kept WHERE v >= 1", "v");
+    EXPECT_TRUE(RowsOf("SELECT", read).empty());
     EXPECT_EQ(StatementStats::Dropped(), 1u);
-    EXPECT_EQ(StatementStats::Reclaimed(), 3u);
-
-    // `sys.meta` carries both counts, as they stood when it was read: its
-    // own statement is recorded at its end.
-    const auto meta = testing_view::ReadViewText(
-        Run("SELECT field, value FROM sys.meta WHERE section = 'statement_stats'"));
-    EXPECT_EQ(meta.Find("field", "statement_stats_reclaimed", "value"), "3");
-    EXPECT_EQ(meta.Find("field", "statement_stats_dropped", "value"), "1");
+    std::size_t of_gone = 0;
+    for (const StatementShape& s : StatementStats::Snapshot()) {
+        of_gone += s.binding.n == 1 && s.binding.oids[0] == gone;
+    }
+    EXPECT_EQ(of_gone, 3u) << "the dropped relation's rows stay until the instance stops";
 }
 
 }  // namespace

@@ -202,8 +202,7 @@ the engine issues itself (a listener's `ROLLBACK`, a KWP load's
 `statement_stats_dropped`. **A shape's slot is 768 bytes** beside its
 168-byte key and its text - about 1.2 KB a shape with a 256-byte text - so
 a core's part holds at most about 5 MB and 64 cores' about 310 MB, each
-allocated on a shape's first statement and kept until the instance stops
-or the row is reclaimed (below).
+allocated on a shape's first statement and kept until the instance stops.
 
 **A row is one binding's** (`stats/statement_binding.hpp`, DI-R2). A fetch
 id is a hash of the statement's text and holds no namespace and no oid, so
@@ -250,14 +249,11 @@ key (`sys.plans`' `relations`, a searched block's references with their
 repeats): for a planned block with no self-join the two are the same
 relations in the same order.
 
-**A relation that is gone gives its rows up to a new shape.** Its oid is
-never reissued, so its rows take no further call; they stay readable until
-a new shape meets its core's part full. Then, at most once per schema
-version that core has seen, the core asks its own catalog which relations
-its part's rows name are gone and drops those rows -
-`statement_stats_reclaimed` - before the new shape is recorded or, with
-nothing to reclaim, dropped and counted. No core is told of a drop, and
-nothing is asked on the path of a statement whose shape is known.
+**A relation that is gone keeps its rows until the instance stops.** Its
+oid is never reissued, so its rows take no further call; they stay
+readable and count against the part's bound. Nothing reclaims them: a
+record does nothing but record (`rules.md` §3a), and a new shape that
+meets its core's part full is dropped and counted.
 
 **What a shape costs**, between `variant` and `shape_text`: `conflicts`,
 `rows`, `rows_examined`, `pages`, `compile_us`, `timed_calls`, `cpu_us`,

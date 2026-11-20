@@ -1505,33 +1505,8 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     // with no fingerprint declares nothing into the binding, so it stays
     // one row.
     const std::uint64_t elapsed_us = now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0;
-    bool full = false;
-    stats::StatementStats::Record(core_id_, out.fetch_id, line, refused, elapsed_us, now_us,
-                                  out.plan_source, out.plan_label, cost, out.binding, &full);
-    if (!full) return;
-    // **A new shape met this core's part full** (DI-Q7 (a)): the rows of
-    // relations that are gone are given up to it. Asked of this core's own
-    // catalog, at most once per schema version it has seen
-    // (`statement_stats.hpp`), and only here - never on the path of a
-    // statement whose shape is known. `NotFound` alone is "gone": a
-    // relation this core cannot read is not one that no longer exists.
-    //
-    // **The version is what this core's cache was validated at, beside its
-    // own counter**: `catalog_version()` is moved by this core's DDL alone
-    // and a peer's drop never advances it (`catalog.hpp`), while
-    // `cache_built_at()` is the instance's schema word as this core last
-    // saw it. Each only grows, so their sum moves when either does - and
-    // not the live word, which a cache not yet revalidated would answer
-    // "still there" under, spending that version's one sweep.
-    {
-        const CurrentCoreGuard as_this_core(core_id_);
-        stats::StatementStats::ReclaimGone(core_id_,
-                                           catalog_.catalog_version() + catalog_.cache_built_at(),
-                                           [this](catalog::Oid oid) {
-            const auto access = catalog_.InitTableAccess(oid);
-            return !access.ok() && access.status().code() == StatusCode::kNotFound;
-        });
-    }
+    // Nothing more than the record: a full part drops and counts the shape
+    // (`statement_stats.hpp`).
     stats::StatementStats::Record(core_id_, out.fetch_id, line, refused, elapsed_us, now_us,
                                   out.plan_source, out.plan_label, cost, out.binding);
 }
@@ -2726,8 +2701,7 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // **`sys.statement_stats`' store** (BO-S5), the instance's: new shapes
     // a full part could not take, which the view therefore never shows.
     section("statement_stats");
-    os << " statement_stats_dropped=" << stats::StatementStats::Dropped()
-       << " statement_stats_reclaimed=" << stats::StatementStats::Reclaimed();
+    os << " statement_stats_dropped=" << stats::StatementStats::Dropped();
     // **`sys.relation_stats`' activity store** (BO-S6), the instance's: new
     // relations a full part could not take, whose counts the view lacks.
     section("relation_stats");

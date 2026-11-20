@@ -1,7 +1,12 @@
 # Work order DI - a shape's statistics named by what the statement binds: `sys.statement_stats` keyed by the relations a statement resolved to, and a plan that matches nothing said so, the census before anything is built
 
-Status: **OPENED 2026-11-20 on the operator's standing go-ahead**
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §6), on worktree
+Status: **CLOSED 2026-11-20** - every stage built, the close measured
+(DI-Q8's bar met as written, a lean on the write path not resolved),
+`origin/main` merged - **and landed the same day on the operator's word,
+"push no verify"** (`raft-marks-2026-11-20.md` §12; §7, DI-S5). Not
+tagged: a tag and a version wait for the operator's word. **Opened 2026-11-20 on the
+operator's standing go-ahead**
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §11), on worktree
 `di-shape-identity` from `1c7bb774` (`v3.4.15-4-g1c7bb774`). Every item the
 operator had not marked is **adopted as CLA proposed under that word, by
 CLA and not as the operator's own mark**: DI-Q0 (a); **DI-Q3 `[quiet-wrong]`
@@ -12,7 +17,9 @@ its measurement and its review's corrections follow in §7. **DI-S1 landed**
 the Cabin controller's signal is a fingerprint's and its candidate's.
 **DI-S3 landed** (§7): a Waystone opt-in is a shape under what its example
 bound, superblock 38, DA-S3 in it. **DI-S4 landed** (§7): a plan a rename
-put out of reach reads `invalid` and restricts no drop.
+put out of reach reads `invalid` and restricts no drop. **DI-S5, the
+close** (§7): DI-Q8 (a) adopted, and **DI-Q7 re-adopted (c)** - DI-S1's
+reclaim taken out under `rules.md` §3a.
 
 Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
@@ -323,8 +330,8 @@ word (§0a).** Every other item is unmarked.
 | DI-Q13 `[quiet-wrong]` **adopted (a) as restated at DI-S0** on the standing go-ahead | What an opt-in names once it is in DI. | **the shape under the relations `WAYSTONE ON`'s example resolved to** - it already compiles its example under the session's namespace (`waystone-concpets.md` §4a) - so a drop ends it and another namespace's same text is not opted. A `sys.patterns` row change, so a format event (DI-Q11); `WAYSTONE OFF <select>` after a drop, which today needs no relation, is restated in DI-S0 | (b) the opt-in stays by text and the manual says so, the recording cost accepted - what "every path" rules out unless the operator re-marks |
 | DI-Q5 **marked (a)** | A renamed relation's plan reading `enabled`. | **in DI** | (b) left a known gap |
 | DI-Q6 **adopted (a) as restated at DI-S0** on the standing go-ahead | The views' shape. The grain of a row changes from a shape to a shape under one binding. | **`sys.statement_stats` and `sys.statement_histogram` gain `relations` (oids as bound) and `namespace`; one row per binding; no second view** | (b) the old grain kept and a second view added per binding |
-| DI-Q7 **adopted (a) as restated at DI-S0** on the standing go-ahead | Rows of a relation that is gone. | **kept and readable until the part is full, then the first reclaimed**; counted in `sys.meta` | (b) removed at the drop's commit on every core - a cross-core act DI-R4 does not allow on the statement path and DI-S0 would have to place; (c) kept until restart, as every row is today |
-| DI-Q8 | The bar at the close. | **DA's close cells and a point `SELECT` and keyed `INSERT` at `cores` 1 and 8: no cell slower outside its own spread**; no factor proposed, since DF's 0.5 us bar on this path was not resolvable | (b) a bar the operator names |
+| DI-Q7 **adopted (a) as restated at DI-S0, then re-adopted (c) at the close** on the standing go-ahead: (a)'s reclaim, built at DI-S1, ran on a statement's own record, and the operator's rule of the same day (`docs/rules/rules.md` §3a, which the close's merge brought) forbids a statistic that (§7, DI-S5) | Rows of a relation that is gone. | (a) kept and readable until the part is full, then the first reclaimed; counted in `sys.meta` - **built and taken out** | (b) removed at the drop's commit on every core - a cross-core act DI-R4 does not allow on the statement path and DI-S0 would have to place; **(c) kept until restart, as every row is today - what stands** |
+| DI-Q8 **adopted (a) at the close** on the standing go-ahead | The bar at the close. | **DA's close cells and a point `SELECT` and keyed `INSERT` at `cores` 1 and 8: no cell slower outside its own spread**; no factor proposed, since DF's 0.5 us bar on this path was not resolvable | (b) a bar the operator names |
 | DI-Q9 | The session's published statement and ASH. | **left on the fetch id** unless DI-S0 finds a reader that joins a sample to a statistics row; then brought back | (b) the binding published beside the fingerprint - a word or more written at every statement's head |
 | DI-Q10 **adopted (a) as restated at DI-S0** on the standing go-ahead | Which plans-that-match-nothing DI shows, beyond the rename. | **the rename and a captured order that no longer compiles (CX-Q16's `INVALID`), by P1**; a fingerprint-version row stays the mount's | (b) the rename alone; (c) P2 |
 | DI-Q14 **adopted (a)** on the standing go-ahead | *Added at DI-S4.* How far a column's rename is established from a plan's row. The row stores the statement's shape text and its relations' oids, no namespace and no compiled form. | **a column the statement writes qualified by one of its bindings** (`b.col`), read off the stored text's tokens against that binding's relation; an unqualified column is not read - which relation it means is the compiler's to say - and the plan reads as it did, entered in `known-gaps.md` | (b) every column, by walking the parsed statement against its bound relations as the compiler resolves them - a second resolver to keep in step with the first; (c) the relation's rename alone |
@@ -926,3 +933,108 @@ captured order's row.
 
 **The suite**: 0 failed of 4903 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
 build inputs. Overhead not measured; measured at the milestone's close.
+
+### DI-S5 - the close, 2026-11-20
+
+On worktree `di-shape-identity`. **DI-Q8 (a) adopted, and DI-Q7 re-adopted
+(c), each by CLA on the operator's standing go-ahead** and neither the
+operator's own mark.
+
+**Measured** (`ck-tester`, `build-release`, interleaved A/B):
+`bench/v3.4.15/results-di-close-v3.4.15-12-g871845e4.md`, A `1c7bb774`
+(`v3.4.15-4-g1c7bb774`, the commit DI opened from) against B `871845e4`
+(`v3.4.15-12-g871845e4`, DI-S4). **DI-Q8's bar is met as written and
+resolves little**: in no cell is B slower outside the cell's own spread.
+Server CPU a statement, quiet pairs, mean (spread), B - A:
+
+| cell | A | B | B - A | B dearer in |
+|---|---|---|---|---|
+| `select1` | 22.80 us (1.13 us) | 22.68 us (1.44 us) | -0.12 us | 2 of 5 pairs |
+| `select8` | 34.29 us (1.21 us) | 34.13 us (0.89 us) | -0.16 us | 3 of 7 pairs |
+| `insert1` | 22.11 us (0.63 us) | 22.53 us (0.67 us) | +0.42 us | 5 of 5 pairs |
+| `insert8` | 54.79 us (4.23 us) | 57.15 us (3.97 us) | +2.36 us | 8 of 8 pairs |
+| `fk1` | 23.31 us (1.03 us) | 23.77 us (1.23 us) | +0.47 us | 2 of 4 pairs |
+
+- **The point reads are level; the writes lean dearer and the lean is not
+  resolved.** Over all 12 lifetimes B is the dearer in 10 of 12 on both
+  `INSERT` cells and 9 of 12 on the FK insert, by about 0.4 us at
+  `cores = 1` - inside each cell's spread and about one and a half times
+  what two servers of one binary differ by on this host. It is stated as
+  a lean, not as no cost and not as a cost. **Not chased**: no remedy was
+  tried, since the bar names the spread and the host has no counter to
+  place 0.4 us with; where a write's cost would come from - the binding
+  declared at the bind and carried on the outcome, the wider statistics
+  key - is the same on a read, which shows none.
+- **The Waystone arms** (CF-S2's, four arms): `replays=` reads 0 where
+  nothing is opted and 200 on the opted `scanprobe` on both binaries, so
+  an opt-in keyed by what its example bound takes on B. Opting saves
+  40.9 us (-10.1 %) of server CPU a statement on A and 49.6 us (-12.1 %)
+  on B; opted B against opted A is -1.77 us, inside the spread. `chain3`,
+  the one cell binding three relations, and `pk` are +0.39 us each,
+  inside theirs.
+- **What the file says of itself**: other sessions' builds loaded the host
+  through part of every pass, so the first pass of the statement cells is
+  set aside and both drivers ran 12 rounds, not 6; the quiet-pair rule (a
+  pair is dropped where either lifetime is over 1.10 x its arm's lowest)
+  was chosen after the data was seen and is disclosed in it; the
+  as-measured figures stand beside the quiet ones. Build 7.7 minutes, run
+  about 31, about 39 against the hour; the quiet gates held about 57
+  minutes, outside the budget.
+- **Not measured**: the tree as it closes. B is DI-S4; the close's own
+  code change takes a branch out of a full part's record (below) and the
+  merge brought CV's code, and neither is in either arm.
+
+**The merge.** `origin/main` at `1aaafe1b` merged at `9411157e`: CV, the
+record of `v3.4.16`, DK and DL written, and the operator's statistics
+rules (`docs/rules/rules.md` §3a). Two conflicts, both documents:
+`raft-marks-2026-11-20.md`, where main's §6 to §10 stand and DI's opening
+is §11, and this version's `index.md`. The code merged without one.
+
+**DI-Q7 re-adopted (c): the reclaim is taken out.** The rule the merge
+brought binds every statistics path added or changed from 2026-11-20: a
+record does nothing but record - no scan, nothing bounded by anything but
+a constant. DI-S1's `ReclaimGone` ran on the record of the statement that
+met its core's part full, scanned the part's 4,096 slots and read the
+catalog once per row's relation. It was at most once a schema version and
+never on a known shape's path, and it is still a scan on a statement's
+path on a statistic's behalf. Removed: `ReclaimGone`, `Record`'s `full`
+answer, `statement_stats_reclaimed`, their three cells. What stands is
+what stood before DI: a new shape that meets a full part is dropped and
+counted, and a dropped relation's rows stay until a restart
+(`known-gaps.md`). A reclaim off the statement's path - by whoever reads
+the view, or a `system` task - is not built and is not DI's.
+
+**DI-S2 under the same rule, left as it is.** The collector DI-S2 re-keyed
+takes one latch for the instance on every identified `SELECT` and evicts
+by a scan, as it did before DI; the stage changed its key and added a
+second map under the same latch. Both are DL's census already
+(`known-gaps.md`, "Statistics that can queue a statement"), and the entry
+now says what DI-S2 changed. Whether a stage that touches a path the rule
+reaches should have waited for DL is the operator's, and is in the day's
+raft-marks as not settled.
+
+**The review** (`critics-developer`, of the close's working diff over
+`9411157e`, by reading - the measurement held the build). No defect: the
+removal is whole, `Record`'s full-part branch is the pre-DI-S1 one with
+the binding key kept, every caller agrees with the declaration, the new
+cell dispatches exactly one statement after the fill. Three trims, all
+applied: a comment in the dispatcher that repeated the header's, "as
+before DI" in `sys-views.md`, and a claim in the new cell's comment the
+cell does not test. Nothing rejected.
+
+**Cells.** `ShapeIdentityTest.AFullPartDropsANewShapeAndKeepsADroppedRelationsRows`
+in place of the reclaim's three.
+
+**The suite**: 0 failed of 4933 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
+build inputs - the merged tree with the reclaim out. **`scripts/sim.sh`**:
+stopped on the operator's word at 30 of its 280 runs, none of the 30 failing - not a run of the corpus on this tree, and not a pass.
+
+**The documents.** `CLAUDE.md`'s rows (Observability, Cabin controller,
+Query language; Waystone and Access statistics at their stages),
+`docs/spec/sys-views.md`, `known-gaps.md`, the manual, this version's
+index.
+
+**Landed on the operator's word** (`raft-marks-2026-11-20.md` §12): merged
+to `main` and pushed with the hook skipped. **Not done, and the
+operator's**: a tag, a version. The format moved (superblock 38): a volume
+written at 37 does not mount on this tree.

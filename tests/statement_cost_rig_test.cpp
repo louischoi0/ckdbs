@@ -298,47 +298,6 @@ TEST_F(StatementCostRig, AConflictArmsSubqueryIsBoundWhetherOrNotARowConflicts) 
     EXPECT_EQ(shape->calls, 2u) << "one row for both";
 }
 
-TEST_F(StatementCostRig, AFullPartReclaimsARelationAnotherCoreDropped) {
-    // DI-Q7 (a) above one core: no core is told of a drop, so core 0 learns
-    // of core 1's from the instance's schema word, and its part must sweep
-    // again once that has moved - a gate on core 0's own DDL count would
-    // sweep once and never again.
-    CommandDispatcher& d0 = rig_->core(0).dispatcher();
-    CommandDispatcher& d1 = rig_->core(1).dispatcher();
-    ASSERT_EQ(d0.Dispatch("CREATE TABLE q (id int64, v int64) BTREE").response.substr(0, 3), "CRE");
-    ASSERT_TRUE(rig_->store().Flush().ok());
-    const stats::StatementBinding over_q = d0.Dispatch("SELECT v FROM q WHERE id = 1").binding;
-    const stats::StatementBinding over_r = d0.Dispatch("SELECT v FROM r WHERE id = 1").binding;
-    ASSERT_EQ(over_q.n, 1u);
-    ASSERT_EQ(over_r.n, 1u);
-    ASSERT_NE(over_q.oids[0], over_r.oids[0]);
-    stats::StatementStats::ResetForTest();
-
-    // Core 0's part, full: five shapes over `q`, the rest over `r`.
-    for (std::size_t i = 0; i < stats::StatementStats::kShapesPerCore; ++i) {
-        stats::StatementStats::Record(0, 5000 + i, "SELECT 1", false, 1, 1, {}, {}, {},
-                                      i < 5 ? over_q : over_r);
-    }
-    // A new shape while every relation is live: a sweep that finds nothing,
-    // and the shape is dropped and counted.
-    ASSERT_EQ(d0.Dispatch("SELECT v FROM r WHERE v = 1").response.rfind("ERR", 0),
-              std::string::npos);
-    ASSERT_EQ(stats::StatementStats::Reclaimed(), 0u);
-    ASSERT_EQ(stats::StatementStats::Dropped(), 1u);
-
-    // The drop, on the other core.
-    ASSERT_EQ(d1.Dispatch("DROP TABLE q").response.substr(0, 4), "DROP");
-
-    // Core 0's next new shape sweeps again and takes `q`'s rows.
-    ASSERT_EQ(d0.Dispatch("SELECT v FROM r WHERE v >= 1").response.rfind("ERR", 0),
-              std::string::npos);
-    EXPECT_EQ(stats::StatementStats::Reclaimed(), 5u);
-    EXPECT_EQ(stats::StatementStats::Dropped(), 1u);
-    for (const stats::StatementShape& s : stats::StatementStats::Snapshot()) {
-        EXPECT_FALSE(s.binding == over_q) << s.fetch_id;
-    }
-}
-
 TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheViews) {
     constexpr int kRounds = 40;
     const std::string select = "SELECT v FROM r WHERE id = 1";

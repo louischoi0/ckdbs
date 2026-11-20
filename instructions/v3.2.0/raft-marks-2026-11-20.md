@@ -114,5 +114,17 @@ took under them.
 | **Adopted at DI-S2** | **DI-Q12 (a)**: the signal keyed by the pattern and its candidate together |
 | **Adopted at DI-S3** | **DI-Q13 `[quiet-wrong]` (a)**, as DI-S0 restated it and with its premise read again (`WAYSTONE ON` compiles its example under the session's namespace): an opt-in names the shape under the relations its example bound, and a committed `DROP TABLE` ends it. **DI-Q11 (a)**: one format event, superblock 38, which also carries DA-S3 by DA-Q1 (a) |
 | **Adopted at DI-S4** | **DI-Q10 (a)** as DI-S0 restated it; and two items the stage reached and wrote into the order first: **DI-Q14 (a)** (a column's rename is established where the statement writes the column by its binding, and an unqualified one reads as before) and **DI-Q15 (a)** (a plan that can match nothing reads `invalid`, for either origin, and restricts no drop) |
-| **Does not settle** | a push, a merge to `main`, a tag or a version: each waits for the operator's word |
+| **Re-adopted at the close** | **DI-Q7 (c), in place of (a)**: the merge of `origin/main` at the close brought the operator's rule of §9 - a record does nothing but record, no scan, nothing a statement waits on - and DI-S1's reclaim scanned a part and read the catalog on the record of the statement that met the part full. It is taken out; a dropped relation's rows stay until a restart, as every row did before DI. CLA's reading of the rule against its own stage, not the operator's word on DI-Q7 |
+| **Adopted at the close** | **DI-Q8 (a)**: no cell slower outside its own spread, no factor |
+| **Does not settle** | a push, a merge to `main`, a tag or a version: each waits for the operator's word. Whether DI-S2's re-keyed collector, which the rule of §9 also reaches and DL owns, should have waited for DL |
 | **Recorded at** | this file; the DI order's header, §4 and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 12. DI closed and landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"For now, finish every process, do the close and push no verify."* - after CLA's progress report on DI: S0 to S4 committed, `origin/main` merged, DI-S1's reclaim taken out, the close measured, the merged tree's suite green and `scripts/sim.sh` running - and, after CLA said it read "finish" as letting the simulator run to its end, *"Stop the simulator and push right away."* (both given in Korean; recorded in English) |
+| **Mark** | **DI is closed and landed**: the work branch merged to `main` with `--no-ff` and pushed with the hook skipped. The suite the hook would run had run on the pushed build inputs (0 failed of 4933 (2 disabled, 2 skipped), on worktree `di-shape-identity`, the merged tree with the reclaim out); `scripts/sim.sh`: stopped on the operator's word at 30 of its 280 runs, none of the 30 failing - not a run of the corpus on this tree, and not a pass |
+| **Skipped on the operator's word** | the pre-push hook, and the rest of the simulator corpus: it is not run on the closing tree and is not reported as a pass |
+| **Does not settle** | a tag, a version; the items §11 leaves open (DI-S2's re-keyed collector under the rule of §9; DI-Q7 (c) as CLA's reading of that rule against its own stage) |
+| **Recorded at** | this file; the DI order's header and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |

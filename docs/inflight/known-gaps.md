@@ -2110,10 +2110,19 @@ DI-S1's commit. Owned by `docs/spec/sys-views.md` §6.1, §6.1a and
   join whose second relation does not exist is counted under its first.
 - **More than 16 distinct relations are not told apart**: one `over` row a
   shape.
-- **A reclaim asks `InitTableAccess` and takes `NotFound` as gone.** What
-  that answers for a relation a transaction still open has dropped is not
-  pinned by a cell; a row reclaimed for a drop that then rolls back is lost
-  statistics, never a wrong row.
+- **A dropped relation's rows stay until a restart** and count against
+  the part's 4,096 (DI-Q7 (c)): a workload that drops and creates relations
+  fills a part with rows no call can reach, and the shapes after them are
+  dropped and counted. A reclaim was built at DI-S1 and taken out at the
+  close: run where a part needs room - a statement's own record - it
+  scanned the part and read the catalog on that statement's path, which
+  `rules.md` §3a forbids. A reclaim off the statement's path is not built.
+- **DI's cost on a write is not resolved.** At the close
+  (`bench/v3.4.15/results-di-close-v3.4.15-12-g871845e4.md`) no cell was
+  slower outside its own spread, the point reads were level, and a keyed
+  `INSERT` and the FK insert read about 0.4 us dearer at `cores = 1` in
+  10 and 9 of 12 lifetimes - inside the spread, on a host with no counter
+  to place it. Not chased.
 - **A shape's slot grew to 768 bytes from 624 and its key to 168 from 24**,
   so the copy a view read makes under each part's latch grew with them
   (above), unmeasured.
@@ -2927,6 +2936,11 @@ and its call sites, not a census: DL-S0 is the census.
   every entry. Breaks clauses (a) and (c), and the second rule: the consumer is
   off and the statement still builds an identity and notes for it. Its cost is inside every
   `cores = 8` number of DA's results files and separated in none.
+  **DI-S2 changed this path's key and nothing else of it** (on
+  `di-shape-identity`): the table holds a signal a `(fingerprint,
+  candidate)` and a second map a fingerprint's waits, so the 4,096 is
+  reached sooner and the eviction's scan with it; the latch, the switch
+  and the scan are as they were, and are DL's.
 - **A Cabin probe's hit or miss takes three shared latches to count
   itself**: the cabin's partition latch a second time, the instance's one
   `stats_latch_`, and the collector's latch above (`CabinStore::NoteHit`,

@@ -2195,7 +2195,6 @@ newline protocol.
 These seven are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
 (`statement_stats_dropped`, `relation_stats_dropped`, `index_stats_dropped`,
-`statement_stats_reclaimed` - rows of dropped tables given up to new shapes -
 `leaf_stats_dropped`, `lock_waits_*`,
 `checkpoints_*`); `sys.refusal_stats` is bounded by the error codes,
 `sys.txn_histogram` by its buckets, and neither gives up any.

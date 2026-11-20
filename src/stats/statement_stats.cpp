@@ -73,8 +73,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
                             std::string_view plan_source,
                             std::string_view plan_label,
                             const StatementCost& cost,
-                            const StatementBinding& binding,
-                            bool* full) noexcept {
+                            const StatementBinding& binding) noexcept {
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);
@@ -84,11 +83,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
     auto found = part.shapes.find(key);
     if (found == part.shapes.end()) {
         if (part.shapes.size() >= kShapesPerCore) {
-            if (full != nullptr) {
-                *full = true;
-            } else {
-                ++part.dropped;
-            }
+            ++part.dropped;
             return;
         }
         // The one allocation, on a shape's first statement; a failure drops
@@ -207,52 +202,6 @@ std::vector<StatementShape> StatementStats::Snapshot() {
     return out;
 }
 
-std::size_t StatementStats::ReclaimGone(std::uint32_t core, std::uint64_t schema_version,
-                                        const std::function<bool(catalog::Oid)>& gone) noexcept {
-    Part& part = parts()[core % kStatsParts];
-    try {
-        // The relations the part's rows name, taken under the latch and
-        // asked about outside it: `gone` reads the catalog.
-        std::vector<catalog::Oid> named;
-        {
-            const LatchGuard held(&part.latch);
-            if (part.swept_at == schema_version) return 0;
-            part.swept_at = schema_version;
-            for (const auto& [key, shape] : part.shapes) {
-                named.insert(named.end(), key.binding.oids.begin(),
-                             key.binding.oids.begin() + key.binding.n);
-            }
-        }
-        std::sort(named.begin(), named.end());
-        named.erase(std::unique(named.begin(), named.end()), named.end());
-        std::erase_if(named, [&gone](catalog::Oid oid) { return !gone(oid); });
-        if (named.empty()) return 0;
-
-        const LatchGuard held(&part.latch);
-        const std::size_t reclaimed = std::erase_if(part.shapes, [&named](const auto& entry) {
-            const StatementBinding& b = entry.first.binding;
-            return std::any_of(b.oids.begin(), b.oids.begin() + b.n, [&named](catalog::Oid oid) {
-                return std::binary_search(named.begin(), named.end(), oid);
-            });
-        });
-        part.reclaimed += reclaimed;
-        return reclaimed;
-    } catch (const std::bad_alloc&) {
-        // Nothing reclaimed: the new shape is dropped and counted, as it
-        // would have been.
-        return 0;
-    }
-}
-
-std::uint64_t StatementStats::Reclaimed() noexcept {
-    std::uint64_t total = 0;
-    for (Part& part : parts()) {
-        const LatchGuard held(&part.latch);
-        total += part.reclaimed;
-    }
-    return total;
-}
-
 std::uint64_t StatementStats::Dropped() noexcept {
     std::uint64_t total = 0;
     for (Part& part : parts()) {
@@ -267,8 +216,6 @@ void StatementStats::ResetForTest() noexcept {
         const LatchGuard held(&part.latch);
         part.shapes.clear();
         part.dropped = 0;
-        part.reclaimed = 0;
-        part.swept_at.reset();
     }
 }
 

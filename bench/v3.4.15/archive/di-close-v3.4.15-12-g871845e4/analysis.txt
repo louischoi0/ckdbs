@@ -1,0 +1,152 @@
+== driver 1 per cell and arm (spread = max - min over lifetimes)
+select1 A n_life=12 cpu_mean=29.95 cpu_spread=17.64 qps_mean=18043 qps_spread=16073 stmts=1300311 bad=0
+select1 B n_life=12 cpu_mean=30.86 cpu_spread=18.67 qps_mean=17981 qps_spread=11263 stmts=1295737 bad=0
+select8 A n_life=12 cpu_mean=36.68 cpu_spread=8.26 qps_mean=81342 qps_spread=67488 stmts=5877382 bad=0
+select8 B n_life=12 cpu_mean=36.45 cpu_spread=6.95 qps_mean=80110 qps_spread=62892 stmts=5788930 bad=0
+insert1 A n_life=12 cpu_mean=28.63 cpu_spread=16.78 qps_mean=18313 qps_spread=14169 stmts=1325813 bad=0
+insert1 B n_life=12 cpu_mean=30.44 cpu_spread=17.09 qps_mean=18168 qps_spread=10293 stmts=1317776 bad=0
+insert8 A n_life=12 cpu_mean=55.94 cpu_spread=8.80 qps_mean=45116 qps_spread=33668 stmts=3262471 bad=0
+insert8 B n_life=12 cpu_mean=57.73 cpu_spread=5.65 qps_mean=44427 qps_spread=31500 stmts=3210948 bad=0
+fk1 A n_life=12 cpu_mean=31.76 cpu_spread=16.91 qps_mean=16932 qps_spread=11214 stmts=1221453 bad=0
+fk1 B n_life=12 cpu_mean=33.20 cpu_spread=18.71 qps_mean=16034 qps_spread=16465 stmts=1155462 bad=0
+== latency (us), median of per-lifetime percentiles
+select1 A 1300311 p0=36 p25=45.5 p50=50.5 p90=58.5 p99=92.5
+select1 B 1295737 p0=38.5 p25=48 p50=52.5 p90=66 p99=143.5
+select8 A 5877382 p0=30 p25=82.5 p50=126 p90=266 p99=553
+select8 B 5788930 p0=30.5 p25=82 p50=123 p90=271.5 p99=844
+insert1 A 1325813 p0=32 p25=40.5 p50=42.5 p90=52 p99=101
+insert1 B 1317776 p0=34.5 p25=46 p50=49.5 p90=61 p99=121.5
+insert8 A 3262471 p0=28.5 p25=81.5 p50=140 p90=781 p99=4735.5
+insert8 B 3210948 p0=30 p25=82.5 p50=142.5 p90=810 p99=5280
+fk1 A 1221453 p0=37.5 p25=48.5 p50=52.5 p90=65 p99=130.5
+fk1 B 1155462 p0=36 p25=49.5 p50=53 p90=69 p99=153.5
+== paired B - A per round: CPU us/stmt, then QPS %
+select1: +0.44 -0.16 +0.13 -0.28 -0.71 +3.16 -5.52 +1.16 -1.71 +9.22 +5.00 +0.19 | mean=+0.91 us (+3.0% of A) B_slower_in=7/12 arm_spread=18.67 outside_spread=no | qps%: -0.3 +1.4 -1.2 +1.6 +3.2 -8.2 +23.5 -5.8 +76.1 -31.5 -16.1 -2.3 mean=+3.4% B_slower_in=7/12
+select8: -0.54 +0.24 -0.99 -0.11 +0.33 -1.09 -0.27 -0.41 -0.89 +0.20 +1.33 -0.63 | mean=-0.24 us (-0.6% of A) B_slower_in=4/12 arm_spread=8.26 outside_spread=no | qps%: +0.9 -1.1 +0.2 +2.7 -4.9 +1.9 -5.9 +5.7 +12.1 -12.4 -5.7 +2.5 mean=-0.4% B_slower_in=5/12
+insert1: +0.16 +0.68 +0.08 +0.69 +9.13 -1.69 +7.07 +1.99 +2.00 +0.52 +2.26 -1.12 | mean=+1.81 us (+6.3% of A) B_slower_in=10/12 arm_spread=17.09 outside_spread=no | qps%: -0.7 -2.0 -0.1 -2.3 -32.1 +6.9 -12.3 +34.8 +51.9 +1.1 -6.7 +1.6 mean=+3.4% B_slower_in=7/12
+insert8: +2.22 +0.79 +0.92 -1.79 +0.97 +4.73 +5.96 -2.74 +2.28 +6.61 +1.20 +0.36 | mean=+1.79 us (+3.2% of A) B_slower_in=10/12 arm_spread=8.80 outside_spread=no | qps%: -7.7 +3.7 -1.8 +7.4 +0.2 -9.5 -1.5 +12.1 +12.4 -24.0 +2.1 -5.7 mean=-1.0% B_slower_in=6/12
+fk1: -0.69 -0.04 +1.02 +1.58 +1.20 +3.78 +2.12 +3.93 +0.63 -0.61 +2.46 +1.94 | mean=+1.44 us (+4.5% of A) B_slower_in=9/12 arm_spread=18.71 outside_spread=no | qps%: +4.3 +0.5 -2.5 -3.2 -15.7 -19.0 -19.0 -6.6 -50.3 +45.3 -17.3 +9.5 mean=-6.2% B_slower_in=8/12
+== loads (loadavg at the end of each lifetime), A/B interleaved by round
+select1 1.34 1.36 3.09 2.92 4.61 4.14 5.39 4.79 4.25 3.99 9.07 9.37 2.55 3.29 10.12 9.94 12.39 12.12 12.13 10.72 9.91 10.00 11.62 11.49
+select8 2.14 3.64 4.31 6.08 6.28 7.25 5.46 6.39 4.90 6.39 11.42 12.01 5.56 6.72 10.59 12.03 13.00 14.62 11.39 12.25 10.96 12.54 12.39 13.94
+insert1 3.16 2.90 5.31 4.96 6.75 5.94 5.56 4.86 5.56 5.70 11.16 10.82 6.30 6.94 11.79 11.60 13.83 13.17 10.60 9.83 12.00 11.62 13.18 12.92
+insert8 3.33 4.43 4.92 5.97 6.95 7.67 5.57 6.09 7.76 8.97 12.83 13.88 9.02 10.50 13.04 13.36 13.72 13.15 11.77 12.67 12.61 12.77 12.63 13.19
+fk1 3.82 3.47 5.28 4.93 7.14 6.19 5.39 4.93 8.98 9.07 13.14 13.04 10.38 10.32 12.85 12.48 12.74 12.32 10.95 10.51 12.27 12.00 12.54 12.15
+
+== driver 2 per cell and arm (reps=12)
+pk A n=12 qps_mean=19586 qps_spread=1502 cpu_mean=22.36 cpu_spread=1.55 p50=48.8 p99=66.6 ops_each=20000 replays=[0]
+pk A-opt n=12 qps_mean=18977 qps_spread=8660 cpu_mean=24.04 cpu_spread=20.32 p50=49.0 p99=66.3 ops_each=20000 replays=[0]
+pk B n=12 qps_mean=18641 qps_spread=9270 cpu_mean=24.07 cpu_spread=14.29 p50=49.2 p99=67.6 ops_each=20000 replays=[0]
+pk B-opt n=12 qps_mean=18753 qps_spread=9130 cpu_mean=24.51 cpu_spread=21.55 p50=49.4 p99=67.7 ops_each=20000 replays=[0]
+chain3 A n=12 qps_mean=16248 qps_spread=960 cpu_mean=32.46 cpu_spread=1.75 p50=58.8 p99=79.6 ops_each=20000 replays=[0]
+chain3 A-opt n=12 qps_mean=15570 qps_spread=8740 cpu_mean=35.50 cpu_spread=33.53 p50=59.2 p99=81.6 ops_each=20000 replays=[0]
+chain3 B n=12 qps_mean=16216 qps_spread=1185 cpu_mean=32.85 cpu_spread=1.88 p50=59.0 p99=80.0 ops_each=20000 replays=[0]
+chain3 B-opt n=12 qps_mean=15563 qps_spread=8295 cpu_mean=35.66 cpu_spread=33.42 p50=59.0 p99=80.6 ops_each=20000 replays=[0]
+scanprobe A n=12 qps_mean=1732 qps_spread=232 cpu_mean=410.29 cpu_spread=50.27 p50=539.7 p99=835.7 ops_each=1000 replays=[0]
+scanprobe A-opt n=12 qps_mean=1811 qps_spread=1059 cpu_mean=398.16 cpu_spread=427.20 p50=498.0 p99=779.7 ops_each=1000 replays=[200]
+scanprobe B n=12 qps_mean=1642 qps_spread=948 cpu_mean=448.79 cpu_spread=385.83 p50=540.2 p99=865.5 ops_each=1000 replays=[0]
+scanprobe B-opt n=12 qps_mean=1817 qps_spread=1150 cpu_mean=397.53 cpu_spread=451.09 p50=504.1 p99=782.2 ops_each=1000 replays=[200]
+== driver 2 paired deltas per rep (X - Y): CPU us/stmt, then qps %
+pk B-A: -0.64 +14.38 +1.08 -0.12 +0.18 -0.24 +2.19 +0.77 +0.79 +0.16 +0.88 +1.05 | mean=+1.71 us (+7.6%) first_dearer_in=9/12 arm_spread=14.29 outside=no | qps%: +4.8 -47.0 -2.3 -0.0 +0.7 +0.8 -5.5 -0.9 -1.6 -1.3 -0.4 -4.2 mean=-4.8% first_slower_in=9/12
+pk B-opt-A-opt: +21.91 +0.65 +0.69 +0.28 +0.71 +0.70 -0.63 -19.93 -0.10 +0.70 +0.40 +0.26 | mean=+0.47 us (+2.0%) first_dearer_in=9/12 arm_spread=21.55 outside=no | qps%: -45.6 -1.7 -0.8 -0.9 -2.1 -0.9 +1.5 +72.0 -1.1 -2.5 +0.0 -0.4 mean=+1.5% first_slower_in=9/12
+pk A-opt-A: -1.23 +0.16 +0.30 -0.02 +0.22 -1.09 +0.50 +20.58 +0.47 -0.22 +0.00 +0.53 | mean=+1.68 us (+7.5%) first_dearer_in=8/12 arm_spread=20.32 outside=no | qps%: +6.5 -0.9 -0.5 -0.0 +0.4 +2.1 +0.6 -43.7 -0.2 -0.5 +1.4 -1.1 mean=-3.0% first_slower_in=7/12
+pk B-opt-B: +21.33 -13.57 -0.08 +0.37 +0.75 -0.15 -2.32 -0.13 -0.42 +0.32 -0.47 -0.26 | mean=+0.45 us (+1.9%) first_dearer_in=4/12 arm_spread=21.55 outside=no | qps%: -44.7 +83.8 +0.9 -0.9 -2.4 +0.5 +8.1 -2.3 +0.3 -1.6 +1.8 +2.8 mean=+3.8% first_slower_in=5/12
+chain3 B-A: -1.54 +1.42 +0.29 -0.40 +0.28 +0.81 +1.63 +1.03 -0.29 +0.21 +0.41 +0.78 | mean=+0.39 us (+1.2%) first_dearer_in=9/12 arm_spread=1.88 outside=no | qps%: +5.3 -3.7 -0.4 +2.1 -0.5 -2.0 -4.9 -0.9 +0.5 +0.3 -0.8 +2.9 mean=-0.2% first_slower_in=7/12
+chain3 B-opt-A-opt: +33.47 +0.60 +0.33 +0.67 -0.10 -0.11 +0.38 -33.18 -0.21 -0.47 +0.71 -0.13 | mean=+0.16 us (+0.5%) first_dearer_in=6/12 arm_spread=33.53 outside=no | qps%: -49.3 -0.8 -0.2 -3.4 +0.6 +0.2 -1.8 +103.0 +1.2 +2.4 -0.8 +1.1 mean=+4.4% first_slower_in=6/12
+chain3 A-opt-A: -1.28 +0.27 +0.40 -0.68 +0.99 +0.58 +1.07 +33.54 +0.15 +1.00 -0.26 +0.64 | mean=+3.04 us (+9.3%) first_dearer_in=9/12 arm_spread=33.53 outside=no | qps%: +4.8 -0.8 -0.7 +2.8 -1.9 -1.5 -0.8 -51.3 -0.5 -2.8 +1.1 +2.1 mean=-4.1% first_slower_in=8/12
+chain3 B-opt-B: +33.73 -0.55 +0.45 +0.40 +0.61 -0.34 -0.17 -0.67 +0.23 +0.31 +0.05 -0.28 | mean=+2.81 us (+8.6%) first_dearer_in=7/12 arm_spread=33.42 outside=no | qps%: -49.5 +2.2 -0.5 -2.7 -0.8 +0.8 +2.5 -0.4 +0.2 -0.8 +1.2 +0.4 mean=-4.0% first_slower_in=6/12
+scanprobe B-A: -44.15 +371.73 +11.31 -2.81 -19.78 +31.28 +101.97 +6.02 -22.09 +3.37 +11.84 +13.31 | mean=+38.50 us (+9.4%) first_dearer_in=8/12 arm_spread=385.83 outside=no | qps%: +13.6 -50.4 -1.6 -0.4 +2.6 -5.6 -18.3 -1.0 +5.4 -0.7 -2.0 -2.7 mean=-5.1% first_slower_in=9/12
+scanprobe B-opt-A-opt: +431.08 +4.02 -17.37 +6.10 -11.76 -8.75 -0.83 -420.97 -4.25 +18.42 -4.85 +1.60 | mean=-0.63 us (-0.2%) first_dearer_in=5/12 arm_spread=451.09 outside=no | qps%: -54.7 -3.0 +7.5 +0.3 +2.3 +2.2 +0.3 +112.0 +0.1 -5.8 +2.5 -2.2 mean=+5.1% first_slower_in=4/12
+scanprobe A-opt-A: -80.92 -49.71 -23.59 -33.54 -44.97 -42.49 -43.01 +375.14 -71.57 -49.55 -40.00 -41.32 | mean=-12.13 us (-3.0%) first_dearer_in=1/12 arm_spread=427.20 outside=no | qps%: +19.0 +12.2 +2.0 +4.2 +7.1 +9.7 +10.0 -48.0 +14.5 +11.2 +7.5 +8.7 mean=+4.8% first_slower_in=1/12
+scanprobe B-opt-B: +394.32 -417.42 -52.27 -24.62 -36.95 -82.53 -145.81 -51.84 -53.73 -34.51 -56.69 -53.02 | mean=-51.26 us (-11.4%) first_dearer_in=1/12 arm_spread=451.09 outside=no | qps%: -52.6 +119.3 +11.3 +5.0 +6.7 +18.7 +35.0 +11.4 +8.8 +5.4 +12.3 +9.2 mean=+15.9% first_slower_in=1/12
+== digests
+pk identical across 48 runs
+chain3 identical across 48 runs
+scanprobe identical across 48 runs
+== run prechecks
+A-opt-r1 2026-11-20 06:02:52 load=2.51 4.70 8.02 1/669 3667291 waited=0s competing=0
+A-opt-r10 2026-11-20 06:31:30 load=4.78 6.24 6.60 1/678 3697259 waited=0s competing=0
+A-opt-r11 2026-11-20 06:31:56 load=3.49 5.81 6.45 2/656 3697552 waited=0s competing=0
+A-opt-r12 2026-11-20 06:32:08 load=3.11 5.65 6.39 1/676 3697691 waited=0s competing=0
+A-opt-r2 2026-11-20 06:10:38 load=7.19 7.30 8.01 1/690 3680397 waited=450s competing=0
+A-opt-r3 2026-11-20 06:12:06 load=3.59 6.18 7.56 1/689 3681548 waited=0s competing=0
+A-opt-r4 2026-11-20 06:12:18 load=3.37 6.01 7.48 1/683 3681716 waited=0s competing=0
+A-opt-r5 2026-11-20 06:12:30 load=3.01 5.84 7.41 1/680 3681838 waited=0s competing=0
+A-opt-r6 2026-11-20 06:12:41 load=2.62 5.67 7.33 1/673 3682044 waited=0s competing=0
+A-opt-r7 2026-11-20 06:26:28 load=2.35 5.64 6.52 1/663 3693024 waited=0s competing=0
+A-opt-r8 2026-11-20 06:26:43 load=2.07 5.47 6.45 2/676 3693157 waited=0s competing=0
+A-opt-r9 2026-11-20 06:31:16 load=5.34 6.42 6.67 1/692 3697083 waited=10s competing=0
+A-r1 2026-11-20 06:02:48 load=2.56 4.75 8.06 2/702 3667255 waited=0s competing=0
+A-r10 2026-11-20 06:31:41 load=4.20 6.06 6.54 1/672 3697392 waited=0s competing=0
+A-r11 2026-11-20 06:31:53 load=3.71 5.89 6.48 2/657 3697507 waited=0s competing=0
+A-r12 2026-11-20 06:32:04 load=3.11 5.65 6.39 2/683 3697634 waited=0s competing=0
+A-r2 2026-11-20 06:11:51 load=4.14 6.42 7.65 2/668 3681363 waited=0s competing=0
+A-r3 2026-11-20 06:12:03 load=3.59 6.18 7.56 1/683 3681514 waited=0s competing=0
+A-r4 2026-11-20 06:12:14 load=3.49 6.08 7.51 2/683 3681675 waited=0s competing=0
+A-r5 2026-11-20 06:12:26 load=3.18 5.93 7.44 1/662 3681784 waited=0s competing=0
+A-r6 2026-11-20 06:12:53 load=2.39 5.47 7.24 1/666 3682208 waited=0s competing=0
+A-r7 2026-11-20 06:26:25 load=2.21 5.67 6.53 1/663 3692964 waited=0s competing=0
+A-r8 2026-11-20 06:26:36 load=2.25 5.57 6.49 1/683 3693125 waited=0s competing=0
+A-r9 2026-11-20 06:31:01 load=6.49 6.68 6.75 1/677 3696879 waited=0s competing=0
+B-opt-r1 2026-11-20 06:03:03 load=2.47 4.65 7.99 2/687 3667400 waited=0s competing=0
+B-opt-r10 2026-11-20 06:31:37 load=4.48 6.15 6.57 1/683 3697352 waited=0s competing=0
+B-opt-r11 2026-11-20 06:31:49 load=3.71 5.89 6.48 1/663 3697479 waited=0s competing=0
+B-opt-r12 2026-11-20 06:32:00 load=3.29 5.73 6.42 1/677 3697601 waited=0s competing=0
+B-opt-r2 2026-11-20 06:11:47 load=4.14 6.42 7.65 1/688 3681317 waited=60s competing=0
+B-opt-r3 2026-11-20 06:11:59 load=3.73 6.25 7.59 1/683 3681470 waited=0s competing=0
+B-opt-r4 2026-11-20 06:12:10 load=3.62 6.15 7.54 2/687 3681596 waited=0s competing=0
+B-opt-r5 2026-11-20 06:12:38 load=2.62 5.67 7.33 1/686 3681994 waited=0s competing=0
+B-opt-r6 2026-11-20 06:12:49 load=2.52 5.55 7.28 1/673 3682137 waited=0s competing=0
+B-opt-r7 2026-11-20 06:26:21 load=2.32 5.75 6.56 2/673 3692903 waited=0s competing=0
+B-opt-r8 2026-11-20 06:26:32 load=2.35 5.64 6.52 2/677 3693068 waited=0s competing=0
+B-opt-r9 2026-11-20 06:31:25 load=4.67 6.24 6.60 1/656 3697181 waited=0s competing=0
+B-r1 2026-11-20 06:02:56 load=2.51 4.70 8.02 2/676 3667336 waited=0s competing=0
+B-r10 2026-11-20 06:31:34 load=4.48 6.15 6.57 1/684 3697312 waited=0s competing=0
+B-r11 2026-11-20 06:31:45 load=3.94 5.98 6.51 1/678 3697432 waited=0s competing=0
+B-r12 2026-11-20 06:32:12 load=2.94 5.58 6.36 1/670 3697723 waited=0s competing=0
+B-r2 2026-11-20 06:10:43 load=7.19 7.30 8.01 1/682 3680458 waited=0s competing=0
+B-r3 2026-11-20 06:11:55 load=3.96 6.34 7.62 2/664 3681403 waited=0s competing=0
+B-r4 2026-11-20 06:12:22 load=3.37 6.01 7.48 1/668 3681762 waited=0s competing=0
+B-r5 2026-11-20 06:12:34 load=2.85 5.76 7.37 1/686 3681897 waited=0s competing=0
+B-r6 2026-11-20 06:12:45 load=2.65 5.62 7.31 1/687 3682112 waited=0s competing=0
+B-r7 2026-11-20 06:26:17 load=2.34 5.82 6.59 1/698 3692855 waited=0s competing=0
+B-r8 2026-11-20 06:30:58 load=6.88 6.76 6.78 1/654 3696829 waited=250s competing=0
+B-r9 2026-11-20 06:31:20 load=4.99 6.33 6.63 1/678 3697139 waited=0s competing=0
+
+== robust: driver 1, spiked pairs dropped (CPU us/stmt)
+select1 B-A: kept=5/12 dropped_pairs(index)=[6, 7, 8, 9, 10, 11, 12] B_mean=22.68 spread=1.44 A_mean=22.80 spread=1.13 delta_mean=-0.12 median=-0.16 first_dearer_in=2/5 arm_spread=1.44 outside=no delta_pct_of_A=-0.5%
+select8 B-A: kept=7/12 dropped_pairs(index)=[6, 8, 9, 11, 12] B_mean=34.13 spread=0.89 A_mean=34.29 spread=1.21 delta_mean=-0.16 median=-0.11 first_dearer_in=3/7 arm_spread=1.21 outside=no delta_pct_of_A=-0.5%
+insert1 B-A: kept=5/12 dropped_pairs(index)=[5, 6, 7, 8, 9, 11, 12] B_mean=22.53 spread=0.67 A_mean=22.11 spread=0.63 delta_mean=+0.42 median=+0.52 first_dearer_in=5/5 arm_spread=0.67 outside=no delta_pct_of_A=+1.9%
+insert8 B-A: kept=8/12 dropped_pairs(index)=[4, 7, 8, 11] B_mean=57.15 spread=3.97 A_mean=54.79 spread=4.23 delta_mean=+2.36 median=+1.59 first_dearer_in=8/8 arm_spread=4.23 outside=no delta_pct_of_A=+4.3%
+fk1 B-A: kept=4/12 dropped_pairs(index)=[5, 6, 7, 8, 9, 10, 11, 12] B_mean=23.77 spread=1.23 A_mean=23.31 spread=1.03 delta_mean=+0.47 median=+0.49 first_dearer_in=2/4 arm_spread=1.23 outside=no delta_pct_of_A=+2.0%
+
+== robust: driver 2, spiked pairs dropped (CPU us/stmt)
+pk B-A: kept=10/12 dropped_pairs(index)=[2, 7] B_mean=22.73 spread=0.82 A_mean=22.34 spread=1.55 delta_mean=+0.39 median=+0.48 first_dearer_in=7/10 arm_spread=1.55 outside=no delta_pct_of_A=+1.7%
+pk B-opt-A-opt: kept=10/12 dropped_pairs(index)=[1, 8] B-opt_mean=22.78 spread=0.59 A-opt_mean=22.41 spread=1.11 delta_mean=+0.37 median=+0.53 first_dearer_in=8/10 arm_spread=1.11 outside=no delta_pct_of_A-opt=+1.6%
+pk A-opt-A: kept=11/12 dropped_pairs(index)=[8] A-opt_mean=22.38 spread=1.11 A_mean=22.41 spread=1.55 delta_mean=-0.03 median=+0.16 first_dearer_in=7/11 arm_spread=1.55 outside=no delta_pct_of_A=-0.2%
+pk B-opt-B: kept=9/12 dropped_pairs(index)=[1, 2, 7] B-opt_mean=22.74 spread=0.69 B_mean=22.74 spread=0.82 delta_mean=-0.01 median=-0.13 first_dearer_in=3/9 arm_spread=0.82 outside=no delta_pct_of_B=-0.0%
+chain3 B-A: kept=12/12 dropped_pairs(index)=[] B_mean=32.85 spread=1.88 A_mean=32.46 spread=1.75 delta_mean=+0.39 median=+0.35 first_dearer_in=9/12 arm_spread=1.88 outside=no delta_pct_of_A=+1.2%
+chain3 B-opt-A-opt: kept=10/12 dropped_pairs(index)=[1, 8] B-opt_mean=32.95 spread=1.40 A-opt_mean=32.78 spread=1.33 delta_mean=+0.17 median=+0.12 first_dearer_in=5/10 arm_spread=1.40 outside=no delta_pct_of_A-opt=+0.5%
+chain3 A-opt-A: kept=11/12 dropped_pairs(index)=[8] A-opt_mean=32.75 spread=1.33 A_mean=32.49 spread=1.75 delta_mean=+0.26 median=+0.40 first_dearer_in=8/11 arm_spread=1.75 outside=no delta_pct_of_A=+0.8%
+chain3 B-opt-B: kept=11/12 dropped_pairs(index)=[1] B-opt_mean=32.91 spread=1.40 B_mean=32.91 spread=1.80 delta_mean=+0.00 median=+0.05 first_dearer_in=6/11 arm_spread=1.80 outside=no delta_pct_of_B=+0.0%
+scanprobe B-A: kept=8/12 dropped_pairs(index)=[1, 2, 7, 9] B_mean=409.70 spread=33.10 A_mean=402.88 spread=21.73 delta_mean=+6.82 median=+8.66 first_dearer_in=6/8 arm_spread=33.10 outside=no delta_pct_of_A=+1.7%
+scanprobe B-opt-A-opt: kept=10/12 dropped_pairs(index)=[1, 8] B-opt_mean=361.74 spread=24.81 A-opt_mean=363.51 spread=26.33 delta_mean=-1.77 median=-2.54 first_dearer_in=4/10 arm_spread=26.33 outside=no delta_pct_of_A-opt=-0.5%
+scanprobe A-opt-A: kept=9/12 dropped_pairs(index)=[1, 8, 9] A-opt_mean=363.07 spread=26.33 A_mean=403.98 spread=21.73 delta_mean=-40.91 median=-42.49 first_dearer_in=0/9 arm_spread=26.33 outside=yes delta_pct_of_A=-10.1%
+scanprobe B-opt-B: kept=9/12 dropped_pairs(index)=[1, 2, 7] B-opt_mean=360.93 spread=24.81 B_mean=410.50 spread=33.10 delta_mean=-49.57 median=-52.27 first_dearer_in=0/9 arm_spread=33.10 outside=yes delta_pct_of_B=-12.1%
+
+== quiet pairs, driver 1: per cell and arm over the kept rounds (same rule: both lifetimes <= 1.10 x their own arm's lowest CPU)
+select1 kept rounds [1, 2, 3, 4, 5]
+  A n=5 cpu_mean=22.80 cpu_spread=1.13 qps_mean=23326 qps_spread=1521 stmts=700318 p0=33 p25=39 p50=40 p90=48 p99=59
+  B n=5 cpu_mean=22.68 cpu_spread=1.44 qps_mean=23535 qps_spread=1445 stmts=706622 p0=33 p25=39 p50=40 p90=46 p99=58
+select8 kept rounds [1, 2, 3, 4, 5, 7, 10]
+  A n=7 cpu_mean=34.29 cpu_spread=1.21 qps_mean=106624 qps_spread=15090 stmts=4491268 p0=30 p25=83 p50=126 p90=245 p99=470
+  B n=7 cpu_mean=34.13 cpu_spread=0.89 qps_mean=103535 qps_spread=20498 stmts=4362178 p0=29 p25=86 p50=125 p90=248 p99=470
+insert1 kept rounds [1, 2, 3, 4, 10]
+  A n=5 cpu_mean=22.11 cpu_spread=0.63 qps_mean=23371 qps_spread=489 stmts=706543 p0=31 p25=35 p50=36 p90=43 p99=63
+  B n=5 cpu_mean=22.53 cpu_spread=0.67 qps_mean=23189 qps_spread=566 stmts=704772 p0=31 p25=36 p50=37 p90=44 p99=65
+insert8 kept rounds [1, 2, 3, 5, 6, 9, 10, 12]
+  A n=8 cpu_mean=54.79 cpu_spread=4.23 qps_mean=47460 qps_spread=33668 stmts=2288537 p0=27.5 p25=85 p50=147.5 p90=641 p99=4021
+  B n=8 cpu_mean=57.15 cpu_spread=3.97 qps_mean=45358 qps_spread=28870 stmts=2185831 p0=29 p25=87 p50=153.5 p90=783.5 p99=4125.5
+fk1 kept rounds [1, 2, 3, 4]
+  A n=4 cpu_mean=23.31 cpu_spread=1.03 qps_mean=22929 qps_spread=1200 stmts=550729 p0=32.5 p25=37 p50=38 p90=46 p99=70.5
+  B n=4 cpu_mean=23.77 cpu_spread=1.23 qps_mean=22860 qps_spread=762 stmts=549068 p0=32.5 p25=38 p50=38.5 p90=46.5 p99=70.5
