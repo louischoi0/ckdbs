@@ -1,0 +1,1321 @@
+{
+ "args": {
+  "bin": "/home/louis/ck-tmp/cv-close/run/kds_B",
+  "workdir": "/home/louis/ck-tmp/cv-close/w2",
+  "out": "/home/louis/ck-tmp/cv-close/s4.json",
+  "port": 15741,
+  "reps": 2,
+  "seconds": 2.0,
+  "heartbeat": "/home/louis/ck-tmp/cv-close/s4.hb",
+  "status": "/home/louis/ck-tmp/cv-close/s4.status"
+ },
+ "bin_sha256": "78b91fd276287cf6e3d67575b6f320a3e202a8534114eb1d9c840ebbdf848f7c",
+ "cells": [
+  {
+   "stmts": 20238,
+   "sps": 10146.2,
+   "server_cpu_us_per_stmt": 47.4,
+   "lat": {
+    "n": 20238,
+    "p0_us": 85.0,
+    "p25_us": 88.9,
+    "p50_us": 90.7,
+    "p75_us": 95.9,
+    "p99_us": 174.2,
+    "max_us": 6138.1
+   },
+   "cell": "latest20_user100",
+   "arm": "T",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.05 5.88 7.98 1/615 3406164",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 19405,
+   "sps": 9727.4,
+   "server_cpu_us_per_stmt": 50.0,
+   "lat": {
+    "n": 19405,
+    "p0_us": 85.4,
+    "p25_us": 89.3,
+    "p50_us": 90.9,
+    "p75_us": 96.4,
+    "p99_us": 170.5,
+    "max_us": 1445.6
+   },
+   "cell": "latest20_user100",
+   "arm": "P",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.88 5.80 7.94 1/614 3406173",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 37123,
+   "sps": 18639.5,
+   "server_cpu_us_per_stmt": 22.9,
+   "lat": {
+    "n": 37123,
+    "p0_us": 47.3,
+    "p25_us": 49.7,
+    "p50_us": 50.5,
+    "p75_us": 53.2,
+    "p99_us": 76.8,
+    "max_us": 5653.3
+   },
+   "cell": "latest20_user100",
+   "arm": "D",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.88 5.80 7.94 1/607 3406182",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 21181,
+   "sps": 10617.1,
+   "server_cpu_us_per_stmt": 47.7,
+   "lat": {
+    "n": 21181,
+    "p0_us": 84.5,
+    "p25_us": 88.0,
+    "p50_us": 89.6,
+    "p75_us": 93.2,
+    "p99_us": 158.3,
+    "max_us": 6003.8
+   },
+   "cell": "latest20_user100",
+   "arm": "T2",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.73 5.72 7.90 1/607 3406190",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 20476,
+   "sps": 10264.0,
+   "server_cpu_us_per_stmt": 47.4,
+   "lat": {
+    "n": 20476,
+    "p0_us": 84.5,
+    "p25_us": 88.1,
+    "p50_us": 89.7,
+    "p75_us": 93.9,
+    "p99_us": 165.5,
+    "max_us": 1425.1
+   },
+   "cell": "latest20_user100",
+   "arm": "T",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.73 5.72 7.90 1/600 3406196",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 19497,
+   "sps": 9775.0,
+   "server_cpu_us_per_stmt": 49.8,
+   "lat": {
+    "n": 19497,
+    "p0_us": 84.4,
+    "p25_us": 88.2,
+    "p50_us": 90.3,
+    "p75_us": 97.5,
+    "p99_us": 169.6,
+    "max_us": 814.9
+   },
+   "cell": "latest20_user100",
+   "arm": "T2",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.73 5.72 7.90 1/614 3406223",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 36821,
+   "sps": 18493.1,
+   "server_cpu_us_per_stmt": 22.8,
+   "lat": {
+    "n": 36821,
+    "p0_us": 47.3,
+    "p25_us": 49.7,
+    "p50_us": 50.6,
+    "p75_us": 54.1,
+    "p99_us": 76.6,
+    "max_us": 1446.0
+   },
+   "cell": "latest20_user100",
+   "arm": "D",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.67 5.65 7.87 1/615 3406230",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 16541,
+   "sps": 8292.7,
+   "server_cpu_us_per_stmt": 57.4,
+   "lat": {
+    "n": 16541,
+    "p0_us": 85.4,
+    "p25_us": 89.3,
+    "p50_us": 94.5,
+    "p75_us": 157.8,
+    "p99_us": 179.2,
+    "max_us": 4332.2
+   },
+   "cell": "latest20_user100",
+   "arm": "P",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.67 5.65 7.87 1/617 3406241",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 17629,
+   "sps": 8838.0,
+   "server_cpu_us_per_stmt": 52.8,
+   "lat": {
+    "n": 17629,
+    "p0_us": 84.5,
+    "p25_us": 88.6,
+    "p50_us": 92.5,
+    "p75_us": 153.8,
+    "p99_us": 175.3,
+    "max_us": 10724.4
+   },
+   "cell": "latest20_user10000",
+   "arm": "T",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.54 5.58 7.83 1/612 3406272",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 20162,
+   "sps": 10107.1,
+   "server_cpu_us_per_stmt": 48.6,
+   "lat": {
+    "n": 20162,
+    "p0_us": 85.5,
+    "p25_us": 89.1,
+    "p50_us": 90.8,
+    "p75_us": 95.3,
+    "p99_us": 169.0,
+    "max_us": 745.1
+   },
+   "cell": "latest20_user10000",
+   "arm": "P",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.54 5.58 7.83 1/612 3406299",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 34042,
+   "sps": 17099.7,
+   "server_cpu_us_per_stmt": 24.4,
+   "lat": {
+    "n": 34042,
+    "p0_us": 47.8,
+    "p25_us": 50.7,
+    "p50_us": 52.3,
+    "p75_us": 69.2,
+    "p99_us": 82.4,
+    "max_us": 5958.7
+   },
+   "cell": "latest20_user10000",
+   "arm": "D",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.42 5.50 7.80 1/616 3406311",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 19296,
+   "sps": 9674.5,
+   "server_cpu_us_per_stmt": 48.7,
+   "lat": {
+    "n": 19296,
+    "p0_us": 85.6,
+    "p25_us": 88.9,
+    "p50_us": 90.6,
+    "p75_us": 98.0,
+    "p99_us": 168.0,
+    "max_us": 3299.4
+   },
+   "cell": "latest20_user10000",
+   "arm": "T2",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.42 5.50 7.80 2/624 3406327",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 20705,
+   "sps": 10380.1,
+   "server_cpu_us_per_stmt": 46.8,
+   "lat": {
+    "n": 20705,
+    "p0_us": 86.0,
+    "p25_us": 89.2,
+    "p50_us": 90.8,
+    "p75_us": 94.7,
+    "p99_us": 162.8,
+    "max_us": 451.4
+   },
+   "cell": "latest20_user10000",
+   "arm": "T",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.42 5.50 7.80 2/624 3406333",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 20496,
+   "sps": 10275.5,
+   "server_cpu_us_per_stmt": 47.8,
+   "lat": {
+    "n": 20496,
+    "p0_us": 85.2,
+    "p25_us": 89.0,
+    "p50_us": 90.4,
+    "p75_us": 94.1,
+    "p99_us": 166.4,
+    "max_us": 1546.3
+   },
+   "cell": "latest20_user10000",
+   "arm": "T2",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.30 5.43 7.76 1/616 3406343",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 33982,
+   "sps": 17068.6,
+   "server_cpu_us_per_stmt": 24.1,
+   "lat": {
+    "n": 33982,
+    "p0_us": 47.4,
+    "p25_us": 50.5,
+    "p50_us": 52.3,
+    "p75_us": 68.5,
+    "p99_us": 85.0,
+    "max_us": 2409.7
+   },
+   "cell": "latest20_user10000",
+   "arm": "D",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.30 5.43 7.76 1/616 3406398",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 20044,
+   "sps": 10048.5,
+   "server_cpu_us_per_stmt": 48.4,
+   "lat": {
+    "n": 20044,
+    "p0_us": 86.4,
+    "p25_us": 90.0,
+    "p50_us": 91.9,
+    "p75_us": 96.1,
+    "p99_us": 168.9,
+    "max_us": 1343.2
+   },
+   "cell": "latest20_user10000",
+   "arm": "P",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.28 5.37 7.73 3/615 3406417",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 19502,
+   "sps": 9776.5,
+   "server_cpu_us_per_stmt": 50.8,
+   "lat": {
+    "n": 19502,
+    "p0_us": 88.5,
+    "p25_us": 92.3,
+    "p50_us": 94.6,
+    "p75_us": 99.1,
+    "p99_us": 168.1,
+    "max_us": 1847.9
+   },
+   "cell": "latest20_user100000",
+   "arm": "T",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.28 5.37 7.73 1/607 3406437",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 16367,
+   "sps": 8205.5,
+   "server_cpu_us_per_stmt": 56.2,
+   "lat": {
+    "n": 16367,
+    "p0_us": 86.8,
+    "p25_us": 91.4,
+    "p50_us": 98.1,
+    "p75_us": 158.2,
+    "p99_us": 185.9,
+    "max_us": 4480.6
+   },
+   "cell": "latest20_user100000",
+   "arm": "P",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.18 5.30 7.69 2/608 3406461",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 36180,
+   "sps": 18166.2,
+   "server_cpu_us_per_stmt": 23.2,
+   "lat": {
+    "n": 36180,
+    "p0_us": 46.9,
+    "p25_us": 49.6,
+    "p50_us": 50.5,
+    "p75_us": 54.2,
+    "p99_us": 83.5,
+    "max_us": 5586.1
+   },
+   "cell": "latest20_user100000",
+   "arm": "D",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.18 5.30 7.69 2/602 3406498",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 19780,
+   "sps": 9914.3,
+   "server_cpu_us_per_stmt": 51.6,
+   "lat": {
+    "n": 19780,
+    "p0_us": 87.2,
+    "p25_us": 91.0,
+    "p50_us": 93.1,
+    "p75_us": 99.7,
+    "p99_us": 178.9,
+    "max_us": 3942.2
+   },
+   "cell": "latest20_user100000",
+   "arm": "T2",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.18 5.30 7.69 1/616 3406580",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 20141,
+   "sps": 10096.1,
+   "server_cpu_us_per_stmt": 50.1,
+   "lat": {
+    "n": 20141,
+    "p0_us": 87.6,
+    "p25_us": 91.2,
+    "p50_us": 93.3,
+    "p75_us": 98.4,
+    "p99_us": 168.3,
+    "max_us": 4012.1
+   },
+   "cell": "latest20_user100000",
+   "arm": "T",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.00 5.21 7.65 1/616 3406594",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 18610,
+   "sps": 9328.7,
+   "server_cpu_us_per_stmt": 52.7,
+   "lat": {
+    "n": 18610,
+    "p0_us": 87.6,
+    "p25_us": 91.2,
+    "p50_us": 93.4,
+    "p75_us": 103.9,
+    "p99_us": 171.2,
+    "max_us": 1654.5
+   },
+   "cell": "latest20_user100000",
+   "arm": "T2",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.00 5.21 7.65 1/616 3406603",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 34894,
+   "sps": 17524.5,
+   "server_cpu_us_per_stmt": 24.1,
+   "lat": {
+    "n": 34894,
+    "p0_us": 47.4,
+    "p25_us": 50.1,
+    "p50_us": 51.4,
+    "p75_us": 67.4,
+    "p99_us": 81.1,
+    "max_us": 2505.6
+   },
+   "cell": "latest20_user100000",
+   "arm": "D",
+   "rep": 1,
+   "host": {
+    "loadavg": "1.92 5.14 7.61 2/616 3406609",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 18279,
+   "sps": 9163.3,
+   "server_cpu_us_per_stmt": 52.0,
+   "lat": {
+    "n": 18279,
+    "p0_us": 86.5,
+    "p25_us": 90.3,
+    "p50_us": 92.8,
+    "p75_us": 111.9,
+    "p99_us": 180.0,
+    "max_us": 2268.9
+   },
+   "cell": "latest20_user100000",
+   "arm": "P",
+   "rep": 1,
+   "host": {
+    "loadavg": "1.92 5.14 7.61 1/623 3406643",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 12135,
+   "sps": 6086.0,
+   "server_cpu_us_per_stmt": 64.3,
+   "lat": {
+    "n": 12135,
+    "p0_us": 100.5,
+    "p25_us": 129.5,
+    "p50_us": 139.7,
+    "p75_us": 153.2,
+    "p99_us": 821.8,
+    "max_us": 5647.9
+   },
+   "cell": "id_desc_limit20",
+   "arm": "T",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.57 5.22 7.63 11/655 3406795",
+    "cc1plus": "8"
+   }
+  },
+  {
+   "stmts": 11381,
+   "sps": 5707.6,
+   "server_cpu_us_per_stmt": 69.4,
+   "lat": {
+    "n": 11381,
+    "p0_us": 103.1,
+    "p25_us": 134.0,
+    "p50_us": 147.8,
+    "p75_us": 164.8,
+    "p99_us": 1208.5,
+    "max_us": 6395.5
+   },
+   "cell": "id_desc_limit20",
+   "arm": "P",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.57 5.22 7.63 10/649 3406820",
+    "cc1plus": "7"
+   }
+  },
+  {
+   "stmts": 19490,
+   "sps": 9770.1,
+   "server_cpu_us_per_stmt": 38.5,
+   "lat": {
+    "n": 19490,
+    "p0_us": 61.2,
+    "p25_us": 75.6,
+    "p50_us": 80.3,
+    "p75_us": 88.1,
+    "p99_us": 251.6,
+    "max_us": 6906.5
+   },
+   "cell": "id_desc_limit20",
+   "arm": "D",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.57 5.22 7.63 8/647 3406859",
+    "cc1plus": "7"
+   }
+  },
+  {
+   "stmts": 12256,
+   "sps": 6145.3,
+   "server_cpu_us_per_stmt": 51.4,
+   "lat": {
+    "n": 12256,
+    "p0_us": 80.5,
+    "p25_us": 116.7,
+    "p50_us": 124.2,
+    "p75_us": 156.8,
+    "p99_us": 520.0,
+    "max_us": 10761.2
+   },
+   "cell": "id_desc_limit20",
+   "arm": "T2",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.16 5.30 7.64 4/632 3406871",
+    "cc1plus": "3"
+   }
+  },
+  {
+   "stmts": 19603,
+   "sps": 9837.3,
+   "server_cpu_us_per_stmt": 33.7,
+   "lat": {
+    "n": 19603,
+    "p0_us": 68.2,
+    "p25_us": 73.1,
+    "p50_us": 105.7,
+    "p75_us": 119.2,
+    "p99_us": 168.5,
+    "max_us": 3615.1
+   },
+   "cell": "id_desc_limit20",
+   "arm": "T",
+   "rep": 1,
+   "host": {
+    "loadavg": "3.16 5.30 7.64 3/630 3406893",
+    "cc1plus": "2"
+   }
+  },
+  {
+   "stmts": 22213,
+   "sps": 11145.2,
+   "server_cpu_us_per_stmt": 31.1,
+   "lat": {
+    "n": 22213,
+    "p0_us": 68.0,
+    "p25_us": 71.7,
+    "p50_us": 74.8,
+    "p75_us": 104.2,
+    "p99_us": 160.6,
+    "max_us": 5778.1
+   },
+   "cell": "id_desc_limit20",
+   "arm": "T2",
+   "rep": 1,
+   "host": {
+    "loadavg": "3.07 5.24 7.61 4/628 3406917",
+    "cc1plus": "1"
+   }
+  },
+  {
+   "stmts": 33144,
+   "sps": 16647.9,
+   "server_cpu_us_per_stmt": 25.0,
+   "lat": {
+    "n": 33144,
+    "p0_us": 47.5,
+    "p25_us": 50.7,
+    "p50_us": 54.1,
+    "p75_us": 70.3,
+    "p99_us": 82.8,
+    "max_us": 864.8
+   },
+   "cell": "id_desc_limit20",
+   "arm": "D",
+   "rep": 1,
+   "host": {
+    "loadavg": "3.07 5.24 7.61 3/621 3406926",
+    "cc1plus": "1"
+   }
+  },
+  {
+   "stmts": 18811,
+   "sps": 9436.5,
+   "server_cpu_us_per_stmt": 38.3,
+   "lat": {
+    "n": 18811,
+    "p0_us": 70.8,
+    "p25_us": 75.4,
+    "p50_us": 118.0,
+    "p75_us": 125.6,
+    "p99_us": 159.1,
+    "max_us": 1044.9
+   },
+   "cell": "id_desc_limit20",
+   "arm": "P",
+   "rep": 1,
+   "host": {
+    "loadavg": "3.07 5.24 7.61 2/621 3406952",
+    "cc1plus": "1"
+   }
+  },
+  {
+   "stmts": 9792,
+   "sps": 4904.7,
+   "server_cpu_us_per_stmt": 133.8,
+   "lat": {
+    "n": 9792,
+    "p0_us": 157.0,
+    "p25_us": 168.2,
+    "p50_us": 221.9,
+    "p75_us": 228.1,
+    "p99_us": 273.8,
+    "max_us": 1137.4
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "T",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.06 5.20 7.58 2/613 3406964",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 8577,
+   "sps": 4295.2,
+   "server_cpu_us_per_stmt": 159.7,
+   "lat": {
+    "n": 8577,
+    "p0_us": 182.5,
+    "p25_us": 192.4,
+    "p50_us": 250.6,
+    "p75_us": 255.9,
+    "p99_us": 335.2,
+    "max_us": 1800.4
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "P",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.06 5.20 7.58 1/614 3407008",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 31508,
+   "sps": 15826.9,
+   "server_cpu_us_per_stmt": 26.0,
+   "lat": {
+    "n": 31508,
+    "p0_us": 46.6,
+    "p25_us": 51.0,
+    "p50_us": 68.8,
+    "p75_us": 70.9,
+    "p99_us": 84.7,
+    "max_us": 1915.4
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "D",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.82 5.12 7.54 1/615 3407029",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 9684,
+   "sps": 4850.8,
+   "server_cpu_us_per_stmt": 132.2,
+   "lat": {
+    "n": 9684,
+    "p0_us": 155.1,
+    "p25_us": 168.6,
+    "p50_us": 222.8,
+    "p75_us": 228.0,
+    "p99_us": 277.9,
+    "max_us": 603.1
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "T2",
+   "rep": 0,
+   "host": {
+    "loadavg": "2.82 5.12 7.54 3/618 3407048",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 9487,
+   "sps": 4752.0,
+   "server_cpu_us_per_stmt": 133.9,
+   "lat": {
+    "n": 9487,
+    "p0_us": 154.1,
+    "p25_us": 172.3,
+    "p50_us": 224.0,
+    "p75_us": 228.4,
+    "p99_us": 273.6,
+    "max_us": 429.6
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "T",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.67 5.05 7.51 1/615 3407054",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 9450,
+   "sps": 4733.4,
+   "server_cpu_us_per_stmt": 134.4,
+   "lat": {
+    "n": 9450,
+    "p0_us": 155.6,
+    "p25_us": 170.8,
+    "p50_us": 224.0,
+    "p75_us": 228.8,
+    "p99_us": 292.2,
+    "max_us": 6598.1
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "T2",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.67 5.05 7.51 1/622 3407079",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 32175,
+   "sps": 16161.5,
+   "server_cpu_us_per_stmt": 25.5,
+   "lat": {
+    "n": 32175,
+    "p0_us": 48.0,
+    "p25_us": 51.2,
+    "p50_us": 56.7,
+    "p75_us": 70.6,
+    "p99_us": 91.4,
+    "max_us": 5267.3
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "D",
+   "rep": 1,
+   "host": {
+    "loadavg": "2.67 5.05 7.51 3/621 3407159",
+    "cc1plus": "0"
+   }
+  },
+  {
+   "stmts": 4090,
+   "sps": 2048.6,
+   "server_cpu_us_per_stmt": 330.1,
+   "lat": {
+    "n": 4090,
+    "p0_us": 184.1,
+    "p25_us": 414.6,
+    "p50_us": 447.6,
+    "p75_us": 472.3,
+    "p99_us": 2173.1,
+    "max_us": 6917.0
+   },
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "P",
+   "rep": 1,
+   "host": {
+    "loadavg": "3.18 5.12 7.52 10/642 3407214",
+    "cc1plus": "7"
+   }
+  },
+  {
+   "stmts": 5704,
+   "sps": 2857.4,
+   "server_cpu_us_per_stmt": 227.9,
+   "lat": {
+    "n": 5704,
+    "p0_us": 200.4,
+    "p25_us": 299.9,
+    "p50_us": 318.5,
+    "p75_us": 337.0,
+    "p99_us": 615.6,
+    "max_us": 6955.2
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "T",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.18 5.12 7.52 9/650 3407256",
+    "cc1plus": "7"
+   }
+  },
+  {
+   "stmts": 4429,
+   "sps": 2218.2,
+   "server_cpu_us_per_stmt": 307.1,
+   "lat": {
+    "n": 4429,
+    "p0_us": 220.5,
+    "p25_us": 388.2,
+    "p50_us": 408.3,
+    "p75_us": 431.6,
+    "p99_us": 1896.4,
+    "max_us": 8563.7
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "P",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.65 5.18 7.52 10/643 3407291",
+    "cc1plus": "8"
+   }
+  },
+  {
+   "stmts": 20773,
+   "sps": 10427.0,
+   "server_cpu_us_per_stmt": 44.8,
+   "lat": {
+    "n": 20773,
+    "p0_us": 63.2,
+    "p25_us": 78.7,
+    "p50_us": 82.9,
+    "p75_us": 88.6,
+    "p99_us": 160.5,
+    "max_us": 7452.5
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "D",
+   "rep": 0,
+   "host": {
+    "loadavg": "3.65 5.18 7.52 12/643 3407312",
+    "cc1plus": "8"
+   }
+  },
+  {
+   "stmts": 3545,
+   "sps": 1774.1,
+   "server_cpu_us_per_stmt": 217.2,
+   "lat": {
+    "n": 3545,
+    "p0_us": 184.1,
+    "p25_us": 298.6,
+    "p50_us": 320.5,
+    "p75_us": 344.9,
+    "p99_us": 6248.6,
+    "max_us": 10702.2
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "T2",
+   "rep": 0,
+   "host": {
+    "loadavg": "4.07 5.24 7.53 9/643 3407341",
+    "cc1plus": "7"
+   }
+  },
+  {
+   "stmts": 5149,
+   "sps": 2579.3,
+   "server_cpu_us_per_stmt": 231.1,
+   "lat": {
+    "n": 5149,
+    "p0_us": 190.2,
+    "p25_us": 306.2,
+    "p50_us": 332.0,
+    "p75_us": 353.6,
+    "p99_us": 2100.0,
+    "max_us": 6952.7
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "T",
+   "rep": 1,
+   "host": {
+    "loadavg": "4.07 5.24 7.53 9/634 3407353",
+    "cc1plus": "8"
+   }
+  },
+  {
+   "stmts": 4353,
+   "sps": 2180.2,
+   "server_cpu_us_per_stmt": 227.4,
+   "lat": {
+    "n": 4353,
+    "p0_us": 209.7,
+    "p25_us": 312.3,
+    "p50_us": 332.2,
+    "p75_us": 355.8,
+    "p99_us": 4272.4,
+    "max_us": 8695.6
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "T2",
+   "rep": 1,
+   "host": {
+    "loadavg": "4.07 5.24 7.53 10/634 3407389",
+    "cc1plus": "7"
+   }
+  },
+  {
+   "stmts": 19322,
+   "sps": 9705.4,
+   "server_cpu_us_per_stmt": 44.0,
+   "lat": {
+    "n": 19322,
+    "p0_us": 61.8,
+    "p25_us": 79.5,
+    "p50_us": 85.3,
+    "p75_us": 94.0,
+    "p99_us": 351.5,
+    "max_us": 6769.3
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "D",
+   "rep": 1,
+   "host": {
+    "loadavg": "4.47 5.31 7.54 9/634 3407407",
+    "cc1plus": "6"
+   }
+  },
+  {
+   "stmts": 3025,
+   "sps": 1513.7,
+   "server_cpu_us_per_stmt": 297.5,
+   "lat": {
+    "n": 3025,
+    "p0_us": 219.8,
+    "p25_us": 370.0,
+    "p50_us": 395.0,
+    "p75_us": 423.5,
+    "p99_us": 6586.7,
+    "max_us": 9064.7
+   },
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "P",
+   "rep": 1,
+   "host": {
+    "loadavg": "4.47 5.31 7.54 11/642 3407468",
+    "cc1plus": "8"
+   }
+  }
+ ],
+ "plans": [
+  {
+   "cell": "latest20_user100",
+   "arm": "T",
+   "sql": "SELECT * FROM cv_t WHERE user_id = 1 ORDER BY created_at DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=21 opens=1 pattern_id=0xa992b83f3fc9a25 fetch_id=0xb4409745c517ab14",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cv_t order=index_desc",
+    "  filter 0:0.1 = 1",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 IndexProbe cv_t opens=1 examined=20 matched=20 sel=100% pages=21 index_scanned=100 index_resolved=20",
+    "DB time 0.34 ms = CPU 0.34"
+   ]
+  },
+  {
+   "cell": "latest20_user100",
+   "arm": "P",
+   "sql": "SELECT * FROM cv_t WHERE user_id = 1 AND created_at BETWEEN 875705 AND 1101000 ORDER BY created_at DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=21 opens=1 pattern_id=0xaad8576face99ede fetch_id=0xfe8604f63262e2dd",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexRange cv_t order=index_desc",
+    "  filter 0:0.1 = 1",
+    "  filter 0:0.2 >= 875705",
+    "  filter 0:0.2 <= 1101000",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 IndexRange cv_t opens=1 examined=20 matched=20 sel=100% pages=21 index_scanned=20 index_resolved=20",
+    "DB time 0.08 ms = CPU 0.08"
+   ]
+  },
+  {
+   "cell": "latest20_user100",
+   "arm": "D",
+   "sql": "SELECT * FROM cv_t WHERE id = 55555",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8b829d661119829c fetch_id=0x8dac9b184b016a83",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cv_t key=55555",
+    "  filter 0:0.0 = 55555",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cv_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.08 ms = CPU 0.08"
+   ]
+  },
+  {
+   "cell": "latest20_user10000",
+   "arm": "T",
+   "sql": "SELECT * FROM cv_t WHERE user_id = 2 ORDER BY created_at DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=21 opens=1 pattern_id=0xa992b83f3fc9a25 fetch_id=0xb4409745c517ab14",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cv_t order=index_desc",
+    "  filter 0:0.1 = 2",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 IndexProbe cv_t opens=1 examined=20 matched=20 sel=100% pages=21 index_scanned=106 index_resolved=20",
+    "DB time 0.13 ms = CPU 0.13"
+   ]
+  },
+  {
+   "cell": "latest20_user10000",
+   "arm": "P",
+   "sql": "SELECT * FROM cv_t WHERE user_id = 2 AND created_at BETWEEN 1098615 AND 1101000 ORDER BY created_at DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=21 opens=1 pattern_id=0xaad8576face99ede fetch_id=0xfe8604f63262e2dd",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexRange cv_t order=index_desc",
+    "  filter 0:0.1 = 2",
+    "  filter 0:0.2 >= 1098615",
+    "  filter 0:0.2 <= 1101000",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 IndexRange cv_t opens=1 examined=20 matched=20 sel=100% pages=21 index_scanned=20 index_resolved=20",
+    "DB time 0.06 ms = CPU 0.06"
+   ]
+  },
+  {
+   "cell": "latest20_user10000",
+   "arm": "D",
+   "sql": "SELECT * FROM cv_t WHERE id = 55555",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8b829d661119829c fetch_id=0x8dac9b184b016a83",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cv_t key=55555",
+    "  filter 0:0.0 = 55555",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cv_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.02 ms = CPU 0.02"
+   ]
+  },
+  {
+   "cell": "latest20_user100000",
+   "arm": "T",
+   "sql": "SELECT * FROM cv_t WHERE user_id = 3 ORDER BY created_at DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=21 opens=1 pattern_id=0xa992b83f3fc9a25 fetch_id=0xb4409745c517ab14",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexProbe cv_t order=index_desc",
+    "  filter 0:0.1 = 3",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 IndexProbe cv_t opens=1 examined=20 matched=20 sel=100% pages=21 index_scanned=203 index_resolved=20",
+    "DB time 0.14 ms = CPU 0.14"
+   ]
+  },
+  {
+   "cell": "latest20_user100000",
+   "arm": "P",
+   "sql": "SELECT * FROM cv_t WHERE user_id = 3 AND created_at BETWEEN 1100767 AND 1101000 ORDER BY created_at DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=21 opens=1 pattern_id=0xaad8576face99ede fetch_id=0xfe8604f63262e2dd",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 IndexRange cv_t order=index_desc",
+    "  filter 0:0.1 = 3",
+    "  filter 0:0.2 >= 1100767",
+    "  filter 0:0.2 <= 1101000",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 IndexRange cv_t opens=1 examined=20 matched=20 sel=100% pages=21 index_scanned=20 index_resolved=20",
+    "DB time 0.14 ms = CPU 0.14"
+   ]
+  },
+  {
+   "cell": "latest20_user100000",
+   "arm": "D",
+   "sql": "SELECT * FROM cv_t WHERE id = 55555",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8b829d661119829c fetch_id=0x8dac9b184b016a83",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cv_t key=55555",
+    "  filter 0:0.0 = 55555",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cv_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.06 ms = CPU 0.06"
+   ]
+  },
+  {
+   "cell": "id_desc_limit20",
+   "arm": "T",
+   "sql": "SELECT * FROM cv_t ORDER BY id DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=20 pages=1 opens=1 pattern_id=0xa11567670961c05e fetch_id=0x50c6ff4a2749ddeb",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cv_t order=tuple_key_desc",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 Scan cv_t opens=1 examined=20 matched=20 sel=100% pages=1",
+    "DB time 0.07 ms = CPU 0.07"
+   ]
+  },
+  {
+   "cell": "id_desc_limit20",
+   "arm": "P",
+   "sql": "SELECT * FROM cv_t WHERE id BETWEEN 110081 AND 110100 ORDER BY id DESC LIMIT 20",
+   "analyze": [
+    "analyze rows=20 class=RangeSelect steps=1 examined=20 pages=1 opens=1 pattern_id=0xea010e1170bc3d80 fetch_id=0x9ff79b86f0a6d2b7",
+    "class=RangeSelect steps=1 hoisted=0",
+    "step 0 Range cv_t range=[110081, 110100] order=tuple_key_desc",
+    "  filter 0:0.0 >= 110081",
+    "  filter 0:0.0 <= 110100",
+    "project * (4 column(s) of step 0)",
+    "quota limit=20",
+    "step 0 Range cv_t opens=1 examined=20 matched=20 sel=100% pages=1",
+    "DB time 0.04 ms = CPU 0.04"
+   ]
+  },
+  {
+   "cell": "id_desc_limit20",
+   "arm": "D",
+   "sql": "SELECT * FROM cv_t WHERE id = 55555",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8b829d661119829c fetch_id=0x8dac9b184b016a83",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cv_t key=55555",
+    "  filter 0:0.0 = 55555",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cv_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.03 ms = CPU 0.03"
+   ]
+  },
+  {
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "T",
+   "sql": "SELECT * FROM cv_t ORDER BY id DESC LIMIT 20 OFFSET 1000",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=1020 pages=8 opens=1 pattern_id=0x12cd2d033cb5a736 fetch_id=0x6565196223e78bcb",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cv_t order=tuple_key_desc",
+    "project * (4 column(s) of step 0)",
+    "quota offset=1000 limit=20",
+    "step 0 Scan cv_t opens=1 examined=1020 matched=1020 sel=100% pages=8",
+    "DB time 0.17 ms = CPU 0.17"
+   ]
+  },
+  {
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "P",
+   "sql": "SELECT * FROM cv_t WHERE id BETWEEN 109081 AND 110100 ORDER BY id DESC LIMIT 20 OFFSET 1000",
+   "analyze": [
+    "analyze rows=20 class=RangeSelect steps=1 examined=1020 pages=8 opens=1 pattern_id=0xd95285b4fcdd7f70 fetch_id=0x3bf483adc12282a7",
+    "class=RangeSelect steps=1 hoisted=0",
+    "step 0 Range cv_t range=[109081, 110100] order=tuple_key_desc",
+    "  filter 0:0.0 >= 109081",
+    "  filter 0:0.0 <= 110100",
+    "project * (4 column(s) of step 0)",
+    "quota offset=1000 limit=20",
+    "step 0 Range cv_t opens=1 examined=1020 matched=1020 sel=100% pages=8",
+    "DB time 0.15 ms = CPU 0.15"
+   ]
+  },
+  {
+   "cell": "id_desc_limit20_offset1000",
+   "arm": "D",
+   "sql": "SELECT * FROM cv_t WHERE id = 55555",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8b829d661119829c fetch_id=0x8dac9b184b016a83",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cv_t key=55555",
+    "  filter 0:0.0 = 55555",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cv_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.08 ms = CPU 0.08"
+   ]
+  },
+  {
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "T",
+   "sql": "SELECT * FROM cv_t ORDER BY id LIMIT 20 OFFSET 1000",
+   "analyze": [
+    "analyze rows=20 class=JoinSelect steps=1 examined=1020 pages=8 opens=1 pattern_id=0x9aed738822ebc74a fetch_id=0x7c80a3f67dcab949",
+    "class=JoinSelect steps=1 hoisted=0",
+    "step 0 Scan cv_t",
+    "project * (4 column(s) of step 0)",
+    "quota offset=1000 limit=20",
+    "step 0 Scan cv_t opens=1 examined=1020 matched=1020 sel=100% pages=8",
+    "DB time 0.23 ms = CPU 0.23"
+   ]
+  },
+  {
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "P",
+   "sql": "SELECT * FROM cv_t WHERE id BETWEEN 1 AND 1020 ORDER BY id LIMIT 20 OFFSET 1000",
+   "analyze": [
+    "analyze rows=20 class=RangeSelect steps=1 examined=1020 pages=8 opens=1 pattern_id=0x5be3f1695dd26300 fetch_id=0xa83689ae7f015fe5",
+    "class=RangeSelect steps=1 hoisted=0",
+    "step 0 Range cv_t range=[1, 1020]",
+    "  filter 0:0.0 >= 1",
+    "  filter 0:0.0 <= 1020",
+    "project * (4 column(s) of step 0)",
+    "quota offset=1000 limit=20",
+    "step 0 Range cv_t opens=1 examined=1020 matched=1020 sel=100% pages=8",
+    "DB time 0.26 ms = CPU 0.26"
+   ]
+  },
+  {
+   "cell": "id_asc_limit20_offset1000",
+   "arm": "D",
+   "sql": "SELECT * FROM cv_t WHERE id = 55555",
+   "analyze": [
+    "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x8b829d661119829c fetch_id=0x8dac9b184b016a83",
+    "class=PointSelect steps=1 hoisted=0",
+    "step 0 Lookup cv_t key=55555",
+    "  filter 0:0.0 = 55555",
+    "project * (4 column(s) of step 0)",
+    "step 0 Lookup cv_t opens=1 examined=1 matched=1 sel=100% pages=1",
+    "DB time 0.05 ms = CPU 0.05"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "cell": "latest20_user100",
+   "same_rows": true
+  },
+  {
+   "cell": "latest20_user10000",
+   "same_rows": true
+  },
+  {
+   "cell": "latest20_user100000",
+   "same_rows": true
+  },
+  {
+   "cell": "id_desc_limit20",
+   "same_rows": true
+  },
+  {
+   "cell": "id_desc_limit20_offset1000",
+   "same_rows": true
+  },
+  {
+   "cell": "id_asc_limit20_offset1000",
+   "same_rows": true
+  }
+ ]
+}

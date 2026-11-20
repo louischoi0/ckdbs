@@ -2674,6 +2674,11 @@ Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
   created_at)` can resolve every one of the user's entries to find 20 of a
   rare kind - no more than IX8a's step resolves, and the order no sort. Its
   index leaf reads are blocking reads, as every index step's are.
+- **A reverse walk across many leaves is not measured**: CV's close
+  (`bench/v3.4.15/results-cv-close-v3.4.15-5-g7d11ba44.md`) measured
+  `LIMIT 20` windows, served from one to a few leaves, where the descent
+  per leaf does not show; what it costs over hundreds of leaves - a
+  filter that rejects most rows, a deep `OFFSET` - is not known.
 
 ## Locking reads (DC)
 

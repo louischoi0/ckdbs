@@ -1,6 +1,8 @@
 # Work order CV - `ORDER BY ... LIMIT` served by the order a structure already holds: the ordered index walk and the reverse walk
 
-Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+Status: **CLOSED 2026-11-20 at CV-S4, not landed** - every stage on the
+work branch, the close measured (§7, CV-S4); landing waits for the
+operator's word. **Opened 2026-11-20 on the operator's standing go-ahead
 (go-ahead-achieving-milestone)**, on worktree `cv-ordered-index-walk` from
 `f4138860` (`v3.4.15-1-gf4138860`). Written 2026-11-15 on `main` at
 `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
@@ -513,3 +515,45 @@ On worktree `cv-ordered-index-walk`, over `10e7b0a4`.
   the walk is parked there - the rig interleaves on one core, and the
   second needs a walk placed at the leftmost leaf by timing.
 - **Suite**: 0 failed of 4,897 (`ctest -LE bs-nightly`) on S3's tree after the review's fixes.
+
+### CV-S4 - the close (2026-11-20)
+
+On worktree `cv-ordered-index-walk`, over `9d92a436` (`origin/main` merged
+into S3's `7d11ba44`; the merge brought documents only). Measured by
+`ck-tester` in `build-release`, A = `f4138860` (`v3.4.15-1-gf4138860`, the
+commit CV opened from) against B = `7d11ba44` (`v3.4.15-5-g7d11ba44`, CV's
+last code), with A2 a byte-identical copy of A as the in-run floor:
+`bench/v3.4.15/results-cv-close-v3.4.15-5-g7d11ba44.md`.
+
+- **CV-R5, the cost off the shape: none this host resolves.** In all 21
+  off-shape cells (`tools/cu_close_overhead.py`: point, range, index, scan
+  and join reads, keyed, conjunct and list updates, insert and delete, at
+  1,000 and 100,000 rows, five interleaved runs) B's server CPU per
+  statement is -3.3 % to +4.1 % of A's, inside the floor in every cell.
+  Against A2's distance alone, `update-in64` sits under one point above it
+  at both sizes (+2.6 % against +1.9 %, +4.1 % against +3.8 %), its p50
+  not moving with it, on a CU list path CV did not change; not a finding.
+  The added work - one byte test per accepted row, one per index step, a
+  coroutine call per slice - is far below the floor, about 1 % to 5 % a
+  cell.
+- **The gain (CV-S0's arms again)**: server CPU per statement, A (CV-S0)
+  against B - latest 20 of a user of 100 rows 115.7 against 53.0 µs, of
+  10,000 rows 7,565 against 58.5 µs, of 100,000 rows 72,500 against
+  54.2 µs; `ORDER BY id DESC LIMIT 20` 39,223 against 28.7 µs, and with
+  `OFFSET 1000` 46,860 against 125.0 µs. `ANALYZE` names `order=index_desc`
+  or `order=tuple_key_desc` in every cell, and the walk returned the proxy's
+  rows in all six. The reverse walk at 20 rows costs what S0's BETWEEN
+  proxy did on A, so its one descent per leaf (CV-Q1 (a)) does not show at
+  one to a few leaves.
+- **Cut** (the results file): a walk across many leaves, where that
+  descent per leaf adds up, was not measured - every cell's `LIMIT 20` is
+  served from one to a few leaves, the walk's best case; the sizes 200 and
+  10K, a wait decomposition and a PostgreSQL floor. A first pass was
+  discarded because another session's build started under it. The quiet
+  gate held about 57 minutes, outside the budget; the runs took about
+  4 minutes.
+- **Gaps**: `known-gaps.md` "Ordered walks (CV)" gains the unmeasured
+  many-leaf walk. The rest of the section stands as S1-S3 wrote it.
+- **Suite**: not run again at the close - no build input changed since
+  S3's 0 failed of 4,897 at `7d11ba44`; the merge `9d92a436` brought
+  documents only.
