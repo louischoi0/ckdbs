@@ -209,3 +209,12 @@ took under them.
 | **Skipped on the operator's word** | the pre-push hook, and the rest of the simulator corpus: it is not run on the closing tree and is not reported as a pass. **And the full suite on the tree as pushed**: `origin/main` had moved to `799a767d` with code (DH, the audit's dead code) and was merged again at the push; the merged tree was built and 111 cells run on it, the WAL golden log re-pinned for DA-S3 and DH-S1b together among them, and the suite's figure above is the tree before that merge |
 | **Does not settle** | a tag, a version; the items §19 leaves open (DI-S2's re-keyed collector under the rule of §9; DI-Q7 (c) as CLA's reading of that rule against its own stage) |
 | **Recorded at** | this file; the DI order's header and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 21. v3.4.17 named and tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.17"* - after CLA's report that DI landed on `main` at `fba5529f` with the hook skipped, that the suite on that tree had been stopped on the operator's word before it reported, and that nothing further was to push |
+| **Mark** | **The version of record is `v3.4.17`**, the operator's own word: an annotated tag on `main` at `fba5529f` (DI's merge, over DH's `799a767d` and the audit's dead-code removals). Its message states what is built since `v3.4.16` (DI, DA-S3, DH, the audit's removals, the statistics rules), the format event (superblock 38: a `v3.4.16` volume does not mount), **that the full suite was not executed on the tagged tree** - last run 0 failed of 4933 at `4459df5c`, before DI's second merge; the tagged tree built and 111 cells passed - and the gaps that bound it: DI's unresolved lean on a write, a dropped relation's statistics rows kept until a restart, the collector left to DL, what a plan out of reach does not establish, DH's stopped close measurement and its two accepted costs, and `v3.4.16`'s carried gaps |
+| **Does not settle** | anything after `fba5529f` but this record; whether the suite is run on the tagged tree |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
