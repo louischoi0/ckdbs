@@ -292,8 +292,9 @@ TEST_F(StatementCostRig, AConflictArmsSubqueryIsBoundWhetherOrNotARowConflicts) 
 
     EXPECT_EQ(free_key.binding.n, 2u) << "the target, then the arm's subquery's relation";
     EXPECT_TRUE(free_key.binding == taken_key.binding);
-    const stats::StatementShape* shape =
-        ShapeOf(stats::StatementStats::Snapshot(), "INSERT", upsert);
+    // Kept: the row found points into it.
+    const std::vector<stats::StatementShape> shapes = stats::StatementStats::Snapshot();
+    const stats::StatementShape* shape = ShapeOf(shapes, "INSERT", upsert);
     ASSERT_NE(shape, nullptr);
     EXPECT_EQ(shape->calls, 2u) << "one row for both";
 }
