@@ -79,6 +79,28 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **No cell crashes a multi-core instance under the rotated checkpoint
+  gate and mounts it.** On `dh-page-image-volume` over `76fe6777`
+  (DH-S2), 2026-11-20. Since DH-S1a a core's own checkpoint comes every
+  `cores` periods, and recovery finds a transaction that core left open
+  through that core's `CHECKPOINT_BEGIN`, which the anchor's fold keeps
+  in the replay range (`wal.md` §11). That chain is pinned in pieces -
+  the gate's turns (`CheckpointGateCadenceTest`), the fold
+  (`SuperBlockFoldTest`), analysis seeding from every begin and keeping
+  what a later begin does not list
+  (`AnalysisTest.ALaterBeginThatDoesNotListATransactionDoesNotClearIt`) -
+  and by no cell end to end: the simulator is one core, the two-core rig's
+  gate is not rotated, and `SetRotation` is reached only by a running
+  server. The order's "a crash between every pair of runs with a live
+  transaction on each core" was not built; it needs a multi-core crash
+  harness that does not exist. **Owner: none.**
+- **Restore and PITR over a log of packed images are covered only
+  implicitly.** Same commit. The simulator's backup cell
+  (`SimLoop.ABackupTakenAcrossTheRunRestoresToItsStopOnEveryCommittedSeed`)
+  and `PointInTimeTest.ARestoreToAnLsnPastTheStopEndsJustBeforeIt` run
+  with the write fetch's image on, so their logs can hold
+  `PACKED_PAGE_IMAGE` records; neither asserts that one lies in the
+  window it restores over. **Owner: none.**
 - **`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` fails about
   one run in ten on a loaded host.** On `dh-page-image-volume` over
   `8fc41252`, 2026-11-20, at a load average of 15 to 19: once in DH-S1b's

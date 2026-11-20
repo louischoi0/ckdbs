@@ -22,6 +22,8 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/tagged_cell.hpp"
 #include "kds/storage/varheap.hpp"
+#include "kds/wal/log_scanner.hpp"
+#include "kds/wal/record.hpp"
 #include "view_text.hpp"
 
 // The simulation harness's own regression suite (bench/workplan-teststrategy
@@ -449,6 +451,75 @@ TEST_F(SimIntegrityCorruption, ATornCatalogPageIsHealedAtTheMount) {
     ASSERT_TRUE(rebooted.ok()) << rebooted.message();
     EXPECT_GE(instance_->recovery().pages_healed, 1u) << "the mount healed no page";
     EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("20"), std::string::npos)
+        << instance_->Execute("SELECT COUNT(*) FROM h");
+    const IntegrityReport report =
+        CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());
+    EXPECT_TRUE(report.ok()) << report.Summary();
+}
+
+// DH-S2: a tear healed from a packed image, through the production path -
+// the store's write fetch, the manager's packer, the mount's redo. The torn
+// write is the second SYNC's first, which the trace names: a catalog page
+// bootstrap created, copied by the first SYNC and written again by the
+// inserts after it. The log from the first SYNC on holds, for that page, a
+// PACKED_PAGE_IMAGE and neither a PAGE_INIT nor a verbatim image - so the
+// packed image is the whole-page record the heal can only have come from.
+TEST_F(SimIntegrityCorruption, ATornPageIsHealedFromAPackedImage) {
+    MakeTables();
+    for (int i = 0; i < 20; ++i) Insert("h", i, "short");
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");  // every page copied: each owes an image
+    const auto synced_at =
+        testing_view::MetaField(instance_->Execute("SHOW META"), "wal_append_lsn");
+    ASSERT_TRUE(synced_at.has_value());
+    for (int i = 20; i < 40; ++i) Insert("h", i, "short");
+
+    instance_->page_device().ClearTrace();
+    instance_->page_device().TearNextWrite(100);
+    ASSERT_EQ(instance_->Execute("SYNC"), "OK synced");
+    PageId torn = kInvalidPageId;
+    for (const auto& op : instance_->page_device().trace()) {
+        if (op.kind == storage::MemoryPageDevice::OpKind::kWrite) {
+            torn = op.first_page_id;  // the torn write's first page takes the 100 bytes
+            break;
+        }
+    }
+    ASSERT_NE(torn, kInvalidPageId) << "the SYNC wrote no page";
+
+    // Every whole-page record the log holds for the torn page since the
+    // first SYNC, and what the write fetch logged in all.
+    std::size_t packed_for_torn = 0, other_whole_for_torn = 0, packed = 0, verbatim_fetch = 0;
+    const auto scanned = wal::ScanLog(
+        instance_->log_device(), 0, std::stoull(*synced_at), [&](const wal::DecodedRecord& r) {
+            const bool for_torn = r.header.page_id == torn;
+            switch (r.type()) {
+                case wal::RecordType::kPackedPageImage:
+                    ++packed;
+                    packed_for_torn += for_torn;
+                    break;
+                case wal::RecordType::kFullPageImage:
+                    // A write fetch's image is at `kNoTxnId`; a DDL's is not.
+                    verbatim_fetch += r.header.txn_id == wal::kNoTxnId;
+                    other_whole_for_torn += for_torn;
+                    break;
+                case wal::RecordType::kPageInit:
+                    other_whole_for_torn += for_torn;
+                    break;
+                default:
+                    break;
+            }
+            return Status::OK();
+        });
+    ASSERT_TRUE(scanned.ok()) << scanned.status().message();
+    ASSERT_GE(packed_for_torn, 1u) << "page " << torn << " was not imaged packed";
+    EXPECT_EQ(other_whole_for_torn, 0u) << "page " << torn << " has another whole-page record";
+    EXPECT_GE(packed, 2u);
+    EXPECT_EQ(verbatim_fetch, 0u) << "a page of these small tables did not pack";
+
+    instance_->Crash();
+    Status rebooted = instance_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_GE(instance_->recovery().pages_healed, 1u) << "the mount healed no page";
+    EXPECT_NE(instance_->Execute("SELECT COUNT(*) FROM h").find("40"), std::string::npos)
         << instance_->Execute("SELECT COUNT(*) FROM h");
     const IntegrityReport report =
         CheckInstance(instance_->store(), instance_->page_device(), instance_->catalog());

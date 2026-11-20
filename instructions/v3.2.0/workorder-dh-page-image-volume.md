@@ -620,6 +620,33 @@ promise (`known-gaps.md`, Testing). After the re-pin, the review's edits
 and DH-S2's cells: **0 failed of 4,883 run** (230 s), on the tree that
 holds this stage and DH-S2's two cells as first written.
 
+### DH-S2 - the proof (2026-11-20)
+
+On `dh-page-image-volume`, over `76fe6777`; tests and documents only.
+
+**§5's list, item by item.**
+
+| asked | where it stands |
+|---|---|
+| a tear at every page write healed and reconciled, over the new image | **run**: `scripts/sim.sh` and the power-loss sweep go through `WalManager::LogPageImage`, so every image they log is packed where the page packs (the gates below). **One cell names it**: `SimIntegrityCorruption.ATornPageIsHealedFromAPackedImage` tears a catalog page, shows from the log that a `PACKED_PAGE_IMAGE` is the only whole-page record the heal could have used, and mounts. A tear a `PAGE_INIT` heals is not the image's |
+| a short, corrupt or oversized image refused by name (DH-R2) | **built** in DH-S1b: `WalPayloadTest.PackedPageImageRefusesEverythingThatIsNotOneEncoding`, `RedoTest.APackedImageThatDoesNotDecodeIsRefusedAndThePageIsUntouched` |
+| an older log read by the new binary | **built**: kind 10 is untouched and its redo and heal cells stand (`RedoHealTest`, `WalGoldenLog`) |
+| the reverse | **not executed.** `RedoTest.APageRecordWithNoApplierEndsRecoveryByName` drives the branch an older build takes; no older binary was run against a newer log (`known-gaps.md`, WAL) |
+| restore and PITR over both | **implicit only**: the simulator's backup cell and the PITR cell run with images on and assert nothing about a packed image in their window (`known-gaps.md`, Testing) |
+| L3: a crash between every pair of runs with a live transaction on each core | **not built**: no multi-core crash-and-mount harness exists. The premise is pinned in pieces - the gate's turns, the fold, and `AnalysisTest.ALaterBeginThatDoesNotListATransactionDoesNotClearIt`, added here, for the transaction and the dirty page a core's own begin carries past other cores' begins (`known-gaps.md`, Testing) |
+
+**Gates.** The suite: 0 failed of 4,883 run on the tree holding DH-S1b
+and this stage's two cells as first written; after the review's edits to
+those two cells they and their fixtures' other cells were rebuilt and
+run, 32 of 32 passing, and the full suite was not run again.
+`scripts/sim.sh` (Release, at `76fe6777`): 280 runs, 0 failures.
+`scripts/bs/io_sweep.py --kinds power-loss-at-page-write --ops 300
+--jobs 6`: 252 runs, 163 points fired, 0 failures; how many of those
+tears were healed, and from which record, was not collected.
+`bs-nightly` cells: none run (the `asan`, `tsan` and `noassert` builds,
+the fuzzers, the differential and the nightly corpus). Overhead not
+measured; measured at the milestone's close.
+
 ### Review (`critics-developer`), per step
 
 **DH-S0 and DH-S1b's premise** (documents, results files and tools; no
@@ -708,3 +735,23 @@ kept as the decoder's cross-check and the room a second format would
 need); **merging redo's two image arms** (five lines, and the two decode
 differently). Not built, recorded in `known-gaps.md`: an older binary
 run against a newer log.
+
+**DH-S2.** Both new cells were correct and proved less than their
+comments said. Applied:
+
+- the simulator cell bounded the *average* image size and never showed
+  that the tear it healed was healed from a packed image - a `PAGE_INIT`
+  in range would have healed the same page. It now names the torn page
+  from the device's trace and reads the log: a `PACKED_PAGE_IMAGE` for
+  that page since the last sync, no `PAGE_INIT` and no verbatim image
+  for it, and no verbatim write-fetch image at all;
+- the analysis cell now carries a dirty page in the old begin as well,
+  so the redo half of the cadence's premise is pinned with the undo
+  half.
+
+Recorded as not built or implicit, on its item-by-item reading: the
+older binary on a newer log, restore and PITR over packed images, and
+the multi-core crash under the rotated gate. Rejected: **asserting a
+packed image inside the PITR cell's window** - a second fixture's log
+scan for a property the simulator cell now proves on the production
+path; the gap is recorded instead.
