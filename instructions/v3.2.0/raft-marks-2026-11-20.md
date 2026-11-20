@@ -21,7 +21,37 @@ took under them.
 | **Does not settle** | anything after `1eeab8ce` but this record; the ruling on DB's close deltas; DA-S3's host |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
 
-## 3. CV opened on the standing go-ahead
+## 3. DI written: a shape's statistics named by what the statement binds
+
+| | |
+|---|---|
+| **Word** | *"First, it seems the priority is to tie the parsing of a query and the statistics about a query to the oid and the namespace, so that there is no quiet wrong answer."* and, after CLA laid out five items with a proposal each, *"Write the DI work order as proposed."* (given in Korean; recorded in English) - in a conversation that compared the engine with a shared cursor cache and a query store |
+| **Mark** | **DI is written, not opened**: `instructions/v3.2.0/workorder-di-shape-identity.md`, in the main checkout on `main` at `f4138860` (`v3.4.15-1-gf4138860`), documents only. **"As proposed" marks four of the five items spoken, each (a)**: DI-Q1 (the binding enters the statistics key; the fetch id does not move), DI-Q2 (a statement with no binding keeps one row that says so), DI-Q4 (the Waystone opt-in's reach is not in DI), DI-Q5 (a renamed relation's plan reading `enabled` is in DI). The letter is CLA's proposal |
+| **Corrected** | Two things CLA said in the conversation. (1) The word speaks of a quiet wrong answer; CLA found no path on which a statement's rows are wrong by the fetch id's text identity - the plan tables, the advice and the posteriors compare oids, and a replay checks `rel_oid`. What is wrong is `sys.statement_stats`' row, which sums two bindings of one text with no mark; the order uses `[quiet-wrong]` for that reading and says so in §0. (2) The fifth item, the identity, was spoken as "the plan key, reused". The plan key exists for a searched join block only, so it would leave every one-relation statement merged; **DI-Q3 is restated in the order and is not covered by "as proposed"** |
+| **Does not settle** | DI-Q0, DI-Q3 and DI-Q6..Q11; whether DI opens; a statistics history or statistics per plan variant, which the conversation named as a later order |
+| **Recorded at** | this file; the DI order's header, §0 and §4; the DI row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 4. DI widened: every path
+
+| | |
+|---|---|
+| **Word** | *"Is there no such thing outside `statement_stats`? It has to be applied to every path on which this problem can occur."* (given in Korean; recorded in English) - after CLA's report that DI was written and pushed at `5915182c` |
+| **Mark** | **DI covers every structure that names a statement by its text alone** (DI-R2a). **DI-Q4 is re-marked (b)**: the Waystone opt-in's reach, which §3 marked out of DI, is in it. The order is amended in the main checkout on `main` at `5915182c`, documents only: §0a, the Cabin controller's signal as DI-S2 (DI-Q12), the opt-in and the trail as DI-S3 (DI-Q13, with a format event, DI-Q11) |
+| **Found** | Read at `5915182c`: the Cabin controller's execution signal is keyed by `pattern_id` alone and credits a pattern's whole heat to the `(relation, column)` seen last (`optimizer_signals.hpp:87-97`, `cabin_optimizer.cpp:239-240`), so one text over two relations prices one relation's Cabin with the other's heat. The engine, not a reader, acts on that merge; no result is wrong by it and the controller is off by default |
+| **Does not settle** | DI-Q0, DI-Q3, DI-Q6..Q13 but DI-Q4; whether DI opens; that the census is complete - 40 files name the two ids and DI-S0 opens the ones this reading did not |
+| **Recorded at** | this file; the DI order's header, §0a, §3, §4, §5 and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 5. DJ written: connections, sessions and cursors
+
+| | |
+|---|---|
+| **Word** | *"From the viewpoint of connections, cursors and connection pools, against the commercial databases (PostgreSQL, Oracle, Azure SQL), find the directions to fill in, or to improve into a design that fits kdbs better."* and, after CLA's reading of the tree and five directions, *"Write a work order for the improvement directions. And make the following options settable: a connection count limit, an idle session timeout."* (given in Korean; recorded in English) |
+| **Mark** | **DJ is written, not opened**: `instructions/v3.2.0/workorder-dj-connections-sessions-cursors.md`, in the main checkout on `main` at `4d72be11` (`v3.4.15-3-g4d72be11`), documents only. **The two settings are the operator's word and are DJ-S1**, built whatever DJ-S0 finds; their names, defaults and edges (DJ-Q1..Q7) are CLA's proposals, unmarked. The other parts - a session handed back clean, a wait at the transaction's head in place of `Begin`'s refusal, a bounded reply - are CLA's directions under "the improvement directions", each gated on DJ-S0 and a mark. The letter is CLA's proposal |
+| **Differs from what CLA said** | CLA told the operator an idle-session timeout was not needed, an idle session holding memory only. The word asks for the setting; it is built, and CLA proposes it off unless set (DJ-Q4 (a)), which is today's behaviour |
+| **Does not settle** | DJ-Q0..Q12 - among them the two keys' names and defaults, what the cap counts (a `C_CANCEL` connection never, DJ-R2 `[quiet-wrong]`), an administrator's reserve, whether a `C_PING` resets the idle clock; whether DJ opens |
+| **Recorded at** | this file; the DJ order's header and §0; the DJ row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 6. CV opened on the standing go-ahead
 
 | | |
 |---|---|

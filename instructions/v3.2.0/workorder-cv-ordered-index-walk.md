@@ -8,7 +8,7 @@ Status: **OPENED 2026-11-20 on the operator's standing go-ahead
 mark**: CV-Q0..Q6 are each adopted as CLA proposed them, and CV-Q7, raised
 at CV-S0, is written into §4 with its options before it is adopted - each
 **on the operator's standing go-ahead of 2026-11-20
-(go-ahead-achieving-milestone)** (`raft-marks-2026-11-20.md` §3). The
+(go-ahead-achieving-milestone)** (`raft-marks-2026-11-20.md` §6). The
 `[source-read]` claims of §1 were read at `a61ab905` and read again at
 `f4138860` (§7, CV-S0); where a line moved, §7 says so.
 
