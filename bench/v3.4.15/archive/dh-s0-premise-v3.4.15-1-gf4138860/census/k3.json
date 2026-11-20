@@ -1,0 +1,171 @@
+{
+ "label": "k3",
+ "wal_dirs": [
+  "wd/wal-keep/k3",
+  "wd/arch/k3"
+ ],
+ "from_lsn": 46842872,
+ "segments": 4,
+ "segment_ends": {
+  "wd/arch/k3/kds-264059d6237b4a68-0.log": "PAD",
+  "wd/arch/k3/kds-264059d6237b4a68-1.log": "PAD",
+  "wd/arch/k3/kds-264059d6237b4a68-2.log": "end of file",
+  "wd/wal-keep/k3/wal-0-3.log": "zero tail"
+ },
+ "crc_validated": false,
+ "records_by_type": {
+  "1": {
+   "count": 133578,
+   "bytes": 4274496
+  },
+  "2": {
+   "count": 133578,
+   "bytes": 4274496
+  },
+  "4": {
+   "count": 1671,
+   "bytes": 93576
+  },
+  "5": {
+   "count": 5,
+   "bytes": 768
+  },
+  "6": {
+   "count": 233377,
+   "bytes": 26670160
+  },
+  "10": {
+   "count": 16538,
+   "bytes": 136008512
+  },
+  "11": {
+   "count": 39,
+   "bytes": 163152
+  },
+  "12": {
+   "count": 39,
+   "bytes": 1560
+  },
+  "14": {
+   "count": 233382,
+   "bytes": 21871608
+  },
+  "26": {
+   "count": 1,
+   "bytes": 48
+  },
+  "29": {
+   "count": 99398,
+   "bytes": 7951840
+  },
+  "30": {
+   "count": 602,
+   "bytes": 14841480
+  }
+ },
+ "images_in_log_all": 16538,
+ "images_since_from_lsn": 16538,
+ "raw_sample": 3000,
+ "by_type": {
+  "3": {
+   "name": "btree_leaf",
+   "count": 15640,
+   "sampled": 3000,
+   "zero_share_mean": 0.6987028401692709,
+   "hole_len_mean": 15.0,
+   "hole_len_median": 15.0,
+   "hole_len_p90": 15,
+   "hole_start_p25_p50_p75": [
+    885,
+    885,
+    929
+   ],
+   "hole_share_mean": 0.0018310546875,
+   "L1": {
+    "mean_bytes": 8192.0,
+    "ratio_median": 1.0,
+    "ratio_p90": 1.0
+   },
+   "L1+lz4": {
+    "mean_bytes": 3463.7993333333334,
+    "ratio_median": 0.4246826171875,
+    "ratio_p90": 0.478515625
+   },
+   "L1+lz4_us": 13.148514670319855,
+   "zlib1": {
+    "mean_bytes": 2181.9603333333334,
+    "ratio_median": 0.2708740234375,
+    "ratio_p90": 0.316162109375
+   },
+   "zlib1_us": 144.88300366792828,
+   "lz4": {
+    "mean_bytes": 3459.7993333333334,
+    "ratio_median": 0.4241943359375,
+    "ratio_p90": 0.47802734375
+   },
+   "lz4_us": 13.404822675511241,
+   "zstd1": {
+    "mean_bytes": 2123.211333333333,
+    "ratio_median": 0.264892578125,
+    "ratio_p90": 0.30615234375
+   },
+   "zstd1_us": 34.00508135867616,
+   "zstd3": {
+    "mean_bytes": 1853.782,
+    "ratio_median": 0.23187255859375,
+    "ratio_p90": 0.271484375
+   },
+   "zstd3_us": 37.112910028857485
+  },
+  "4": {
+   "name": "undo",
+   "count": 898,
+   "sampled": 898,
+   "zero_share_mean": 0.7609369834441119,
+   "hole_len_mean": 1258.6603563474387,
+   "hole_len_median": 50.0,
+   "hole_len_p90": 5149,
+   "hole_start_p25_p50_p75": [
+    6374,
+    8142,
+    8142
+   ],
+   "hole_share_mean": 0.1536450630306932,
+   "L1": {
+    "mean_bytes": 6937.339643652561,
+    "ratio_median": 0.994384765625,
+    "ratio_p90": 0.9945068359375
+   },
+   "L1+lz4": {
+    "mean_bytes": 2962.7861915367484,
+    "ratio_median": 0.399658203125,
+    "ratio_p90": 0.4796142578125
+   },
+   "L1+lz4_us": 11.929911991709922,
+   "zlib1": {
+    "mean_bytes": 2175.861915367483,
+    "ratio_median": 0.2890625,
+    "ratio_p90": 0.358154296875
+   },
+   "zlib1_us": 106.38622378304036,
+   "lz4": {
+    "mean_bytes": 2969.836302895323,
+    "ratio_median": 0.4000244140625,
+    "ratio_p90": 0.4801025390625
+   },
+   "lz4_us": 12.158867483025205,
+   "zstd1": {
+    "mean_bytes": 2075.152561247216,
+    "ratio_median": 0.28021240234375,
+    "ratio_p90": 0.3272705078125
+   },
+   "zstd1_us": 32.68778840606755,
+   "zstd3": {
+    "mean_bytes": 1977.534521158129,
+    "ratio_median": 0.26287841796875,
+    "ratio_p90": 0.321044921875
+   },
+   "zstd3_us": 34.37987071895487
+  }
+ }
+}

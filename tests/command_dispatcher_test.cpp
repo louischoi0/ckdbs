@@ -23,6 +23,7 @@
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/memory_page_device.hpp"
 #include "view_text.hpp"
+#include "pattern_rows.hpp"
 
 namespace kds::server {
 namespace {
@@ -41,6 +42,23 @@ protected:
 
 // ---- SHOW PATTERNS: `sys.patterns` (docs/spec/waystone-concpets.md section 4) --
 
+// DA-S3 (superblock 38): `sys.access_stats` is a view over the instance's
+// memory store and no catalog relation - bootstrap makes neither its page
+// nor its rows.
+TEST_F(CommandDispatcherTest, AccessStatsIsAViewAndNoRelationSinceSuperblock38) {
+    CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
+    for (const char* view : {"SELECT name FROM sys.tables", "SELECT name FROM sys.objects"}) {
+        const std::string reply = d.Dispatch(view).response;
+        const auto names = testing_view::ReadViewText(reply).Column("name");
+        EXPECT_FALSE(names.empty()) << view;
+        for (const std::string& name : names) EXPECT_NE(name, "access_stats") << view;
+    }
+    const auto shown = testing_view::ReadViewText(d.Dispatch("SHOW ACCESS").response);
+    EXPECT_FALSE(shown.columns.empty());
+    EXPECT_EQ(d.Dispatch("SHOW ACCESS").response,
+              d.Dispatch("SELECT * FROM sys.access_stats").response);
+}
+
 TEST_F(CommandDispatcherTest, ShowPatternsOnAFreshDatabaseReportsNone) {
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
     const auto shown = testing_view::ReadViewText(d.Dispatch("SHOW PATTERNS").response);
@@ -50,7 +68,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsOnAFreshDatabaseReportsNone) {
 
 TEST_F(CommandDispatcherTest, ShowPatternsListsAnOptedPattern) {
     ASSERT_TRUE(boot_->catalog
-                    .SetPatternWaystone(0xABCD, catalog::kStmtClassUnclassified, /*on=*/true,
+                    .SetPatternWaystone(0xABCD, kds::testing_patterns::AnyBinding(), catalog::kStmtClassUnclassified, /*on=*/true,
                                         kInvalidPageId)
                     .ok());
 
@@ -76,7 +94,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsListsAnOptedPattern) {
 
     // An opt-out keeps the row and reads false.
     ASSERT_TRUE(boot_->catalog
-                    .SetPatternWaystone(0xABCD, 0, /*on=*/false, kInvalidPageId)
+                    .SetPatternWaystone(0xABCD, kds::testing_patterns::AnyBinding(), 0, /*on=*/false, kInvalidPageId)
                     .ok());
     const std::string after = d.Dispatch("SHOW PATTERNS").response;
     EXPECT_EQ(testing_view::ReadViewText(after).Find("fetch_id", id, "waystone"), "0") << after;
@@ -84,7 +102,7 @@ TEST_F(CommandDispatcherTest, ShowPatternsListsAnOptedPattern) {
 
 TEST_F(CommandDispatcherTest, ShowPatternsReportsAWaystoneDirectory) {
     ASSERT_TRUE(boot_->catalog
-                    .SetPatternWaystone(7, catalog::kStmtClassUnclassified, /*on=*/true, 4096)
+                    .SetPatternWaystone(7, kds::testing_patterns::AnyBinding(), catalog::kStmtClassUnclassified, /*on=*/true, 4096)
                     .ok());
 
     CommandDispatcher d(boot_->superblock, boot_->catalog, store_);
@@ -129,13 +147,13 @@ TEST_F(CommandDispatcherTest, ShowPatternsMarksRowsFromAnotherFingerprintVersion
 
     // But it is still invisible to a lookup, which is where the version
     // rule lives.
-    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(0x5151).ok());
+    EXPECT_FALSE(kds::testing_patterns::PatternRowOf(boot_->catalog, 0x5151).ok());
 }
 
 TEST_F(CommandDispatcherTest, ShowPatternsResponseIsOneLine) {
     for (const std::uint64_t fetch_id : {1u, 2u}) {
         ASSERT_TRUE(boot_->catalog
-                        .SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified,
+                        .SetPatternWaystone(fetch_id, kds::testing_patterns::AnyBinding(), catalog::kStmtClassUnclassified,
                                             /*on=*/true, kInvalidPageId)
                         .ok());
     }
@@ -1082,7 +1100,7 @@ TEST_F(CommandDispatcherTest, ACatalogViewComparesItsIntegersUnsigned) {
         const auto fp = parser::FingerprintOf(std::string("SELECT a FROM r WHERE ") + where);
         ASSERT_TRUE(fp.has_value()) << where;
         if (boot_->catalog
-                .SetPatternWaystone(fp->fetch_id, catalog::kStmtClassUnclassified,
+                .SetPatternWaystone(fp->fetch_id, kds::testing_patterns::AnyBinding(), catalog::kStmtClassUnclassified,
                                     /*on=*/true, kInvalidPageId)
                 .ok()) {
             ++made;

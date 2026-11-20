@@ -41,7 +41,7 @@
 // Every *headered* page it writes is stamped with a CRC32C over the common
 // page header (page.md sections 8 and 10) and verified when it is read back
 // on a miss - never on a hit. Corruption is therefore detected at load; the
-// FULL_PAGE_IMAGE that heals it is the WAL's job (wal.md section 10).
+// page image that heals it is the WAL's job (wal.md section 10).
 //
 // ---- Headerless pages ---------------------------------------------------
 //
@@ -1817,7 +1817,8 @@ private:
     };
     Counter hits_, misses_, reclaimed_inline_, reclaimed_background_, batches_inline_,
         batches_background_, batches_partial_, batch_steps_, batch_steps_background_,
-        dirty_queued_, dirty_drained_, refused_, would_wait_, fetch_images_logged_;
+        dirty_queued_, dirty_drained_, refused_, would_wait_, fetch_images_logged_,
+        fetch_image_bytes_logged_;
 
     // The write fetch's image (the public section). The registry: 0 an
     // empty slot, an owner oid as itself, a page id with `kUnloggedPageTag`.
@@ -1826,9 +1827,9 @@ private:
     void RemoveUnlogged(std::uint64_t word) noexcept;
     bool IsUnlogged(std::uint64_t word) const noexcept;
     static constexpr std::uint64_t kUnloggedPageTag = std::uint64_t{1} << 63;
-    // Four standing entries (the two unlogged catalog chains' heads and
-    // owners) and one per fenced index build running at once; 32 leaves
-    // 28 builds, each under its own relation `X`.
+    // Two standing entries (the one unlogged catalog chain's head and
+    // owner) and one per fenced index build running at once; 32 leaves
+    // 30 builds, each under its own relation `X`.
     static constexpr std::size_t kUnloggedSlots = 32;
     std::array<std::atomic<std::uint64_t>, kUnloggedSlots> unlogged_{};
     std::atomic<bool> fetch_images_{false};

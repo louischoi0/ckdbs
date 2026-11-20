@@ -136,26 +136,20 @@ std::vector<std::byte> DropRecord(std::uint64_t assertion_id) {
     return WholeRecord(wal::RecordType::kAssertDrop, wal::kNoTxnId, kEntryPage, payload);
 }
 
-// The recovery-side owner of the directories, as a test double: a map, the
-// skip rule for an unknown id, and a drop that erases.
+// The recovery-side owner of the directories, as a test double: a map and
+// the skip rule for an unknown id.
 class MapContext : public AssertionReplayContext {
 public:
     BoundCabin* CabinOf(std::uint64_t assertion_id) override {
         auto it = cabins_.find(assertion_id);
         return it == cabins_.end() ? nullptr : it->second;
     }
-    void Drop(std::uint64_t assertion_id) override {
-        cabins_.erase(assertion_id);
-        ++drops_;
-    }
 
     void Adopt(std::uint64_t assertion_id, BoundCabin* cabin) { cabins_[assertion_id] = cabin; }
     bool Holds(std::uint64_t assertion_id) const { return cabins_.count(assertion_id) != 0; }
-    int drops() const { return drops_; }
 
 private:
     std::unordered_map<std::uint64_t, BoundCabin*> cabins_;
-    int drops_ = 0;
 };
 
 Status Fold(const std::vector<std::vector<std::byte>>& log, storage::PageStore& store,
@@ -495,11 +489,12 @@ TEST_F(AssertionReplayTest, AnUnknownAssertionIsSkippedWholePageHalfIncluded) {
     EXPECT_EQ(view.value().entry_count(), 0) << "the page half must be skipped too";
 }
 
-TEST_F(AssertionReplayTest, DropForgetsTheDirectory) {
+TEST_F(AssertionReplayTest, ADropRecordIsPassedOverNotFoldedAndNotRefused) {
+    // Which assertions exist is the catalog's answer, so the fold applies no
+    // drop - and it is an assertion record, so the fold does not answer
+    // "not an assertion record" either.
     log_.push_back(DropRecord(kAssertionId));
     ASSERT_TRUE(Fold(log_, replay_store_, context_).ok());
-    EXPECT_FALSE(context_.Holds(kAssertionId));
-    EXPECT_EQ(context_.drops(), 1);
 }
 
 TEST_F(AssertionReplayTest, AReserveWhoseEntryIsNotReservedIsCorruption) {

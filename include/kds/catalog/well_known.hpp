@@ -175,12 +175,11 @@ inline constexpr Oid kSysAssertionsTable = 116;
 // are the pages being built is a question with no answer yet.
 inline constexpr Oid kSysAssertionsColumnOidBase = 140;
 
-// sys.access_stats (docs/spec/heap-and-tuple.md §7): one row per access *shape*
-// - `(kind, rel_id, column_mask)` - with how often it ran and when it last
-// ran. A fixed-offset typed row like its neighbours, not a row-codec
-// relation: everything in it is fixed-width, so none of sys.assertions'
-// reasons apply.
-inline constexpr Oid kSysAccessStatsTable = 130;
+// **130 is retired** (DA-S3, superblock 38). It was `sys.access_stats`, a
+// catalog relation at page 11 until DA moved the statistic to memory
+// (`stats/access_stats.hpp`); bootstrap no longer creates the relation and
+// no build reads its rows. Never reused, for the reason 115 and 120
+// through 124 are not.
 
 // sys.cabins (docs/spec/cabin.md §10): one row per Cabin - a
 // `(relation, non-tuple-key column)` store authoritative for observed values.
@@ -267,9 +266,7 @@ inline constexpr Oid kSysPlansColumnOidBase = 162;
 // free map never kept, or one another relation has since been handed, so
 // a walk that trusts the link - the delete-mark sweep over every catalog
 // root - must pass them by.
-constexpr bool IsUnloggedCatalogRelation(Oid oid) {
-    return oid == kSysAccessStatsTable || oid == kSysStatisticsTable;
-}
+constexpr bool IsUnloggedCatalogRelation(Oid oid) { return oid == kSysStatisticsTable; }
 
 // A Cabin's shape (`SysCabinRow::shape`, AR1-4: column, expression and
 // predicate are shapes of one key function), with **0 reserved for "unset"**
@@ -322,7 +319,7 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kTypeDate,            kTypeTimestamp,        kTypeDecimalWide,
     kTypeDroppedTable,    kTypeDroppedNamespace, kSysTypesTable,        kSysObjectsTable,
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
-    kSysPatternsTable,    kSysAssertionsTable,   kSysAccessStatsTable,
+    kSysPatternsTable,    kSysAssertionsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
     kSysTransitionsTable, kSysTransitionsColumnOidBase, kSysCabinExprsTable,
     kSysCabinExprsColumnOidBase, kSysStatisticsTable, kSysPlansTable,
@@ -372,10 +369,9 @@ inline constexpr PageId kCatalogPagePatterns = 9;
 // CC12/CR1. One frame table serves every core, so no core needs a right to
 // read a page another loaded.
 inline constexpr PageId kCatalogPagePatternDefs = 10;
-// sys.access_stats' root, made by bootstrap and written by nothing since DA
-// (the rows are memory-resident, `stats/access_stats.hpp`); it leaves at
-// DA-S3.
-inline constexpr PageId kCatalogPageAccessStats = 11;
+// **Page 11 is reserved and unused** since superblock 38 (DA-S3):
+// sys.access_stats' root until DA moved the statistic to memory. No build
+// makes or reads it, and it is handed to no other relation, as page 10.
 inline constexpr PageId kCatalogPageCabins = 12;
 inline constexpr PageId kCatalogPageFkeys = 13;
 
@@ -403,7 +399,7 @@ inline constexpr PageId kCatalogPageCabinExprs = 15;
 inline constexpr PageId kCatalogPageTransitions = 16;
 
 // Root heap page of sys.statistics (superblock 36, CY-S1). A fixed-offset
-// typed row, like sys.access_stats, so it has no var-heap.
+// typed row, so it has no var-heap.
 inline constexpr PageId kCatalogPageStatistics = 17;
 
 // Root heap page of sys.plans (superblock 37, CX-S1a), the highest fixed
@@ -425,9 +421,9 @@ inline constexpr PageId kCatalogPagePlans = 18;
 // the chain starts, and every page past it comes from the free map's
 // general supply (`crosscore.md` CC12/CR3), so the only way to name a
 // relation's pages is to walk its chain.
-// `kCatalogPagePatternDefs` is deliberately **not** in this list: nothing
-// creates that page any more, so walking it would name a page this build
-// never writes.
+// `kCatalogPagePatternDefs` and page 11 are deliberately **not** in this
+// list: nothing creates those pages any more, so walking one would name a
+// page this build never writes.
 //
 // **The oid is the owner a page the chain grows onto is stamped with**
 // (page.md §2a), as `heap::ChainInsert` stamps a declaration relation's:
@@ -449,7 +445,6 @@ inline constexpr CatalogRoot kCatalogRoots[] = {
     {kCatalogPageTables, kSysTablesTable},
     {kCatalogPageIndexes, kSysIndexesTable},
     {kCatalogPagePatterns, kSysPatternsTable},
-    {kCatalogPageAccessStats, kSysAccessStatsTable},
     {kCatalogPageCabins, kSysCabinsTable},
     {kCatalogPageFkeys, kSysFkeysTable},
     {kCatalogPageAssertions, kSysAssertionsTable},

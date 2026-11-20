@@ -78,6 +78,7 @@ decision is logged with the inputs that produced it.
 | PO5 | Lifecycle state machine per managed Cabin: `CANDIDATE → BUILDING → ACTIVE → DECAYING → DROPPED`, with `DECAYING → ACTIVE` recovery on score rebound and `BUILDING → discard` on failure/interruption. All transitions execute as single steps of the controller's tick. |
 | PO6 | Budget: one page budget for the instance's optimizer-managed Cabins (`cabin_optimizer_page_budget`). Over-budget CREATE is admitted only in **exchange** for dropping the lowest-net-benefit ACTIVE Cabin (explicit replacement rule — optimization within a budget, not open-ended growth). Observational entry sets are memory-resident (`cabin.md` §9), so a Cabin's "pages" are a pricing proxy, 1 + entries / 254 (`CabinOptimizerExecutor::PagesProxyOf`); the budget governs that size and upkeep. |
 | PO7b | **The candidate a fingerprint names is read in written-position order since CC-Q15** (`instructions/v3.2.0/workorder-cc-plan-statistics.md`): the first column Cabin probe, else the first equality filter scan, by step id - which since CB-Q3 is the relation's written position - so the join planner's executed order does not choose among them. The planner's order can still change a step's kind (a relation probed in one order is filter-scanned in another), and with it the candidate; the Cabin controller's other inputs are unchanged. |
+| PO7c | **An execution signal is a fingerprint's and its candidate's together** (DI-S2, `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q12 (a); `stats/optimizer_signals.hpp`, `SignalKey`). A fingerprint is a hash of the statement's text and holds no namespace and no relation oid, so one fingerprint is two statements wherever a name in it resolves to two relations - under two namespaces (`USE`), or over a relation dropped and created again. The signal's key is therefore `(pattern_id, the candidate's relation, the candidate's column)`: each `(relation, column)` is credited the executions that targeted it and no others, and an execution with no candidacy is the fingerprint's own signal, priced by nothing - before DI-S2 it was added to the frequency and the mean of the candidate the fingerprint had last named. The Cabin serving a candidate is the one the newest execution saw and is no part of the key. The 4,096 cap bounds signals, not fingerprints. **A wait sample (S4) is a fingerprint's, not a candidate's** - the sampler knows the session's published pattern and nothing the statement bound - so it is kept beside the fingerprint's signals, credited to none, and read by nothing that decides. What the key does not hold is the column's identity past its position: a position `ADD COLUMN` reuses after `PURGE DROPPED COLUMNS` inherits the dropped column's decayed heat until it decays (`known-gaps.md`). |
 | PO7 | Refresh strategy: quality surveillance, not eager maintenance. Hint-failure rate above threshold ⇒ HEAL; if quality does not recover after HEAL (e.g., mass relocation by bulk UPDATE) ⇒ DROP — demand, if real, re-nominates the candidate. "Discard and re-observe" over "repair at any cost" is the correct posture for a structure whose drop returns its queries to the tree walk. |
 | PO8 | Safety: experimental status; runtime kill switch `SET cabin_optimizer = on\|off`. Turning off halts new decisions and in-flight builds but leaves existing Cabins untouched (no destructive path on disable). Every action is recorded in a decision log with the input-score snapshot. |
 | PO9 | Observability: `SHOW CABIN_OPTIMIZER` — per managed Cabin: state, net-benefit score, hint hit rate, coverage, pages, last action + reason; production counters per action type and budget utilization; ANALYZE's Cabin-hit output carries `cabin_optimizer=true` on an optimizer-managed Cabin - a step that carries it is a pinned one (`arm=plan`, PO11). |
@@ -116,8 +117,8 @@ decision is logged with the inputs that produced it.
 ## II.4 Cost–benefit model (PO3)
 
 All quantities are in the common currency of **page accesses**, fixed-point
-16.16. Per candidate or managed Cabin `c` over the relation's fingerprint
-population:
+16.16. Per candidate or managed Cabin `c` over the execution signals that
+name it (PO7c: a fingerprint's executions that targeted `c`):
 
 **Benefit** — decayed page savings per unit time:
 
@@ -125,8 +126,8 @@ population:
 B(c) = Σ_i  f_i × max(0, P_scan,i − P_cabin)
 ```
 
-- `f_i` — R1-decayed execution frequency of fingerprint `i` whose predicate
-  is served by `c` (S1);
+- `f_i` — R1-decayed execution frequency of signal `i`, a fingerprint's
+  executions whose predicate is served by `c` (S1);
 - `P_scan,i` — observed pages scanned per execution without the Cabin (S2;
   for an ACTIVE Cabin this is the recorded pre-Cabin baseline carried in
   its state, not a live measurement);

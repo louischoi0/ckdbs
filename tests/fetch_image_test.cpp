@@ -30,13 +30,14 @@ class ImageGate final : public wal::WalDurability {
 public:
     wal::Lsn durable_lsn() const noexcept override { return next_; }
     Status EnsureDurable(wal::Lsn) override { return Status::OK(); }
-    StatusOr<wal::Lsn> LogPageImage(PageId page_id,
-                                    std::span<const std::byte, kPageSize> page) override {
+    StatusOr<LoggedPageImage> LogPageImage(PageId page_id,
+                                           std::span<const std::byte, kPageSize> page) override {
         if (refuse) return Status::IoError("refused for the test");
         images.push_back({page_id, std::vector<std::byte>(page.begin(), page.end())});
-        next_ += 8224;
-        return next_ - 8224;
+        next_ += kRecordBytes;
+        return LoggedPageImage{next_ - kRecordBytes, kRecordBytes};
     }
+    static constexpr std::size_t kRecordBytes = 8224;
     struct Image {
         PageId page_id;
         std::vector<std::byte> bytes;
@@ -108,6 +109,9 @@ TEST_F(FetchImageTest, AFaultedPageIsImagedAtItsFirstWriteFetchAndStampedWithIt)
     { ASSERT_TRUE(store_->Get(id).ok()); }
     EXPECT_EQ(gate_.images.size(), 1u);
     EXPECT_EQ(store_->pool_counters().fetch_images, 1u);
+    // DH-R6: the bytes are the record's as the gate appended it, not a
+    // count times a size.
+    EXPECT_EQ(store_->pool_counters().fetch_image_bytes, ImageGate::kRecordBytes);
 }
 
 TEST_F(FetchImageTest, EveryWritebackCopyOwesTheNextImage) {

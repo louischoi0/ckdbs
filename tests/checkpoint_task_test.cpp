@@ -301,8 +301,15 @@ TEST(CheckpointGateRotationTest, ACoreThatStoppedAskingDoesNotHoldTheRestBack) {
         ASSERT_FALSE(refused.entered());
     }
     { const CheckpointGate::Hold early(&gate, 1, 500); EXPECT_FALSE(early.entered()); }
-    // ... and past it, core 1 goes again.
-    { const CheckpointGate::Hold late(&gate, 1, 10 + kPeriod + 1); EXPECT_TRUE(late.entered()); }
+    // ... through the second period too (DH: a tick that fires late is not a
+    // core that stopped asking) ...
+    { const CheckpointGate::Hold still(&gate, 1, 10 + kPeriod + 1); EXPECT_FALSE(still.entered()); }
+    // ... and past that, core 1 goes again.
+    {
+        const CheckpointGate::Hold late(&gate, 1,
+                                        10 + CheckpointGate::kRecentAskPeriods * kPeriod + 1);
+        EXPECT_TRUE(late.entered());
+    }
 }
 
 TEST(CheckpointGateRotationTest, AnAttemptNamingNoCoreIsNeverRotatedAway) {
@@ -311,7 +318,7 @@ TEST(CheckpointGateRotationTest, AnAttemptNamingNoCoreIsNeverRotatedAway) {
     CheckpointGate gate;
     gate.SetRotation(1000);
     { const CheckpointGate::Hold owed(&gate, 3, 0); }  // core 3 asked and ran: entry at 0
-    { const CheckpointGate::Hold asked(&gate, 2, 5); } // core 2 asked, entered (older: never)
+    { const CheckpointGate::Hold asked(&gate, 2, 5); } // core 2 asked: owed the turn, too soon
     const CheckpointGate::Hold shutdown(&gate);
     EXPECT_TRUE(shutdown.entered());
 }
@@ -324,11 +331,104 @@ TEST(CheckpointGateRotationTest, AnAskStampedAfterThisCoresReadingStillCounts) {
     { const CheckpointGate::Hold ran(&gate, 0, 100); ASSERT_TRUE(ran.entered()); }
     {
         const CheckpointGate::Hold held(&gate, CheckpointGate::kAnyCore, 0);
-        const CheckpointGate::Hold asked(&gate, 1, 300);  // refused: the run is held
+        const CheckpointGate::Hold asked(&gate, 1, 900);  // refused: the run is held
         ASSERT_FALSE(asked.entered());
     }
-    const CheckpointGate::Hold behind(&gate, 0, 200);  // core 0's reading predates core 1's ask
+    // Core 0's reading predates core 1's ask, and is past the spacing (DH),
+    // so it is the turn, not the spacing, that refuses it.
+    const CheckpointGate::Hold behind(&gate, 0, 800);
     EXPECT_FALSE(behind.entered()) << "core 1, which never ran, is owed the turn";
+}
+
+// ---- The cadence is the instance's (DH-Q10 (a)) -----------------------------
+
+// Four cores ticking in phase, `skew` apart in `order`, each run `run` long:
+// how often each core entered over `periods` periods, and when.
+struct InPhase {
+    std::vector<int> entries = std::vector<int>(4, 0);
+    std::vector<std::uint64_t> at;
+};
+InPhase InPhaseEntries(std::uint64_t period, std::uint64_t skew, std::uint64_t run, int periods,
+                       const std::vector<std::uint32_t>& order = {0, 1, 2, 3}) {
+    CheckpointGate gate;
+    gate.SetRotation(period);
+    InPhase out;
+    std::uint64_t running_until = 0;
+    std::optional<CheckpointGate::Hold> running;
+    for (int n = 1; n <= periods; ++n) {
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            const std::uint64_t t = static_cast<std::uint64_t>(n) * period + i * skew;
+            if (running.has_value() && t >= running_until) running.reset();
+            if (running.has_value()) {
+                const CheckpointGate::Hold attempt(&gate, order[i], t);  // refused; the ask counts
+                EXPECT_FALSE(attempt.entered());
+                continue;
+            }
+            running.emplace(&gate, order[i], t);
+            if (!running->entered()) {
+                running.reset();
+                continue;
+            }
+            ++out.entries[order[i]];
+            out.at.push_back(t);
+            running_until = t + run;
+        }
+    }
+    return out;
+}
+
+TEST(CheckpointGateCadenceTest, OneRunAPeriodEachCoreInTurn) {
+    constexpr std::uint64_t kMs = 1'000'000;
+    // A run (2 ms) shorter than the skew between two cores' ticks (3 ms):
+    // the next core in turn asks after it has ended, and still waits.
+    const InPhase ran = InPhaseEntries(5000 * kMs, 3 * kMs, 2 * kMs, /*periods=*/12);
+    ASSERT_EQ(ran.at.size(), 12u) << "one run a period";
+    for (int core = 0; core < 4; ++core) EXPECT_EQ(ran.entries[core], 3) << "core " << core;
+    for (std::size_t i = 1; i < ran.at.size(); ++i) {
+        EXPECT_GE(ran.at[i] - ran.at[i - 1], 5000 * kMs - 9 * kMs) << "run " << i;
+        EXPECT_LE(ran.at[i] - ran.at[i - 1], 5000 * kMs + 9 * kMs) << "run " << i;
+    }
+}
+
+TEST(CheckpointGateCadenceTest, TheOrderOfArrivalDoesNotChooseTheCore) {
+    constexpr std::uint64_t kMs = 1'000'000;
+    // Core 3 always asks first, and the turn still goes round: the first
+    // asker is refused when the turn is another core's.
+    const InPhase ran = InPhaseEntries(5000 * kMs, 3 * kMs, 2 * kMs, /*periods=*/12, {3, 2, 1, 0});
+    ASSERT_EQ(ran.at.size(), 12u);
+    for (int core = 0; core < 4; ++core) EXPECT_EQ(ran.entries[core], 3) << "core " << core;
+}
+
+TEST(CheckpointGateCadenceTest, ATickThatFiresLateDoesNotTakeAnotherCoresTurn) {
+    // Core 0's second tick fires 10 late, by which time core 1's ask of the
+    // first period is more than one period old. Were "recent" one period,
+    // core 0 would read core 1 as a core that stopped asking and run again.
+    CheckpointGate gate;
+    gate.SetRotation(1000);
+    { const CheckpointGate::Hold first(&gate, 0, 1000); ASSERT_TRUE(first.entered()); }
+    { const CheckpointGate::Hold soon(&gate, 1, 1003); ASSERT_FALSE(soon.entered()); }
+    { const CheckpointGate::Hold late(&gate, 0, 2010); EXPECT_FALSE(late.entered()); }
+    { const CheckpointGate::Hold owed(&gate, 1, 2020); EXPECT_TRUE(owed.entered()); }
+}
+
+TEST(CheckpointGateCadenceTest, ARunThatOutlastsThePeriodCostsATurnNotACore) {
+    constexpr std::uint64_t kMs = 1'000'000;
+    // Every run is 1.2 periods long, so every second period meets it: the
+    // cores still take turns, at half the rate.
+    const InPhase ran = InPhaseEntries(5000 * kMs, 3 * kMs, 6000 * kMs, /*periods=*/16);
+    EXPECT_EQ(ran.at.size(), 8u);
+    for (int core = 0; core < 4; ++core) EXPECT_EQ(ran.entries[core], 2) << "core " << core;
+}
+
+TEST(CheckpointGateCadenceTest, AnAttemptNamingNoCoreIsNotSpaced) {
+    // Shutdown's, mount's and SYNC's runs are not the cadence's: one is
+    // admitted right behind a cadence run and does not push the next back.
+    CheckpointGate gate;
+    gate.SetRotation(1000);
+    { const CheckpointGate::Hold cadence(&gate, 0, 1000); ASSERT_TRUE(cadence.entered()); }
+    { const CheckpointGate::Hold sync(&gate); EXPECT_TRUE(sync.entered()); }
+    { const CheckpointGate::Hold soon(&gate, 1, 1400); EXPECT_FALSE(soon.entered()); }
+    { const CheckpointGate::Hold next(&gate, 1, 2000); EXPECT_TRUE(next.entered()); }
 }
 
 TEST(CheckpointGateRotationTest, FirstComeStarvesHalfTheCores) {

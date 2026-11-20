@@ -11,6 +11,7 @@
 #include "kds/catalog/oid.hpp"
 #include "kds/catalog/well_known.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/stats/statement_binding.hpp"
 
 // Fixed-layout catalog rows. Each is inserted and read as a single heap
 // tuple payload (kds::heap::PageView::InsertTuple()/ReadTuple()), so no
@@ -581,13 +582,25 @@ struct SysPatternRow {
     Oid oid;
 
     // The parse-time fingerprint of the statement's fetch shape
-    // (parser/fingerprint.hpp `fetch_id`). Unique across live rows, and the
-    // key every lookup arrives with.
+    // (parser/fingerprint.hpp `fetch_id`). **With the binding below, the
+    // key every lookup arrives with** (DI-S3, superblock 38): a fetch id is
+    // a hash of the statement's text and holds no namespace and no relation,
+    // so one text is as many shapes as the relations it resolves to, and a
+    // row is one of them.
     std::uint64_t fetch_id;
 
     // Reserved: written 0, advanced by nothing (the heat note above). It
     // was the last execution's timestamp.
     std::uint64_t last_seen;
+
+    // **What the opted statement bound** (`stats/statement_binding.hpp`):
+    // the namespace its unqualified names were resolved in, 0 where it
+    // wrote none, and its `binding_n` distinct relations in first-declared
+    // order, the rest 0. Written once, by the `WAYSTONE ON` that made the
+    // row, from the compile of its example; never changed. `BindingOf` and
+    // `SetBinding` below are the only readers and writers.
+    Oid binding_namespace;
+    std::array<Oid, stats::StatementBinding::kMaxRelations> binding_oids;
 
     // Which revision of the fingerprinting algorithm produced
     // `fetch_id` (parser/fingerprint.hpp kFingerprintVersion). A row
@@ -650,24 +663,33 @@ struct SysPatternRow {
     // the last field) but would change the row's size for nothing.
     //
     // The field order below is not cosmetic. `flags` (u16) sits before
-    // `origin` (u8) because `dir_depth` ends the row at 37: a u16 next pads
-    // the struct to 38 and the u8 after it lands at 40, so both keep the
-    // offsetof static_assert this file's layout rule depends on. Reversing
-    // them puts the u16 at struct offset 40 against an on-disk 39 and the
+    // `origin` (u8) because `dir_depth` ends at an even offset: a u16 next
+    // needs no padding and the u8 after it follows at once, so both keep
+    // the offsetof static_assert this file's layout rule depends on.
+    // Reversing them puts the u16 one byte past its on-disk offset and the
     // assert stops holding.
     std::uint8_t origin;
+
+    // How many of `binding_oids` are the binding's (DI-S3). A byte after
+    // `origin`, the row's last.
+    std::uint8_t binding_n;
 
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kFetchIdOffset = 8;
     static constexpr std::size_t kLastSeenOffset = 16;
-    static constexpr std::size_t kFingerprintVersionOffset = 24;
-    static constexpr std::size_t kWaystoneRootOffset = 28;
-    static constexpr std::size_t kUseCountOffset = 32;
-    static constexpr std::size_t kStmtClassOffset = 36;
-    static constexpr std::size_t kDirDepthOffset = 37;
-    static constexpr std::size_t kFlagsOffset = 38;
-    static constexpr std::size_t kOriginOffset = 40;
-    static constexpr std::size_t kOnDiskSize = kOriginOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kBindingNamespaceOffset = 24;
+    static constexpr std::size_t kBindingOidsOffset = 32;
+    // 32 + 16 relations of 8 bytes.
+    static constexpr std::size_t kFingerprintVersionOffset =
+        kBindingOidsOffset + stats::StatementBinding::kMaxRelations * sizeof(Oid);
+    static constexpr std::size_t kWaystoneRootOffset = kFingerprintVersionOffset + 4;
+    static constexpr std::size_t kUseCountOffset = kWaystoneRootOffset + 4;
+    static constexpr std::size_t kStmtClassOffset = kUseCountOffset + 4;
+    static constexpr std::size_t kDirDepthOffset = kStmtClassOffset + 1;
+    static constexpr std::size_t kFlagsOffset = kDirDepthOffset + 1;
+    static constexpr std::size_t kOriginOffset = kFlagsOffset + 2;
+    static constexpr std::size_t kBindingCountOffset = kOriginOffset + 1;
+    static constexpr std::size_t kOnDiskSize = kBindingCountOffset + sizeof(std::uint8_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysPatternRow> Decode(std::span<const std::byte> bytes);
@@ -684,7 +706,32 @@ static_assert(offsetof(SysPatternRow, stmt_class) == SysPatternRow::kStmtClassOf
 static_assert(offsetof(SysPatternRow, dir_depth) == SysPatternRow::kDirDepthOffset);
 static_assert(offsetof(SysPatternRow, flags) == SysPatternRow::kFlagsOffset);
 static_assert(offsetof(SysPatternRow, origin) == SysPatternRow::kOriginOffset);
-static_assert(SysPatternRow::kOnDiskSize == 41);
+static_assert(offsetof(SysPatternRow, binding_namespace) ==
+              SysPatternRow::kBindingNamespaceOffset);
+static_assert(offsetof(SysPatternRow, binding_oids) == SysPatternRow::kBindingOidsOffset);
+static_assert(offsetof(SysPatternRow, binding_n) == SysPatternRow::kBindingCountOffset);
+// 41 bytes until superblock 38, which added the binding's 137.
+static_assert(SysPatternRow::kOnDiskSize == 178);
+
+// The binding a row names, and the one way a row is given it. A row never
+// holds an overflow: `WAYSTONE ON` refuses a statement whose binding is not
+// held, so `binding_n` is at least 1 on every row a build wrote.
+inline stats::StatementBinding BindingOf(const SysPatternRow& row) noexcept {
+    stats::StatementBinding binding;
+    binding.namespace_oid = row.binding_namespace;
+    binding.n = static_cast<std::uint8_t>(
+        row.binding_n <= stats::StatementBinding::kMaxRelations
+            ? row.binding_n
+            : stats::StatementBinding::kMaxRelations);
+    for (std::size_t i = 0; i < binding.n; ++i) binding.oids[i] = row.binding_oids[i];
+    return binding;
+}
+inline void SetBinding(SysPatternRow& row, const stats::StatementBinding& binding) noexcept {
+    row.binding_namespace = binding.namespace_oid;
+    row.binding_n = binding.n;
+    row.binding_oids = {};
+    for (std::size_t i = 0; i < binding.n; ++i) row.binding_oids[i] = binding.oids[i];
+}
 
 // `flags` bit 0: **the shape is opted in to Waystone** (CF-S1b,
 // `instructions/v3.2.0/workorder-cf-waystone-premise.md` §8.3). Set by
@@ -697,77 +744,13 @@ static_assert(SysPatternRow::kOnDiskSize == 41);
 // it says, so losing it costs performance rather than answers.
 inline constexpr std::uint16_t kPatternWaystone = 0x1;
 
-// ---- sys.access_stats, as a pre-DA build stored it -----------------------
-//
-// **Written and read by no build since DA**: the statistic is the
-// instance's memory store (`stats/access_stats.hpp`), and this row stays
-// only with the bootstrap that still makes page 11 (DA-Q1 (a), DA-S3). What
-// follows is the row's meaning as those builds wrote it.
-//
-// How often each **access shape** ran, and when it last ran. One row per
-// `(kind, rel_id, column_mask)`.
-//
-// **Keyed by columns, never by values.** `WHERE flag = 1` and
-// `WHERE flag = 2` are one row here. That is what makes the relation
-// bounded - by the schema rather than by the data - so it needs no
-// eviction policy and no directory. The *values* already identify
-// something: a Waystone pattern instance, through `arg_hash`. Two layers,
-// two questions: "which columns does this workload search on" belongs
-// here, "which arguments repeat" belongs there.
-//
-// Field order by descending alignment, so the on-disk offsets and the
-// struct's coincide and every field carries an offsetof assert.
-struct SysAccessStatRow {
-    Oid rel_id;
-
-    // Bit per `col_pos` the access was keyed or filtered on: bit 0 (the
-    // tuple key) for a lookup, probe or range; the filtered columns for a filter
-    // scan; 0 for a bare scan.
-    //
-    // A relation wider than 64 columns folds its high columns into no bit,
-    // which makes the shape *coarser* rather than wrong - two accesses
-    // differing only past column 63 merge into one row. Stated here rather
-    // than left to be discovered.
-    std::uint64_t column_mask;
-
-    // Executions observed. Saturating, never wrapping: a count that rolled
-    // over would make the hottest access in the database look like the
-    // coldest, which is the one reading an optimizer must never be handed.
-    std::uint64_t use_count;
-
-    // Truncated logical timestamp of the last execution. Best-effort, in
-    // the same sense sys.patterns' is: it ranks shapes, and nothing
-    // reports it.
-    std::uint64_t last_seen;
-
-    // The access kind as a pre-DA build stored it, 0 unset. No build since
-    // DA writes or reads the row: the struct stays with the bootstrap that
-    // still makes page 11, until DA-S3 removes both.
-    std::uint8_t kind;
-
-    static constexpr std::size_t kRelIdOffset = 0;
-    static constexpr std::size_t kColumnMaskOffset = 8;
-    static constexpr std::size_t kUseCountOffset = 16;
-    static constexpr std::size_t kLastSeenOffset = 24;
-    static constexpr std::size_t kKindOffset = 32;
-    static constexpr std::size_t kOnDiskSize = kKindOffset + sizeof(std::uint8_t);
-
-    std::array<std::byte, kOnDiskSize> Encode() const;
-    static StatusOr<SysAccessStatRow> Decode(std::span<const std::byte> bytes);
-};
-
-static_assert(offsetof(SysAccessStatRow, rel_id) == SysAccessStatRow::kRelIdOffset);
-static_assert(offsetof(SysAccessStatRow, column_mask) == SysAccessStatRow::kColumnMaskOffset);
-static_assert(offsetof(SysAccessStatRow, use_count) == SysAccessStatRow::kUseCountOffset);
-static_assert(offsetof(SysAccessStatRow, last_seen) == SysAccessStatRow::kLastSeenOffset);
-static_assert(offsetof(SysAccessStatRow, kind) == SysAccessStatRow::kKindOffset);
-
-// One column's bit in `SysAccessStatRow::column_mask`, 0 past 63 by the
-// field's folding rule: the one shift, so no site shifts by a position >= 64.
+// One column's bit in an access shape's column mask
+// (`stats/access_stats.hpp`), 0 past 63: a relation wider than 64 columns
+// folds its high columns into no bit, which makes the shape coarser rather
+// than wrong. The one shift, so no site shifts by a position >= 64.
 constexpr std::uint64_t ColumnBit(std::uint16_t col) noexcept {
     return col < 64 ? std::uint64_t{1} << col : 0;
 }
-static_assert(SysAccessStatRow::kOnDiskSize == 33);
 
 // The class value a row carries when nothing has classified the statement
 // - which is every row until the parser gains its class tags. Named so no
@@ -1065,17 +1048,6 @@ static_assert(SysFkeyRow::kOnDiskSize == 28);
 // lands. The bit records the declaration so `SHOW` prints it without a
 // second catalog read, and a stored 0 keeps its one reading: the check runs.
 inline constexpr std::uint16_t kFkNullable = 1u << 0;
-
-// Deepest directory a pattern's waystones can need, and therefore the
-// largest value `dir_depth` may hold.
-//
-// Derived, not chosen: the directory is walked by digits of a 64-bit
-// `arg_hash` at a fanout of 2048 = 2^11 per level (spec section 5), so
-// ceil(64 / 11) = 6 levels address the whole key space. A seventh could
-// not be reached by any key. P07 owns the walk and may need *fewer* levels
-// than this; it cannot need more.
-inline constexpr std::uint8_t kMaxPatternDirDepth = 6;
-static_assert(kMaxPatternDirDepth * 11 >= 64, "the depth bound must cover a 64-bit arg_hash");
 
 // Whether this pattern has a waystone directory to walk. The one test for
 // it: `dir_depth`, never the root, for the reason recorded at that field.

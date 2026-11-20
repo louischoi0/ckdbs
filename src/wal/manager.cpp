@@ -1,5 +1,6 @@
 #include "kds/wal/manager.hpp"
 
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 #include "kds/sched/wait_state.hpp"
+#include "kds/wal/payload.hpp"
 
 namespace kds::wal {
 namespace {
@@ -457,6 +459,24 @@ StatusOr<Lsn> WalManager::AppendThrough(const RecordSpec& spec,
                                std::to_string(EncodedRecordSize(payload.size())));
     }
     return lsn.value();
+}
+
+StatusOr<WalManager::LoggedPageImage> WalManager::LogPageImage(
+    PageId page_id, std::span<const std::byte, kPageSize> page) {
+    // Packed first, on this stack: the caller holds the page exclusive, so
+    // the bytes packed are the bytes that would have been logged verbatim.
+    std::array<std::byte, kPackedImageMaxPayload> packed;
+    const std::size_t packed_size = EncodePackedPageImage(page, packed);
+    const bool is_packed = packed_size != 0;
+    const std::span<const std::byte> payload =
+        is_packed ? std::span<const std::byte>(packed).first(packed_size)
+                  : std::span<const std::byte>(page);
+    auto lsn = Append(RecordSpec{is_packed ? RecordType::kPackedPageImage
+                                           : RecordType::kFullPageImage,
+                                 kNoTxnId, page_id},
+                      payload);
+    if (!lsn.ok()) return lsn.status();
+    return LoggedPageImage{lsn.value(), EncodedRecordSize(payload.size())};
 }
 
 StatusOr<Lsn> WalManager::Commit(std::uint64_t txn_id, DurabilityClass durability) {

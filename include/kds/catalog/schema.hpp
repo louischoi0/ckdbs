@@ -501,8 +501,9 @@ struct TableAccess {
     struct IndexRef {
         Oid index_oid = 0;
         PageId root_page_id = kInvalidPageId;
-        // The index's schema constants: `key_width` is what
-        // exec::EncodeIndexKey produces, `entry_width` the whole leaf entry.
+        // The index's schema constants: `key_width` is the key columns'
+        // `exec::EncodeIndexKeyColumn` encodings end to end, `entry_width`
+        // the whole leaf entry.
         std::uint16_t key_width = 0;
         std::uint16_t entry_width = 0;
         std::uint8_t nkeys = 0;
@@ -583,6 +584,9 @@ struct TableAccess {
 struct PatternAccess {
     Oid oid = 0;
     std::uint64_t fetch_id = 0;
+    // What the opted statement bound (DI-S3, `rows.hpp`): with `fetch_id`,
+    // the entry's key.
+    stats::StatementBinding binding;
     std::uint32_t fingerprint_version = 0;
     PageId waystone_root = kInvalidPageId;
     std::uint8_t stmt_class = 0;

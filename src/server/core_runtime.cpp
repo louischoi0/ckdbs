@@ -441,22 +441,17 @@ void CoreRuntime::Run() {
     // PW3 (a peer with none left the anchor unadvanced). A no-op where
     // `checkpointer_` is unset.
     //
-    // **Staggered by core** (AT-S8): the run is the instance's
-    // (`wal::CheckpointGate`), and every core arms this within milliseconds
-    // of the others with one period, so unstaggered ticks meet each period -
-    // and whenever a run outlasts the start-up skew, the same core wins each
-    // time and the rest skip for good, holding the fold, and so the anchor,
-    // at their completion checkpoints. Core `k` of `n` starts `k/n` of a
-    // period late; core 0's cadence, `Expeditor`'s, starts at phase 0.
+    // **In phase with every other core** (DH-Q10 (a)): the run is the
+    // instance's, one a period (`wal::CheckpointGate`), so every core asks
+    // at each period and the gate's rotation gives the turn to the core
+    // whose last run is oldest. The stagger AT-S8 put here spread the
+    // cores' runs over the period, which is `cores` runs a period; the
+    // starvation it answered - the same core winning every tick - is the
+    // rotation's to prevent since BI-S2.
     if (checkpointer_.has_value() && config_.checkpoint_interval_ns > 0) {
-        const sched::MonoTimeNs period = config_.checkpoint_interval_ns;
-        const sched::MonoTimeNs phase =
-            period / std::max<std::uint32_t>(config_.core_count, 1) * config_.core_id;
-        scheduler_->SubmitAt(scheduler_->clock().Now() + phase, [this, period] {
-            // Submits the run as a task and returns (BI-R1).
-            scheduler_->SubmitEvery(period, [this] {
-                checkpointer_->SubmitRun(*scheduler_, config_.checkpoint_gate, config_.core_id);
-            });
+        // Submits the run as a task and returns (BI-R1).
+        scheduler_->SubmitEvery(config_.checkpoint_interval_ns, [this] {
+            checkpointer_->SubmitRun(*scheduler_, config_.checkpoint_gate, config_.core_id);
         });
     }
 

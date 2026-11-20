@@ -123,15 +123,35 @@ TEST(SysPatternRowTest, OnDiskLayoutIsPinned) {
     // **Still 41 after that feature was withdrawn on 2026-08-31**, and after
     // CF-S1b re-scoped bit 0 of `flags` as the Waystone opt-in and `origin`
     // as a reserved byte, written 0: the codec still round-trips whatever
-    // the byte holds, so a layout change is caught here.
+    // the byte holds, so a layout change is caught here. **178 since
+    // superblock 38** (DI-S3): the binding's namespace and 16 relations
+    // after `last_seen`, its count after `origin`.
     SysPatternRow row{};
     row.fetch_id = 0x1122334455667788ull;
     row.dir_depth = 0x2A;
     row.flags = 0xBEEF;
     row.origin = 0x5A;
+    row.binding_namespace = 0x0102030405060708ull;
+    row.binding_oids[0] = 0x1112131415161718ull;
+    row.binding_oids[15] = 0x2122232425262728ull;
+    row.binding_n = 16;
     const auto bytes = row.Encode();
 
-    ASSERT_EQ(bytes.size(), 41u);
+    ASSERT_EQ(bytes.size(), 178u);
+    EXPECT_EQ(SysPatternRow::kBindingNamespaceOffset, 24u);
+    EXPECT_EQ(SysPatternRow::kBindingOidsOffset, 32u);
+    EXPECT_EQ(SysPatternRow::kFingerprintVersionOffset, 160u);
+    EXPECT_EQ(SysPatternRow::kBindingCountOffset, 177u);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kBindingNamespaceOffset]), 0x08);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kBindingOidsOffset]), 0x18);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kBindingOidsOffset + 15 * 8]), 0x28);
+    EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kBindingCountOffset]), 16);
+    const auto decoded = SysPatternRow::Decode(bytes);
+    ASSERT_TRUE(decoded.ok());
+    const kds::stats::StatementBinding binding = BindingOf(decoded.value());
+    EXPECT_EQ(binding.namespace_oid, 0x0102030405060708ull);
+    EXPECT_EQ(binding.n, 16u);
+    EXPECT_EQ(binding.oids[15], 0x2122232425262728ull);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFetchIdOffset]), 0x88);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kFetchIdOffset + 7]), 0x11);
     EXPECT_EQ(std::to_integer<int>(bytes[SysPatternRow::kDirDepthOffset]), 0x2A);

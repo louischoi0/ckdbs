@@ -99,7 +99,7 @@ returns only what it names, so that conjunct is not compared again.
 | `columns` | schema | `rel_name`, checked | a live, visible column of a relation (no dropped column, no heap's hidden key) |
 | `objects` | schema | - | a table object of `sys.objects` |
 | `types` | engine | - | a registered type |
-| `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
+| `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`, and what the row's `WAYSTONE ON` bound (DI-S3) - `namespace`, `relation_oids`, `relations`, as §6.1 prints a statistics row's. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
 | `namespaces` | schema | - | a namespace, `sys` and `public` first |
 | `indexes` | schema | - | a secondary index, its keys, covered columns, height and entries, how often it served a read (§6.2b) and how often its leaves split (§6.2c) |
 | `fkeys` | schema | - | a declared foreign key, listed where its child is visible |
@@ -110,7 +110,7 @@ returns only what it names, so that conjunct is not compared again.
 | `transitions` | engine | - | a declared Transition, verbatim |
 | `statistics` | engine | - | the planner's relation statistics (CY-S1b, CY-S4, `plan-stats.md` PS23): `relation_oid`, `namespace`, `name`, `kind` (`relation`), `state` (`published`, `pending`, or `none` for a locked relation that holds nothing), `origin` (`gathered`, `imported`, or `observed` for the steward's sampled prior, whose `version`, `leaves` and `made_at` are NULL), `version`, `rows`, `leaves`, `made_at`, `locked`, `used` (1 on the row the planner prices the relation from), `document` (the row's export text, `EXPORT STATISTICS`'s answer) |
 | `statistics_history` | engine | - | the replaced managed versions, oldest first, the last 8 per relation (CY-Q12 (a)): `relation_oid`, `namespace`, `name`, `version`, `origin`, `rows`, `leaves`, `made_at` |
-| `plans` | engine | - | a managed plan's `sys.plans` row (`plan_id`, `name`, `origin`, `state`, `fetch_id`, `relations` as written, `join_order` as run, `variants`, `written_at`, `statement` with its literals written `?`). `origin` is `captured` (a captured join order, CX-S1a; `state` `enabled`, `variants` NULL) or `admin` (an administrator's plan, CX-S1b): its `state` is `enabled`, `disabled`, or `invalid` where a relation it names is gone or its fetch id is another fingerprint version's, its `join_order` its `ELSE` variant's, and `variants` every variant in rule order as `<name> WHEN <rule> ORDER (<binding>, ...)` or `<name> ELSE ORDER (...)`, each followed by ` ACCESS <binding> <pin>, ...` where the variant pins an arm (CX-S3a), joined by `; `. A row this build cannot read shows `unreadable` and its text as stored |
+| `plans` | engine | - | a managed plan's `sys.plans` row (`plan_id`, `name`, `origin`, `state`, `fetch_id`, `relations` as written, `join_order` as run, `variants`, `written_at`, `statement` with its literals written `?`). `origin` is `captured` (a captured join order, CX-S1a; `state` `enabled`, `variants` NULL) or `admin` (an administrator's plan, CX-S1b): its `state` is `enabled`, `disabled`, or `invalid` where a relation it names is gone or its fetch id is another fingerprint version's. **Either origin reads `invalid` where a rename has put its key out of every statement's reach** (DI-S4, `exec::PlanRowCanMatch`): a relation its stored statement names is no longer named that, or a column the statement writes by its binding is no longer one - derived at the read from the row and the catalog, nothing written, and only what is established (an unqualified column's rename is not). An administrator's plan has its `join_order` its `ELSE` variant's, and `variants` every variant in rule order as `<name> WHEN <rule> ORDER (<binding>, ...)` or `<name> ELSE ORDER (...)`, each followed by ` ACCESS <binding> <pin>, ...` where the variant pins an arm (CX-S3a), joined by `; `. A row this build cannot read shows `unreadable` and its text as stored |
 | `plan_advice` | engine | - | an `ADVISE PLAN`'s latest advice for one statement shape (CX-S7, `parser-v2.md` I12): `fetch_id`, `relations` as written, `in_force` (the plan it was priced against: `written`, `captured`, `uncaptured`, `searched`, or `admin:<plan>/<variant>`), `searched` (0 for a join the search never orders), `proposed_order`, `cost_ratio` (the proposal's cost over the plan in force's, as text with three decimals; under 1 cheaper), `generation` (the statistics generation the search read), `advised_at`, and `proposal`, the `CREATE PLAN` text over the statement's shape with its literals `?` (NULL for a block `CREATE PLAN` refuses, a subquery predicate's). Memory only, one table for the instance, emptied by a restart, oldest first; bounded at 1,024 shapes `[provisional]`, the oldest dropped past it; a relation dropped since reads `oid <n>`. Never read by a compile |
 | `cabin_optimizer` | engine | - | a managed entry of the Cabin controller; refused where no controller runs |
 | `lock_waits` | engine | - | one lock wait (§6.3) |
@@ -192,8 +192,9 @@ table of single-writer words a core.
 
 ### 6.1 `sys.statement_stats` (`stats/statement_stats.hpp`)
 
-One row per `(fetch_id, kind)` for the instance, the cores' parts merged at
-read: `calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`,
+One row per `(fetch_id, kind, binding)` for the instance, the cores' parts
+merged at read: `binding`, `namespace`, `relations`, `relation_oids` (below),
+`calls`, `refused`, `total_us`, `max_us`, `first_seen`, `last_seen`,
 `plan_source`, `plan_name`, `variant`, the cost columns below
 and `shape_text`, the first statement seen, cut to 256 bytes at a character
 boundary. **`plan_source`** (CX-R11) is where the shape's join order came
@@ -219,10 +220,61 @@ Recorded once per statement at its end, timed whole - a park, a re-run and
 the group commit are one call; a refused statement is a call. A statement
 the engine issues itself (a listener's `ROLLBACK`, a KWP load's
 `BEGIN`/`COMMIT`) and a load chunk are not counted. 4096 shapes per core;
-`statement_stats_dropped`. **A shape's slot is 624 bytes** beside its key
-and its text - about 1 KB a shape with a 256-byte text - so a core's part
-holds at most about 4 MB and 64 cores' about 250 MB, each allocated on a
-shape's first statement and kept until the instance stops.
+`statement_stats_dropped`. **A shape's slot is 768 bytes** beside its
+168-byte key and its text - about 1.2 KB a shape with a 256-byte text - so
+a core's part holds at most about 5 MB and 64 cores' about 310 MB, each
+allocated on a shape's first statement and kept until the instance stops.
+
+**A row is one binding's** (`stats/statement_binding.hpp`, DI-R2). A fetch
+id is a hash of the statement's text and holds no namespace and no oid, so
+one text is two statements wherever a name in it resolves to two relations:
+under two namespaces (`USE`, NS5), or over a relation dropped and created
+again under its name (DT2). The row's key therefore carries what the
+statement bound: **the distinct relations it declared at its binds, in
+first-declared order** - a join's, a subquery's, a write's target and then
+its subqueries', a query layer statement's as its compile describes them -
+**and the namespace its unqualified names were resolved in**. It is the
+resolution that answered: a resolve made again because a DDL moved under
+it forgets the first, and a query layer walk, which runs or not by the
+data, declares nothing into it. Two statements that resolved any
+reference differently are never one row: under one default namespace two
+written names are one relation only where they are one name, so equal
+lists are equal resolutions of every reference, and the namespace is what
+tells `a.t JOIN b.t JOIN t` under `USE a` from the same text under
+`USE b`. A statement that writes every name qualified has no namespace and
+is one row whatever namespace its session is in.
+
+- `binding`: `bound`; `none`, a statement that declared no relation -
+  refused before its bind, naming none, or of a kind with no fingerprint;
+  or `over`, a statement that declared more than 16 distinct relations,
+  whose binding is not held: every such statement of a shape is that one
+  row, and the row is no binding's.
+- `namespace`: the name of the namespace the unqualified names were
+  resolved in, `oid <n>` once it is gone; NULL where the statement wrote
+  none, and for `none` and `over`.
+- `relations`: the bound relations, each `ns.name`, or `oid <n>` once it
+  is gone, joined by `, ` as `sys.plans`' are; NULL for `none` and `over`.
+- `relation_oids`: the same relations by oid, joined the same way. **The
+  identity a reader groups and joins by**: a name moves with a rename, and
+  a relation dropped and created again reads the same name on two rows.
+
+A statement refused part way through its bind is the row of what it had
+declared by then - a `SELECT` refused in its compile, a write refused past
+its target - unless the query layer answers in a native compile's place,
+whose binds are then no part of it. **A `SELECT` the native grammar does not parse has no
+fetch id** - a set operation, and every other form only the query layer
+reads - so it is kind `SELECT` at `fetch_id = 0`, one row a binding: the
+row of every such text over those relations. `plan_source`, `plan_name` and `variant` are the row's
+own binding's. The relations are not the references of a captured order's
+key (`sys.plans`' `relations`, a searched block's references with their
+repeats): for a planned block with no self-join the two are the same
+relations in the same order.
+
+**A relation that is gone keeps its rows until the instance stops.** Its
+oid is never reissued, so its rows take no further call; they stay
+readable and count against the part's bound. Nothing reclaims them: a
+record does nothing but record (`rules.md` §3a), and a new shape that
+meets its core's part full is dropped and counted.
 
 **What a shape costs**, between `variant` and `shape_text`: `conflicts`,
 `rows`, `rows_examined`, `pages`, `compile_us`, `timed_calls`, `cpu_us`,
@@ -281,8 +333,9 @@ its compile.
 
 ### 6.1a `sys.statement_histogram` (`stats/statement_stats.hpp`)
 
-A shape's latency distribution: `fetch_id`, `kind`, `bucket`, `lo_us`,
-`count`. Every call's elapsed time - `total_us`'s, a refused call's
+A shape's latency distribution: `fetch_id`, `kind`, `binding`, `namespace`,
+`relation_oids` (the `sys.statement_stats` row's, the columns the two views
+join by), `bucket`, `lo_us`, `count`. Every call's elapsed time - `total_us`'s, a refused call's
 included - falls in one of `sys.wait_histogram`'s 32 buckets (§6.6): bucket
 k holds `[2^k, 2^(k+1))` microseconds, the last is open-ended, and bucket 0
 takes everything under 2 us. One row per shape and non-empty bucket, the
@@ -447,8 +500,10 @@ column_mask)` for the instance, every core's part merged - `uses` summed
 and saturating, `last_seen` the latest, on the instance's monotonic clock
 in ns. What a shape is and what counts is `heap-and-tuple.md` §7's. **Rows
 in key order** (DA-Q2 (a)): `rel_oid`, then the kind's name, then
-`column_mask`. A catalog relation at page 11 until DA; memory-resident
-since, like every view of this section, and the instance's
+`column_mask`. A catalog relation at page 11 until DA, whose dead
+bootstrap left at superblock 38 (oid 130 retired, page 11 reserved and
+unused); memory-resident since DA, like every view of this section, and
+the instance's
 (`Expeditor`'s, handed to every core; DA-R6), so a restart, a restore and
 a second instance in one process each start empty.
 
@@ -577,6 +632,9 @@ statement's `fetch_id`, 0 before a statement names one and for a kind that
 carries none - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE` carry one), `p1`-`p3`,
 `wait_elapsed_us`. The 64-byte record also holds `step_id`, `origin_session`
 and `trx_id`, which nothing fills yet and the view does not show.
+**`fingerprint` names a text, not a binding**: a sample joined to
+`sys.statement_stats` by it meets every binding's row of that text (§6.1),
+and nothing in the engine makes that join.
 
 A view read copies each core's ring under that ring's own latch - the raw
 records, into room made before the hold, decoded after it - so a query

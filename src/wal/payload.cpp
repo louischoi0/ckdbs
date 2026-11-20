@@ -491,6 +491,100 @@ StatusOr<std::span<const std::byte>> DecodeFullPageImage(std::span<const std::by
     return in.first(kFullPageImagePayloadSize);
 }
 
+// ---- PACKED_PAGE_IMAGE ---------------------------------------------------
+
+std::size_t EncodePackedPageImage(std::span<const std::byte, kPageSize> page,
+                                  std::span<std::byte> out) noexcept {
+    if (out.size() < kPackedImageMaxPayload) return 0;
+    const auto* const in = reinterpret_cast<const unsigned char*>(page.data());
+    auto* const base = reinterpret_cast<unsigned char*>(out.data());
+    unsigned char* const bitmap = base + kPackedImagePrefixSize;
+    std::memset(bitmap, 0, kPackedImageBitmapSize);
+    unsigned char* at = bitmap + kPackedImageBitmapSize;
+    // A word adds at most a mask byte and its eight bytes, so one check a
+    // word keeps every store below inside the first `kPackedImageMaxPayload`.
+    const unsigned char* const limit = base + kPackedImageMaxPayload - (1 + kPackedImageWordSize);
+    for (std::size_t w = 0; w < kPackedImageWords; ++w) {
+        const unsigned char* const word = in + w * kPackedImageWordSize;
+        std::uint64_t any;
+        std::memcpy(&any, word, sizeof(any));  // read as "is any byte set", never as a value
+        if (any == 0) continue;
+        if (at > limit) return 0;
+        bitmap[w / 8] = static_cast<unsigned char>(bitmap[w / 8] | (1u << (w % 8)));
+        unsigned char* const mask_at = at++;
+        unsigned mask = 0;
+        for (unsigned b = 0; b < kPackedImageWordSize; ++b) {
+            // Stored unconditionally and kept only if nonzero: no branch on
+            // the data, and the slot is overwritten by whatever comes next.
+            const unsigned char c = word[b];
+            *at = c;
+            const unsigned set = c != 0;
+            at += set;
+            mask |= set << b;
+        }
+        *mask_at = static_cast<unsigned char>(mask);
+    }
+    const std::size_t packed_len =
+        static_cast<std::size_t>(at - base) - kPackedImagePrefixSize;
+    Store<std::uint16_t>(out, kPackedImageLenOffset, static_cast<std::uint16_t>(packed_len));
+    Store<std::uint8_t>(out, kPackedImageFormatOffset, kPackedImageZeroWords);
+    Store<std::uint8_t>(out, kPackedImageReserved8Offset, 0);
+    Store<std::uint32_t>(out, kPackedImageReserved32Offset, 0);
+    return kPackedImagePrefixSize + packed_len;
+}
+
+Status DecodePackedPageImage(std::span<const std::byte> in, std::span<std::byte, kPageSize> page) {
+    const auto refuse = [](const std::string& why) {
+        return Status::Corruption("wal payload: PACKED_PAGE_IMAGE " + why);
+    };
+    if (Status s = CheckInputSize(in, kPackedImagePrefixSize + kPackedImageBitmapSize,
+                                  "PACKED_PAGE_IMAGE");
+        !s.ok()) {
+        return s;
+    }
+    const std::size_t packed_len = Load<std::uint16_t>(in, kPackedImageLenOffset);
+    const std::uint8_t format = Load<std::uint8_t>(in, kPackedImageFormatOffset);
+    if (format != kPackedImageZeroWords) {
+        return refuse("format " + std::to_string(format) + " is not one this build reads");
+    }
+    if (Load<std::uint8_t>(in, kPackedImageReserved8Offset) != 0 ||
+        Load<std::uint32_t>(in, kPackedImageReserved32Offset) != 0) {
+        return refuse("has a nonzero reserved field");
+    }
+    // The body is the payload less its prefix and the envelope's padding,
+    // which is under one alignment unit and zero.
+    const std::size_t end = kPackedImagePrefixSize + packed_len;
+    if (packed_len < kPackedImageBitmapSize || end > in.size() ||
+        in.size() - end >= kRecordAlignment || end > kPackedImageMaxPayload) {
+        return refuse("names a body of " + std::to_string(packed_len) + " bytes in a payload of " +
+                      std::to_string(in.size()));
+    }
+    for (std::size_t i = end; i < in.size(); ++i) {
+        if (in[i] != std::byte{0}) return refuse("has nonzero padding");
+    }
+    const auto* const body = reinterpret_cast<const unsigned char*>(in.data()) + kPackedImagePrefixSize;
+    auto* const out = reinterpret_cast<unsigned char*>(page.data());
+    std::memset(out, 0, kPageSize);
+    std::size_t at = kPackedImageBitmapSize;
+    for (std::size_t w = 0; w < kPackedImageWords; ++w) {
+        if ((body[w / 8] & (1u << (w % 8))) == 0) continue;
+        if (at == packed_len) return refuse("ends inside word " + std::to_string(w));
+        const unsigned mask = body[at++];
+        if (mask == 0) return refuse("names word " + std::to_string(w) + " and gives it no byte");
+        for (unsigned b = 0; b < kPackedImageWordSize; ++b) {
+            if ((mask & (1u << b)) == 0) continue;
+            if (at == packed_len) return refuse("ends inside word " + std::to_string(w));
+            const unsigned char c = body[at++];
+            if (c == 0) return refuse("stores a zero byte in word " + std::to_string(w));
+            out[w * kPackedImageWordSize + b] = c;
+        }
+    }
+    if (at != packed_len) {
+        return refuse("carries " + std::to_string(packed_len - at) + " bytes past its last word");
+    }
+    return Status::OK();
+}
+
 // ---- BTREE_SPLIT ---------------------------------------------------------
 
 StatusOr<std::size_t> EncodeBtreeSplit(std::span<std::byte> out,

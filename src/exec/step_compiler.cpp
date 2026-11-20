@@ -2579,7 +2579,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
         // relation and not on any part of it, and nothing finer is declared
         // by anyone since CP-S2a.
         if (declare != nullptr) {
-            declare->Position(oid.value());
+            declare->Position(oid.value(), rel->schema.empty() ? default_namespace : 0);
         }
         auto access = catalog.InitTableAccess(oid.value());
         if (!access.ok()) return access.status();

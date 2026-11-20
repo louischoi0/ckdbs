@@ -13,7 +13,7 @@ bool TrailRecorder::WouldRecord(std::uint8_t sightings) const noexcept {
     return sightings >= kRecordThreshold;
 }
 
-std::uint8_t TrailRecorder::Observe(const InstanceKey& key) {
+std::uint8_t TrailRecorder::Observe(const Sighting& key) {
     if (sightings_.size() >= kMaxSightings && sightings_.find(key) == sightings_.end()) {
         // Cleared wholesale rather than evicted one at a time. Every
         // instance loses its accumulated count and needs one more execution
@@ -33,7 +33,8 @@ std::uint8_t TrailRecorder::Observe(const InstanceKey& key) {
     return count;
 }
 
-const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_id) {
+const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_id,
+                                                           catalog::Oid pattern) {
     // **A lookup, never a registration** (CF-S1b). A shape is recorded only
     // once an operator opted it in, and `WAYSTONE ON` is the one writer of
     // the row, so a `SELECT` writes no catalog page and appends nothing to
@@ -41,7 +42,7 @@ const catalog::PatternAccess* TrailRecorder::EnsurePattern(std::uint64_t fetch_i
     // map, complete per generation, so a shape that is not opted is a hash
     // miss and never a scan; the opt-in moves the schema word, so a cached
     // answer is at most one statement old.
-    auto found = catalog_.FindOptedPattern(fetch_id);
+    auto found = catalog_.FindOptedPatternRow(fetch_id, pattern);
     if (!found.ok()) {
         // NotFound is "not opted", which is silent. Any other answer is a
         // `sys.patterns` read that failed, and an opted pattern behind it
@@ -66,7 +67,9 @@ StatusOr<std::pair<PageId, std::uint8_t>> TrailRecorder::EnsureDirectory(
     return std::make_pair(pattern.waystone_root, pattern.dir_depth);
 }
 
-void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail) {
+void TrailRecorder::OnPatternResult(const InstanceKey& instance, catalog::Oid pattern,
+                                    const exec::TrailCollector& trail) {
+    const Sighting key{instance, pattern};
     // Nothing to record. A statement whose steps are all searches
     // (invariant 9) collects nothing and is not a candidate for a trail -
     // counted as a sighting all the same, since the instance did execute.
@@ -99,18 +102,18 @@ void TrailRecorder::OnPatternResult(const InstanceKey& key, const exec::TrailCol
     // Not opted: sighted, and nothing more. Not a failure - it is what
     // every shape is until an operator says otherwise. A row that could not
     // be read is counted inside EnsurePattern().
-    const catalog::PatternAccess* pattern = EnsurePattern(key.fetch_id);
-    if (pattern == nullptr) return;
+    const catalog::PatternAccess* opted = EnsurePattern(instance.fetch_id, pattern);
+    if (opted == nullptr) return;
 
-    auto directory = EnsureDirectory(*pattern);
+    auto directory = EnsureDirectory(*opted);
     if (!directory.ok()) {
         ++stats_.write_failures;
         return;
     }
 
     const std::uint64_t now = clock_ != nullptr ? static_cast<std::uint64_t>(clock_->Now()) : 0;
-    if (Status s = WriteTrail(store_, directory.value().first, directory.value().second, key,
-                              trail.entries(), now);
+    if (Status s = WriteTrail(store_, directory.value().first, directory.value().second,
+                              instance, trail.entries(), now);
         !s.ok()) {
         // Never propagated. A trail that could not be written is a trail
         // that does not exist, which is where every instance starts and

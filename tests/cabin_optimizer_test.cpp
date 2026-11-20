@@ -96,6 +96,28 @@ TEST(CabinOptimizerTest, GoldenCreateAfterTheConfirmStreak) {
     EXPECT_TRUE(opt.Decide(HotSnapshot(4)).empty());
 }
 
+TEST(CabinOptimizerTest, OnePatternOverTwoRelationsPricesEachWithItsOwnHeat) {
+    // DI-S2 (`optimizer_signals.hpp`, `SignalKey`): a pattern is a text, and
+    // one text over two relations is two signals. The hot one earns its
+    // CREATE; the other - one execution of 400 pages, B = 398 against
+    // theta_create x C = 3 x 400 - earns none. Summed under the candidate
+    // seen last, as before DI-S2, the cold relation would have been the
+    // one created.
+    CabinOptimizer opt(TestConfig());
+    const auto snapshot = [](std::uint64_t version) {
+        return Snap(version, 0,
+                    {Fp(/*pattern=*/7, /*freq=*/10, /*pages=*/400, kRel, kCol),
+                     Fp(/*pattern=*/7, /*freq=*/1, /*pages=*/400, kRel + 1, kCol)});
+    };
+    EXPECT_TRUE(opt.Decide(snapshot(1)).empty());
+    EXPECT_TRUE(opt.Decide(snapshot(2)).empty());
+    const ActionSet third = opt.Decide(snapshot(3));
+    ASSERT_EQ(third.size(), 1u);
+    EXPECT_EQ(third[0].action, CabinAction::kCreate);
+    EXPECT_EQ(third[0].rel_oid, kRel);
+    EXPECT_EQ(third[0].benefit, 380 * kFixOne) << "the hot relation's executions alone";
+}
+
 TEST(CabinOptimizerTest, AStreakBrokenMidwayStartsOver) {
     CabinOptimizer opt(TestConfig());
     EXPECT_TRUE(opt.Decide(HotSnapshot(1)).empty());

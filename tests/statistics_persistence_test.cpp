@@ -202,15 +202,6 @@ TEST_F(StatisticsPersistenceTest, TheMountsDeleteMarkSweepPassesADamagedChainBy)
     auto finalized = catalog_->FinalizeDeleteMarksAtMount();
     ASSERT_TRUE(finalized.ok()) << "the mount is refused: " << finalized.status().message();
     EXPECT_TRUE(Take().empty());
-    // The same holds for page 11, which a pre-DA build left unlogged and
-    // which nothing walks since DA: a damaged link there refuses no mount.
-    {
-        auto head = store_.Get(kCatalogPageAccessStats);
-        ASSERT_TRUE(head.ok());
-        heap::PageView(head.value().bytes()).set_next_page_id(9999);
-    }
-    finalized = catalog_->FinalizeDeleteMarksAtMount();
-    EXPECT_TRUE(finalized.ok()) << finalized.status().message();
 }
 
 TEST_F(StatisticsPersistenceTest, AHeadThatIsNoHeapPageIsMadeAgainEmptyAndTheMountGoesOn) {

@@ -35,6 +35,7 @@
 #include "kds/wire/kwp_types.hpp"
 #include "kds/wire/row_codec.hpp"
 #include "view_text.hpp"
+#include "pattern_rows.hpp"
 
 // **The multi-core assembly, run rather than modelled** (AM-S0(a)).
 //
@@ -464,7 +465,7 @@ TEST_F(ExpeditorTest, EveryMountRenewsTheWaystoneDirectoryItFinds) {
     const auto root_of = [&](Expeditor& db) {
         auto fp = parser::FingerprintOf(sql);
         EXPECT_TRUE(fp.has_value());
-        auto row = db.catalog().GetSysPatternRow(fp->fetch_id);
+        auto row = kds::testing_patterns::PatternRowOf(db.catalog(), fp->fetch_id);
         EXPECT_TRUE(row.ok()) << row.status().message();
         EXPECT_TRUE(row.ok() && (row.value().flags & catalog::kPatternWaystone) != 0)
             << "the opt-in did not survive";

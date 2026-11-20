@@ -120,7 +120,22 @@ namespace {
 // so the script's stream gains one image of every bootstrap page it writes
 // after the boot's flush, each at `kNoTxnId`, and every later LSN moves. No
 // record kind is added and none changes its framing (DB-R5).
-constexpr std::uint32_t kGoldenLogCrc = 0x0124c937u;
+// **Re-pinned at DH-S1b** (on `dh-page-image-volume`,
+// `instructions/v3.2.0/workorder-dh-page-image-volume.md` DH-Q11 (a)): the
+// write fetch's image of a page that shrinks is a PACKED_PAGE_IMAGE, record
+// kind 35, so each image the script's stream gained at DB-S1 is a shorter
+// record of the new kind and every later LSN moves. FULL_PAGE_IMAGE's
+// framing is unchanged; the script images no page that fails to pack.
+// **Re-pinned at DA-S3** (on `di-shape-identity`,
+// `instructions/v3.2.0/workorder-da-access-stats-memory-resident.md` DA-Q1
+// (a), superblock 38): bootstrap no longer creates `sys.access_stats`, so
+// its two logged rows - `sys.objects`' and `sys.tables`' - leave the
+// stream, every later record's LSN moves, and every later row on those two
+// pages, bootstrap's own and the script's, lands one slot earlier. No
+// record's format changes.
+// **The value is the two together**: each re-pin above moved the stream, and
+// this is the stream with both, pinned at the merge that joined them.
+constexpr std::uint32_t kGoldenLogCrc = 0x8fd5ae2cu;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

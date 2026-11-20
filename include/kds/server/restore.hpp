@@ -27,8 +27,7 @@ namespace kds::server {
 // not freeze its filesystem can hold a torn page, found here rather than by
 // the restore's mount or the first read of it.
 struct DataFileCheck {
-    std::uint64_t pages_checked = 0;    // written pages whose checksum was verified
-    std::uint64_t pages_forgotten = 0;  // `ForgetUnwrittenPages`' give-backs
+    std::uint64_t pages_checked = 0;  // written pages whose checksum was verified
 };
 // Read-only: a backup on read-only media is checked, never written.
 Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nullptr);
@@ -38,12 +37,13 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // logged ones to the stop, and nothing brings the unlogged ones anywhere -
 // Waystone pages (invariant 8 makes them advisory). Two halves:
 //
-// `ForgetUnwrittenPages` - offline, on the laid-out data file: the check
-// above, and then every user page the copied maps call allocated whose
-// bytes are all zero (or past the file's end) is given back - nothing is
-// written unless every page passed. A logged one is recreated by its record,
-// which re-sets the bit (`CreateAt`); an unlogged one was never written and
-// would stay allocated and unreadable for good. Headerless pages are left:
+// `ForgetUnwrittenPages` (restore.cpp, `PrepareRestoredVolume`'s second
+// step) - offline, on the laid-out data file: the check above, and then
+// every user page the copied maps call allocated whose bytes are all zero
+// (or past the file's end) is given back - nothing is written unless every
+// page passed. A logged one is recreated by its record, which re-sets the
+// bit (`CreateAt`); an unlogged one was never written and would stay
+// allocated and unreadable for good. Headerless pages are left:
 // their zeros are an empty directory.
 //
 // `DiscardAdvisoryState` - at every mount, after recovery: every pattern's
@@ -53,8 +53,6 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 // reach a page the first half gave back, nor - after a crash - a child whose
 // allocation bit never reached the device. The renewal's walk sets the instance's opted count (CF-S1c), which
 // the mount's log line reads.
-Status ForgetUnwrittenPages(storage::PageDevice& device, DataFileCheck* out = nullptr);
-
 
 }  // namespace kds::server
 
@@ -73,16 +71,14 @@ struct RestoreWindow {
     std::uint64_t backup_id = 0;
 };
 
-// Marks the restore of `window` owed in page 0 of the data file at
-// `data_file`, with a fresh lineage id (BR-R10), and syncs it: anchor slot 0
-// becomes `{start, start, stop, segment(start)}`, so the next mount starts at
-// the backup's start, never at the copied anchor (BR-R4), and does not open
-// short of the stop (BR-R2). Refuses a page 0 that is not a whole superblock
-// of this build's version, a window whose start is not below its stop, and
-// backup id 0. Returns the new lineage id through `lineage` when non-null.
-Status MarkRestoreOwed(const std::string& data_file, const RestoreWindow& window,
-                       std::uint64_t* lineage = nullptr);
-// The same on a device no store has open (the simulation harness's restore).
+// Marks the restore of `window` owed in page 0 of `device` - a data file no
+// store has open - with a fresh lineage id (BR-R10), and syncs it: anchor
+// slot 0 becomes `{start, start, stop, segment(start)}`, so the next mount
+// starts at the backup's start, never at the copied anchor (BR-R4), and does
+// not open short of the stop (BR-R2). Refuses a window whose start is not
+// below its stop and backup id 0, before the device is read, and a page 0
+// that is not a whole superblock of this build's version. Returns the new
+// lineage id through `lineage` when non-null.
 Status MarkRestoreOwedOn(storage::PageDevice& device, const RestoreWindow& window,
                          std::uint64_t* lineage = nullptr);
 // A copied data file made a restore's volume: the restore marked owed
@@ -127,11 +123,12 @@ struct RestoreLayout {
 // manifest is checked (an unknown format or another build's superblock is
 // refused, BR-R7) and every file verified against it (a missing, short or
 // corrupt one is refused by name, BR-R8); the target must hold nothing; the
-// data file and the segments `[start, stop]` are copied, durably; for a
-// target past the stop the archive's segments under the backup's lineage
-// follow, and the log is cut at the first record at or past the target;
-// then `MarkRestoreOwed`. The next mount recovers, refuses to open short of
-// the stop, and takes the fresh lineage (BR-R10). Nothing here replays.
+// data file is copied, durably, and `PrepareRestoredVolume` run on the copy
+// before it takes its name; then the segments `[start, stop]` are copied,
+// durably; for a target past the stop the archive's segments under the
+// backup's lineage follow, and the log is cut at the first record at or
+// past the target. The next mount recovers, refuses to open short of the
+// stop, and takes the fresh lineage (BR-R10). Nothing here replays.
 Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out = nullptr);
 
 }  // namespace kds::server

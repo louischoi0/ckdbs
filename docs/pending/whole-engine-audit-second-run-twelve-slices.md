@@ -10,9 +10,10 @@ operator (G26-R, G21-R); **the last 37 were verified on 2026-11-17 at
 thirteen of the fifteen surviving logic defects are fixed since (section
 12); G31 and G39 wait for a ruling, each deferred by the operator into an
 entry of its own (`archiver-stalls-on-a-hole-among-leftover-segments.md`,
-`well-known-name-refusal-in-create-namespace.md`), and the dead-code and
-duplication survivors are not taken up**; 15 slices are still unread. The rest decides nothing, opens
-no stage, licenses no code.
+`well-known-name-refusal-in-create-namespace.md`); nine of the eleven
+dead-code survivors are removed since 2026-11-20 (section 13), and G44, G47
+and the five duplication survivors are not taken up**; 15 slices are still
+unread. The rest decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-13, in conversation with the operator; recorded 2026-11-14.
 Read at: `0b98bc4f` (`v3.4.8-11-g0b98bc4f`), on worktree `audit-core12-slices`.
 Every `path:line` below is at that commit.
@@ -31,7 +32,7 @@ under `docs/inflight/bugs/`).
 | G1 to G15 | **survived** every verifier assigned to them: five logic defects (G1-G5), five dead code (G6-G10), five duplication (G11-G15). **All fifteen taken up on 2026-11-14** (section 8) |
 | G16 to G20 | **survived** both verifiers of a resumed pass on 2026-11-14, read at `6a3ce231`, and **fixed** the same day (section 9) |
 | G21, G23 to G26 | **survived** both verifiers of the next resumed pass on 2026-11-15, read at `030b5bd9`, and **fixed** the same day (section 10) |
-| G27 to G64 | **verified** on 2026-11-17, read at `102d4450` (section 11). **Fixed the same day** (section 12): G27-G30, G33-G38, G40-G42. **Not taken up**: G31 and G39 (a ruling each), and every dead-code and duplication survivor. 31 **survived**, some in part or narrowed (G27-G31, G33-G49, G51, G52, G54-G56, G58, G62-G64); G32 is **moot**, closed by G1's fix; G50, G53, G57, G60 and G61 are **refuted**. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
+| G27 to G64 | **verified** on 2026-11-17, read at `102d4450` (section 11). **Fixed the same day** (section 12): G27-G30, G33-G38, G40-G42. **Removed on 2026-11-20** (section 13): the dead code of G43, G45, G46, G48, G49, G51, G52, G54 and G55. **Not taken up**: G31 and G39 (a ruling each), the dead code of G44 and G47 (a ruling each), and every duplication survivor (G56, G58, G62-G64). 31 **survived**, some in part or narrowed (G27-G31, G33-G49, G51, G52, G54-G56, G58, G62-G64); G32 is **moot**, closed by G1's fix; G50, G53, G57, G60 and G61 are **refuted**. G22 is G4's defect and G59 is G14's change, both resolved since (section 8) |
 | G65, G66 | **refuted**: G65 is already in `known-gaps.md`, G66 is not worth the change |
 
 **What bounds that.** Nothing was built, run or changed: every finder and
@@ -1125,10 +1126,12 @@ up, not a proof that the code is right.
 1. ~~The verifiers that did not return~~: done. G16-G21 and G23-G26 in
    sections 9 and 10, G27-G58 and G60-G64 in section 11; G22 and G59 moot.
    Every finding of this run now has a verdict. Thirteen logic defects are
-   fixed (section 12). **What is left of this item is the operator's**:
-   section 11's five questions - G31 and G39 among them, which are the two
-   logic defects not fixed - and whether the 11 dead-code and 5 duplication
-   survivors are taken up; until then none of those is to be changed.
+   fixed (section 12) and nine dead-code survivors are removed (section
+   13). **What is left of this item is the operator's**: section 11's five
+   questions - G31 and G39 among them, which are the two logic defects not
+   fixed, and G44 and G47, the two dead-code survivors not removed - and
+   whether the 5 duplication survivors are taken up; until then none of
+   those is to be changed.
 2. ~~G1-G5~~ and ~~G6-G15~~: done, section 8.
 3. **The other 15 slices**, or the decision that the audit stops here.
 
@@ -1514,3 +1517,101 @@ and G42's inherited disposition are each pinned by a cell of the mechanism,
 not reproduced on a running server. G36's cell damages a catalog row by
 hand, the only way the defect is reached.
 
+## 13. What became of the dead code: G43, G45, G46, G48, G49, G51, G52, G54, G55
+
+`[source-read]` and `[measured]` as marked. On 2026-11-20 the operator had
+the nine dead-code survivors that need no ruling taken up (given in Korean;
+recorded in English: `instructions/v3.2.0/raft-marks-2026-11-20.md` §11).
+**All nine are removed, each as section 11.2's verifier refined it; G44 and
+G47 wait for the rulings section 11 asks**, and nothing was changed for
+either. The work is on worktree `audit-dead-code-g43-g55`, branch
+`worktree-audit-dead-code-g43-g55`, from `1c7bb774`: one commit,
+`8f5d4388`, 43 files, 472 lines out and 247 in.
+
+| Finding | Became | What stayed, and why |
+|---|---|---|
+| G43 | Redo's not-dirty filter, `RedoStats::skipped_not_dirty` and `deferred_assertions`, `RecoveryReport::orphaned_records`, `MountRecovery::redo_skipped_not_dirty` and the mount line's ", skipped-not-dirty N" are gone; `redo.hpp` states what the caller owes - a redo start at or above the scan start, which `RecoverCore` floors it to. The cell `RedoTest.ARecordBelowItsPagesRecLsnIsSkippedAndThePageNeverFaulted`, which reached the filter by editing an analysis result by hand, goes with it | `dirty_pages`, for the redo start |
+| G45 | `StructuralChange` and `IndexChange` are gone: `InsertPlacement` and `IndexInsertResult` list page ids, `LogSplit` hands the list to `LogTreeSplit` with no copy, and `index_maintain` assigns it. Same pages, same order, same `BTREE_SPLIT` | The two result types and the two bounds are not merged (the verifier's verdict). `index_tree.hpp`'s sentence calling `kMaxStructuralChanges` "the wrong bound" for an index - section 11's unjudged aside - is reworded: the two are counted from two splits and are equal |
+| G46 | Both `AsPage` helpers and the third inline copy in `index_maintain.cpp`; `IndexLeafView::key_width` / `entry_width`, `IndexInternalView::key_width` / `set_leftmost_child` | `IndexLeafCount`: three test callers, and the verifier left it either way |
+| G48 | `FkParentVerdicts::size`, `empty`, `set_collected`, `collected` and `collected_`; `Put` returns `void` | - |
+| G49 | `exec::EncodeIndexKey`. `index.md` IX5, `schema.hpp` and `index_page.hpp` name `EncodeIndexKeyColumn`, which carries the byte encoding and did not move. The cell `APrefixEncodesAsABytedPrefixOfTheWholeKey` goes: with every encoder a per-column loop the prefix property holds by construction, and the cell pinned the deleted function's short-values path | `ACompositeKeyOrdersColumnByColumn`, over a local per-column helper |
+| G51 | `AssertionEnforcer::unenforceable` and `empty`; `AssertionReplayContext::Drop` and `RecoveryContext::Drop`; `ASSERT_DROP` joins the fold's no-op arm, answered OK and never folded (`assertion.md` §7). The cell `DropForgetsTheDirectory` became `ADropRecordIsPassedOverNotFoldedAndNotRefused` | `BoundCabinChainWriter::pages()` (G25's cell reads it); `wal::DecodeAssertDrop`, test-only now, with the round-trip cell that pins the record's bytes |
+| G52, G54 | `Catalog::FindIndexesForTable`, `catalog::kMaxPatternDirDepth` with its comment and assert (`stats::kMaxPatternDirDepth` is the one definition), `CatalogCache::pattern_entries` | - |
+| G55 | `MarkRestoreOwed`'s path overload, now a helper in `tests/backup_restore_test.cpp`; `DataFileCheck::pages_forgotten`; `ForgetUnwrittenPages`' declaration and `out` - file-local in `restore.cpp`, the name kept. `backup.md` B2 names `MarkRestoreOwedOn` | `DataFileCheck`, one field now, for `VerifyDataFilePages`' callers |
+
+`[measured]` **G43's premise was run, not only read.** Section 11.2 asked
+that the cells calling `Redo` unfloored be run. A build with the old filter
+put back, and a line written to a file each time it would have skipped a
+record, ran the whole suite: 4,863 cells passed and the filter fired in
+none - no mount, no restore, no simulation cell, and none of the unfloored
+cells of `wal_recycle_premise_test.cpp` and `wal_high_water_test.cpp`. The
+one cell written to fire it is the one deleted, which set the entry by hand.
+
+**The reviews.** Three `critics-developer` reads, one per slice (G43/G45/G46,
+G48/G49/G51, G52/G54/G55), each told to refute. None found a wrong answer;
+the first could not break G43's premise (one production caller, the floor,
+one scan for both phases, a checkpoint's dirty table taken before its BEGIN
+is appended). Taken from them: `redo.hpp`'s sentence on a record below the
+scan start; two heap-chain clauses in `insert_placement.hpp` and a
+"dynamic spans" clause in `redo.cpp`, stale since the types changed; the
+new leaf's `min_key` read off the page where the deleted field was
+asserted; `assertion_replay.hpp`'s skip rule, which said a drop record
+makes an id unknown, and its "five" record types, which are six; the
+`LayOutRestore` comment's order of steps; a window cell whose zero-reads
+check could not fail on an empty device, given a page to read. **Rejected**:
+pointing the prefix cell at a production prefix encoder instead of deleting
+it (the two are inside the step compiler and the VM and not callable
+alone); naming `restore.cpp` where `backup.md` cites the header for
+`ForgetUnwrittenPages` (the header still carries the description). **One
+reviewer's claim was wrong**: that nothing calls `empty()` on an
+`AssertionEnforcer` - three lines of `tests/assertion_recover_test.cpp` did,
+as section 11.2's verifier said, the build refused them, and they ask
+`AnyOn` of the relation now.
+
+**Outside the nine, found by the suite and fixed.**
+`DropTableReclaimServingTest.ATwoCoreMountReclaimsOnceEveryCoreHasCheckpointedWhileServing`
+failed once in the first full run. `[measured]` It is not this change's:
+with the old filter put back the same expectation failed 3 times in 1,600
+runs, eight at a time, the filter firing in none; with it out, 2 in 320 and
+9 in 1,600. Each page still allocated after the remount was a leaf or an
+internal node of the relation being written, or an undo page: a freed id
+returns through the store's free list ahead of the cursor (`page.md` §5),
+and the client is still writing when the reclaim ends. The cell required
+every dropped page to be unallocated; it now requires one to be free or no
+longer the dropped relation's. 0 failures in 1,600 runs after.
+
+**What changed that an operator can see**: the mount's recovery line no
+longer carries ", skipped-not-dirty N", a count that was always 0. Nothing
+else: no statement's answer, refusal, lock or record changes.
+
+`[measured]` The full suite ran 4,863 of 4,863 on `8f5d4388`'s build inputs
+(`ctest -LE bs-nightly`, Debug, `-j8`), two cells disabled and two skipped,
+as before, while another session's build ran on the host. A run of the same
+inputs just before it failed one cell,
+`StrictParkRigTest.AnExplicitStrictCommitParksAndPublishesAtItsSync`, on a
+2 s deadline, with this session's own eight-way stress of the reclaim cell
+running beside it; the run counted is the one after, with nothing of this
+session beside it. `origin/main` had moved to `b0a824db` (CV, `v3.4.16`, DK
+and DL written) and is merged at `755e9000`: one conflict, in
+`src/storage/index/index_tree.cpp`, where CV's `IndexFetchLeaf` had taken
+the type and layout checks out of `IndexVisitFrom` - CV's side kept - and
+three `AsPage` calls CV added went with the helper.
+
+**The merged tree's suite was not executed before the push.** CV brought
+source, so the run at `8f5d4388` does not cover `755e9000`; the operator
+asked for the push with the hook skipped while the merged tree was still
+building (`raft-marks-2026-11-20.md` §11). `[measured]` **Run after the
+push, it passed**: 4,895 of 4,895 on the tree `main` carries at `1cd689ae`
+(`v3.4.16-6-g1cd689ae`; `ctest -LE bs-nightly`, Debug, `-j8`). **The simulation corpus was not
+run to its end**: `scripts/sim.sh 4` passed its first 17 runs on
+`8f5d4388`'s Debug build and was stopped for the merge.
+
+**What bounds that.** The overhead is not measured: no interleaved A/B was
+run. What the change does to a path a statement takes is two things - a
+split no longer copies its page list into a vector, and `InsertPlacement`
+and `IndexInsertResult` are smaller by a `bool` and a key, or a `bool`, per
+slot of 33 - and neither was timed. G43's premise rests on the suite's
+mounts; a volume the suite does not build - a
+checkpoint cut short by the 16-busy bound, a PITR cut - was read by the
+reviewer and not run. The rate of the reclaim cell's failure was taken
+while another session's build ran on the host.

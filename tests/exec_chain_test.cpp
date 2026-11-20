@@ -478,7 +478,7 @@ TEST(ExecSuspendAuditTest, AnotherThreadsPinIsNotUnsafeToSuspendUnder) {
 // read the sequence rather than a side effect of it.
 class RecordingPosition final : public PositionSink {
 public:
-    void Position(catalog::Oid rel) override { at.push_back(rel); }
+    void Position(catalog::Oid rel, catalog::Oid) override { at.push_back(rel); }
     std::vector<catalog::Oid> at;
 };
 

@@ -1,0 +1,5 @@
+id=k1 arm=B shape=update-lit cores=4 clients=4 dur=group archive=1 keep_wal=1 rows=100000
+id=k2 arm=B shape=update-lit cores=4 clients=4 dur=group archive=1 keep_wal=1 rows=1000000 frames=2048
+id=k3 arm=B shape=update-lit cores=8 clients=8 dur=group archive=1 keep_wal=1 rows=100000
+id=k5 arm=B shape=update-lit cores=1 clients=4 dur=group archive=1 keep_wal=1 rows=1000000 frames=2048
+id=k8 arm=B shape=insert rows=0 cores=4 clients=4 dur=group archive=1 keep_wal=1

@@ -1,0 +1,54 @@
+00:40:57 snapshot update-lit:100000:65536 built in 1s
+00:41:07 snapshot update-lit:1000000:2048 built in 9s
+00:41:07 snapshot insert:0:65536 built in 0s
+00:41:07 snapshots done
+00:41:26 c1r1 A0 update-lit:100000 c4 group: 76173 stmts 5078/s bad=0 ck=11 img=0 load1=3.12
+00:41:44 c1r1 B update-lit:100000 c4 group: 70200 stmts 4679/s bad=0 ck=11 img=7657 load1=2.65
+00:42:03 c1r1 L update-lit:100000 c4 group: 75630 stmts 5041/s bad=0 ck=0 img=0 load1=2.62
+00:42:21 c1r2 A0 update-lit:100000 c4 group: 75774 stmts 5051/s bad=0 ck=11 img=0 load1=2.29
+00:42:42 snapshots done
+00:43:10 c1r1 L update-lit:100000 c4 group: 69295 stmts 4619/s bad=0 ck=2 img=1472 load1=1.76
+00:43:29 c1r2 B update-lit:100000 c4 group: 69296 stmts 4619/s bad=0 ck=11 img=7592 load1=2.87
+00:43:57 c1r2 L update-lit:100000 c4 group: 70022 stmts 4668/s bad=0 ck=2 img=1689 load1=3.42
+00:44:16 c2 A0 update-lit:1000000 c4 group: 39947 stmts 2663/s bad=1 ck=11 img=0 load1=2.81
+00:44:35 c2 B update-lit:1000000 c4 group: 42297 stmts 2820/s bad=0 ck=11 img=35594 load1=2.59
+00:45:04 c2 L update-lit:1000000 c4 group: 37921 stmts 2528/s bad=7 ck=2 img=30784 load1=2.53
+00:45:22 c3 A0 update-lit:100000 c8 group: 134715 stmts 8980/s bad=0 ck=21 img=0 load1=2.19
+00:45:41 c3 B update-lit:100000 c8 group: 117551 stmts 7836/s bad=0 ck=21 img=15994 load1=2.01
+00:46:29 c3 L update-lit:100000 c8 group: 120360 stmts 8023/s bad=0 ck=2 img=1800 load1=1.72
+00:46:48 c5 A0 update-lit:1000000 c1 group: 53730 stmts 3582/s bad=0 ck=3 img=0 load1=2.39
+00:47:08 c5 B update-lit:1000000 c1 group: 38637 stmts 2576/s bad=0 ck=3 img=31294 load1=2.07
+00:47:27 c6 A0 update-lit:100000 c4 strict: 63223 stmts 4214/s bad=0 ck=11 img=0 load1=1.97
+00:47:45 c6 B update-lit:100000 c4 strict: 56150 stmts 3743/s bad=1 ck=11 img=7181 load1=2.15
+00:48:04 c7 A0 update-lit:100000 c1 group: 64478 stmts 4298/s bad=0 ck=3 img=0 load1=2.04
+00:48:22 c7 B update-lit:100000 c1 group: 60963 stmts 4064/s bad=0 ck=3 img=1864 load1=1.81
+00:48:41 c8 A0 insert:0 c4 group: 77157 stmts 5143/s bad=0 ck=11 img=0 load1=1.63
+00:48:59 c8 B insert:0 c4 group: 76542 stmts 5102/s bad=0 ck=11 img=268 load1=1.80
+00:48:59 ALL DONE
+00:49:24 s4a A0 scenario2 c8 group: rc=0 tps=2619.1328470015155 wall=24s load1=1.73
+00:49:49 s4a B scenario2 c8 group: rc=0 tps=2555.667366088366 wall=24s load1=2.14
+00:50:13 s4a L scenario2 c8 group: rc=0 tps=2536.6540131407983 wall=24s load1=2.23
+00:50:42 s4b A0 scenario2 c1 group: rc=0 tps=1121.4309914494163 wall=28s load1=2.49
+00:51:10 s4b B scenario2 c1 group: rc=0 tps=1127.6551059188023 wall=28s load1=1.98
+00:51:34 s4c A0 scenario2 c8 strict: rc=0 tps=2286.0730720715324 wall=24s load1=2.11
+00:52:00 s4c B scenario2 c8 strict: rc=0 tps=2271.8936804694117 wall=25s load1=2.18
+00:52:35 s4d A0 scenario2 c1 strict: rc=0 tps=636.4747182375182 wall=35s load1=2.89
+00:53:11 s4d B scenario2 c1 strict: rc=0 tps=615.7964332609946 wall=36s load1=2.05
+00:53:11 ALL DONE
+00:53:44 s4a2 A0 scenario2 c8 group: rc=0 tps=2545.975578658221 wall=25s load1=1.39
+00:54:10 s4a2 B scenario2 c8 group: rc=0 tps=2514.5506469448637 wall=25s load1=1.56
+00:54:35 s4a2 L scenario2 c8 group: rc=0 tps=2521.8683641548964 wall=25s load1=2.35
+00:55:04 s4b2 A0 scenario2 c1 group: rc=0 tps=1128.9754501726397 wall=28s load1=1.96
+00:55:32 s4b2 B scenario2 c1 group: rc=0 tps=1117.254271336075 wall=28s load1=1.58
+00:55:32 ALL DONE
+00:56:01 c1w A0 update-lit:100000 c4 group: 71700 stmts 4780/s bad=0 ck=10 img=0 load1=1.95
+00:56:29 c1w B update-lit:100000 c4 group: 67840 stmts 4522/s bad=1 ck=10 img=8414 load1=1.82
+00:56:29 ALL DONE
+00:58:02 k1 B update-lit:100000 c4 group: 68357 stmts 4557/s bad=0 ck=11 img=7790 load1=0.73
+00:58:21 k2 B update-lit:1000000 c4 group: 39911 stmts 2660/s bad=0 ck=11 img=33661 load1=1.15
+00:58:40 k3 B update-lit:100000 c8 group: 107498 stmts 7166/s bad=0 ck=21 img=15935 load1=1.94
+00:58:59 k5 B update-lit:1000000 c1 group: 36477 stmts 2415/s bad=0 ck=3 img=29574 load1=2.04
+00:59:18 k8 B insert:0 c4 group: 77065 stmts 5137/s bad=0 ck=11 img=303 load1=1.87
+00:59:18 ALL DONE
+00:59:43 k4a B scenario2 c8 group: rc=0 tps=2442.2976409527005 wall=25s load1=1.89
+00:59:43 ALL DONE

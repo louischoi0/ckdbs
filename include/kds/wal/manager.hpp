@@ -305,12 +305,12 @@ public:
     // refused `OutOfSpace` (stats().ring_full_drains / ring_full_refusals).
     StatusOr<Lsn> Append(const RecordSpec& spec, std::span<const std::byte> payload = {});
 
-    // The write fetch's image (`durability.hpp`): a FULL_PAGE_IMAGE at
-    // `kNoTxnId`, the page itself its payload (`payload.hpp`: no prefix).
-    StatusOr<Lsn> LogPageImage(PageId page_id,
-                               std::span<const std::byte, kPageSize> page) override {
-        return Append(RecordSpec{RecordType::kFullPageImage, kNoTxnId, page_id}, page);
-    }
+    // The write fetch's image (`durability.hpp`), at `kNoTxnId`: a
+    // PACKED_PAGE_IMAGE when the page packs smaller than itself, else a
+    // FULL_PAGE_IMAGE with the page its payload (`payload.hpp`). Packed on
+    // the caller's stack, under the page's exclusive hold.
+    StatusOr<LoggedPageImage> LogPageImage(PageId page_id,
+                                           std::span<const std::byte, kPageSize> page) override;
 
     // **The cadence checkpoint's tried entries** (CZ-S3, `stream.hpp`'s
     // concurrency section; wal.md §6). Each sets `*busy` and does nothing

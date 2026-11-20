@@ -180,7 +180,8 @@ TEST_F(AshSamplerTest, AWaitingSampleOfAShapeIsHandedToTheWaitSink) {
     scheduler_.RunOnce();
     const auto snap = sink.Snapshot();
     ASSERT_EQ(snap.fingerprints.size(), 1u);
-    EXPECT_EQ(snap.fingerprints[0].wait_samples_q8, stats::kDecayScoreScale)
+    ASSERT_EQ(snap.waits.size(), 1u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, stats::kDecayScoreScale)
         << "one waiting sample of the shape; the unshaped session and the background task add none";
 }
 

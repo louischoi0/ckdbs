@@ -46,8 +46,21 @@ std::string_view StatementKindOf(std::string_view line) noexcept {
 std::size_t StatementStats::KeyHash::operator()(const Key& k) const noexcept {
     // The kind's pointer is its identity: every key's kind is a `kKinds`
     // entry or `kOther`.
-    return std::hash<std::uint64_t>{}(k.fetch_id) ^
-           (std::hash<const void*>{}(k.kind.data()) << 1);
+    std::uint64_t h = std::hash<std::uint64_t>{}(k.fetch_id) ^
+                      (std::hash<const void*>{}(k.kind.data()) << 1);
+    // The binding, folded word by word (splitmix64's finalizer constants):
+    // one text's bindings differ in a namespace or an oid, each a small
+    // integer, so they are spread before they are mixed in. An unbound
+    // statement - every kind with no fingerprint - folds nothing.
+    const auto fold = [&h](std::uint64_t word) noexcept {
+        word *= 0xBF58476D1CE4E5B9ULL;
+        h = (h ^ word ^ (word >> 31)) * 0x94D049BB133111EBULL;
+    };
+    const StatementBinding& b = k.binding;
+    if (b.over) fold(~std::uint64_t{0});
+    if (b.namespace_oid != 0) fold(b.namespace_oid);
+    for (std::size_t i = 0; i < b.n; ++i) fold(b.oids[i]);
+    return static_cast<std::size_t>(h);
 }
 
 std::array<StatementStats::Part, kStatsParts>& StatementStats::parts() noexcept {
@@ -59,7 +72,8 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
                             bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                             std::string_view plan_source,
                             std::string_view plan_label,
-                            const StatementCost& cost) noexcept {
+                            const StatementCost& cost,
+                            const StatementBinding& binding) noexcept {
     const StatisticsRecordScope recording("sys.statement_stats");
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
@@ -73,7 +87,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
         part.busy.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    const Key key{fetch_id, kind};
+    const Key key{fetch_id, kind, binding};
     auto found = part.shapes.find(key);
     if (found == part.shapes.end()) {
         if (part.shapes.size() >= kShapesPerCore) {
@@ -85,6 +99,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
         try {
             Row row;
             row.counts.fetch_id = fetch_id;
+            row.counts.binding = binding;  // a fixed array: a row's copy still allocates nothing
             row.counts.first_seen_us = now_us;
             // Cut at a character boundary: a UTF-8 continuation byte
             // (`10xxxxxx`) at the cut moves it back, so the text stays
@@ -203,7 +218,17 @@ std::vector<StatementShape> StatementStats::Snapshot() {
     out.reserve(merged.size());
     for (auto& [key, shape] : merged) out.push_back(std::move(shape));
     std::sort(out.begin(), out.end(), [](const StatementShape& a, const StatementShape& b) {
-        return a.fetch_id != b.fetch_id ? a.fetch_id < b.fetch_id : a.kind < b.kind;
+        if (a.fetch_id != b.fetch_id) return a.fetch_id < b.fetch_id;
+        if (a.kind != b.kind) return a.kind < b.kind;
+        // The unbound row first, then by namespace and relations, the row
+        // whose binding is not known last.
+        if (a.binding.over != b.binding.over) return b.binding.over;
+        if (a.binding.namespace_oid != b.binding.namespace_oid) {
+            return a.binding.namespace_oid < b.binding.namespace_oid;
+        }
+        return std::lexicographical_compare(
+            a.binding.oids.begin(), a.binding.oids.begin() + a.binding.n,
+            b.binding.oids.begin(), b.binding.oids.begin() + b.binding.n);
     });
     return out;
 }

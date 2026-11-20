@@ -12,6 +12,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/stats/trail_store.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "pattern_rows.hpp"
 
 // The trail recorder end to end (docs/inflight/in-progress/waystone-workplan.md P09/P10): what
 // decides an instance is worth remembering, and what it writes.
@@ -61,7 +62,7 @@ protected:
     // The trail recorded for `sql`'s instance, or empty when there is none.
     std::vector<WaystoneEntry> TrailFor(const std::string& sql) {
         const InstanceKey key = KeyOf(sql);
-        auto pattern = boot_->catalog.FindOptedPattern(key.fetch_id);
+        auto pattern = kds::testing_patterns::OptedPatternOf(boot_->catalog, key.fetch_id);
         if (!pattern.ok() || !pattern.value()->has_waystone_directory()) return {};
         auto read = ReadTrail(store_, pattern.value()->waystone_root,
                               pattern.value()->dir_depth, key);
@@ -103,7 +104,7 @@ TEST_F(TrailRecorderTest, AShapeNotOptedInRegistersNothingAndRecordsNothing) {
     // server's optimizer surface does: the collector's gate is the opt-in,
     // not the identity.
     for (int i = 0; i < 2; ++i) Run("ANALYZE " + sql);
-    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id).ok())
+    EXPECT_FALSE(kds::testing_patterns::PatternRowOf(boot_->catalog, KeyOf(sql).fetch_id).ok())
         << "a SELECT registered a sys.patterns row";
     EXPECT_TRUE(TrailFor(sql).empty());
     EXPECT_EQ(recorder_->stats().trails_written, 0u);
@@ -132,7 +133,12 @@ TEST_F(TrailRecorderTest, AShapeNotOptedInRegistersNothingAndRecordsNothing) {
 TEST_F(TrailRecorderTest, AnOptedRowWithNoDirectoryRecordsNothingAndMakesNothing) {
     const std::string sql = "SELECT * FROM t WHERE id = 3";
     const std::uint64_t fetch_id = KeyOf(sql).fetch_id;
-    auto opted = boot_->catalog.SetPatternWaystone(fetch_id, catalog::kStmtClassUnclassified,
+    // The row of what the statement binds (DI-S3): written by hand, with no
+    // directory, as an ON under `waystone_recording = off` leaves one.
+    const stats::StatementBinding bound = dispatcher_->Dispatch(sql).binding;
+    ASSERT_EQ(bound.n, 1u);
+    auto opted = boot_->catalog.SetPatternWaystone(fetch_id, bound,
+                                                   catalog::kStmtClassUnclassified,
                                                    /*on=*/true, kInvalidPageId);
     ASSERT_TRUE(opted.ok()) << opted.status().message();
     // The first sighting only counts, and pays whatever a statement pays
@@ -145,7 +151,7 @@ TEST_F(TrailRecorderTest, AnOptedRowWithNoDirectoryRecordsNothingAndMakesNothing
     Run(sql);
     EXPECT_EQ(recorder_->stats().trails_written, 0u);
     EXPECT_GT(recorder_->stats().write_failures, 0u) << "an opted row with no directory was silent";
-    auto row = boot_->catalog.GetSysPatternRow(fetch_id);
+    auto row = kds::testing_patterns::PatternRowOf(boot_->catalog, fetch_id);
     ASSERT_TRUE(row.ok()) << row.status().message();
     EXPECT_FALSE(catalog::HasWaystoneDirectory(row.value())) << "a SELECT rooted the row";
     EXPECT_EQ(row.value().waystone_root, kInvalidPageId);
@@ -300,7 +306,7 @@ TEST_F(TrailRecorderTest, ClearingTheSightingTableOnlyRestartsCounting) {
     trail.Add(t);
 
     for (std::size_t i = 0; i < TrailRecorder::kMaxSightings + 1; ++i) {
-        recorder_->OnPatternResult(InstanceKey{1000 + i, i}, trail);
+        recorder_->OnPatternResult(InstanceKey{1000 + i, i}, /*pattern=*/0, trail);
     }
     EXPECT_GE(recorder_->stats().sighting_table_clears, 1u);
     // Nothing recorded: every one of those instances was seen exactly once.
@@ -321,8 +327,8 @@ TEST_F(TrailRecorderTest, AnOverflowedCollectorRecordsNothingRatherThanAPartialT
     ASSERT_TRUE(tiny.overflowed());
 
     const InstanceKey key{4242, 1};
-    recorder_->OnPatternResult(key, tiny);
-    recorder_->OnPatternResult(key, tiny);
+    recorder_->OnPatternResult(key, /*pattern=*/0, tiny);
+    recorder_->OnPatternResult(key, /*pattern=*/0, tiny);
     EXPECT_EQ(recorder_->stats().trails_written, 0u);
     EXPECT_GE(recorder_->stats().skipped_overflow, 1u);
 }
@@ -337,7 +343,7 @@ TEST_F(TrailRecorderTest, RecordingLeavesThePatternRowsHeatAsRegistered) {
     Run(sql);
     ASSERT_EQ(recorder_->stats().trails_written, 2u);
 
-    auto row = boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id);
+    auto row = kds::testing_patterns::PatternRowOf(boot_->catalog, KeyOf(sql).fetch_id);
     ASSERT_TRUE(row.ok());
     // BL-S4's ruling 1 (rows.hpp): a recorded execution writes its trail and
     // no catalog row, so a repeated read makes no logged write. Heat stays

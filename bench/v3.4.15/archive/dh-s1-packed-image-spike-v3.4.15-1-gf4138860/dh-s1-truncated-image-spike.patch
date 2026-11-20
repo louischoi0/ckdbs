@@ -1,0 +1,33 @@
+--- a/include/kds/wal/manager.hpp
++++ b/include/kds/wal/manager.hpp
+@@ -309,7 +309,29 @@
+     // `kNoTxnId`, the page itself its payload (`payload.hpp`: no prefix).
+     StatusOr<Lsn> LogPageImage(PageId page_id,
+                                std::span<const std::byte, kPageSize> page) override {
+-        return Append(RecordSpec{RecordType::kFullPageImage, kNoTxnId, page_id}, page);
++        // DH-S1 SPIKE, MEASUREMENT ONLY, never committed. KDS_DH_IMAGE_BYTES
++        // logs only the first N bytes of the image (the log volume a packed
++        // image would have); KDS_DH_IMAGE_SPIN_US burns that many
++        // microseconds first, under the page's exclusive hold (the packer's
++        // CPU). **A log written this way cannot be recovered**: redo refuses
++        // the short payload. Unset, this is main's behaviour.
++        static const std::size_t spike_bytes = [] {
++            const char* v = std::getenv("KDS_DH_IMAGE_BYTES");
++            const std::size_t n = v == nullptr ? kPageSize : std::strtoull(v, nullptr, 10);
++            return n == 0 || n > kPageSize ? kPageSize : n;
++        }();
++        static const long spike_spin_us = [] {
++            const char* v = std::getenv("KDS_DH_IMAGE_SPIN_US");
++            return v == nullptr ? 0L : std::strtol(v, nullptr, 10);
++        }();
++        if (spike_spin_us > 0) {
++            const auto until = std::chrono::steady_clock::now() +
++                               std::chrono::microseconds(spike_spin_us);
++            while (std::chrono::steady_clock::now() < until) {
++            }
++        }
++        return Append(RecordSpec{RecordType::kFullPageImage, kNoTxnId, page_id},
++                      std::span<const std::byte>(page).first(spike_bytes));
+     }
+
+     // **The cadence checkpoint's tried entries** (CZ-S3, `stream.hpp`'s

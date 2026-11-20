@@ -139,6 +139,7 @@ add_executable(kds_tests
     lock_wait_log_test.cpp
     relation_stats_test.cpp
     statement_stats_test.cpp
+    shape_identity_test.cpp
     refusal_stats_test.cpp
     txn_stats_test.cpp
     index_stats_test.cpp

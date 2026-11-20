@@ -79,6 +79,56 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **DH's close measured five cells and one recovery round; the controls
+  were not measured.** On `dh-page-image-volume`, 2026-11-20
+  (`bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`): the operator
+  stopped the measurement part-way, after a host shared with other
+  sessions' builds had let 30 clean runs through in about three and a half
+  hours. Not measured, A against B: `select-pk` at one and eight cores,
+  `insert` at four cores, scenario 2, the four-core pressure cell (where
+  DH-S0 read the image's build faster than the no-image one and left it
+  unexplained), `strict`; the 10K-row update control has one round and no
+  floor, and the recovery cell one round. "No cell slower for DH" is
+  known for the five cells in the file and for no other. **The tree
+  that merged DH with `origin/main` at `18f2e339` (CV, the audit's
+  dead-code removals) was not suite-run before it was pushed**; DH's own
+  tree ran 0 failed of 4,883 before that merge. **Owner: none.**
+- **No cell crashes a multi-core instance under the rotated checkpoint
+  gate and mounts it.** On `dh-page-image-volume` over `76fe6777`
+  (DH-S2), 2026-11-20. Since DH-S1a a core's own checkpoint comes every
+  `cores` periods, and recovery finds a transaction that core left open
+  through that core's `CHECKPOINT_BEGIN`, which the anchor's fold keeps
+  in the replay range (`wal.md` §11). That chain is pinned in pieces -
+  the gate's turns (`CheckpointGateCadenceTest`), the fold
+  (`SuperBlockFoldTest`), analysis seeding from every begin and keeping
+  what a later begin does not list
+  (`AnalysisTest.ALaterBeginThatDoesNotListATransactionDoesNotClearIt`) -
+  and by no cell end to end: the simulator is one core, the two-core rig's
+  gate is not rotated, and `SetRotation` is reached only by a running
+  server. The order's "a crash between every pair of runs with a live
+  transaction on each core" was not built; it needs a multi-core crash
+  harness that does not exist. **Owner: none.**
+- **Restore and PITR over a log of packed images are covered only
+  implicitly.** Same commit. The simulator's backup cell
+  (`SimLoop.ABackupTakenAcrossTheRunRestoresToItsStopOnEveryCommittedSeed`)
+  and `PointInTimeTest.ARestoreToAnLsnPastTheStopEndsJustBeforeIt` run
+  with the write fetch's image on, so their logs can hold
+  `PACKED_PAGE_IMAGE` records; neither asserts that one lies in the
+  window it restores over. **Owner: none.**
+- **`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` fails about
+  one run in ten on a loaded host.** On `dh-page-image-volume` over
+  `8fc41252`, 2026-11-20, at a load average of 15 to 19: once in DH-S1b's
+  suite, then 22 of 200 repeats, and 16 of 200 with DH's packing switched
+  off in the same tree - the same rate, so not the packed image's. The
+  cell gives each of five `group` commits on a peer core 2 s to be woken
+  by the WAL writer's kick, in a rig whose idle block is 5 s; the kick is
+  best-effort (`sched/waker_table.hpp`: a kick that reads the
+  destination's flag before it is raised is skipped, priced at one idle
+  block), and the failures print `kicks skipped 1`. The cell asserts a
+  bound the kick does not promise. Not measured: the rate on a quiet host,
+  or how often a server's peer commit pays the 10 ms block for the same
+  race. **Owner: none.**
+
 - **The sim's constraint stream cannot kill a mutant that ignores held
   assertion contributions.** On `bs-test-hardening` at `76a2c08c`,
   `scripts/bs/mutants.sh`'s `holds-ignored` (every held contribution
@@ -266,6 +316,74 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   restart. Read on `de-page-read-off-the-reactor` at `1942cb9a`,
   2026-11-19; DE's close corrected the same claim in §5 ("Durability
   points") and left §6 as found - it is not DE's.
+- **A log this build wrote is not one a pre-DH build of the same
+  superblock can always replay.** Since DH-S1b (on `dh-page-image-volume`
+  over `8fc41252`) the write fetch's image is record kind 35,
+  `PACKED_PAGE_IMAGE`, wherever the page packs to under a page (`wal.md`
+  §10). No superblock or segment version moved (DH-Q11 (a)): a build that
+  predates DH mounts a cleanly shut volume as before (read, not tested: it
+  holds when the shutdown checkpoint completed), and refuses a crashed one,
+  one whose shutdown checkpoint failed, a backup or a PITR whose replay
+  range holds a packed image, at redo, as `no applier for record type
+  UNKNOWN` - the older build has no name for kind 35 - after its own redo has applied the records
+  before it, which a later mount on this build applies again. Nothing at
+  the door says which build a volume needs; the refusal is the statement.
+  **Not executed**: an older binary against a newer log - the claim rests on
+  reading redo's refusal of a page record it has no applier for, at
+  `f4138860` (`src/wal/redo.cpp`), and on
+  `RedoTest.APageRecordWithNoApplierEndsRecoveryByName`, which drives that
+  branch with a reserved kind, not with kind 35 on an older build. Owner:
+  `docs/spec/wal.md` §10.
+- **Only the write fetch's image is packed.** The whole pages an index
+  build, a catalog chain's link edit, an assertion build and a
+  `BTREE_SPLIT` log stay 8,192 bytes each (DH-Q13 (a)); their volume was
+  not measured by DH. A page that does not pack to under a page - random
+  or compressed bytes in wide columns - is logged verbatim and costs what
+  it did before DH; DH measured only tables of integers and scenario 2's
+  schema. Owner: `docs/spec/wal.md` §10.
+- **Where pages are faulted in often, a write still pays most of the
+  image's price.** On `dh-page-image-volume`, closing code `22818e44`,
+  measured 2026-11-20 (`bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`).
+  With a table three times the pool (1M rows, 2,048 frames, one core) a
+  statement logs 0.81 images, each owed by the page's fault-in, which the
+  instance's cadence does not reduce; the pack halves their bytes (about
+  6,900 B to about 3,080 B a statement) and the build is 14.8 % faster
+  than before DH and still 19.5 % under the same build with no image
+  debt. With the table resident the price is 2 % at four cores and inside
+  the floor at eight. What reduces it there is the pool's size, not a
+  setting DH added; conditioning the fault-in's debt on an image already
+  in the replay range was noted and not proposed (the order, §2.1).
+  Accepted by the operator at DH's close (`raft-marks-2026-11-20.md`
+  §18). Owner: `docs/spec/wal.md` §10.
+- **Above one core the replay range is up to `cores` checkpoint
+  intervals, and one more for each turn a core loses.** Since DH-S1a
+  (on `dh-page-image-volume` over `df0dcd70`, read and unit-tested there)
+  the cadence is the instance's: one run starts each
+  `checkpoint_interval_ms` and the cores take turns (`wal.md` §11), so a
+  core's contribution to the anchor's fold comes from a run up to `cores`
+  intervals old, its redo start about one interval below that run, where
+  the run was one interval old - about 45 s at eight cores and the
+  default. Until every core has run once after a mount the fold stays
+  where the mount's completion checkpoints put it, now for up to `cores`
+  intervals. What follows the fold follows it there: a crash replays that much log, the log keeps that
+  much from recycling, a dropped relation's pages and a dropped index's
+  wait that long to be reclaimed, and a backup's start is that far behind
+  its `BACKUP START`. **Measured once** at DH's close (eight cores, 50 s of
+  100,000-row updates, `kill -9`; one round, no floor): recovery read
+  1,456,727 records against 161,207 and the mount took 0.72 s against
+  0.19 s; the WAL directory held 268.4 MB against 201.3 MB. Accepted by
+  the operator (`raft-marks-2026-11-20.md` §18). A core whose tick meets a run in progress, or the
+  spacing rule, waits a whole period for its next ask, and its turn stays
+  owed; nothing retries sooner. A cadence checkpoint that outlasts the
+  period costs the turns its run spans: 1.2 periods halves the rate
+  (`CheckpointGateCadenceTest`). Not measured: the
+  mount time over a `cores`-interval replay range, and the log directory's
+  size at eight cores. **Not covered by the suite**: that the cores' ticks
+  are armed in phase (`src/server/core_runtime.cpp`) - the gate's cases
+  drive the gate with in-phase asks, and a stagger put back would pass
+  them, giving one run every interval x (1 + 1/`cores`); a test of two
+  reactors' timers at a 20 ms period was judged a flake on a shared host
+  and not written. Owner: `docs/spec/wal.md` §11.
 - **A refused catalog report on a new page, or a catalog row no empty page
   holds, spends one page.** Re-read on `worktree-fix-catalog-page-ceiling`
   at `0e539d46`, 2026-10-18. `InsertRow` leaves the page allocated, empty
@@ -1733,14 +1851,22 @@ the claim's deepening trap, the leak per mount); these are what it leaves.
   every core but the growing one), on a `CABIN AUTO` create or drop, on a
   catalog-writing resolve and on an opt-in, so it is not "per DDL". Bounded
   by the rows ever opted; not measured.
-- **An opt-in is by text.** `fetch_id` carries no namespace and no oid, so
-  one `WAYSTONE ON` applies under every `USE` whose text matches and
-  **survives `DROP TABLE`** and a re-create under the same name: no
-  `sys.patterns` writer runs on a drop. Replay stays correct through the
-  `rel_oid` check (`exec/trail_replay.cpp`), but the recording cost comes
-  back on a shape nobody opted for the new relation, and each mount renews a
-  directory for an example that no longer resolves. It must be turned off
-  explicitly (`OFF <select>` needs no relation). `manual/sql/sql.md` says so.
+- **An opt-in is a shape under what it bound** (DI-S3, superblock 38;
+  verified on `di-shape-identity` at DI-S3's commit): the row carries the
+  binding, a committed `DROP TABLE` ends the opt-ins naming the relation,
+  and two bindings of one text keep two directories. What is left:
+  - **A dispatcher with a transaction manager and no log never sees a
+    drop commit** (`EndDdlScopeById` reads the commit's LSN), so there the
+    opt-in outlives the drop until a mount; no server is built that way.
+  - **An ended row stays**, its bit and root cleared, naming a dropped oid:
+    one 178-byte row a dropped relation's opt-in, never reclaimed.
+  - **A renamed relation's opt-in is inert, not ended**: its text no longer
+    compiles, and the row waits for `OFF <fetch_id>`.
+  - **`OFF <select>` over an example that binds only part of its
+    relations** (a join whose second relation is gone) names a binding no
+    row has and answers `unchanged`.
+  - **A `SELECT` over more than 16 distinct relations cannot be opted in**
+    (`NotImplemented`).
 - **The opted path's own costs are left as built** (CF-O-Q13 (a)): every
   re-record takes the directory page exclusive, which dirties it
   (`src/stats/waystone_dir.cpp`, `LookupOrCreateWaystonePage`'s `Get`), and
@@ -2088,6 +2214,76 @@ Owned by `docs/spec/sys-views.md` §6.2c and `docs/spec/plan-stats.md` §6.
   counts a division on a second core, drives a division that fails, or
   reaches the store's bound.
 
+### A row is one binding's (DI-S1)
+
+Verified on `di-shape-identity` (branch `worktree-di-shape-identity`) at
+DI-S1's commit. Owned by `docs/spec/sys-views.md` §6.1, §6.1a and
+`include/kds/stats/statement_binding.hpp`.
+
+- **A `SELECT` the native grammar does not parse has no fetch id.** A parse
+  that stops in the middle answers no fingerprint (`parser.hpp`), so a set
+  operation and every other form only the query layer reads is kind
+  `SELECT` at `fetch_id = 0`. Since DI-S1 that is one row a binding, so no
+  row sums statements over different relations; it still sums every such
+  text over the same relations, and its `shape_text` is the first one
+  seen. Giving such a statement its own fetch id is not built.
+- **A statement refused part way through its bind is the row of what it
+  had declared by then**, not the row its text has once it binds whole: a
+  join whose second relation does not exist is counted under its first.
+- **More than 16 distinct relations are not told apart**: one `over` row a
+  shape.
+- **A dropped relation's rows stay until a restart** and count against
+  the part's 4,096 (DI-Q7 (c)): a workload that drops and creates relations
+  fills a part with rows no call can reach, and the shapes after them are
+  dropped and counted. A reclaim was built at DI-S1 and taken out at the
+  close: run where a part needs room - a statement's own record - it
+  scanned the part and read the catalog on that statement's path, which
+  `rules.md` §3a forbids. A reclaim off the statement's path is not built.
+- **DI's cost on a write is not resolved.** At the close
+  (`bench/v3.4.15/results-di-close-v3.4.15-12-g871845e4.md`) no cell was
+  slower outside its own spread, the point reads were level, and a keyed
+  `INSERT` and the FK insert read about 0.4 us dearer at `cores = 1` in
+  10 and 9 of 12 lifetimes - inside the spread, on a host with no counter
+  to place it. Not chased.
+- **A shape's slot grew to 768 bytes from 624 and its key to 168 from 24**,
+  so the copy a view read makes under each part's latch grew with them
+  (above), unmeasured.
+- **`sys.ash`'s `fingerprint` is the text's** (DI-Q9 (a)): a reader who
+  joins a sample to `sys.statement_stats` by it meets every binding's row.
+- **No cell** drives `ResolveNames`' second resolve through a statement
+  (the rewind is pinned on the binding alone), or a refused commit's and a
+  refused page wait's rebuilt reply carrying the binding; the walk's
+  rebuilt reply is pinned on the two-core rig.
+
+### The Cabin controller's signal is a candidate's (DI-S2)
+
+Verified on `di-shape-identity` (branch `worktree-di-shape-identity`) at
+DI-S2's commit. Owned by `docs/spec/cabin-controller.md` PO7c.
+
+- **A candidate is a relation and a column position, not a column.**
+  Nothing tells the signals of a `DROP COLUMN`, so a position `ADD COLUMN`
+  reuses after `PURGE DROPPED COLUMNS` inherits the dropped column's
+  decayed heat until it decays. Found at DI-S0; not a text identity and
+  not fixed by DI.
+- **A fingerprint whose candidacy moves between two columns of one
+  relation is two signals**: the old one decays where it was overwritten
+  whole before DI-S2. No decision is priced with more heat than before the
+  move.
+- **One fingerprint is now as many signals as the relations it targets,
+  plus one for its executions with no candidacy, under the same 4,096
+  cap** (`kMaxTrackedFingerprints`, `[PROPOSED]`, unmeasured): 41 texts
+  under 100 namespaces pass it where 41 entries stood before. Past the cap
+  every new signal evicts the coldest - commonly another newcomer, so
+  neither builds a count - and pays the 4,096-entry scan under the
+  collector's latch, on the success path of every `SELECT`. The eviction
+  rule is unchanged; its reach is what moved.
+- **The execution feed runs with the controller off**, under its latch
+  above one core (`RecordOptimizerSignals`): only `Tick` and the wait
+  samples follow the switch. Unchanged by DI.
+- **A dropped relation's signals are not forgotten at the drop**: they
+  name an oid no statement can bind again, decay, and are evicted when the
+  table is full.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close
@@ -2256,8 +2452,10 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   checkpoint interval. `captured_pending` counts what is waiting. Owned
   by `parser-v2.md` I12.
 
-- **A captured plan has no state but present.** `INVALID` (CX-Q16) and
-  `DISABLED` are not built for one: a captured order that stops compiling
+- **A captured plan has no state of its own.** `DISABLED` is not built
+  for one, and `INVALID` (CX-Q16) only as DI-S4 derives it - a rename of a
+  relation, or of a column written by its binding, read off the row. A
+  captured order that stops compiling for another reason
   is declined statement by statement and counted, its row unchanged, and
   the only acts on it are `DROP PLAN` and a `CREATE PLAN` over its shape
   (`ALTER PLAN` on a captured row is refused `NotImplemented`). Verified
@@ -2396,14 +2594,32 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `SELECT` or across a restart. Owned by
   `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
-- **A renamed relation's plan reads `enabled` and matches nothing new.**
-  A fetch id hashes names, so after `ALTER TABLE ... RENAME TO` or `RENAME
-  COLUMN` of a name the statement writes, no statement in the new spelling
-  matches the plan; `sys.plans` still shows it `enabled` and it still
-  RESTRICTs the relation's `DROP TABLE`. Nothing tells the administrator
-  but `plan_served` not moving and `sys.statement_stats` naming another
-  source for the new shape. Verified at CX-S1b by reading. Owned by
-  `parser-v2.md` I12.
+- **A plan a rename put out of reach reads `invalid`, where the rename is
+  established from its row** (DI-S4, `exec::PlanRowCanMatch`; verified on
+  `di-shape-identity` at DI-S4's commit): a renamed relation, and a renamed
+  column the statement writes by its binding (`b.col`). It then restricts
+  no `DROP TABLE`. **Not established, so read as before** (DI-R9): a
+  renamed column the statement writes **unqualified** - the plan reads
+  `enabled`, still RESTRICTs, and matches nothing; a statement stored cut
+  short; a captured order that stops compiling for any reason but those
+  two. Nothing is written at the rename: the state is derived at each read
+  of `sys.plans` and at the drop's RESTRICT, and the plan stays in the
+  administrator's table and in the captured table, where no statement
+  reaches it. A rename back puts it in force again. Also not established:
+  **a statement the native grammar does not read with its literals as
+  `0`** - any `LIKE`, whose pattern must be a string - and **a dropped
+  column**, since a `DROP COLUMN` undecided would read as a rename. And
+  what the derived state costs:
+  - **`invalid` hides `enabled` and `disabled`** while the rename stands.
+  - **A rename back after the drop's check orphans the plan**: over
+    `(t, u)` with `u` renamed away, `DROP TABLE t` is let through; a
+    `RENAME` of `u` back before the drop decides puts the plan in force
+    over a relation about to be gone, where it then reads `invalid` for
+    the gone relation. `CREATE PLAN` could not do that before DI-S4 - it
+    waits for the drop's `X`.
+  - **A pinned index's `DROP INDEX` and a named Cabin's drop are still
+    restricted** by a plan that can match nothing.
+  Owned by `parser-v2.md` I12.
 
 - **What CX-S1b's cells do not reach.** A variant whose order does not
   compile for a statement (the decline has one cell, by the sort rule); a
@@ -2811,13 +3027,10 @@ Verified on `da-access-stats-memory-resident` at DA-S1
 (`instructions/v3.2.0/workorder-da-access-stats-memory-resident.md`; owner
 `docs/spec/sys-views.md` §6.2d, `docs/spec/heap-and-tuple.md` §7).
 
-- **DA-S3 is owed: page 11's bootstrap stays.** Bootstrap still makes page
-  11 and its `sys.objects` and `sys.tables` rows (oid 130), so `SHOW TABLES`
-  and `sys.tables` still list `access_stats`, and `SysAccessStatRow`, the
-  `kCatalogRoots` entry, `IsUnloggedCatalogRelation`'s and
-  `RegisterUnloggedClasses`' page-11 halves stay with it (DA-Q9 (a)). No
-  build since DA writes or reads the page. Removing them is a format event,
-  bound to the first superblock bump after 37 any order makes (DA-Q1 (a)).
+- **DA-S3 is done at superblock 38** (on `di-shape-identity`, carried by
+  DI's format event): bootstrap makes no page 11 and no `sys.objects` or
+  `sys.tables` row for oid 130, which is retired; page 11 is reserved and
+  unused, as page 10. A version-37 volume does not mount.
 - **A forget orders the writes, not the statements** (DA-R5): a `SELECT`
   whose borrow was refused and that records after an `ADD COLUMN`'s forget
   can re-admit the reused position's shape, as page 11's hold allowed.
@@ -2915,9 +3128,9 @@ Verified on `bs-test-hardening` from `5d58f3ca`
   naming `Corruption` - and lost to the instance until a restore:
   - **page 0 and the two map regions** (DB-Q3): read before recovery, never
     imaged, so a tear refuses the mount; no second copy exists;
-  - **a page of an unlogged class** (`sys.statistics`, page 11 - which no
-    build since DA writes - and a fenced index build's tree before its
-    `LogBuiltTree`), whose content no record describes;
+  - **a page of an unlogged class** (`sys.statistics`, and a fenced index
+    build's tree before its `LogBuiltTree`), whose content no record
+    describes;
   - **a tear of the mount's own write**: images are off through the mount
     (DB-R2), so a page redo or the mount wrote back and a crash tore before
     the completion checkpoint is refused when its last image is below the

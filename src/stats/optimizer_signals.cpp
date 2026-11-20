@@ -8,27 +8,30 @@ namespace kds::stats {
 
 namespace {
 
-// A note's home slot. The ids are hashes already (a fingerprint) or dense
-// (a cabin id); the multiply spreads the dense ones.
+// A note's home slot. A pattern id is a hash already and a cabin id dense;
+// the multiply spreads the dense ones.
 std::size_t HomeOf(std::uint64_t id, std::size_t slots) noexcept {
     return static_cast<std::size_t>((id * 0x9E3779B97F4A7C15ull) >> 32) % slots;
 }
+std::size_t HomeOf(const SignalKey& key, std::size_t slots) noexcept {
+    return SignalKeyHash{}(key) % slots;
+}
 
-// The entry for `id` in a part's table of `slots`, claimed where the id is
+// The entry for `key` in a part's table of `slots`, claimed where the key is
 // new and fewer than `bound` are used - half the slots, so the walk meets an
 // empty one. Null past the bound.
-template <class Note>
+template <class Note, class Key>
 Note* Claim(Note* table, std::size_t slots, std::size_t bound, std::size_t& used,
-            std::uint64_t id) noexcept {
-    for (std::size_t i = HomeOf(id, slots), n = 0; n < slots; i = i + 1 == slots ? 0 : i + 1, ++n) {
+            const Key& key) noexcept {
+    for (std::size_t i = HomeOf(key, slots), n = 0; n < slots; i = i + 1 == slots ? 0 : i + 1, ++n) {
         Note& note = table[i];
         if (note.used) {
-            if (note.id == id) return &note;
+            if (note.key == key) return &note;
             continue;
         }
         if (used >= bound) return nullptr;
         note = Note{};
-        note.id = id;
+        note.key = key;
         note.used = true;
         ++used;
         return &note;
@@ -54,7 +57,7 @@ void MergeInto(FingerprintSignal& into, const FingerprintSignal& from,
                sched::MonoTimeNs half_life) noexcept {
     MergeDecay(into.executions, from.executions, half_life);
     MergeDecay(into.pages, from.pages, half_life);
-    MergeDecay(into.wait_samples, from.wait_samples, half_life);
+    // The key's candidate, with the Cabin serving it as last noted.
     if (from.candidate.valid()) into.candidate = from.candidate;
 }
 
@@ -66,27 +69,28 @@ void MergeInto(CabinQualitySignal& into, const CabinQualitySignal& from,
 }
 
 // Room in a bounded map for `incoming` new keys: the coldest entries, by
-// decayed primary score at `now`, erased **in one pass** - a scan a fold's
-// part, never a scan a newcomer, since the fold runs on a reactor. Restarting
-// a victim's count is a performance event; refusing the newcomers would
-// starve every pattern that turns hot after the table filled, which is
-// exactly the pattern a heat tracker exists to notice.
+// decayed primary score at one reading of the clock, erased **in one pass** -
+// a scan a fold's part, never a scan a newcomer, since the fold runs on a
+// reactor. `evicted(key)` is told each victim. Restarting a victim's count
+// is a performance event; refusing the newcomers would starve every pattern
+// that turns hot after the table filled, which is exactly the pattern a
+// heat tracker exists to notice.
 //
 // **Ranked in the log domain**, and that is a correctness point rather
 // than a refinement: a full table is mostly *idle* entries, and Q24.8
 // reads every score older than ~16 half-lives as exactly 0. Comparing
 // those finds a tie among all of them, so the victim would be arbitrary
-// among the cold, and a fingerprint idle for an hour could outlive one idle
-// for a week. The log-domain read keeps them ordered however long they
-// idle (decay.hpp). A tie that remains goes to the lower key, so the
-// victims do not depend on the map's iteration order.
-template <typename Map, typename Primary>
+// among the cold, and a signal idle for an hour could outlive one idle for
+// a week. The log-domain read keeps them ordered however long they idle
+// (decay.hpp). A tie that remains goes to the lower key, so the victims do
+// not depend on the map's iteration order.
+template <typename Map, typename Primary, typename Evicted>
 void MakeRoom(Map& map, std::size_t cap, std::size_t incoming, const sched::Clock* clock,
               sched::MonoTimeNs half_life, Primary primary,
-              std::vector<std::pair<Log2Q16, std::uint64_t>>& scratch) {
+              std::vector<std::pair<Log2Q16, typename Map::key_type>>& scratch,
+              Evicted evicted) {
     if (map.size() + incoming <= cap) return;
     const std::size_t drop = std::min(map.size(), map.size() + incoming - cap);
-    // One clock reading for the whole ranking.
     const bool timed = clock != nullptr;
     const sched::MonoTimeNs now = timed ? clock->Now() : 0;
     scratch.clear();
@@ -98,10 +102,23 @@ void MakeRoom(Map& map, std::size_t cap, std::size_t incoming, const sched::Cloc
     }
     std::nth_element(scratch.begin(), scratch.begin() + static_cast<std::ptrdiff_t>(drop),
                      scratch.end());
-    for (std::size_t i = 0; i < drop; ++i) map.erase(scratch[i].second);
+    for (std::size_t i = 0; i < drop; ++i) {
+        map.erase(scratch[i].second);
+        evicted(scratch[i].second);
+    }
 }
 
 }  // namespace
+
+std::size_t SignalKeyHash::operator()(const SignalKey& k) const noexcept {
+    // splitmix64's finalizer over the three words: a pattern's signals
+    // differ in a small oid and a column position.
+    std::uint64_t h = k.pattern_id ^ (k.rel_oid * 0x9E3779B97F4A7C15ULL) ^
+                      (static_cast<std::uint64_t>(k.col_pos) << 48);
+    h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    h = (h ^ (h >> 27)) * 0x94D049BB133111EBULL;
+    return static_cast<std::size_t>(h ^ (h >> 31));
+}
 
 OptimizerSignals::OptimizerSignals(const sched::Clock* clock, sched::MonoTimeNs half_life_ns,
                                    std::uint32_t cores)
@@ -109,7 +126,8 @@ OptimizerSignals::OptimizerSignals(const sched::Clock* clock, sched::MonoTimeNs 
     const std::uint32_t parts = std::max<std::uint32_t>(cores, 1);
     parts_.reserve(parts);
     for (std::uint32_t c = 0; c < parts; ++c) parts_.push_back(std::make_unique<Part>());
-    taken_shapes_.reserve(kNotedShapesPerCore);
+    taken_signals_.reserve(kNotedSignalsPerCore);
+    taken_waits_.reserve(kNotedWaitsPerCore);
     taken_cabins_.reserve(kNotedCabinsPerCore);
 }
 
@@ -130,16 +148,18 @@ OptimizerSignals::Part* OptimizerSignals::Enter(std::uint32_t core,
         part.busy_drops.fetch_add(1, std::memory_order_relaxed);
         return nullptr;
     }
-    if (!part.shapes) {
+    if (!part.signals) {
         // The one allocation, at the part's first note, and never retried
         // once it failed: a note must not try an allocation every time.
         if (!part.failed) {
-            part.shapes.reset(new (std::nothrow) ShapeNote[kShapeSlots]());
+            part.signals.reset(new (std::nothrow) SignalNote[kSignalSlots]());
+            part.waits.reset(new (std::nothrow) WaitNote[kWaitSlots]());
             part.cabins.reset(new (std::nothrow) CabinNote[kCabinSlots]());
         }
-        if (!part.shapes || !part.cabins) {
+        if (!part.signals || !part.waits || !part.cabins) {
             part.failed = true;
-            part.shapes.reset();
+            part.signals.reset();
+            part.waits.reset();
             part.cabins.reset();
             part.full_drops.fetch_add(1, std::memory_order_relaxed);
             hold.reset();
@@ -147,22 +167,6 @@ OptimizerSignals::Part* OptimizerSignals::Enter(std::uint32_t core,
         }
     }
     return &part;
-}
-
-OptimizerSignals::ShapeNote* OptimizerSignals::ShapeFor(Part& part,
-                                                        std::uint64_t pattern_id) noexcept {
-    ShapeNote* note = Claim(part.shapes.get(), kShapeSlots, kNotedShapesPerCore, part.shapes_used,
-                            pattern_id);
-    if (note == nullptr) part.full_drops.fetch_add(1, std::memory_order_relaxed);
-    return note;
-}
-
-OptimizerSignals::CabinNote* OptimizerSignals::CabinNoteFor(Part& part,
-                                                            std::uint64_t cabin_id) noexcept {
-    CabinNote* note = Claim(part.cabins.get(), kCabinSlots, kNotedCabinsPerCore, part.cabins_used,
-                            cabin_id);
-    if (note == nullptr) part.full_drops.fetch_add(1, std::memory_order_relaxed);
-    return note;
 }
 
 void OptimizerSignals::NoteExecution(std::uint32_t core, std::uint64_t pattern_id,
@@ -173,8 +177,18 @@ void OptimizerSignals::NoteExecution(std::uint32_t core, std::uint64_t pattern_i
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
     if (part == nullptr) return;
-    ShapeNote* note = ShapeFor(*part, pattern_id);
-    if (note == nullptr) return;
+    // The pattern and what it targeted (the header, DI-S2): an execution
+    // with no candidacy is the pattern's `{0, 0}` signal.
+    const SignalKey key = candidate.valid()
+                              ? SignalKey{pattern_id, candidate.rel_oid, candidate.col_pos}
+                              : SignalKey{pattern_id, 0, 0};
+    SignalNote* note =
+        Claim(part->signals.get(), kSignalSlots, kNotedSignalsPerCore, part->signals_used, key);
+    if (note == nullptr) {
+        part->full_drops.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    // The key's candidate, with the Cabin serving it now.
     if (candidate.valid()) note->signal.candidate = candidate;
     Touch(note->signal.executions, clock_, half_life_ns_);
     // Clamped into Accumulate's point width; a statement that read four
@@ -192,9 +206,13 @@ void OptimizerSignals::NoteWaitSample(std::uint32_t core, std::uint64_t pattern_
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
     if (part == nullptr) return;
-    if (ShapeNote* note = ShapeFor(*part, pattern_id); note != nullptr) {
-        Touch(note->signal.wait_samples, clock_, half_life_ns_);
+    WaitNote* note =
+        Claim(part->waits.get(), kWaitSlots, kNotedWaitsPerCore, part->waits_used, pattern_id);
+    if (note == nullptr) {
+        part->full_drops.fetch_add(1, std::memory_order_relaxed);
+        return;
     }
+    Touch(note->signal, clock_, half_life_ns_);
 }
 
 void OptimizerSignals::NoteCabinLookup(std::uint32_t core, std::uint64_t cabin_id,
@@ -204,8 +222,12 @@ void OptimizerSignals::NoteCabinLookup(std::uint32_t core, std::uint64_t cabin_i
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
     if (part == nullptr) return;
-    CabinNote* note = CabinNoteFor(*part, cabin_id);
-    if (note == nullptr) return;
+    CabinNote* note =
+        Claim(part->cabins.get(), kCabinSlots, kNotedCabinsPerCore, part->cabins_used, cabin_id);
+    if (note == nullptr) {
+        part->full_drops.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     Touch(note->signal.lookups, clock_, half_life_ns_);
     if (!served) Touch(note->signal.coverage_misses, clock_, half_life_ns_);
 }
@@ -218,15 +240,27 @@ void OptimizerSignals::NoteCabinHint(std::uint32_t core, std::uint64_t cabin_id,
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
     if (part == nullptr) return;
-    if (CabinNote* note = CabinNoteFor(*part, cabin_id); note != nullptr) {
-        Touch(note->signal.hint_failures, clock_, half_life_ns_);
+    CabinNote* note =
+        Claim(part->cabins.get(), kCabinSlots, kNotedCabinsPerCore, part->cabins_used, cabin_id);
+    if (note == nullptr) {
+        part->full_drops.fetch_add(1, std::memory_order_relaxed);
+        return;
     }
+    Touch(note->signal.hint_failures, clock_, half_life_ns_);
 }
 
 void OptimizerSignals::Fold() {
+    // A pattern's last signal gone, its waits go with it (DI-S2).
+    const auto release = [this](std::uint64_t pattern_id) {
+        if (auto waits = patterns_.find(pattern_id);
+            waits != patterns_.end() && --waits->second.signals == 0) {
+            patterns_.erase(waits);
+        }
+    };
     for (const std::unique_ptr<Part>& part_ptr : parts_) {
         Part& part = *part_ptr;
-        taken_shapes_.clear();
+        taken_signals_.clear();
+        taken_waits_.clear();
         taken_cabins_.clear();
         {
             // A bounded copy into memory reserved at construction, then the
@@ -235,48 +269,64 @@ void OptimizerSignals::Fold() {
             // holder is that core's note, a few words long; a part found
             // busy keeps its notes for the next fold.
             const LatchGuard hold(Armed(part), std::try_to_lock);
-            if (!hold.owns() || !part.shapes) continue;
-            TakeAll(part.shapes.get(), kShapeSlots, part.shapes_used, taken_shapes_);
+            if (!hold.owns() || !part.signals) continue;
+            TakeAll(part.signals.get(), kSignalSlots, part.signals_used, taken_signals_);
+            TakeAll(part.waits.get(), kWaitSlots, part.waits_used, taken_waits_);
             TakeAll(part.cabins.get(), kCabinSlots, part.cabins_used, taken_cabins_);
         }
-        // In id order, so what the fold merges and evicts does not depend on
-        // where a part's hash put an entry (DL-R5).
-        const auto by_id = [](const auto& a, const auto& b) { return a.id < b.id; };
-        std::sort(taken_shapes_.begin(), taken_shapes_.end(), by_id);
-        std::sort(taken_cabins_.begin(), taken_cabins_.end(), by_id);
+        // In key order, so what the fold merges and evicts does not depend
+        // on where a part's hash put an entry (DL-R5).
+        const auto by_key = [](const auto& a, const auto& b) { return a.key < b.key; };
+        std::sort(taken_signals_.begin(), taken_signals_.end(), by_key);
+        std::sort(taken_waits_.begin(), taken_waits_.end(), by_key);
+        std::sort(taken_cabins_.begin(), taken_cabins_.end(), by_key);
 
-        // An execution admits a shape; wait samples alone never do. A part's
-        // pair that was executed was touched, and a touch leaves a score of
-        // at least one point that nothing decays in place, so a zero score
-        // is "no execution since the last fold".
-        const auto executed = [](const ShapeNote& note) {
-            return note.signal.executions.scaled != 0;
-        };
+        // **Each newcomer is counted to its pattern before a victim is
+        // chosen** (DI-S2): a victim of the same pattern then leaves the
+        // pattern's entry, and the waits in it, standing for the signal
+        // about to be made.
         std::size_t fresh = 0;
-        for (const ShapeNote& note : taken_shapes_) {
-            if (executed(note) && !fingerprints_.contains(note.id)) ++fresh;
+        for (const SignalNote& note : taken_signals_) {
+            if (fingerprints_.contains(note.key)) continue;
+            ++patterns_[note.key.pattern_id].signals;
+            ++fresh;
         }
         MakeRoom(fingerprints_, kMaxTrackedFingerprints, fresh, clock_, half_life_ns_,
                  [](const FingerprintSignal& s) -> const DecayState& { return s.executions; },
-                 evict_scratch_);
-        for (const ShapeNote& note : taken_shapes_) {
-            if (executed(note)) {
-                MergeInto(fingerprints_[note.id], note.signal, half_life_ns_);
-            } else if (const auto found = fingerprints_.find(note.id);
-                       found != fingerprints_.end()) {
-                MergeInto(found->second, note.signal, half_life_ns_);
+                 evict_signals_,
+                 [&](const SignalKey& victim) { release(victim.pattern_id); });
+        for (std::size_t at = 0; at < taken_signals_.size(); ++at) {
+            const SignalNote& note = taken_signals_[at];
+            try {
+                MergeInto(fingerprints_[note.key], note.signal, half_life_ns_);
+            } catch (...) {
+                // The signal was not made, nor are the newcomers after it:
+                // their patterns are not left counting them.
+                for (std::size_t rest = at; rest < taken_signals_.size(); ++rest) {
+                    if (!fingerprints_.contains(taken_signals_[rest].key)) {
+                        release(taken_signals_[rest].key.pattern_id);
+                    }
+                }
+                throw;
+            }
+        }
+        // A wait sample is its pattern's, kept beside the pattern's signals
+        // and counted only while it has one: a wait alone admits nothing.
+        for (const WaitNote& note : taken_waits_) {
+            if (const auto found = patterns_.find(note.key); found != patterns_.end()) {
+                MergeDecay(found->second.wait_samples, note.signal, half_life_ns_);
             }
         }
 
         fresh = 0;
         for (const CabinNote& note : taken_cabins_) {
-            if (!cabins_.contains(note.id)) ++fresh;
+            if (!cabins_.contains(note.key)) ++fresh;
         }
         MakeRoom(cabins_, kMaxTrackedCabins, fresh, clock_, half_life_ns_,
                  [](const CabinQualitySignal& s) -> const DecayState& { return s.lookups; },
-                 evict_scratch_);
+                 evict_cabins_, [](std::uint64_t) {});
         for (const CabinNote& note : taken_cabins_) {
-            MergeInto(cabins_[note.id], note.signal, half_life_ns_);
+            MergeInto(cabins_[note.key], note.signal, half_life_ns_);
         }
     }
 }
@@ -309,12 +359,11 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
     snapshot.decay_epoch = clock_ != nullptr ? clock_->Now() : 0;
 
     snapshot.fingerprints.reserve(fingerprints_.size());
-    for (const auto& [id, signal] : fingerprints_) {
+    for (const auto& [key, signal] : fingerprints_) {
         SnapshotFingerprint out;
-        out.pattern_id = id;
+        out.pattern_id = key.pattern_id;
         out.frequency_q8 = ValueAt(signal.executions, clock_, half_life_ns_);
         out.pages_q8 = ValueAt(signal.pages, clock_, half_life_ns_);
-        out.wait_samples_q8 = ValueAt(signal.wait_samples, clock_, half_life_ns_);
         // The same reads in the log domain, for the consumer that must
         // still order two shapes after both have decayed past Q24.8's
         // floor. Same state, same instant - only the projection differs.
@@ -322,6 +371,10 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
         out.pages_log2 = Log2ValueAt(signal.pages, clock_, half_life_ns_);
         out.candidate = signal.candidate;
         snapshot.fingerprints.push_back(out);
+    }
+    snapshot.waits.reserve(patterns_.size());
+    for (const auto& [id, waits] : patterns_) {
+        snapshot.waits.push_back({id, ValueAt(waits.wait_samples, clock_, half_life_ns_)});
     }
     snapshot.cabins.reserve(cabins_.size());
     for (const auto& [id, signal] : cabins_) {
@@ -338,6 +391,14 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
     // iteration order is not part of the state.
     std::sort(snapshot.fingerprints.begin(), snapshot.fingerprints.end(),
               [](const SnapshotFingerprint& a, const SnapshotFingerprint& b) {
+                  if (a.pattern_id != b.pattern_id) return a.pattern_id < b.pattern_id;
+                  if (a.candidate.rel_oid != b.candidate.rel_oid) {
+                      return a.candidate.rel_oid < b.candidate.rel_oid;
+                  }
+                  return a.candidate.col_pos < b.candidate.col_pos;
+              });
+    std::sort(snapshot.waits.begin(), snapshot.waits.end(),
+              [](const SnapshotPatternWaits& a, const SnapshotPatternWaits& b) {
                   return a.pattern_id < b.pattern_id;
               });
     std::sort(snapshot.cabins.begin(), snapshot.cabins.end(),

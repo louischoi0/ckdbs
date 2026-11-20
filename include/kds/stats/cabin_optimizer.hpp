@@ -30,13 +30,15 @@
 // ---- The model (§II.4), and where v1 simplifies it -----------------------
 //
 // Benefit per candidate c: B(c) = Σ_i f_i × max(0, P_scan,i − P_cabin),
-// summed over fingerprints the snapshot links to c (CandidateRef - the
-// PHY02 amendment to PHY01's snapshot, since a bare pattern_id names no
-// column). P_scan,i is the fingerprint's decayed mean pages per execution,
-// computed here from the S2 pair - the one division, as promised.
+// summed over the execution signals the snapshot links to c (CandidateRef -
+// the PHY02 amendment to PHY01's snapshot, since a bare pattern_id names no
+// column; since DI-S2 a signal is a fingerprint's executions **that
+// targeted c**, so the sum holds no other candidate's). P_scan,i is the
+// signal's decayed mean pages per execution, computed here from the S2
+// pair - the one division, as promised.
 //
 // Cost: C(c) = P_rel / T_amort + h_fail × f_lookup × k_heal, with
-// **P_rel estimated as the largest serving fingerprint's mean page cost**
+// **P_rel estimated as the largest serving signal's mean page cost**
 // (a full filter-scan reads the relation, so the observed scan cost is the
 // observed build cost) and T_amort expressed in decay half-lives
 // (`amort_windows`, default 64 - build cost and benefit decay on the same

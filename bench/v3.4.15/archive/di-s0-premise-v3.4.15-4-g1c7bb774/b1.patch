@@ -1,0 +1,515 @@
+diff --git a/include/kds/exec/step_compiler.hpp b/include/kds/exec/step_compiler.hpp
+index 4db7faa2..9e5e53f9 100644
+--- a/include/kds/exec/step_compiler.hpp
++++ b/include/kds/exec/step_compiler.hpp
+@@ -88,7 +88,10 @@ namespace kds::exec {
+ class PositionSink {
+ public:
+     virtual ~PositionSink() = default;
+-    virtual void Position(catalog::Oid rel) = 0;
++    // `unqualified_in`: the namespace the name was resolved in where it was
++    // written unqualified (NS5), 0 for a qualified name - what tells one
++    // text's two statements apart (`stats/statement_binding.hpp`).
++    virtual void Position(catalog::Oid rel, catalog::Oid unqualified_in) = 0;
+ };
+ 
+ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+diff --git a/include/kds/server/command_dispatcher.hpp b/include/kds/server/command_dispatcher.hpp
+index 4e7f70f8..f714c838 100644
+--- a/include/kds/server/command_dispatcher.hpp
++++ b/include/kds/server/command_dispatcher.hpp
+@@ -47,6 +47,7 @@
+ #include "kds/stats/index_stats.hpp"
+ #include "kds/stats/lock_wait_log.hpp"
+ #include "kds/stats/relation_stats.hpp"
++#include "kds/stats/statement_binding.hpp"
+ #include "kds/sched/clock.hpp"
+ #include "kds/sched/coro.hpp"
+ 
+@@ -356,6 +357,13 @@ struct DispatchOutcome {
+     // not carried: a KWP bind is substituted into the text before the parse, so
+     // the hash covers bind values, which WD11 forbids recording.
+     std::uint64_t pattern_id = 0;
++    // **What the statement bound** (DI, `stats/statement_binding.hpp`): the
++    // relations its last run declared and the namespace its unqualified
++    // names were resolved in, which with `fetch_id` is the row
++    // `sys.statement_stats` keeps the statement in. Carried for
++    // `fetch_id`'s reason; a re-run's replaces the run before it, and a
++    // reply rebuilt over the outcome keeps it.
++    stats::StatementBinding binding;
+ 
+     // **Where a `SELECT`'s join order came from** (CX-R11), for
+     // `sys.statement_stats`: `exec::PlanSourceName`'s static text, or
+@@ -1372,10 +1380,14 @@ private:
+             txn_ != nullptr ? txn_->visibility().DdlGeneration() : 0;
+         std::optional<txn::ReadView> view = ViewFor(*session);
+         if (after_view_for_test_) after_view_for_test_();
++        // What the first resolve declares is forgotten if it is made again
++        // (DI): the statement's binding is the resolution that answered.
++        const stats::StatementBinding::Mark bound = statement_binding_.mark();
+         auto answer = resolve(view.has_value() ? &*view : nullptr);
+         if (!view.has_value() && txn_ != nullptr &&
+             txn_->visibility().DdlGeneration() != generation) {
+             view = MintResolveView(*session);
++            statement_binding_.Rewind(bound);
+             answer = resolve(&*view);
+         }
+         return answer;
+@@ -3004,6 +3016,10 @@ private:
+     // copied onto its outcome by `DispatchAndStage` (BO-S5).
+     std::uint64_t statement_fetch_id_ = 0;
+     std::uint64_t statement_pattern_id_ = 0;
++    // What the running statement has bound so far (DI): every read borrow
++    // of the statement declares into it (`read_borrow.hpp`), and it is
++    // copied onto the outcome the same way.
++    stats::StatementBinding statement_binding_;
+     // The running `SELECT`'s plan source and plan, set by its compile and
+     // copied onto its outcome the same way (CX-R11).
+     std::string_view statement_plan_source_;
+diff --git a/include/kds/server/read_borrow.hpp b/include/kds/server/read_borrow.hpp
+index 5539ab50..29ec5013 100644
+--- a/include/kds/server/read_borrow.hpp
++++ b/include/kds/server/read_borrow.hpp
+@@ -5,6 +5,7 @@
+ #include <vector>
+ 
+ #include "kds/exec/step_compiler.hpp"
++#include "kds/stats/statement_binding.hpp"
+ #include "kds/txn/lock_table.hpp"
+ 
+ // ---- The read borrow (AO-S6e-b; AO-R12, AR2 §3's `SELECT` row; moved to
+@@ -51,6 +52,12 @@
+ // The cap is not special-cased for the same reason: `TryAcquire` refuses
+ // at `max_locks_per_txn` and the reader carries on. The ledger holds one
+ // entry per bound relation, which no statement approaches.
++//
++// **It is also where the statement's binding is taken** (DI,
++// `stats/statement_binding.hpp`): every declaration is told to `binding`,
++// where one is given, before anything is asked of the lock table and
++// whether or not there is one - what a statement bound is a fact about the
++// statement, not about a lock.
+ 
+ namespace kds::server {
+ 
+@@ -60,8 +67,12 @@ public:
+     // read path constructs one unconditionally so the call sites carry no
+     // branch of their own. `taken` counts granted relation asks, which is
+     // what a cell reads to say the borrow was taken at all.
+-    ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken) noexcept
+-        : locks_(holder != 0 ? locks : nullptr), holder_(holder), taken_(taken) {}
++    ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken,
++               stats::StatementBinding* binding) noexcept
++        : locks_(holder != 0 ? locks : nullptr),
++          holder_(holder),
++          taken_(taken),
++          binding_(binding) {}
+     // Declaring `rel` at once: what a write does at its resolve. A write
+     // resolves a schema exactly as a read does and its own `IX` is taken
+     // after that - before its admission for an `INSERT`, at its declared
+@@ -70,11 +81,13 @@ public:
+     // `SELECT`'s bind does - an `IS`, compatible with that `IX`, so the
+     // writer pays nothing for it. `INSERT`, `UPDATE` and `DELETE` are the
+     // three callers; the two with a `WHERE` then hand the borrow to
+-    // `CompileWhere` for their subquery relations.
++    // `CompileWhere` for their subquery relations. `unqualified_in` as
++    // `Position`'s.
+     ReadBorrow(txn::LockTable* locks, std::uint64_t holder, std::uint64_t* taken,
+-               catalog::Oid rel) noexcept
+-        : ReadBorrow(locks, holder, taken) {
+-        Position(rel);
++               stats::StatementBinding* binding, catalog::Oid rel,
++               catalog::Oid unqualified_in) noexcept
++        : ReadBorrow(locks, holder, taken, binding) {
++        Position(rel, unqualified_in);
+     }
+     ReadBorrow(const ReadBorrow&) = delete;
+     ReadBorrow& operator=(const ReadBorrow&) = delete;
+@@ -82,7 +95,8 @@ public:
+         if (locks_ != nullptr) locks_->Release(holder_, holdings_);
+     }
+ 
+-    void Position(catalog::Oid rel) override {
++    void Position(catalog::Oid rel, catalog::Oid unqualified_in) override {
++        if (binding_ != nullptr) binding_->Declare(rel, unqualified_in);
+         if (locks_ == nullptr) return;
+         // The unit a `DROP TABLE` meets, and since CP-S2a the whole of the
+         // borrow. **Asked once per relation, whatever the answer**: the
+@@ -104,6 +118,7 @@ private:
+     txn::LockTable* locks_ = nullptr;
+     std::uint64_t holder_ = 0;
+     std::uint64_t* taken_ = nullptr;
++    stats::StatementBinding* binding_ = nullptr;
+     txn::LockHoldings holdings_;
+     // Every relation asked for, whatever the answer. A vector and a linear
+     // scan: the count is the statement's relation count, small in practice
+diff --git a/include/kds/stats/statement_stats.hpp b/include/kds/stats/statement_stats.hpp
+index 4ae3f8fe..84ac6181 100644
+--- a/include/kds/stats/statement_stats.hpp
++++ b/include/kds/stats/statement_stats.hpp
+@@ -11,6 +11,7 @@
+ #include "kds/base/latch.hpp"
+ #include "kds/sched/wait_state.hpp"
+ #include "kds/stats/per_core_ring.hpp"
++#include "kds/stats/statement_binding.hpp"
+ #include "kds/stats/wait_event.hpp"
+ 
+ // **`sys.statement_stats`' rows: what a statement shape costs**
+@@ -20,11 +21,19 @@
+ //
+ // ---- The key ---------------------------------------------------------------
+ //
+-// `(fetch_id, kind)` (BO-Q6 (a) as revised). `kind` is the statement's first
+-// keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE` carry a
+-// fingerprint (`parser/fingerprint.cpp`), so every other kind is one row at
+-// `fetch_id = 0`. A first word that is no statement verb is `OTHER`, so a
+-// client cannot mint a row per misspelling.
++// `(fetch_id, kind, binding)` (BO-Q6 (a) as revised; the binding since DI-S1,
++// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-R2). `kind` is the
++// statement's first keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE`
++// carry a fingerprint (`parser/fingerprint.cpp`), so every other kind is one
++// row at `fetch_id = 0`. A first word that is no statement verb is `OTHER`,
++// so a client cannot mint a row per misspelling.
++//
++// **A row is one binding's** (`statement_binding.hpp`): a fetch id hashes a
++// statement's text, so one text under two namespaces, or over a relation
++// dropped and created again, is two statements and two rows. A statement
++// that bound nothing - refused before its bind, naming no relation, or of a
++// kind with no fingerprint - is the row with no binding; one that bound more
++// relations than a binding holds is the row whose binding is not known.
+ //
+ // ---- Where the rows live, and the latch protocol ---------------------------
+ //
+@@ -56,6 +65,7 @@ namespace kds::stats {
+ struct StatementShape {
+     std::uint64_t fetch_id = 0;
+     std::string kind;
++    StatementBinding binding;
+     std::uint64_t calls = 0;
+     std::uint64_t refused = 0;
+     std::uint64_t total_us = 0;
+@@ -123,16 +133,18 @@ public:
+     // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
+     // the statement whole, re-runs included. `plan_source` is empty for a
+     // statement that compiled no join block, and then the shape keeps what
+-    // it had.
++    // it had. `binding` is what the statement bound, default for one that
++    // bound nothing.
+     static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
+                        bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
+                        std::string_view plan_source = {},
+                        std::string_view plan_label = {},
+-                       const StatementCost& cost = {}) noexcept;
++                       const StatementCost& cost = {},
++                       const StatementBinding& binding = {}) noexcept;
+ 
+     // Every shape, the cores' parts merged by key: every count and sum
+     // added, the longest call the longest, the first statement the
+-    // earliest seen. Ordered by (fetch_id, kind).
++    // earliest seen. Ordered by (fetch_id, kind, binding).
+     static std::vector<StatementShape> Snapshot();
+ 
+     // New shapes no part could take, over every core.
+@@ -145,6 +157,7 @@ private:
+     struct Key {
+         std::uint64_t fetch_id;
+         std::string_view kind;  // static storage, `StatementKindOf`'s
++        StatementBinding binding;
+         bool operator==(const Key&) const = default;
+     };
+     struct KeyHash {
+diff --git a/src/exec/step_compiler.cpp b/src/exec/step_compiler.cpp
+index 36dbb2c9..9581fb3e 100644
+--- a/src/exec/step_compiler.cpp
++++ b/src/exec/step_compiler.cpp
+@@ -2488,7 +2488,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
+         // relation and not on any part of it, and nothing finer is declared
+         // by anyone since CP-S2a.
+         if (declare != nullptr) {
+-            declare->Position(oid.value());
++            declare->Position(oid.value(), rel->schema.empty() ? default_namespace : 0);
+         }
+         auto access = catalog.InitTableAccess(oid.value());
+         if (!access.ok()) return access.status();
+diff --git a/src/server/command_dispatcher.cpp b/src/server/command_dispatcher.cpp
+index 02edaa74..076d3db8 100644
+--- a/src/server/command_dispatcher.cpp
++++ b/src/server/command_dispatcher.cpp
+@@ -716,7 +716,9 @@ PageId CommandDispatcher::BeginMissRerun(Session& waiting, DispatchOutcome* out)
+         const Status refused = Status::TxnConflict(
+             "a page this statement read would have had to be waited for after rows had been "
+             "sent; the statement was not run again - retry it");
++        const stats::StatementBinding binding = out->binding;
+         *out = DispatchOutcome{ErrorReply(refused), false, 0, refused};
++        out->binding = binding;
+         return kInvalidPageId;
+     }
+     // The run after the read starts with no rows, as BA-S14's does (CE-A1).
+@@ -1110,8 +1112,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
+         out->pending_lsn = wal::kNoLsn;
+         if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {
+             const std::optional<std::uint64_t> compile_ns = out->compile_ns;
++            const stats::StatementBinding binding = out->binding;
+             *out = {ErrorReply(refused), out->should_stop, 0, refused};
+             out->compile_ns = compile_ns;
++            out->binding = binding;
+             // A refused commit is no bound: a deferred one was aborted, so
+             // no ceiling would ever cover it. The session's earlier bound
+             // was covered before this statement ran (BA-R1c).
+@@ -1242,6 +1246,7 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
+     statement_trail_mark_ = 0;
+     statement_fetch_id_ = 0;
+     statement_pattern_id_ = 0;
++    statement_binding_ = {};
+     statement_plan_source_ = {};
+     statement_plan_label_.clear();
+     statement_head_ns_ = NowNs();
+@@ -1270,6 +1275,7 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
+     }
+     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
+     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
++    outcome.binding = std::exchange(statement_binding_, {});
+     outcome.plan_source = std::exchange(statement_plan_source_, {});
+     outcome.plan_label = std::exchange(statement_plan_label_, {});
+     outcome.compile_ns = std::exchange(statement_compile_ns_, std::nullopt);
+@@ -1472,9 +1478,15 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
+         sched::FlushOnCpu();
+         cost.timed = sched::SampleSessionCost(*head.booked_to) - head.sample;
+     }
++    // A binding holds as many relations as a captured order's key does, so
++    // a planned block's binding never goes over where its plan's key fits.
++    static_assert(stats::StatementBinding::kMaxRelations == exec::kMaxPlannedRelations);
++    // The binding is a shape's: a kind with no fingerprint is one row,
++    // whatever its statements named (`statement_stats.hpp`).
+     stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
+                                   now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0, now_us,
+-                                  out.plan_source, out.plan_label, cost);
++                                  out.plan_source, out.plan_label, cost,
++                                  out.fetch_id != 0 ? out.binding : stats::StatementBinding{});
+ }
+ 
+ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Session* session) {
+@@ -1547,6 +1559,7 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
+         // typed caller reads `status`, and the bare line folds to
+         // `InvalidArgument`, which a failed device sync is not.
+         DispatchOutcome refused{ErrorReply(s), outcome.should_stop, 0, s};
++        refused.binding = outcome.binding;
+         refused.fetch_id = outcome.fetch_id;  // still this shape's call (BO-S5)
+         return refused;
+     }
+@@ -3555,7 +3568,7 @@ public:
+ private:
+     Status Step(std::uint32_t leaves) override {
+         // This slice's `IS`, given back when the slice returns.
+-        const ReadBorrow borrow(d_.locks_, d_.NextReadHolder(), &d_.read_borrows_, gather_.oid());
++        const ReadBorrow borrow(d_.locks_, d_.NextReadHolder(), &d_.read_borrows_, nullptr, gather_.oid(), 0);
+         // The pinned memo still resolves a relation dropped since the head;
+         // what refuses that gather's result is the store (`Forget`).
+         auto access = d_.catalog_.InitTableAccess(gather_.oid());
+@@ -7166,11 +7179,13 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
+     const std::string_view plan_source = out->plan_source;
+     std::string plan_label = std::move(out->plan_label);
+     const std::optional<std::uint64_t> compile_ns = out->compile_ns;
++    const stats::StatementBinding binding = out->binding;
+     *out = Finish(ran);
+     out->statement = statement;
+     out->plan_source = plan_source;
+     out->plan_label = std::move(plan_label);
+     out->compile_ns = compile_ns;
++    out->binding = binding;
+     co_return Status::OK();
+ }
+ 
+@@ -7473,7 +7488,11 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
+         return Refused(oid.status());
+     }
+ 
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
++                      written.schema.empty() ? (scope.session != nullptr
++                                                    ? scope.session->default_namespace()
++                                                    : catalog::kNamespacePublic)
++                                             : 0);  // AT-R1
+ 
+     auto access = catalog_.InitTableAccess(oid.value());
+     if (!access.ok()) {
+@@ -10116,7 +10135,8 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>&
+     // of the statement, which a sliced walk carries past this function
+     // (BA-S15). A second compile declares into it again, which asks each
+     // relation once (`ReadBorrow::Position`).
+-    ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
++    ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_,
++                                            &statement_binding_);
+     // `join_order`, read once a statement (CX-R10): a `SET JOIN_ORDER` on
+     // any core lands at the next compile.
+     const exec::JoinOrder join_order = this->join_order();
+@@ -11028,7 +11048,7 @@ public:
+           session_(session),
+           snap_(snap),
+           context_(context),
+-          borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_) {}
++          borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_, &d.statement_binding_) {}
+ 
+     StatusOr<std::vector<exec::LayerColumn>> DescribeRelation(
+         const parser::RelationRef& rel) override {
+@@ -11716,7 +11736,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
+         return Refused(oid.status());
+     }
+ 
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
++                      stmt.schema.empty() ? context.default_namespace : 0);  // AT-R1
+ 
+     auto access = catalog_.InitTableAccess(oid.value());
+     if (!access.ok()) {
+@@ -12475,7 +12496,8 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
+                                         context.default_namespace, stmt.from.byte_offset, v);
+     });
+     if (!oid.ok()) return Refused(oid.status());
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
++                      stmt.from.schema.empty() ? context.default_namespace : 0);  // AT-R1
+     auto access = catalog_.InitTableAccess(oid.value());
+     if (!access.ok()) return Refused(access.status());
+     const catalog::TableAccess& ta = *access.value();
+@@ -14167,7 +14189,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
+             const exec::StatementContext context = StatementContextFor(session);
+             auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+             {
+-                ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
++                ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
+                 auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                     return exec::Compile(catalog_, stmt, v, &borrow, &context, nullptr);
+                 });
+@@ -14307,12 +14329,12 @@ Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
+     // other. Each oid is asked once; `read_borrows_` moves by one a grant.
+     const std::uint64_t holder = NextReadHolder();
+     const std::uint64_t before = read_borrows_;
+-    hold.emplace(locks_, holder, &read_borrows_);
++    hold.emplace(locks_, holder, &read_borrows_, nullptr);
+     std::size_t distinct = 0;
+     for (std::size_t i = 0; i < key.n; ++i) {
+         const auto* const seen = std::find(key.oids.data(), key.oids.data() + i, key.oids[i]);
+         if (seen == key.oids.data() + i) ++distinct;
+-        hold->Position(key.oids[i]);
++        hold->Position(key.oids[i], 0);
+     }
+     if (holder != 0 && read_borrows_ - before < distinct) {
+         hold.reset();
+@@ -14414,7 +14436,7 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
+ 
+     const exec::StatementContext context = StatementContextFor(session);
+     const auto create_row = [&]() -> StatusOr<exec::PlanRow> {
+-        ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
++        ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
+         const auto compile = [&](const exec::PlanOptions* options) {
+             return ResolveNames(session, [&](const txn::ReadView* v) {
+                 return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
+@@ -14696,7 +14718,7 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
+     }
+ 
+     const exec::StatementContext context = StatementContextFor(session);
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
+     const auto compile = [&](const exec::PlanOptions* options) {
+         return ResolveNames(session, [&](const txn::ReadView* v) {
+             return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
+@@ -14825,7 +14847,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
+                                         session.default_namespace(), stmt.table_byte_offset, v);
+     });
+     if (!oid.ok()) return Refused(oid.status());
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr, oid.value(), 0);  // IS, AT-R1
+     auto access = catalog_.InitTableAccess(oid.value());
+     if (!access.ok()) return Refused(access.status());
+     const catalog::TableAccess& ta = *access.value();
+@@ -15013,7 +15035,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
+                                         session.default_namespace(), stmt.table_byte_offset, v);
+     });
+     if (!oid.ok()) return Refused(oid.status());
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr, oid.value(), 0);  // IS, AT-R1
+ 
+     // **A DDL transaction, though S2 writes no catalog row**: CD-S3's flag is
+     // written in it, under the same `IX` (CD-OI-9). The cleans are no
+@@ -15209,7 +15231,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
+                                         stmt.table_byte_offset, v);
+     });
+     if (!oid.ok()) return Refused(oid.status());
+-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
++    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
++                      stmt.schema.empty() ? context.default_namespace : 0);  // AT-R1
+ 
+     auto access = catalog_.InitTableAccess(oid.value());
+     if (!access.ok()) return Refused(access.status());
+diff --git a/src/stats/statement_stats.cpp b/src/stats/statement_stats.cpp
+index f866c22d..9e19299e 100644
+--- a/src/stats/statement_stats.cpp
++++ b/src/stats/statement_stats.cpp
+@@ -46,8 +46,21 @@ std::string_view StatementKindOf(std::string_view line) noexcept {
+ std::size_t StatementStats::KeyHash::operator()(const Key& k) const noexcept {
+     // The kind's pointer is its identity: every key's kind is a `kKinds`
+     // entry or `kOther`.
+-    return std::hash<std::uint64_t>{}(k.fetch_id) ^
+-           (std::hash<const void*>{}(k.kind.data()) << 1);
++    std::uint64_t h = std::hash<std::uint64_t>{}(k.fetch_id) ^
++                      (std::hash<const void*>{}(k.kind.data()) << 1);
++    // The binding, folded word by word (splitmix64's finalizer constants):
++    // one text's bindings differ in a namespace or an oid, each a small
++    // integer, so they are spread before they are mixed in. An unbound
++    // statement - every kind with no fingerprint - folds nothing.
++    const auto fold = [&h](std::uint64_t word) noexcept {
++        word *= 0xBF58476D1CE4E5B9ULL;
++        h = (h ^ word ^ (word >> 31)) * 0x94D049BB133111EBULL;
++    };
++    const StatementBinding& b = k.binding;
++    if (b.over) fold(~std::uint64_t{0});
++    if (b.namespace_oid != 0) fold(b.namespace_oid);
++    for (std::size_t i = 0; i < b.n; ++i) fold(b.oids[i]);
++    return static_cast<std::size_t>(h);
+ }
+ 
+ std::array<StatementStats::Part, kStatsParts>& StatementStats::parts() noexcept {
+@@ -59,13 +72,14 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
+                             bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
+                             std::string_view plan_source,
+                             std::string_view plan_label,
+-                            const StatementCost& cost) noexcept {
++                            const StatementCost& cost,
++                            const StatementBinding& binding) noexcept {
+     // Derived here, so every key's kind is `StatementKindOf`'s static
+     // storage - the pointer `KeyHash` hashes by.
+     const std::string_view kind = StatementKindOf(line);
+     Part& part = parts()[core % kStatsParts];
+     const LatchGuard held(&part.latch);
+-    const Key key{fetch_id, kind};
++    const Key key{fetch_id, kind, binding};
+     auto found = part.shapes.find(key);
+     if (found == part.shapes.end()) {
+         if (part.shapes.size() >= kShapesPerCore) {
+@@ -78,6 +92,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
+             StatementShape shape;
+             shape.fetch_id = fetch_id;
+             shape.kind = std::string(kind);
++            shape.binding = binding;
+             shape.first_seen_us = now_us;
+             // Cut at a character boundary: a UTF-8 continuation byte
+             // (`10xxxxxx`) at the cut moves it back, so the text stays
+@@ -172,7 +187,17 @@ std::vector<StatementShape> StatementStats::Snapshot() {
+     out.reserve(merged.size());
+     for (auto& [key, shape] : merged) out.push_back(std::move(shape));
+     std::sort(out.begin(), out.end(), [](const StatementShape& a, const StatementShape& b) {
+-        return a.fetch_id != b.fetch_id ? a.fetch_id < b.fetch_id : a.kind < b.kind;
++        if (a.fetch_id != b.fetch_id) return a.fetch_id < b.fetch_id;
++        if (a.kind != b.kind) return a.kind < b.kind;
++        // The unbound row first, then by namespace and relations, the row
++        // whose binding is not known last.
++        if (a.binding.over != b.binding.over) return b.binding.over;
++        if (a.binding.namespace_oid != b.binding.namespace_oid) {
++            return a.binding.namespace_oid < b.binding.namespace_oid;
++        }
++        return std::lexicographical_compare(
++            a.binding.oids.begin(), a.binding.oids.begin() + a.binding.n,
++            b.binding.oids.begin(), b.binding.oids.begin() + b.binding.n);
+     });
+     return out;
+ }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <compare>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -19,9 +20,11 @@
 // One collector for the instance (AT-S8), a part a core (DL-S1), three
 // signals:
 //
-//   S1  per-fingerprint execution frequency - a decayed count, touched
-//       once per successful fingerprinted SELECT.
-//   S2  pages scanned per execution, per fingerprint - a decayed *sum*
+//   S1  execution frequency - a decayed count, touched once per
+//       successful fingerprinted SELECT - **per fingerprint and candidate**
+//       (`SignalKey`, DI-S2): a fingerprint is a text, and one text is as
+//       many statements as the relations it resolves to.
+//   S2  pages scanned per execution, on the same key - a decayed *sum*
 //       kept beside S1's decayed count, so the decayed mean is their
 //       ratio and both halves idle on the same clock. The pages come from
 //       `StepStats::pages_fetched`, the executor counter built for this.
@@ -39,23 +42,24 @@
 //
 // ---- Where a note goes: a part a core, folded by the consumer (DL-S1) ------
 //
-// **A note writes its own core's part and nothing else.** A part is two
-// fixed tables - shapes and Cabins - allocated whole at the core's first
-// note and never grown, each entry the decayed pairs of what the core
-// noted since the last fold. The part's latch is taken by the **try** form:
-// the one other taker is the consumer's fold, and a note that meets it is
-// dropped and counted, never waited out. A new key past half a table is
-// dropped and counted the same way; the fold empties the table, so the
-// bound is on the shapes one core runs between two folds.
+// **A note writes its own core's part and nothing else.** A part is three
+// fixed tables - execution signals, a pattern's wait samples, Cabins -
+// allocated whole at the core's first note and never grown, each entry the
+// decayed pairs of what the core noted since the last fold. The part's
+// latch is taken by the **try** form: the one other taker is the consumer's
+// fold, and a note that meets it is dropped and counted, never waited out.
+// A new key past half a table is dropped and counted the same way; the fold
+// empties the table, so the bound is on the signals one core notes between
+// two folds.
 //
 // **The consumer folds.** `Fold()` - the controller's tick, through
 // `Snapshot()` - takes each part in core order, copies its entries into
 // memory it reserved beforehand, empties the part and lets it go; then,
 // holding nothing a statement takes, merges the copies into the folded
-// state in id order (`MergeDecay`, `decay.hpp`). The folded maps are
-// **bounded** and the fold is where they evict: a full shape table drops
+// state in key order (`MergeDecay`, `decay.hpp`). The folded maps are
+// **bounded** and the fold is where they evict: a full signal table drops
 // its coldest entry (lowest decayed score) to admit a hotter newcomer,
-// which merely restarts that shape's evidence - a performance event, the
+// which merely restarts that signal's evidence - a performance event, the
 // TrailRecorder-sightings stance. The caps are `[PROPOSED]` and nothing may
 // depend on the numbers, only on the rule: **eviction restarts counting, it
 // never fabricates it.** Room for a part's newcomers is made in one pass
@@ -87,10 +91,11 @@
 
 namespace kds::stats {
 
-// Fingerprints tracked before the coldest is evicted to admit a new one.
-// `[PROPOSED]` 4096 - the sibling caps' number (kMaxSightings,
+// Execution signals tracked before the coldest is evicted to admit a new
+// one. `[PROPOSED]` 4096 - the sibling caps' number (kMaxSightings,
 // cabin_max_values), for the sibling reason: a backstop against an
-// unbounded axis, not a tuning target.
+// unbounded axis, not a tuning target. **It bounds signals, not patterns**
+// (DI-S2): a pattern has one signal per candidate it was seen to target.
 inline constexpr std::size_t kMaxTrackedFingerprints = 4096;
 
 // Cabins tracked. Cabin ids are catalog-bounded in practice; the cap is
@@ -115,19 +120,52 @@ struct CandidateRef {
     bool valid() const noexcept { return rel_oid != 0; }
 };
 
-// One fingerprint's S1/S2 state: the decayed execution count and the
-// decayed page sum. Their ratio is the decayed mean pages-per-execution.
+// **What an execution signal is keyed by: the pattern and the candidate it
+// targeted, together** (DI-S2,
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q12 (a)). A
+// pattern id is a hash of the statement's text and holds no namespace and
+// no relation oid, so one pattern is two statements wherever a name in it
+// resolves to two relations - under two namespaces, or over a relation
+// dropped and created again. Keyed by the pattern alone, the heat of both
+// was one sum credited to whichever candidate ran last, and the controller
+// priced one relation's Cabin with another relation's executions. With the
+// candidate in the key each `(relation, column)` is credited the
+// executions that targeted it and no others. `{0, 0}` is a pattern's
+// executions with no candidacy: pure heat, priced by no decision.
+struct SignalKey {
+    std::uint64_t pattern_id = 0;
+    std::uint64_t rel_oid = 0;
+    std::uint16_t col_pos = 0;
+
+    bool operator==(const SignalKey&) const = default;
+    // An order: what makes a fold's merge, and an eviction's tie, the same
+    // whatever a hash table's iteration yields (DL-R5).
+    auto operator<=>(const SignalKey&) const = default;
+};
+
+struct SignalKeyHash {
+    std::size_t operator()(const SignalKey& k) const noexcept;
+};
+
+// One signal's S1/S2 state: the decayed execution count and the decayed
+// page sum. Their ratio is the decayed mean pages-per-execution.
 struct FingerprintSignal {
     DecayState executions;
     DecayState pages;
-    // S4 (CJ's WE13, `[EXPERIMENTAL]`): ASH samples of this shape found
-    // WAITING, decayed. Read by nothing that decides.
-    DecayState wait_samples;
-    // Last-observed candidacy. A shape's target is a function of the
-    // shape, so overwriting is idempotent in the steady state; it moves
-    // only when the catalog under the shape moved (a Cabin created or
-    // dropped), and then the newest answer is the right one.
+    // The candidate the key names, with the Cabin that serves it as last
+    // observed: `cabin_id` moves when a Cabin on the column is created or
+    // dropped, and then the newest answer is the right one.
     CandidateRef candidate;
+};
+
+// S4 (CJ's WE13, `[EXPERIMENTAL]`), and how many signals a pattern has.
+// **A wait sample is a pattern's, not a candidate's**: the sampler knows
+// the session's published pattern and nothing the statement bound (DI-Q9
+// (a)), so the sample is kept beside the pattern's signals and credited to
+// none of them. Read by nothing that decides.
+struct PatternWaits {
+    DecayState wait_samples;
+    std::uint32_t signals = 0;
 };
 
 // One Cabin's S3 state.
@@ -143,10 +181,6 @@ struct SnapshotFingerprint {
     std::uint64_t pattern_id = 0;
     std::uint32_t frequency_q8 = 0;  // decayed executions, Q24.8
     std::uint32_t pages_q8 = 0;      // decayed page sum, Q24.8
-    // S4, appended: the decayed count of ASH samples of this shape that were
-    // WAITING. `Decide` does not read it (no cost model prices a wait), so it
-    // moves no decision and no digest (`{version, decay_epoch}`).
-    std::uint32_t wait_samples_q8 = 0;
 
     // The same two values in the log domain (decay.hpp's `Log2Q16`),
     // carried beside the linear pair rather than replacing it. The linear
@@ -160,6 +194,15 @@ struct SnapshotFingerprint {
     Log2Q16 pages_log2 = kLog2NegInf;
 
     CandidateRef candidate;          // zero rel_oid = no cabin candidacy
+};
+
+// S4: the decayed count of ASH samples of a pattern that were WAITING, one
+// row a pattern with a signal. `Decide` does not read it (no cost model
+// prices a wait), so it moves no decision and no digest
+// (`{version, decay_epoch}`).
+struct SnapshotPatternWaits {
+    std::uint64_t pattern_id = 0;
+    std::uint32_t wait_samples_q8 = 0;
 };
 
 struct SnapshotCabin {
@@ -176,7 +219,9 @@ struct SnapshotCabin {
 struct OptimizerSnapshot {
     std::uint64_t version = 0;         // increments per Snapshot() call
     sched::MonoTimeNs decay_epoch = 0; // the clock reading of every value
-    std::vector<SnapshotFingerprint> fingerprints;  // sorted by pattern_id
+    // Sorted by (pattern_id, candidate relation, candidate column).
+    std::vector<SnapshotFingerprint> fingerprints;
+    std::vector<SnapshotPatternWaits> waits;        // sorted by pattern_id
     std::vector<SnapshotCabin> cabins;              // sorted by cabin_id
 };
 
@@ -184,7 +229,8 @@ class OptimizerSignals {
 public:
     // What one core's part holds between two folds, live: half its slots.
     // `[PROPOSED]`, a backstop as the caps above are.
-    static constexpr std::size_t kNotedShapesPerCore = 1024;
+    static constexpr std::size_t kNotedSignalsPerCore = 1024;
+    static constexpr std::size_t kNotedWaitsPerCore = 256;
     static constexpr std::size_t kNotedCabinsPerCore = 256;
 
     // The clock and half-life bind at construction - the one site config
@@ -212,14 +258,16 @@ public:
 
     // S1 + S2: one successful fingerprinted execution that read
     // `pages_fetched` pages, targeting `candidate` if the shape has cabin
-    // candidacy. Never fails and never waits.
+    // candidacy - the signal of `pattern_id` and that candidate (DI-S2).
+    // Never fails and never waits.
     void NoteExecution(std::uint32_t core, std::uint64_t pattern_id, std::uint64_t pages_fetched,
                        CandidateRef candidate = {}) noexcept;
 
-    // S4 (CJ's WE13): one ASH sample of `pattern_id` found WAITING. Folded
-    // only for a shape the folded state tracks by the time its part is
-    // folded, or that part noted an execution of since the last fold: a
-    // wait alone never admits a shape.
+    // S4 (CJ's WE13): one ASH sample of `pattern_id` found WAITING. A
+    // pattern's, not a candidate's (DI-Q9 (a)). Folded only for a pattern
+    // with a signal by the time its part is folded - one the folded state
+    // tracks, or that this part noted an execution of since the last fold:
+    // a wait alone never admits or evicts one.
     void NoteWaitSample(std::uint32_t core, std::uint64_t pattern_id) noexcept;
 
     // S3, forwarded by CabinStore: a probe against `cabin_id`. `served`
@@ -232,7 +280,7 @@ public:
     // ---- The consumer: one thread at a time (the header) -------------------
 
     // Every part's notes merged into the folded state, parts in core order
-    // and entries by id. A part found busy keeps its notes for the next
+    // and entries by key. A part found busy keeps its notes for the next
     // fold.
     void Fold();
 
@@ -249,7 +297,7 @@ public:
     // the honest reading either way.
     SnapshotCabin QualityOf(std::uint64_t cabin_id) const;
 
-    std::size_t tracked_fingerprints() const noexcept { return fingerprints_.size(); }
+    std::size_t tracked_signals() const noexcept { return fingerprints_.size(); }
     std::size_t tracked_cabins() const noexcept { return cabins_.size(); }
 
     // A part's latch, for a test that holds it as the fold does; null where
@@ -270,24 +318,28 @@ public:
 
 private:
     // One key's entry in a part: what its core noted since the last fold.
-    template <class Signal>
+    template <class Key, class Signal>
     struct Noted {
-        std::uint64_t id = 0;
+        Key key{};
         Signal signal;
         bool used = false;
     };
-    using ShapeNote = Noted<FingerprintSignal>;
-    using CabinNote = Noted<CabinQualitySignal>;
+    using SignalNote = Noted<SignalKey, FingerprintSignal>;
+    using WaitNote = Noted<std::uint64_t, DecayState>;  // a pattern's wait samples
+    using CabinNote = Noted<std::uint64_t, CabinQualitySignal>;
     // Twice the live bound, so a probe meets an empty slot.
-    static constexpr std::size_t kShapeSlots = 2 * kNotedShapesPerCore;
+    static constexpr std::size_t kSignalSlots = 2 * kNotedSignalsPerCore;
+    static constexpr std::size_t kWaitSlots = 2 * kNotedWaitsPerCore;
     static constexpr std::size_t kCabinSlots = 2 * kNotedCabinsPerCore;
 
     struct Part {
         Latch latch{LatchKind::kStatsRing};
         // Under `latch`. Allocated whole at the part's first note.
-        std::unique_ptr<ShapeNote[]> shapes;
+        std::unique_ptr<SignalNote[]> signals;
+        std::unique_ptr<WaitNote[]> waits;
         std::unique_ptr<CabinNote[]> cabins;
-        std::size_t shapes_used = 0;
+        std::size_t signals_used = 0;
+        std::size_t waits_used = 0;
         std::size_t cabins_used = 0;
         bool failed = false;  // the allocation failed: every note drops
         // Any thread reads them; the part's core alone adds.
@@ -300,10 +352,6 @@ private:
     // be had.
     Part* Enter(std::uint32_t core, std::optional<LatchGuard>& hold) noexcept;
     Latch* Armed(Part& part) const noexcept { return armed_ ? &part.latch : nullptr; }
-    // The part's entry for a key, claimed at its first note since the fold;
-    // null, and one full drop, past the bound.
-    static ShapeNote* ShapeFor(Part& part, std::uint64_t pattern_id) noexcept;
-    static CabinNote* CabinNoteFor(Part& part, std::uint64_t cabin_id) noexcept;
 
     const sched::Clock* clock_;
     sched::MonoTimeNs half_life_ns_;
@@ -315,14 +363,18 @@ private:
 
     // ---- The consumer's ----------------------------------------------------
     std::uint64_t version_ = 0;
-    std::unordered_map<std::uint64_t, FingerprintSignal> fingerprints_;
+    std::unordered_map<SignalKey, FingerprintSignal, SignalKeyHash> fingerprints_;
+    // One entry per pattern with a signal in `fingerprints_`.
+    std::unordered_map<std::uint64_t, PatternWaits> patterns_;
     std::unordered_map<std::uint64_t, CabinQualitySignal> cabins_;
     // The fold's copies, reserved at construction so a part's hold allocates
     // nothing.
-    std::vector<ShapeNote> taken_shapes_;
+    std::vector<SignalNote> taken_signals_;
+    std::vector<WaitNote> taken_waits_;
     std::vector<CabinNote> taken_cabins_;
     // The fold's ranking of a full map's entries, kept between folds.
-    std::vector<std::pair<Log2Q16, std::uint64_t>> evict_scratch_;
+    std::vector<std::pair<Log2Q16, SignalKey>> evict_signals_;
+    std::vector<std::pair<Log2Q16, std::uint64_t>> evict_cabins_;
 };
 
 }  // namespace kds::stats

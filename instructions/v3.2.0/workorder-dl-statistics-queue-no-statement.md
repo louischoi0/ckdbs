@@ -1,7 +1,7 @@
 # Work order DL - statistics queue no statement, and a switched-off consumer collects nothing: the two rules established over every recording path, every statistics read a statement makes and every collection task, and checked
 
 Status: **OPENED 2026-11-20 on the operator's standing go-ahead
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §11)**, on
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §22)**, on
 worktree `dl-statistics-queue-no-statement` from `b0a824db`
 (`v3.4.16-2-gb0a824db`). **No DL-Q item but DL-Q1 and DL-Q3 is the
 operator's own mark**: every other one is CLA's proposal, adopted on that
@@ -462,7 +462,7 @@ these are the order's.
 
 (a) is CLA's proposal in each. **DL-Q1 and DL-Q3 are the operator's own marks; every
 other mark is CLA's proposal adopted on the operator's standing go-ahead of 2026-11-20
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §11), never the operator's
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §22), never the operator's
 per-item mark.** None is tagged `[quiet-wrong]`. The options not taken stay open to the
 operator's own mark.
 
@@ -560,7 +560,7 @@ test are added. Documents only.
 ### Opened 2026-11-20, and DL-S0: the census
 
 Opened on the operator's standing go-ahead (go-ahead-achieving-milestone,
-`raft-marks-2026-11-20.md` §11) on worktree
+`raft-marks-2026-11-20.md` §22) on worktree
 `dl-statistics-queue-no-statement` from `b0a824db` (`v3.4.16-2-gb0a824db`).
 The marks are §4's column: DL-Q1 and DL-Q3 the operator's own, every other
 adopted as CLA proposed it on that standing word.

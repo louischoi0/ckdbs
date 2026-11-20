@@ -101,11 +101,6 @@ public:
         return it == cabins_.end() ? nullptr : it->second;
     }
 
-    void Drop(std::uint64_t assertion_id) override {
-        cabins_.erase(assertion_id);
-        based_.erase(assertion_id);
-    }
-
 private:
     std::map<std::uint64_t, BoundCabin*> cabins_;
     std::set<std::uint64_t> based_;

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <functional>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -447,13 +448,13 @@ TEST(IndexTreeTest, AnOrdinaryInsertReportsNoStructureAndASplitReportsBoth) {
     EXPECT_TRUE(split.value().restructured());
     EXPECT_NE(kInvalidPageId, split.value().new_root) << "the first split must grow a root";
 
-    // The new leaf, the old one, and the new root - each named exactly once,
-    // with the new pages distinguishable from the rewritten ones.
-    int new_pages = 0;
-    for (const IndexChange& c : split.value().changes()) {
-        if (c.is_new_page) ++new_pages;
-    }
-    EXPECT_EQ(2, new_pages) << "the sibling and the root are new; the split page is rewritten";
+    // The new leaf, the old one, and the new root - each named exactly once.
+    const auto changes = split.value().changes();
+    const std::set<PageId> named(changes.begin(), changes.end());
+    EXPECT_EQ(3u, changes.size());
+    EXPECT_EQ(3u, named.size()) << "a page is named twice";
+    EXPECT_EQ(1u, named.count(f.root)) << "the split leaf is rewritten";
+    EXPECT_EQ(1u, named.count(split.value().new_root));
 }
 
 

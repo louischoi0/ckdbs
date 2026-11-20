@@ -1,0 +1,5 @@
+id=s4a2 arm=A0 shape=scenario2 cores=8 clients=8 dur=group keep_wal=0 s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4a2 arm=B shape=scenario2 cores=8 clients=8 dur=group keep_wal=0 s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4a2 arm=L shape=scenario2 cores=8 clients=8 dur=group keep_wal=0 s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4b2 arm=A0 shape=scenario2 cores=1 clients=8 dur=group keep_wal=0 s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"
+id=s4b2 arm=B shape=scenario2 cores=1 clients=8 dur=group keep_wal=0 s2args="--organizations 2000 --ships 30 --operations 2000 --cargos 24000 --bookings 12000"

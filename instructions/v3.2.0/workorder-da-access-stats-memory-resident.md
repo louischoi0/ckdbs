@@ -1,6 +1,6 @@
 # Work order DA - access statistics kept, their storage moved to memory: `sys.access_stats` as a memory-resident view
 
-Status: **CLOSED 2026-11-19, DA-S3 owed, and landed on `main` on the operator's word "push no verify"** (`raft-marks-2026-11-19.md` §17, the hook skipped; suite 0 failed of 4865 at `89c26252`) (DA-S0 `75bbf9f2`, DA-S1 `89c26252`, DA-S2 the documents at `ffe7c501` and the close `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`; no tag). **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
+Status: **DA-S3 built 2026-11-20 on worktree `di-shape-identity`, in DI's format event (superblock 38), not landed** (the last section). **CLOSED 2026-11-19, DA-S3 owed, and landed on `main` on the operator's word "push no verify"** (`raft-marks-2026-11-19.md` §17, the hook skipped; suite 0 failed of 4865 at `89c26252`) (DA-S0 `75bbf9f2`, DA-S1 `89c26252`, DA-S2 the documents at `ffe7c501` and the close `bench/v3.4.14/results-da-close-v3.4.14-32-g89c26252.md`: no cell slower, +13.5 % throughput at `cores = 8`; no tag). **OPENED 2026-11-19** on worktree `da-access-stats-memory-resident`
 from `origin/main` at `673f025d` (`v3.4.14-30-g673f025d`), on the
 operator's standing go-ahead of 2026-11-19 (go-ahead-achieving-milestone,
 `raft-marks-2026-11-19.md` §15): every unmarked item adopted as CLA
@@ -642,3 +642,39 @@ home in `sys-views.md` §6.2d). The milestone row says what DA-S3 owes.
 
 **DA closes with DA-S3 owed**: the bootstrap's removal waits for the first
 superblock bump after 37 any order makes (DA-Q1 (a) as revised).
+
+## DA-S3 - the removal, 2026-11-20
+
+On worktree `di-shape-identity` (branch `worktree-di-shape-identity`), as
+the one commit DA-Q1 (a) bound to "the first bump after 37 any order
+makes": DI's, for its `sys.patterns` row
+(`instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q11 (a), adopted
+by CLA on the operator's standing go-ahead of 2026-11-20). **Superblock
+38.**
+
+**Removed**: bootstrap's `access_stats` entry, so no page 11 and no
+`sys.objects` or `sys.tables` row for oid 130; `kSysAccessStatsTable` and
+its `kAllWellKnownOids` entry - **130 is retired, never reused**, as 115
+and 120 through 124; `kCatalogPageAccessStats` and its `kCatalogRoots`
+entry - **page 11 is reserved and unused**, as page 10; `SysAccessStatRow`
+and its codec (`ColumnBit` stays, it is the memory store's);
+`IsUnloggedCatalogRelation`'s and `RegisterUnloggedClasses`' page-11
+halves, which leaves `sys.statistics` the one unlogged catalog chain.
+
+**What a client sees** (DA-R1): `sys.tables`, `sys.objects` and
+`SHOW TABLES` no longer list `access_stats`; `sys.access_stats` and
+`SHOW ACCESS` answer as before. A version-37 volume does not mount, and
+this build's volume does not mount on a version-37 binary: no migration,
+the standing order of 2026-10-07.
+
+**Tests**: `SuperBlockTest.AVersion37VolumeDoesNotMount`;
+`CommandDispatcherTest.AccessStatsIsAViewAndNoRelationSinceSuperblock38`;
+the two cells that fetched page 11 no longer do
+(`statistics_persistence_test.cpp`, `core_runtime_test.cpp`); the WAL
+golden log is re-pinned, bootstrap's stream being two rows shorter.
+
+**The suite**: 1 failed of 4893 at `-j8` before the re-pin - the golden
+log, by the bytes that were meant to move - and that cell passes with the
+new pin; the whole suite is run again with the rest of DI-S3 over it.
+Overhead not measured; measured at DI's close.
+

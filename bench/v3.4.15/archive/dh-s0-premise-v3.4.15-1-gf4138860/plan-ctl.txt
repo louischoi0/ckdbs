@@ -1,0 +1,2 @@
+id=c1w arm=A0 shape=update-lit rows=100000 cores=4 clients=4 dur=group warm=12.5
+id=c1w arm=B shape=update-lit rows=100000 cores=4 clients=4 dur=group warm=12.5

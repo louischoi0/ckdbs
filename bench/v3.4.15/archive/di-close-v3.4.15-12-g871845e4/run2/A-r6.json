@@ -1,0 +1,45 @@
+{
+ "arm": "A",
+ "rep": 6,
+ "precheck": {
+  "loadavg": "2.39 5.47 7.24 1/666 3682208",
+  "competing": [],
+  "quiet_waited_s": 0
+ },
+ "cells": [
+  {
+   "cell": "chain3",
+   "ops": 20000,
+   "qps": 16440.922213592767,
+   "server_cpu_us": 32.209880850000005,
+   "p50_us": 58.78496449440718,
+   "p99_us": 77.61095184832811,
+   "digest": "5e31be9eccf34cb1",
+   "analyze_replays": 0,
+   "plan": "analyze rows=1 class=JoinSelect steps=3 examined=3 pages=3 opens=3 pattern_id=0xd3e4bb90d1bd4506 fetch_id=0x18be05321c91f316\nclass=JoinSelect steps=3 hoisted=0\nstep 0 Lookup a key=1\n  filter 0:0.0 = 1\nstep 1 Probe b key=0:0.1\n  filter 0:0.1 = 0:1.0\nstep 2 Probe c key=0:1.1\n  filter 0:1.1 = 0:2.0\nproject a.id=0:0.0, b.id=0:1.0, c.v=0:2.2\nstep 0 Lookup a opens=1 examined=1 matched=1 sel=100% pages=1\nstep 1 Probe b opens=1 examined=1 matched=1 sel=100% pages=1\nstep 2 Probe c opens=1 examined=1 matched=1 sel=100% pages=1\nDB time 0.05 ms = CPU 0.05\nSELECT"
+  },
+  {
+   "cell": "pk",
+   "ops": 20000,
+   "qps": 19196.361522804775,
+   "server_cpu_us": 23.13153935,
+   "p50_us": 49.32098090648651,
+   "p99_us": 69.64604835957289,
+   "digest": "74e67e8c61b29ace",
+   "analyze_replays": 0,
+   "plan": "analyze rows=1 class=PointSelect steps=1 examined=1 pages=1 opens=1 pattern_id=0x3489ccf2b5745880 fetch_id=0xf3eb81d489020ad\nclass=PointSelect steps=1 hoisted=0\nstep 0 Lookup a key=1\n  filter 0:0.0 = 1\nproject * (3 column(s) of step 0)\nstep 0 Lookup a opens=1 examined=1 matched=1 sel=100% pages=1\nDB time 0.03 ms = CPU 0.03\nSELECT"
+  },
+  {
+   "cell": "scanprobe",
+   "ops": 1000,
+   "qps": 1777.973816257892,
+   "server_cpu_us": 398.54058299999997,
+   "p50_us": 526.5370709821582,
+   "p99_us": 849.5270740240812,
+   "digest": "9ced7268a2481a09",
+   "analyze_replays": 0,
+   "plan": "analyze rows=100 class=JoinSelect steps=3 examined=10200 pages=280 opens=201 pattern_id=0x17ca4e900967c85f fetch_id=0xb2e95445865950a3\nclass=JoinSelect steps=3 hoisted=0\nplanned order=captured\nstep 0 FilterScan t\n  filter 0:0.1 = 0\nstep 1 Probe bar key=0:0.2\n  filter 0:0.2 = 0:1.0\nstep 2 Probe sym key=0:0.3\n  filter 0:0.3 = 0:2.0\nproject t.sym_id=0:0.3, t.ret=0:0.4, bar.close=0:1.1, sym.ticker=0:2.1\nstep 0 FilterScan t opens=1 examined=10000 matched=100 sel=1% pages=80\nstep 1 Probe bar opens=100 examined=100 matched=100 sel=100% pages=100\nstep 2 Probe sym opens=100 examined=100 matched=100 sel=100% pages=100\nDB time 0.37 ms = CPU 0.37\nSELECT"
+  }
+ ],
+ "finished": "2026-11-20 06:12:53"
+}

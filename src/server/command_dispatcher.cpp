@@ -87,6 +87,20 @@ void SetBuildRunStart(BuildRun& run, sched::MonoTimeNs started_ns) noexcept;
 
 namespace {
 
+// Every `(SELECT ...)` written as a value under `expr`, in written order
+// (BJ-S7's scalar subquery; the query grammar's forms carry no statement).
+// The tree's height is the parser's bound (`kMaxExprHeight`).
+void CollectSubqueries(const parser::Expr* expr, std::vector<const parser::Expr*>* out) {
+    if (expr == nullptr) return;
+    if (expr->kind == parser::Expr::Kind::kSubquery) {
+        if (expr->subquery != nullptr) out->push_back(expr);
+        return;
+    }
+    CollectSubqueries(expr->lhs.get(), out);
+    CollectSubqueries(expr->rhs.get(), out);
+    for (const auto& arg : expr->args) CollectSubqueries(arg.get(), out);
+}
+
 // The statement's constants (`exec/functions.hpp`) for a statement the
 // session runs: `NOW()`'s instant and the namespace an unqualified relation
 // name means (`USE`, namespace.md NS8).
@@ -716,7 +730,9 @@ PageId CommandDispatcher::BeginMissRerun(Session& waiting, DispatchOutcome* out)
         const Status refused = Status::TxnConflict(
             "a page this statement read would have had to be waited for after rows had been "
             "sent; the statement was not run again - retry it");
+        const stats::StatementBinding binding = out->binding;
         *out = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+        out->binding = binding;
         return kInvalidPageId;
     }
     // The run after the read starts with no rows, as BA-S14's does (CE-A1).
@@ -986,6 +1002,9 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // Kept from the first run: every re-run is the same text, and a reply
     // rebuilt below (a refused commit, a walk's end) need not carry it.
     const std::uint64_t fetch_id = out->fetch_id;
+    // And what it bound, for a re-run that is answered before its bind: the
+    // fetch id above would otherwise be recorded beside no binding.
+    const stats::StatementBinding first_binding = out->binding;
     ash_stats->fingerprint.set(fetch_id);
     if (for_collector) ash_stats->pattern_id.set(out->pattern_id);
 
@@ -1116,8 +1135,10 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         out->pending_lsn = wal::kNoLsn;
         if (Status refused = wal_->EnsureDurable(lsn); !refused.ok()) {
             const std::optional<std::uint64_t> compile_ns = out->compile_ns;
+            const stats::StatementBinding binding = out->binding;
             *out = {ErrorReply(refused), out->should_stop, 0, refused};
             out->compile_ns = compile_ns;
+            out->binding = binding;
             // A refused commit is no bound: a deferred one was aborted, so
             // no ceiling would ever cover it. The session's earlier bound
             // was covered before this statement ran (BA-R1c).
@@ -1126,6 +1147,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
         }
     }
     out->fetch_id = fetch_id;
+    if (out->binding.none()) out->binding = first_binding;
     RecordStatement(line, *out, began_ns, head, session);
     co_return Status::OK();
 }
@@ -1248,6 +1270,7 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     statement_trail_mark_ = 0;
     statement_fetch_id_ = 0;
     statement_pattern_id_ = 0;
+    statement_binding_ = {};
     statement_plan_source_ = {};
     statement_plan_label_.clear();
     statement_head_ns_ = NowNs();
@@ -1276,6 +1299,7 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     }
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
+    outcome.binding = std::exchange(statement_binding_, {});
     outcome.plan_source = std::exchange(statement_plan_source_, {});
     outcome.plan_label = std::exchange(statement_plan_label_, {});
     outcome.compile_ns = std::exchange(statement_compile_ns_, std::nullopt);
@@ -1481,9 +1505,19 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
         sched::FlushOnCpu();
         cost.timed = sched::SampleSessionCost(*head.booked_to) - head.sample;
     }
-    stats::StatementStats::Record(core_id_, out.fetch_id, line, refused,
-                                  now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0, now_us,
-                                  out.plan_source, out.plan_label, cost);
+    // A binding holds as many relations as a captured order's key does, so
+    // a planned block's binding never goes over where its plan's key fits.
+    static_assert(stats::StatementBinding::kMaxRelations == exec::kMaxPlannedRelations);
+    // **The binding whatever the fetch id**: a `SELECT` the native grammar
+    // does not parse has none (`parser.hpp`, a parse that stopped in the
+    // middle), and its row at fetch id 0 is still one binding's. A kind
+    // with no fingerprint declares nothing into the binding, so it stays
+    // one row.
+    const std::uint64_t elapsed_us = now_ns > began_ns ? (now_ns - began_ns) / 1000 : 0;
+    // Nothing more than the record: a full part drops and counts the shape
+    // (`statement_stats.hpp`).
+    stats::StatementStats::Record(core_id_, out.fetch_id, line, refused, elapsed_us, now_us,
+                                  out.plan_source, out.plan_label, cost, out.binding);
 }
 
 DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Session* session) {
@@ -1556,6 +1590,7 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
         // typed caller reads `status`, and the bare line folds to
         // `InvalidArgument`, which a failed device sync is not.
         DispatchOutcome refused{ErrorReply(s), outcome.should_stop, 0, s};
+        refused.binding = outcome.binding;
         refused.fetch_id = outcome.fetch_id;  // still this shape's call (BO-S5)
         return refused;
     }
@@ -2299,9 +2334,10 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
        << " pool_batch_steps_background=" << pool.batch_steps_background
        << " pool_dirty_queued=" << pool.dirty_queued
        << " pool_dirty_drained=" << pool.dirty_drained << " pool_refused=" << pool.refused
-       // DB-R6: the write fetch's images, each `wal::RecordSize(kPageSize)`
-       // bytes of log.
+       // DB-R6, DH-R6: the write fetch's images and the log bytes their
+       // records took, as appended.
        << " pool_fetch_images=" << pool.fetch_images
+       << " pool_fetch_image_bytes=" << pool.fetch_image_bytes
        << " pool_would_wait=" << pool.would_wait;
 
     // The undo purge's two numbers (docs/inflight/in-progress/workplan-undo-purge.md UP3):
@@ -3595,7 +3631,7 @@ public:
 private:
     Status Step(std::uint32_t leaves) override {
         // This slice's `IS`, given back when the slice returns.
-        const ReadBorrow borrow(d_.locks_, d_.NextReadHolder(), &d_.read_borrows_, gather_.oid());
+        const ReadBorrow borrow(d_.locks_, d_.NextReadHolder(), &d_.read_borrows_, nullptr, gather_.oid(), 0);
         // The pinned memo still resolves a relation dropped since the head;
         // what refuses that gather's result is the store (`Forget`).
         auto access = d_.catalog_.InitTableAccess(gather_.oid());
@@ -3734,6 +3770,20 @@ std::string StatisticsDocument(std::string_view label, const stats::RelationStat
     }
     doc.append(" relation=").append(label);
     return doc;
+}
+
+void CommandDispatcher::EndOptInsNaming(catalog::Oid oid) {
+    // **A dropped relation ends the Waystone opt-ins that name it** (DI-S3,
+    // DI-Q13 (a)): its oid is never reissued, so the shapes can bind it no
+    // more. After the drop has committed, never inside it - a drop that
+    // rolls back keeps its opt-ins. A write that fails leaves the rows for
+    // the next mount's renewal to end, which costs a directory page until
+    // then and no answer (invariant 8).
+    if (auto ended = catalog_.EndPatternsNaming(oid); !ended.ok() && log_ != nullptr &&
+                                                      log_->enabled(LogLevel::kWarn)) {
+        log_->Warn("waystone", "the opt-ins naming dropped relation " + std::to_string(oid) +
+                                   " were not ended: " + ended.status().message());
+    }
 }
 
 void CommandDispatcher::ForgetRelationStatistics(catalog::Oid oid) {
@@ -4890,11 +4940,40 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             // either. Asked of the instance's table, which holds every such
             // plan; a disabled one does not restrict, and its row reads
             // `invalid` once the relation is gone.
-            if (const auto plan = admin_plans_->EnabledNaming(oid.value()); plan.has_value()) {
-                return DispatchOutcome{"ERR plan '" + *plan +
-                                           "' names this relation; DROP PLAN or ALTER PLAN " +
-                                           *plan + " DISABLE first",
-                                       false};
+            //
+            // **A plan that can match no statement restricts nothing** (DI-S4):
+            // after a rename of a name its statement writes, its key is out
+            // of every statement's reach (`exec::PlanRowCanMatch`), so it is
+            // in force for none and the drop protects nothing by waiting for
+            // it. Read off the rows, and only once the table says some
+            // enabled plan names the relation.
+            if (admin_plans_->EnabledNaming(oid.value()).has_value()) {
+                auto plans = exec::ListPlans(catalog_, page_store_);
+                if (!plans.ok()) return Refused(plans.status());
+                auto tables = catalog_.ListTables(nullptr);
+                if (!tables.ok()) return Refused(tables.status());
+                for (const exec::PlanRow& plan : plans.value()) {
+                    if (plan.captured || !plan.readable || !plan.enabled ||
+                        !plan.key.Names(oid.value())) {
+                        continue;
+                    }
+                    // The newest row of a name is the plan (`LoadPlans`): an
+                    // `ALTER PLAN` whose delete of the old row failed leaves
+                    // it beside the new one, and it speaks for nothing.
+                    const bool superseded = std::any_of(
+                        plans.value().begin(), plans.value().end(),
+                        [&](const exec::PlanRow& other) {
+                            return !other.captured && other.id > plan.id &&
+                                   exec::SameName(other.name, plan.name);
+                        });
+                    if (superseded || !exec::PlanRowCanMatch(catalog_, plan, tables.value())) {
+                        continue;
+                    }
+                    return DispatchOutcome{"ERR plan '" + plan.name +
+                                               "' names this relation; DROP PLAN or ALTER PLAN " +
+                                               plan.name + " DISABLE first",
+                                           false};
+                }
             }
             // CN-4 T7 as revised in BV-S2: a Transition goes with its
             // relation - but its row commits at its own statement and a drop
@@ -4962,6 +5041,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             captured_plans_->ForgetRelation(oid.value());
             admin_plans_->ForgetRelation(oid.value());
             ForgetRelationStatistics(oid.value());
+            EndOptInsNaming(oid.value());
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -6718,13 +6798,8 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed,
 
 Status CommandDispatcher::LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id,
                                    catalog::Oid oid, PageId anchor_page_id) {
-    std::vector<PageId> pages;
-    pages.reserve(placed.changes().size());
-    for (const storage::StructuralChange& change : placed.changes()) {
-        pages.push_back(change.page_id);
-    }
-    return LogTreeSplit(pages, placed.held, txn_id, oid, /*index_oid=*/0, placed.new_root,
-                        anchor_page_id, &placed.anchor);
+    return LogTreeSplit(placed.changes(), placed.held, txn_id, oid, /*index_oid=*/0,
+                        placed.new_root, anchor_page_id, &placed.anchor);
 }
 
 Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages,
@@ -7092,6 +7167,12 @@ public:
     std::optional<parser::Parser> parser;
     std::optional<parser::Statement> statement;
     std::optional<ReadBorrow> borrow;
+    // What this run's own compile bound (DI, `stats/statement_binding.hpp`):
+    // the run's borrow declares into it, the statement's binding absorbs it
+    // once the compile has answered, and the Waystone gate asks the opted
+    // map with it - a `SELECT` run inside a write is opted, or not, as the
+    // `SELECT` it is.
+    stats::StatementBinding binding;
     std::optional<exec::StepChain> chain;
     TextResultSink text_sink;
     ResultSink* sink = nullptr;
@@ -7209,11 +7290,13 @@ sched::Coro SelectRun::Execute(DispatchOutcome* out) {
     const std::string_view plan_source = out->plan_source;
     std::string plan_label = std::move(out->plan_label);
     const std::optional<std::uint64_t> compile_ns = out->compile_ns;
+    const stats::StatementBinding binding = out->binding;
     *out = Finish(ran);
     out->statement = statement;
     out->plan_source = plan_source;
     out->plan_label = std::move(plan_label);
     out->compile_ns = compile_ns;
+    out->binding = binding;
     co_return Status::OK();
 }
 
@@ -7515,8 +7598,26 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
     if (!oid.ok()) {
         return Refused(oid.status());
     }
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
+                      written.schema.empty() ? context.default_namespace : 0);  // AT-R1
 
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+    // **A conflict arm's subqueries are bound here, once** (DI,
+    // `stats/statement_binding.hpp`). The arm runs a `SET` value's subquery
+    // at each row that conflicts, so left to it the statement's binding
+    // would hold the subquery's relations only where some row conflicted -
+    // what a statement bound would follow its data. A compile, never a run;
+    // a subquery that does not compile is the arm's to refuse.
+    if (written.on_conflict_do_update) {
+        std::vector<const parser::Expr*> subqueries;
+        for (const parser::Assignment& a : written.conflict_assignments) {
+            CollectSubqueries(a.expr.get(), &subqueries);
+        }
+        for (const parser::Expr* node : subqueries) {
+            (void)ResolveNames(scope.session, [&](const txn::ReadView* v) {
+                return exec::Compile(catalog_, *node->subquery, v, &borrow, &context).status();
+            });
+        }
+    }
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
@@ -9109,6 +9210,7 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
             // the table, its row kept (`exec/plan_catalog.hpp`).
             admin_plans_->ForgetRelation(owed->oid);
             ForgetRelationStatistics(owed->oid);
+            EndOptInsNaming(owed->oid);
         }
         owed = owed_drops_.erase(owed);
     }
@@ -10159,11 +10261,15 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // of the statement, which a sliced walk carries past this function
     // (BA-S15). A second compile declares into it again, which asks each
     // relation once (`ReadBorrow::Position`).
-    ReadBorrow& borrow = run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_);
+    ReadBorrow& borrow =
+        run->borrow.emplace(locks_, NextReadHolder(), &read_borrows_, &run->binding);
     // `join_order`, read once a statement (CX-R10): a `SET JOIN_ORDER` on
     // any core lands at the next compile.
     const exec::JoinOrder join_order = this->join_order();
     auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+        // This resolve's binds alone: one made again because a DDL moved
+        // under it forgets the first (`statement_binding.hpp`).
+        run->binding = {};
         exec::PlanOptions plan;
         plan.join_build_max_rows = budget_.join_build_max_rows();
         plan.sort_max_rows = sort_max_rows_;
@@ -10199,8 +10305,17 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
                 return std::move(*layered);
             }
         }
+        // Refused, and no layer answered in its place: the statement is
+        // recorded under what it had bound by then, as a write refused past
+        // its target is (`statement_binding.hpp`).
+        statement_binding_.Absorb(run->binding);
         return Refused(chain.status());
     }
+
+    // The compile answered: what it bound is the statement's. Not before -
+    // a compile declined for the query layer leaves nothing of its own
+    // under what answers in its place.
+    statement_binding_.Absorb(run->binding);
 
     // **Every read runs where the session is, walking the whole relation** (AT-S9,
     // AT-0 item 4 answered "struck"): one frame table serves every core
@@ -10285,7 +10400,11 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     const catalog::PatternAccess* opted = nullptr;
     if ((recorder_ != nullptr || replay_enabled_) && trailable && fingerprint.has_value() &&
         !catalog_.NoOptedPatterns() && exec::HasReplayableStep(compiled)) {
-        if (auto found = catalog_.FindOptedPattern(fingerprint->fetch_id); found.ok()) {
+        // **Opted under what this compile bound** (DI-S3): the shape's
+        // text opted over another namespace's relations, or over a
+        // relation since dropped and created again, is not this statement.
+        if (auto found = catalog_.FindOptedPattern(fingerprint->fetch_id, run->binding);
+            found.ok()) {
             opted = found.value();
         } else if (found.status().code() != StatusCode::kNotFound && recorder_ != nullptr) {
             recorder_->CountUnreadablePattern();
@@ -10304,7 +10423,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // controller switched off nothing is built for it** (`rules.md` §3a).
     if (fingerprint.has_value() && (waystone_usable || CollectorOn() || analyze)) {
         identity = StatementIdentity{stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
-                                     fingerprint->pattern_id};
+                                     fingerprint->pattern_id, opted != nullptr ? opted->oid : 0};
     }
 
     // The trail a previous execution of this instance recorded. Read once,
@@ -10715,7 +10834,7 @@ void CommandDispatcher::RecordTrail(const std::optional<StatementIdentity>& iden
     // empty one would replace a populated trail with nothing.
     if (recorder_ == nullptr || trail == nullptr || trail->empty()) return;
     if (!identity.has_value()) return;
-    recorder_->OnPatternResult(identity->trail, *trail);
+    recorder_->OnPatternResult(identity->trail, identity->opted_row, *trail);
 }
 
 void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
@@ -10799,6 +10918,9 @@ DispatchOutcome CommandDispatcher::RunWalkWrite(std::string_view line, Session& 
         statement_trail_mark_ = parked.trail_mark;
         context = parked.context;
         subquery_answers = parked.subqueries;
+        // What it had bound, which the re-dispatch cleared (`ParkedWrite`).
+        // The binds this run makes again are relations it already holds.
+        statement_binding_ = parked.binding;
         // **And so is its statement boundary** (BH-S1, Census A row 5). The
         // re-dispatch cleared it, and a READ COMMITTED transaction would
         // otherwise re-mint its registered view at the next `ViewFor`
@@ -10850,7 +10972,8 @@ DispatchOutcome CommandDispatcher::RunWalkWrite(std::string_view line, Session& 
         session.set_parked_write(Session::ParkedWrite{scope.txn, scope.owned, snap,
                                                       out.walk_cursor, statement_trail_mark_,
                                                       is_delete, context,
-                                                      std::move(subquery_answers)});
+                                                      std::move(subquery_answers),
+                                                      statement_binding_});
         return out;
     }
     return FinishWrite(session, scope, WithReturning(line, session, scope, std::move(out), context),
@@ -11078,7 +11201,7 @@ public:
           session_(session),
           snap_(snap),
           context_(context),
-          borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_) {}
+          borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_, &d.statement_binding_) {}
 
     StatusOr<std::vector<exec::LayerColumn>> DescribeRelation(
         const parser::RelationRef& rel) override {
@@ -11145,8 +11268,16 @@ StatusOr<std::vector<std::vector<parser::AstValue>>> CommandDispatcher::WalkForL
     const auto run = std::make_shared<SelectRun>(*this, session);
     run->snapshot.emplace(txn::LeasedSnapshot{snap, {}});
     run->statement.emplace(std::move(stmt));
+    // **A walk declares nothing into the statement's binding** (DI,
+    // `stats/statement_binding.hpp`): the layer walks a relation when its
+    // rows are first asked for and never twice, so which walks run, and in
+    // what order, follows the data. The binding is the layer's describes',
+    // made once per relation source at its compile, and every relation a
+    // walk reads was described first.
+    const stats::StatementBinding::Mark bound = statement_binding_.mark();
     const DispatchOutcome out =
         RunToEnd(SelectBody(run, session, /*analyze=*/false, &context, {}));
+    statement_binding_.Rewind(bound);
     if (Status refused = OutcomeStatus(out); !refused.ok()) return refused;
     return sink.TakeRows();
 }
@@ -11766,7 +11897,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         return Refused(oid.status());
     }
 
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
+                      stmt.schema.empty() ? context.default_namespace : 0);  // AT-R1
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) {
@@ -12525,7 +12657,8 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
                                         context.default_namespace, stmt.from.byte_offset, v);
     });
     if (!oid.ok()) return Refused(oid.status());
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
+                      stmt.from.schema.empty() ? context.default_namespace : 0);  // AT-R1
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
@@ -14100,6 +14233,20 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
     std::uint64_t fetch_id = 0;
     std::uint8_t stmt_class = catalog::kStmtClassUnclassified;
     PageId root = kInvalidPageId;
+    // **What the example bound** (DI-S3, DI-Q13 (a)): an opt-in names the
+    // shape under the relations its example resolved to, in the session's
+    // namespace. Unset for `OFF <fetch_id>`, which clears every binding of
+    // the shape, and for an `OFF <select>` whose example resolves to nothing
+    // now - there is no opt-in it could name.
+    std::optional<stats::StatementBinding> bound;
+    bool by_number = false;
+    // `ON`'s read borrow of the example's relations, **held across its
+    // write**: released before it, a `DROP TABLE` could take its `X`, commit
+    // and end the opt-ins naming the relation in the gap, and the row
+    // written after would be opted over a dropped oid until the next mount.
+    // A lock, not a `TableAccess*`, so it may span the schema word's move.
+    stats::StatementBinding example_binding;
+    std::optional<ReadBorrow> example_borrow;
     const char first = example.front();
     if (std::isdigit(static_cast<unsigned char>(first)) != 0 || first == '-' || first == '+') {
         // **`ON` names its pattern by example only** (CF-O-Q1 (a)): a number
@@ -14118,6 +14265,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                 std::to_string(example_at) + ")"));
         }
         fetch_id = *parsed;
+        by_number = true;
     } else {
         // ---- The example's leading word, before any parse ----------------
         if (IEquals(lead, "INSERT") || IEquals(lead, "UPDATE") || IEquals(lead, "DELETE")) {
@@ -14198,9 +14346,28 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
         }
         fetch_id = fingerprint->fetch_id;
 
-        // **`OFF <select>` stops here**: it only fingerprints, so none of
-        // ON's shape, D2 or borrow refusals apply, and OFF can always clear
-        // what ON set - after a `DROP TABLE` included.
+        // **`OFF <select>` resolves its example and nothing more** (DI-S3):
+        // it clears the opt-in of what the example binds under the session's
+        // namespace, so none of ON's shape or D2 refusals apply. An example
+        // that resolves to nothing - its relation dropped, which ended the
+        // opt-in (`EndOptInsNaming`), or never there - names no opt-in, and
+        // is answered `unchanged`; `OFF <fetch_id>` is the form that needs
+        // no relation.
+        if (!on) {
+            const exec::StatementContext context = StatementContextFor(session);
+            auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+            stats::StatementBinding resolved;
+            ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &resolved);
+            auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                resolved = {};
+                return exec::Compile(catalog_, stmt, v, &borrow, &context, nullptr);
+            });
+            // Whether or not the compile answered: an example whose
+            // relations resolved names their shape, and a `?` read as a
+            // literal can be refused past the bind.
+            (void)chain;
+            if (!resolved.over && resolved.n != 0) bound = resolved;
+        }
         if (on) {
             // ---- Compile, never execute --------------------------------
             //
@@ -14211,14 +14378,17 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             // SELECT runs beside it. A refusal the compile itself answers
             // `TxnConflict` is positioned at the example.
             //
-            // **Scoped**: the chain and the borrow go before the write,
-            // which moves the schema word, and no `TableAccess*` may be held
-            // across that (catalog.hpp's `BumpVersion`).
+            // **The chain is scoped** and goes before the write, which moves
+            // the schema word: no `TableAccess*` may be held across that
+            // (catalog.hpp's `BumpVersion`). The borrow stays (above).
             const exec::StatementContext context = StatementContextFor(session);
             auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+            stats::StatementBinding& resolved = example_binding;
+            ReadBorrow& borrow =
+                example_borrow.emplace(locks_, NextReadHolder(), &read_borrows_, &resolved);
             {
-                ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
                 auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                    resolved = {};
                     return exec::Compile(catalog_, stmt, v, &borrow, &context, nullptr);
                 });
                 if (!chain.ok()) {
@@ -14270,6 +14440,15 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
                 }
                 stmt_class = exec::StoredStatementClass(compiled.klass);
             }
+            // A binding that is not held names no shape to opt in
+            // (`statement_binding.hpp`): more relations than it holds.
+            if (resolved.over) {
+                return Refused(Status::NotImplemented(
+                    "WAYSTONE ON over a SELECT that binds more than " +
+                    std::to_string(stats::StatementBinding::kMaxRelations) +
+                    " relations is not implemented (byte " + std::to_string(example_at) + ")"));
+            }
+            bound = resolved;
 
             // ---- The directory, before page 9's hold --------------------
             //
@@ -14280,7 +14459,7 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
             // with a concurrent ON is settled under the hold, and the loser's
             // page is logged as leaked there.
             if (recorder_ != nullptr) {
-                auto row = catalog_.GetSysPatternRow(fetch_id);
+                auto row = catalog_.GetSysPatternRow(fetch_id, *bound);
                 if (!row.ok() && row.status().code() != StatusCode::kNotFound) {
                     return Refused(AtByte(row.status(), 0));
                 }
@@ -14297,7 +14476,16 @@ DispatchOutcome CommandDispatcher::HandleWaystone(std::string_view line, Session
         }
     }
 
-    auto wrote = catalog_.SetPatternWaystone(fetch_id, stmt_class, on, root);
+    // `OFF <fetch_id>`: every binding of the shape. An example: the opt-in
+    // of what it bound. An `OFF` whose example binds nothing now asks with
+    // no binding, which no row holds: nothing is written and the answer is
+    // `unchanged` - **through the same hold**, so it waits, as every
+    // `unchanged` does, for whatever earlier record set the state it
+    // reports (a drop's end of the opt-in among them).
+    auto wrote = by_number ? catalog_.ClearPatternWaystone(fetch_id)
+                           : catalog_.SetPatternWaystone(
+                                 fetch_id, bound.value_or(stats::StatementBinding{}), stmt_class,
+                                 on, root);
     if (!wrote.ok()) return Refused(AtByte(wrote.status(), 0));
 
     // **The named park** (§8.3, Durability of OK): the hold is released, and
@@ -14357,12 +14545,12 @@ Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
     // other. Each oid is asked once; `read_borrows_` moves by one a grant.
     const std::uint64_t holder = NextReadHolder();
     const std::uint64_t before = read_borrows_;
-    hold.emplace(locks_, holder, &read_borrows_);
+    hold.emplace(locks_, holder, &read_borrows_, nullptr);
     std::size_t distinct = 0;
     for (std::size_t i = 0; i < key.n; ++i) {
         const auto* const seen = std::find(key.oids.data(), key.oids.data() + i, key.oids[i]);
         if (seen == key.oids.data() + i) ++distinct;
-        hold->Position(key.oids[i]);
+        hold->Position(key.oids[i], 0);
     }
     if (holder != 0 && read_borrows_ - before < distinct) {
         hold.reset();
@@ -14464,7 +14652,7 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
 
     const exec::StatementContext context = StatementContextFor(session);
     const auto create_row = [&]() -> StatusOr<exec::PlanRow> {
-        ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
+        ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
         const auto compile = [&](const exec::PlanOptions* options) {
             return ResolveNames(session, [&](const txn::ReadView* v) {
                 return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
@@ -14746,7 +14934,7 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
     }
 
     const exec::StatementContext context = StatementContextFor(session);
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_);
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
     const auto compile = [&](const exec::PlanOptions* options) {
         return ResolveNames(session, [&](const txn::ReadView* v) {
             return exec::Compile(catalog_, stmt, v, &borrow, &context, options);
@@ -14875,7 +15063,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                                         session.default_namespace(), stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return Refused(oid.status());
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr, oid.value(), 0);  // IS, AT-R1
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
@@ -15063,7 +15251,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                                         session.default_namespace(), stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return Refused(oid.status());
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // IS, AT-R1
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr, oid.value(), 0);  // IS, AT-R1
 
     // **A DDL transaction, though S2 writes no catalog row**: CD-S3's flag is
     // written in it, under the same `IX` (CD-OI-9). The cleans are no
@@ -15259,7 +15447,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                         stmt.table_byte_offset, v);
     });
     if (!oid.ok()) return Refused(oid.status());
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, oid.value());  // AT-R1
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
+                      stmt.schema.empty() ? context.default_namespace : 0);  // AT-R1
 
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return Refused(access.status());

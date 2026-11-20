@@ -103,14 +103,14 @@ TEST(OptimizerSignalsTest, TheFingerprintTableEvictsItsColdestAtTheCap) {
         if (id % 512 == 511) signals.Fold();
     }
     signals.Fold();
-    ASSERT_EQ(signals.tracked_fingerprints(), stats::kMaxTrackedFingerprints);
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
     ASSERT_EQ(signals.drops().full, 0u);
 
     // A newcomer evicts the coldest rather than being refused: the table
     // stays at the cap and the new fingerprint is tracked.
     signals.NoteExecution(/*core=*/0, 999'999, 1);
     signals.Fold();
-    EXPECT_EQ(signals.tracked_fingerprints(), stats::kMaxTrackedFingerprints);
+    EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     bool newcomer = false;
@@ -144,7 +144,7 @@ TEST(OptimizerSignalsTest, EvictionPicksTheColdestAmongEntriesTheLinearScoreFlat
     }
     signals.Fold();
     clock.Advance(25 * kHalfLife);
-    ASSERT_EQ(signals.tracked_fingerprints(), stats::kMaxTrackedFingerprints);
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
 
     const stats::OptimizerSnapshot before = signals.Snapshot();
     for (const stats::SnapshotFingerprint& fp : before.fingerprints) {
@@ -500,7 +500,7 @@ TEST(OptimizerSignalsTest, AFoldEvictsTheColdestForEveryNewcomerOfAPartAtOnce) {
         if (id % 512 == 0) signals.Fold();
     }
     signals.Fold();
-    ASSERT_EQ(signals.tracked_fingerprints(), stats::kMaxTrackedFingerprints);
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
 
     // 300 newcomers in one part, each hotter than the coldest band.
     for (std::uint64_t n = 0; n < 300; ++n) {
@@ -534,17 +534,17 @@ TEST(OptimizerSignalsTest, ANoteForACoreWithNoPartIsDroppedAndCounted) {
 // fold makes room.
 TEST(OptimizerSignalsTest, APartPastItsBoundDropsNewShapesUntilTheFold) {
     stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
-    const std::uint64_t bound = stats::OptimizerSignals::kNotedShapesPerCore;
+    const std::uint64_t bound = stats::OptimizerSignals::kNotedSignalsPerCore;
     for (std::uint64_t id = 1; id <= bound; ++id) signals.NoteExecution(/*core=*/0, id, 1);
     EXPECT_EQ(signals.drops().full, 0u);
     signals.NoteExecution(/*core=*/0, bound + 1, 1);
     signals.NoteExecution(/*core=*/0, /*pattern_id=*/1, 1);
     EXPECT_EQ(signals.drops().full, 1u);
     signals.Fold();
-    EXPECT_EQ(signals.tracked_fingerprints(), bound);
+    EXPECT_EQ(signals.tracked_signals(), bound);
     signals.NoteExecution(/*core=*/0, bound + 1, 1);
     signals.Fold();
-    EXPECT_EQ(signals.tracked_fingerprints(), bound + 1);
+    EXPECT_EQ(signals.tracked_signals(), bound + 1);
     EXPECT_EQ(signals.drops().full, 1u);
 }
 
@@ -587,7 +587,9 @@ TEST(OptimizerSignalsTest, WaitSamplesCountOnlyTrackedShapesAndOnlyWhileTheSwitc
     signals.NoteWaitSample(/*core=*/0, 7);  // switch off: not counted
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     ASSERT_EQ(snap.fingerprints.size(), 1u) << "a wait sample admits no shape";
-    EXPECT_EQ(snap.fingerprints[0].wait_samples_q8, 2 * stats::kDecayScoreScale);
+    ASSERT_EQ(snap.waits.size(), 1u);
+    EXPECT_EQ(snap.waits[0].pattern_id, 7u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, 2 * stats::kDecayScoreScale);
 }
 
 TEST(OptimizerSignalsTest, TheWaitSignalMovesNothingTheControllerReads) {
@@ -600,14 +602,165 @@ TEST(OptimizerSignalsTest, TheWaitSignalMovesNothingTheControllerReads) {
         s->NoteExecution(/*core=*/0, 5, 3);
     }
     for (int i = 0; i < 100; ++i) waited.NoteWaitSample(/*core=*/0, 5);
-    const auto a = plain.Snapshot().fingerprints.at(0);
-    const auto b = waited.Snapshot().fingerprints.at(0);
+    const stats::OptimizerSnapshot plain_snap = plain.Snapshot();
+    const stats::OptimizerSnapshot waited_snap = waited.Snapshot();
+    const auto a = plain_snap.fingerprints.at(0);
+    const auto b = waited_snap.fingerprints.at(0);
     EXPECT_EQ(a.frequency_q8, b.frequency_q8);
     EXPECT_EQ(a.pages_q8, b.pages_q8);
     EXPECT_EQ(a.frequency_log2, b.frequency_log2);
     EXPECT_EQ(a.pages_log2, b.pages_log2);
-    EXPECT_EQ(a.wait_samples_q8, 0u);
-    EXPECT_GT(b.wait_samples_q8, 0u);
+    EXPECT_EQ(plain_snap.waits.at(0).wait_samples_q8, 0u);
+    EXPECT_GT(waited_snap.waits.at(0).wait_samples_q8, 0u);
+}
+
+// ---- DI-S2: a signal is the pattern's and its candidate's ---------------------
+//
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q12 (a). A pattern
+// id is a statement's text, which holds no namespace and no relation, so one
+// pattern is two statements wherever a name in it resolves to two relations.
+// Keyed by the pattern alone the two were one sum, credited to the candidate
+// that ran last.
+
+TEST(OptimizerSignalsTest, OnePatternOverTwoCandidatesIsTwoSignalsEachItsOwnHeat) {
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
+    const stats::CandidateRef east{/*rel_oid=*/40, /*col_pos=*/2, /*cabin_id=*/0};
+    const stats::CandidateRef west{/*rel_oid=*/41, /*col_pos=*/2, /*cabin_id=*/0};
+    for (int i = 0; i < 5; ++i) signals.NoteExecution(/*core=*/0, 7, 10, east);
+    signals.NoteExecution(/*core=*/0, 7, 300, west);  // the one that ran last
+    signals.NoteExecution(/*core=*/0, 7, 1);          // and one with no candidacy
+
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 3u);
+    // Sorted by pattern, then by the candidate's relation and column: the
+    // signal with no candidacy first.
+    EXPECT_FALSE(snap.fingerprints[0].candidate.valid());
+    EXPECT_EQ(snap.fingerprints[0].frequency_q8, 1 * stats::kDecayScoreScale);
+    EXPECT_EQ(snap.fingerprints[1].candidate.rel_oid, 40u);
+    EXPECT_EQ(snap.fingerprints[1].frequency_q8, 5 * stats::kDecayScoreScale);
+    EXPECT_EQ(snap.fingerprints[1].pages_q8, 50 * stats::kDecayScoreScale);
+    EXPECT_EQ(snap.fingerprints[2].candidate.rel_oid, 41u);
+    EXPECT_EQ(snap.fingerprints[2].frequency_q8, 1 * stats::kDecayScoreScale);
+    EXPECT_EQ(snap.fingerprints[2].pages_q8, 300 * stats::kDecayScoreScale)
+        << "the candidate that ran last is credited its own execution and no other";
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) EXPECT_EQ(fp.pattern_id, 7u);
+    EXPECT_EQ(signals.tracked_signals(), 3u) << "the cap counts signals";
+}
+
+TEST(OptimizerSignalsTest, ACandidatesCabinIsTheOneSeenLastAndMovesNoSignal) {
+    // The key is the relation and the column; the Cabin that serves them is
+    // what the newest execution saw.
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteExecution(/*core=*/0, 7, 2, stats::CandidateRef{40, 2, 900});
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 1u);
+    EXPECT_EQ(snap.fingerprints[0].candidate.cabin_id, 900u);
+    EXPECT_EQ(snap.fingerprints[0].frequency_q8, 2 * stats::kDecayScoreScale);
+}
+
+TEST(OptimizerSignalsTest, APatternsWaitsAreItsOwnAndLeaveWithItsLastSignal) {
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{41, 2, 0});
+    signals.NoteWaitSample(/*core=*/0, 7);
+    stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 2u);
+    // One row for the pattern, credited to neither candidate.
+    ASSERT_EQ(snap.waits.size(), 1u);
+    EXPECT_EQ(snap.waits[0].pattern_id, 7u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, stats::kDecayScoreScale);
+
+    // Fill the table with hotter signals: pattern 7's two are the coldest
+    // and go one at a time, and its waits go with the second.
+    clock.Advance(kHalfLife);
+    for (std::uint64_t id = 100; id < 100 + stats::kMaxTrackedFingerprints - 1; ++id) {
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();  // as a tick would: a part's worth at a time
+    }
+    snap = signals.Snapshot();
+    std::size_t sevens = 0;
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) sevens += fp.pattern_id == 7;
+    EXPECT_EQ(sevens, 1u);
+    EXPECT_EQ(snap.waits.front().pattern_id, 7u) << "a pattern with a signal keeps its waits";
+    signals.NoteExecution(/*core=*/0, 9000, 1);
+    snap = signals.Snapshot();
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) EXPECT_NE(fp.pattern_id, 7u);
+    for (const stats::SnapshotPatternWaits& w : snap.waits) EXPECT_NE(w.pattern_id, 7u);
+    EXPECT_EQ(snap.waits.size(), snap.fingerprints.size());
+    EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+}
+
+TEST(OptimizerSignalsTest, AVictimOfTheNewcomersPatternLeavesThePatternsWaitsStanding) {
+    // The review's finding: counted after the eviction, a newcomer whose
+    // pattern's only signal was the victim found the pattern's entry erased
+    // and its waits gone, though the pattern still had a signal.
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteWaitSample(/*core=*/0, 7);
+    clock.Advance(kHalfLife);
+    // The table, full, with pattern 7's one signal the coldest.
+    for (std::uint64_t id = 100; id < 100 + stats::kMaxTrackedFingerprints - 1; ++id) {
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();  // as a tick would: a part's worth at a time
+    }
+    signals.Fold();
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+    // Pattern 7 again, over another candidate: its old signal is the victim.
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{41, 2, 0});
+
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+    std::size_t sevens = 0;
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) {
+        if (fp.pattern_id != 7) continue;
+        ++sevens;
+        EXPECT_EQ(fp.candidate.rel_oid, 41u);
+    }
+    EXPECT_EQ(sevens, 1u);
+    ASSERT_FALSE(snap.waits.empty());
+    EXPECT_EQ(snap.waits.front().pattern_id, 7u);
+    EXPECT_GT(snap.waits.front().wait_samples_q8, 0u) << "the pattern's waits were dropped";
+    EXPECT_EQ(snap.waits.size(), snap.fingerprints.size()) << "one signal a pattern here";
+}
+
+TEST(OptimizerSignalsTest, OneTextUnderTwoNamespacesCreditsEachRelationItsOwnExecutions) {
+    // Through the dispatcher: `SELECT * FROM b WHERE sym = 'x'` is a filter
+    // scan whose candidate is `b.sym` - `east.b`'s under `USE east`,
+    // `west.b`'s under `USE west`.
+    Instance db;
+    for (const char* ns : {"east", "west"}) {
+        ASSERT_EQ(db.Run(std::string("CREATE NAMESPACE ") + ns).substr(0, 7), "CREATED");
+        ASSERT_EQ(db.Run(std::string("CREATE TABLE ") + ns + ".b (id int64, sym varchar) BTREE")
+                      .substr(0, 7),
+                  "CREATED");
+        ASSERT_EQ(db.Run(std::string("INSERT INTO ") + ns + ".b VALUES ('x')").substr(0, 8),
+                  "INSERTED");
+    }
+    const std::string scan = "SELECT * FROM b WHERE sym = 'x'";
+    ASSERT_EQ(db.Run("USE east").substr(0, 3), "USE");
+    for (int i = 0; i < 4; ++i) ASSERT_NE(db.Run(scan).rfind("ERR", 0), 0u);
+    ASSERT_EQ(db.Run("USE west").substr(0, 3), "USE");
+    ASSERT_NE(db.Run(scan).rfind("ERR", 0), 0u);
+
+    const auto east = db.catalog().ResolveRelation("east", "b", catalog::kNamespacePublic);
+    const auto west = db.catalog().ResolveRelation("west", "b", catalog::kNamespacePublic);
+    ASSERT_TRUE(east.ok() && west.ok());
+    const std::uint64_t pattern = parser::FingerprintOf(scan)->pattern_id;
+    std::uint32_t east_q8 = 0, west_q8 = 0;
+    std::size_t signals_of_pattern = 0;
+    for (const stats::SnapshotFingerprint& s : db.signals().Snapshot().fingerprints) {
+        if (s.pattern_id != pattern) continue;
+        ++signals_of_pattern;
+        if (s.candidate.rel_oid == east.value()) east_q8 = s.frequency_q8;
+        if (s.candidate.rel_oid == west.value()) west_q8 = s.frequency_q8;
+    }
+    EXPECT_EQ(signals_of_pattern, 2u);
+    EXPECT_EQ(east_q8, 4 * stats::kDecayScoreScale);
+    EXPECT_EQ(west_q8, 1 * stats::kDecayScoreScale)
+        << "the relation that ran last was credited the other's executions";
 }
 
 }  // namespace

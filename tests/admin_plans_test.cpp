@@ -1635,6 +1635,108 @@ TEST_F(AdminPlanTest, AnEnabledPlanRestrictsItsRelationsDropAndADisabledOneReads
     EXPECT_TRUE(PlanRows().empty());
 }
 
+// ---- DI-S4: a plan that can match no statement says so ------------------------
+//
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q5 (a), DI-Q10 (a).
+// A plan's key is its statement's fetch id - a hash of the text - and its
+// relations' oids. A rename keeps the oids and changes the spelling that
+// reaches them: the old text no longer resolves, the new one is another
+// fetch id, and the plan is in force for no statement. Until DI-S4 it read
+// `enabled` and still refused its relation's `DROP TABLE`.
+
+TEST_F(AdminPlanTest, APlanARenamePutOutOfReachReadsInvalidAndRestrictsNoDrop) {
+    Ok("CREATE PLAN p FOR " + Where("5") + kModelsFirst);
+    const auto state = [&] {
+        const std::string view = Run("SELECT name, origin, state FROM sys.plans");
+        for (const char* s : {"enabled", "disabled", "invalid"}) {
+            if (view.find(std::string("p,admin,") + s) != std::string::npos) return std::string(s);
+        }
+        return view;
+    };
+    ASSERT_EQ(state(), "enabled");
+
+    // A column the statement writes by its binding (`results.pnl`).
+    Ok("ALTER TABLE results RENAME COLUMN pnl TO profit");
+    EXPECT_EQ(state(), "invalid");
+    Ok("ALTER TABLE results RENAME COLUMN profit TO pnl");
+    EXPECT_EQ(state(), "enabled") << "the spelling the plan was made over resolves again";
+
+    // The relation itself.
+    Ok("ALTER TABLE results RENAME TO outcomes");
+    EXPECT_EQ(state(), "invalid");
+    Ok("ALTER TABLE outcomes RENAME TO results");
+    EXPECT_EQ(state(), "enabled");
+    // In force again, so it restricts its relation's drop again.
+    EXPECT_EQ(Run("DROP TABLE results").rfind("ERR plan 'p' names this relation", 0), 0u);
+
+    // Out of reach, it is in force for no statement and restricts nothing.
+    Ok("ALTER TABLE results RENAME TO outcomes");
+    ASSERT_EQ(state(), "invalid");
+    ASSERT_EQ(Run("DROP TABLE outcomes").rfind("DROPPED", 0), 0u);
+    EXPECT_EQ(state(), "invalid") << "its relation is gone";
+}
+
+TEST_F(AdminPlanTest, AnUnqualifiedColumnsRenameIsNotEstablishedAndThePlanReadsAsItDid) {
+    // DI-R9: the state is never a guess. Which relation a bare column means
+    // is the compiler's to say, so its rename is not read off the row; the
+    // plan reads `enabled` though no statement matches it (`known-gaps.md`).
+    Ok("CREATE PLAN q FOR SELECT name FROM models JOIN results ON results.model_id = models.id "
+       "WHERE pnl > 5 VARIANT v ELSE ORDER (results, models)");
+    Ok("ALTER TABLE results RENAME COLUMN pnl TO profit");
+    EXPECT_NE(Run("SELECT name, origin, state FROM sys.plans").find("q,admin,enabled"),
+              std::string::npos);
+}
+
+TEST_F(AdminPlanTest, APlanInReachReadsEnabledWhateverItsStatementWrites) {
+    // The other direction of DI-R9: nothing a statement may write makes a
+    // plan in reach read `invalid`. A string literal and a number (each `?`
+    // in the stored text, read as `0` for the parse), a namespace written
+    // out, aliases, and a column dropped rather than renamed.
+    Ok("CREATE TABLE notes (id int64, model_id int64, tag varchar, spare int64) BTREE");
+    Ok("INSERT INTO notes VALUES (1, 1, 'x', 0)");
+    Ok("CREATE PLAN lit FOR SELECT n.tag, m.name FROM public.notes AS n JOIN public.models AS m "
+       "ON n.model_id = m.id WHERE n.tag = 'gold' AND n.spare > 7 "
+       "VARIANT v ELSE ORDER (m, n)");
+    const auto state = [&](const std::string& name) {
+        const std::string view = Run("SELECT name, origin, state FROM sys.plans");
+        for (const char* s : {"enabled", "disabled", "invalid"}) {
+            if (view.find(name + ",admin," + s) != std::string::npos) return std::string(s);
+        }
+        return view;
+    };
+    EXPECT_EQ(state("lit"), "enabled");
+    // A dropped column is no rename: undecided it would read as one, and a
+    // rollback would undo it after a drop had been let through.
+    Ok("ALTER TABLE notes DROP COLUMN spare");
+    EXPECT_EQ(state("lit"), "enabled");
+
+    // Disabled, out of reach, back: it reads as it did.
+    Ok("ALTER PLAN lit DISABLE");
+    ASSERT_EQ(state("lit"), "disabled");
+    Ok("ALTER TABLE notes RENAME COLUMN tag TO label");
+    EXPECT_EQ(state("lit"), "invalid");
+    Ok("ALTER TABLE notes RENAME COLUMN label TO tag");
+    EXPECT_EQ(state("lit"), "disabled");
+}
+
+TEST_F(AdminPlanTest, ACapturedOrderARenamePutOutOfReachReadsInvalid) {
+    // CX-Q16's `INVALID`, for the case DI-S4 can establish: a captured row
+    // read `enabled` whatever became of its statement.
+    const std::string join = Where("5");
+    Ok(join);
+    Ok(join);
+    ASSERT_TRUE(exec::PersistCapturedPlans(boot_->catalog, store_, nullptr,
+                                           dispatcher_->captured_plans(), 42)
+                    .ok());
+    std::string view = Run("SELECT origin, state FROM sys.plans");
+    ASSERT_NE(view.find("captured,enabled"), std::string::npos)
+        << "nothing was captured; the cell proves nothing: " << view;
+    Ok("ALTER TABLE models RENAME TO engines");
+    view = Run("SELECT origin, state FROM sys.plans");
+    EXPECT_NE(view.find("captured,invalid"), std::string::npos) << view;
+    EXPECT_EQ(view.find("captured,enabled"), std::string::npos) << view;
+}
+
 TEST_F(AdminPlanTest, AMountServesAnEnabledPlanHoldsADisabledOneAndKeepsTheNewestRowOfAName) {
     Ok("CREATE PLAN p FOR " + Where("5") + kModelsFirst);
     Ok("CREATE PLAN q FOR SELECT models.name FROM models JOIN results ON results.model_id = "

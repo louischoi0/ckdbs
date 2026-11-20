@@ -79,10 +79,10 @@
 // ---- Structural changes are reported, not logged here -------------------
 //
 // This file mutates pages; it does not know about the WAL. An insert
-// reports every page it created or restructured (`BtreeInsertResult::
-// changes()`), in the order redo has to apply them, and the caller emits
-// the records. Same division as heap_chain.hpp, where `linked_from` and
-// `grew_chain` exist for exactly that.
+// reports every page it created or restructured (`InsertPlacement::
+// changes()`) and the caller emits the split's one record. Same division
+// as heap_chain.hpp, where `linked_from` and `grew_chain` exist for
+// exactly that.
 //
 // ---- Concurrency: one page at a time, and one window that is checked ---
 //
@@ -112,9 +112,8 @@
 
 namespace kds::btree {
 
-// The descent's depth bound and the shape an insert reports back are
-// shared with the heap chain and live in insert_placement.hpp:
-// `kMaxBtreeDepth`, `StructuralChange`, `InsertPlacement`.
+// The descent's depth bound and the shape an insert reports back live in
+// insert_placement.hpp: `kMaxBtreeDepth`, `InsertPlacement`.
 
 // Where a tuple lives, and the leaf it lives in, **held**: what a descent
 // hands back to a reader or a writer.

@@ -2517,21 +2517,23 @@ Status DevicePageStore::LogOwedImage(PageId page_id, std::span<const std::byte, 
     if (!ImagedClass(page_id, bytes)) return Status::OK();
     wal::WalDurability* const gate = GateForCaller();
     if (gate == nullptr) return Status::OK();  // a store that logs nothing
-    auto lsn = gate->LogPageImage(page_id, bytes);
-    if (!lsn.ok()) {
+    auto logged = gate->LogPageImage(page_id, bytes);
+    if (!logged.ok()) {
         // Still owed: the fetch fails, and a later one - after a restart,
         // since a refused append fail-stops the log - pays it.
         LatchGuard structure(structure_latch());
         if (auto it = frames_.find(page_id); it != frames_.end()) it->second.owes_image = true;
-        return lsn.status().WithContext("logging page " + std::to_string(page_id) +
-                                        "'s image at its write fetch");
+        return logged.status().WithContext("logging page " + std::to_string(page_id) +
+                                           "'s image at its write fetch");
     }
-    if (lsn.value() == wal::kNoLsn) return Status::OK();  // a gate that logs no image
+    const wal::Lsn lsn = logged.value().lsn;
+    if (lsn == wal::kNoLsn) return Status::OK();  // a gate that logs no image
     fetch_images_logged_.Add();
+    fetch_image_bytes_logged_.Add(logged.value().record_bytes);
     // The stamp is the image's recLSN too (`StampPageLsn` keeps the
     // minimum): a checkpoint that collects this page carries a redo start
-    // at or below the image, or redo's dirty filter would skip it.
-    return StampPageLsn(page_id, lsn.value());
+    // at or below the image, or redo would start past it.
+    return StampPageLsn(page_id, lsn);
 }
 
 bool DevicePageStore::ImagedClass(PageId page_id,
@@ -3266,6 +3268,7 @@ DevicePageStore::PoolCounters DevicePageStore::pool_counters() const {
     out.dirty_drained = dirty_drained_.Load();
     out.refused = refused_.Load();
     out.fetch_images = fetch_images_logged_.Load();
+    out.fetch_image_bytes = fetch_image_bytes_logged_.Load();
     out.would_wait = would_wait_.Load();
     return out;
 }

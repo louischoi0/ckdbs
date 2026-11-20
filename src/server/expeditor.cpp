@@ -843,7 +843,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // **A restore owed starts at the backup's start, never at the copied
     // anchor** (BR-R4, `br-s0-census.md` §2): a fuzzy copy's page 0 can carry
     // an anchor above pages copied before it was written, and recovering
-    // from there would skip records those pages need. `MarkRestoreOwed`
+    // from there would skip records those pages need. `MarkRestoreOwedOn`
     // rewrote slot 0 to the backup's start with the stop as its durable
     // point, which analysis refuses to end short of (BR-R2), so slot 0 is
     // the one value read by the log's open, recovery and the assertion
@@ -1951,8 +1951,9 @@ Status Expeditor::Start() {
         // with more than one stream. The one pool was opened at the whole
         // `buffer_pool_frames` (`Open`, BE-R3); nothing divides it.
 
-        // The gate rotates the cadence's runs over one period (BI-Q7 (a),
-        // `wal::CheckpointGate`), set before any reactor can ask it.
+        // The gate admits one cadence run a period, the cores in turn
+        // (BI-Q7 (a), DH-Q10 (a); `wal::CheckpointGate`), set before any
+        // reactor can ask it.
         checkpoint_gate_.SetRotation(config_.checkpoint_interval_ns);
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             // A peer's config; it borrows the pool (AM-S2 step 3).
