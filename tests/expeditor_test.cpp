@@ -30,6 +30,7 @@
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/server/load_placer.hpp"
 #include "kds/server/transaction_placement.hpp"
+#include "kds/txn/instance_visibility.hpp"
 #include "kds/wire/error_registry.hpp"
 #include "kds/wire/kwp.hpp"
 #include "kds/wire/kwp_types.hpp"
@@ -2128,6 +2129,91 @@ TEST_F(ExpeditorTest, TheIdleTimeoutLeavesAnOpenTransactionAndARunningStatementA
     ASSERT_GE(stopper, 0);
     (void)SendLine(stopper, "STOP");
     ::close(stopper);
+}
+
+// ---- DJ-S3: a transaction's head waits for an in-flight slot --------------
+//
+// `docs/spec/txn.md` §4.1 (the in-flight tables). A core publishes 1,024
+// open transactions; the 1,025th `BEGIN`, or an autocommit write, waits for
+// a slot under `res.txn_slot` and runs again when one frees, and is refused
+// at the fault net as before when none does. **The mutation**: drop the
+// park in `DispatchAsync`, and the late `BEGIN` is refused at once.
+
+TEST_F(ExpeditorTest, ABeginPastTheCoresSlotsWaitsForOneAndIsAdmittedWhenOneFrees) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.lock_wait_fault_net_ns = 5ULL * 1'000'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+
+    KwpClient setup(config.port);
+    ASSERT_TRUE(setup.Hello());
+    ASSERT_EQ(setup.Run("CREATE TABLE s (id int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+
+    // Every slot of the one core held.
+    std::vector<std::unique_ptr<KwpClient>> holders;
+    for (std::uint32_t i = 0; i < txn::kInFlightSlotsPerCore; ++i) {
+        holders.push_back(std::make_unique<KwpClient>(config.port));
+        ASSERT_TRUE(holders.back()->Hello()) << "holder " << i;
+        ASSERT_EQ(holders.back()->Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK") << "holder " << i;
+    }
+
+    // A `BEGIN` and an autocommit write past them, each on a thread of its
+    // own: both wait.
+    KwpClient late_begin(config.port), late_write(config.port);
+    ASSERT_TRUE(late_begin.Hello());
+    ASSERT_TRUE(late_write.Hello());
+    std::string begun, written;
+    std::thread a([&] { begun = late_begin.Txn(wire::ClientFrameType::kTxnBegin); });
+    std::thread b([&] { written = late_write.Run("INSERT INTO s VALUES (1, 1)"); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_TRUE(begun.empty()) << "the late BEGIN was answered without a slot: " << begun;
+    EXPECT_TRUE(written.empty()) << "the late write was answered without a slot: " << written;
+
+    // Two holders end; each slot admits one of the two waiters.
+    ASSERT_EQ(holders[0]->Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
+    ASSERT_EQ(holders[1]->Txn(wire::ClientFrameType::kTxnAbort), "TXN_OK");
+    a.join();
+    b.join();
+    EXPECT_EQ(begun, "TXN_OK");
+    EXPECT_EQ(written.rfind("INSERTED", 0), 0u) << written;
+    EXPECT_EQ(late_begin.Txn(wire::ClientFrameType::kTxnCommit), "TXN_OK");
+    // The waiting write ran once: its re-run is the statement, not a second
+    // one.
+    EXPECT_EQ(setup.Run("SELECT id FROM s"), "1 \n");
+
+    for (auto& h : holders) (void)h->Txn(wire::ClientFrameType::kTxnAbort);
+    EXPECT_TRUE(running.Stop().ok());
+}
+
+TEST_F(ExpeditorTest, ABeginThatNoSlotReachesIsRefusedAtTheFaultNet) {
+    Expeditor::Config config = ConfigAt(/*cores=*/1);
+    config.lock_wait_fault_net_ns = 300ULL * 1'000'000ULL;
+    auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    ASSERT_TRUE(Started(opened.value()->Start()));
+    RunningInstance running(*opened.value(), config.debug_text_port);
+    ASSERT_TRUE(running.Run());
+
+    std::vector<std::unique_ptr<KwpClient>> holders;
+    for (std::uint32_t i = 0; i < txn::kInFlightSlotsPerCore; ++i) {
+        holders.push_back(std::make_unique<KwpClient>(config.port));
+        ASSERT_TRUE(holders.back()->Hello()) << "holder " << i;
+        ASSERT_EQ(holders.back()->Txn(wire::ClientFrameType::kTxnBegin), "TXN_OK") << "holder " << i;
+    }
+    KwpClient late(config.port);
+    ASSERT_TRUE(late.Hello());
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::string refused = late.Run("BEGIN");
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    // The refusal it always was, `RESOURCE_EXHAUSTED` naming the cap.
+    EXPECT_NE(refused.find("kInFlightSlotsPerCore"), std::string::npos) << refused;
+    EXPECT_GE(waited, std::chrono::milliseconds(250)) << "refused without waiting";
+
+    for (auto& h : holders) (void)h->Txn(wire::ClientFrameType::kTxnAbort);
+    EXPECT_TRUE(running.Stop().ok());
 }
 
 }  // namespace

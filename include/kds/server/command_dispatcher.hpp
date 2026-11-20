@@ -403,6 +403,11 @@ struct DispatchOutcome {
     };
     std::optional<Examined> examined;
     std::optional<std::uint64_t> compile_ns;
+    // **The statement was refused because its core had no in-flight slot**
+    // (DJ-S3): a `BEGIN`, or an autocommit write's own transaction, met
+    // `Begin`'s cap before it wrote anything. `DispatchAsync` parks on a
+    // slot and runs the statement again.
+    bool slot_wait = false;
     // `RESET SESSION` ran (DJ-S2): the engine's half of the session is at
     // its defaults, and the protocol's half - named statements and portals,
     // which the dispatcher cannot reach - is the caller's to drop.
@@ -3125,6 +3130,9 @@ private:
     Latch* cabin_optimizer_view_latch_ = nullptr;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
     const ConnectionLimits* connection_limits_ = nullptr;  // DJ-S1, set_connection_limits()
+    // DJ-S3: this statement's `Begin` was refused for want of a slot; read
+    // into `DispatchOutcome::slot_wait` by `StageStatement`, cleared there.
+    bool slot_refused_ = false;
     BackupControl* backup_ = nullptr;          // BR-S2, set_backup()
     const WalArchiver* archiver_ = nullptr;    // BR-S4, set_archiver()
 

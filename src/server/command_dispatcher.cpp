@@ -1014,6 +1014,41 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     sched::MonoTimeNs statement_deadline_ns = 0;
     co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
 
+    // ---- DJ-S3: a transaction's head waits for an in-flight slot ---------
+    //
+    // **A wait in place of a refusal** (DJ-Q9 (a)). `Begin` refuses once
+    // its core publishes `kInFlightSlotsPerCore` transactions, before it
+    // issues an id; the statement it refused - a `BEGIN`, or an autocommit
+    // write opening its own scope - had written nothing, so it parks until
+    // the core has a slot and runs again whole. Bounded by the lock family's
+    // fault net, counted from the first refusal; at it the last run's
+    // refusal is the answer, as before. A slot frees when a transaction of
+    // this core decides, which runs on this reactor, so the level-triggered
+    // poll sees it at the next turn and nothing needs a kick. No move to
+    // another core: the statement is past its head, and the placer reads no
+    // slot count (DJ-S0). **Before the structural re-run and the PURGE
+    // wait**, so the run a slot admits still has both: placed after them,
+    // an admitted write's stale descent reached the client and an admitted
+    // PURGE answered its horizon refusal unwaited.
+    if (out->slot_wait && txn_ != nullptr && clock_ != nullptr) {
+        const sched::MonoTimeNs deadline_ns = NowNs() + lock_wait_fault_net_ns_;
+        while (out->slot_wait && NowNs() < deadline_ns) {
+            const std::function<bool()> freed = [this, deadline_ns] {
+                return !txn_->InFlightFull() || NowNs() >= deadline_ns;
+            };
+            {
+                sched::WaitScope wait(stats::WaitEvent::kResTxnSlot, core_id_);
+                co_await sched::WaitUntil{&freed};
+            }
+            {
+                const MayParkScope parking(*this, /*allowed=*/true, statement);
+                *out = DispatchAndStage(line, session);
+            }
+            co_await AwaitStatementWaits(line, session, out, &statement_deadline_ns);
+        }
+        out->slot_wait = false;
+    }
+
     // ---- BA-S14: a structural refusal waits a turn and runs again --------
     //
     // **A stale descent's `TxnConflict` stops reaching the client** (BA-R11,
@@ -1227,6 +1262,7 @@ template <typename Body>
 DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body) {
     // BA-S14's two per-statement facts, cleared before the statement runs.
     structural_poison_withheld_ = false;
+    slot_refused_ = false;
     storage::ClearStructuralRefusal();
     // **No statement starts armed** (DE, `storage/miss_refusal.hpp`). The
     // arm is set and dropped around one body (`SelectRun::Execute`), and no
@@ -1291,6 +1327,9 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
         // (`SelectRun::Execute`).
         storage::ClearMissRefusal();
     }
+    // DJ-S3: a refusal for a slot is the statement's answer only once its
+    // wait has run out; a statement that recovered from one is not parked.
+    outcome.slot_wait = std::exchange(slot_refused_, false) && !outcome.status.ok();
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     outcome.binding = std::exchange(statement_binding_, {});
@@ -12875,6 +12914,8 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
     if (read_only.value_or(false)) return BeginReadOnly(level, session);
 
     auto begun = txn_->Begin(level, statement_head_ns_);
+    // DJ-S3: refused for a slot, the statement waits for one and runs again.
+    if (!begun.ok() && txn_->InFlightFull()) slot_refused_ = true;
     // ErrorReply, not a bare "ERR ": the id this draws can fail to carve,
     // and inside an explicit transaction that refusal lands *here* rather
     // than at the INSERT - the id is drawn once, at BEGIN - so this is the
@@ -13328,7 +13369,12 @@ StatusOr<CommandDispatcher::WriteScope> CommandDispatcher::BeginWrite(
     }
 
     auto begun = txn_->Begin(isolation.value_or(session.isolation()), statement_head_ns_);
-    if (!begun.ok()) return begun.status();
+    if (!begun.ok()) {
+        // DJ-S3: nothing is written before an owned scope opens, so a write
+        // refused for a slot waits for one and runs again whole.
+        if (txn_->InFlightFull()) slot_refused_ = true;
+        return begun.status();
+    }
     session.NoteViewMinted(statement_head_ns_);
     scope.txn = begun.value();
     scope.owned = true;

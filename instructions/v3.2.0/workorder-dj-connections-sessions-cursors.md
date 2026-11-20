@@ -570,7 +570,7 @@ not measured; measured at the milestone's close.
 
 ### DJ-S2 - a session handed back clean (2026-11-20)
 
-On `dj-connections-sessions-cursors` at `the commit below`. Built under DJ-Q8 (a):
+On `dj-connections-sessions-cursors` at `56855c48`. Built under DJ-Q8 (a):
 
 - **`RESET SESSION`** (`CommandDispatcher::HandleReset`), a session
   statement routed as `SET` is, open to every role, on both protocols. It
@@ -639,3 +639,76 @@ same code failed one other cell, `ShowSugarTest.SysWaitEventNamesListsTheRegistr
 which pinned the registry's count as a literal; it reads the registry's
 constant now. Not a clean full run: stated, not reported as a pass. Overhead not
 measured; measured at the milestone's close.
+
+### DJ-S3 - a wait in place of a refusal (2026-11-20)
+
+Built under DJ-Q9 (a) as restated at DJ-S0 (a park alone): where
+`TransactionManager::Begin` refuses because its core publishes
+`kInFlightSlotsPerCore` transactions, the statement it refused - a `BEGIN`
+(`HandleBegin`) or an autocommit write opening its own scope
+(`BeginWrite`), each having written nothing - is marked
+(`DispatchOutcome::slot_wait`), parks in `DispatchAsync` under the new wait
+event `res.txn_slot` until the core has a slot, and runs again whole;
+bounded by the lock family's fault net, after which the refusal is
+answered as before. `TransactionManager::InFlightFull()` is the predicate.
+Not parked: a declaration's lock-holder, a KWP load chunk, a structural or
+`PURGE` re-run that meets the cap, and a dispatcher with no clock.
+Documents: `txn.md` §4.1, `wait-events.md` (`res.txn_slot`).
+
+**Tests** (`expeditor_test.cpp`): 1,024 holders on one core, a late `BEGIN`
+and a late autocommit `INSERT` both waiting, both admitted as two holders
+end, the write run once; with no slot freed, the late `BEGIN` refused naming
+the cap after waiting the fault net.
+
+**Review** (`critics-developer`). Found and fixed by it: the slot wait ran
+after BA-S14's structural re-run and the `PURGE` wait, so a statement it
+admitted that then met a stale descent was answered `TxnConflict` and a
+`PURGE` skipped its horizon wait - the block now runs ahead of both; a
+wrong section citation in `wait-events.md`. Applied from it: the refused
+cell pins the refusal's text, the admitted cell the write's single run, and
+`txn.md` names what is not parked. **Left, stated**: the slot wait's own
+fault net is counted apart from the statement's, so a statement can wait
+up to two fault nets; a cancel during the park is taken at the next frame;
+each cell opens about 1,027 connections, which a 1,024 descriptor limit
+would refuse.
+
+### DJ-S4 - the reply's bound (2026-11-20)
+
+- **P5a, under DJ-Q10 (a)**: a walk parked on a client that has taken no
+  byte for `txn_lifetime_ceiling_ms` is cancelled (`TcpServer::
+  SubmitStatement`'s `resume_when`), whether or not a transaction is open;
+  no new key. Progress is a byte the outbox sent (`FlushOutbox`) or a drain
+  of the socket's kernel queue (`SIOCOUTQ`, read only while parked).
+- **P5b, under DJ-Q11 (a) `[quiet-wrong]`**: a capped portal's statement
+  that produces more than `kMaxPortalHeldBytes` (16 MiB, `kMaxFrame`,
+  `[provisional]`) of rows is refused `RESOURCE_EXHAUSTED` /
+  `kPortalHeldBytes` (8), not fatal (`WireResultSink::Emit`). The resumable
+  read is `docs/conceptnotes/cn12-read-resumed-by-key.md`, not built.
+
+Documents: `protocol.md` §7, §11; `known-gaps.md` ("Streamed replies
+(CE)", "Locking reads (DC)"); `docs/conceptnotes/README.md`.
+
+**Tests** (`ce_streaming_reply_test.cpp`): a walk parked on a client that
+does not read cancelled at a 1 s ceiling, the relation then free for a
+`DROP` and the reader getting rows then `CANCELLED`; a client reading a
+receive buffer every 300 ms not cancelled at a 1 s ceiling (its mutation -
+no `SIOCOUTQ` reset - was run and fails it); a capped portal of about
+19 MB refused by name and the connection standing, under the bound and
+uncapped answered.
+
+**Review** (`critics-developer`). Found and fixed by it: the park's clock
+was reset only when the outbox emptied, so a client that read slowly was
+cancelled as one that did not read - reset now at every byte the outbox
+sends; four document corrections (the bound counted from the last byte; a
+capped `RETURNING`'s refusal is the write's; the ceiling sweep skips a
+statement over several parks, not one; CN-12's index row). Applied from it:
+the slow-reader cell - which then failed, because a slow reader on
+loopback frees the server's kernel buffer long before the socket turns
+writable: hence the `SIOCOUTQ` read; and the capped cell widened to 10,000
+rows. **Rejected**: none.
+
+DJ-S3 and DJ-S4 were built, reviewed and suite-run on one tree and are
+committed apart. Suite: 0 failed of 4,981 (2 disabled, 2 skipped) on the two together, at
+`56855c48` plus both stages' changes; the golden detail number 8 added
+after it, its file's 8 cells run green. Overhead not measured; measured at the
+milestone's close.
