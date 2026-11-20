@@ -41,7 +41,7 @@
 // A builder reads what the `SHOW` handler it replaced read, under the same
 // holds: the catalog's typed readers, the page store's pinned reads, the
 // Cabin store's and the enforcer's own latched accessors, and the cabin
-// optimizer under `cabin_optimizer_view_latch_`. It takes no hold of its
+// optimizer's published view (`ControllerView`). It takes no hold of its
 // own and keeps none past its return; the rows it returns are copies.
 
 namespace kds::server {
@@ -1171,9 +1171,20 @@ StatusOr<exec::CatalogView> CommandDispatcher::TransitionsView() {
     return view;
 }
 
+std::shared_ptr<const exec::CabinOptimizerViewData> CommandDispatcher::ControllerView() const {
+    // The instance's: what core 0's cadence published, read with nothing
+    // held across a tick (`exec/cabin_optimizer_view.hpp`).
+    if (cabin_view_board_ != nullptr) return cabin_view_board_->Current();
+    // No board: one thread owns the controller and this dispatcher.
+    if (cabin_controller_ == nullptr && cabin_executor_ == nullptr) return nullptr;
+    return exec::BuildCabinOptimizerView(cabin_controller_, cabin_executor_, optimizer_signals_);
+}
+
 StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t byte) {
-    const LatchGuard latched(cabin_optimizer_view_latch_);
-    if (cabin_controller_ == nullptr) {
+    // The copy the controller's tick published (DL-S3): this read waits for
+    // no tick, and so for no Cabin's build.
+    const std::shared_ptr<const exec::CabinOptimizerViewData> published = ControllerView();
+    if (published == nullptr || !published->has_controller) {
         return Status::InvalidArgument(
             "sys.cabin_optimizer has nothing to report: this instance runs no cabin optimizer "
             "(byte " + std::to_string(byte) + ")");
@@ -1198,8 +1209,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t 
                   {"epoch", kInt}});
     auto labels = RelationLabels::Read(catalog_, nullptr);
     if (!labels.ok()) return labels.status();
-    const std::vector<stats::DecisionRecord> log = cabin_controller_->DecisionLog();
-    for (const stats::ManagedEntryView& entry : cabin_controller_->ManagedEntries()) {
+    const std::vector<stats::DecisionRecord>& log = published->log;
+    for (std::size_t at = 0; at < published->entries.size(); ++at) {
+        const stats::ManagedEntryView& entry = published->entries[at];
         auto access = catalog_.InitTableAccess(entry.rel_oid);
         std::vector<parser::AstValue> row{
             Int(entry.rel_oid),      labels.value().Namespace(entry.rel_oid), labels.value().Name(entry.rel_oid),
@@ -1207,8 +1219,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::CabinOptimizerView(std::uint32_t 
             Int(entry.cabin_id),     Int(entry.pages),
             Int(entry.confirm_streak), Int(entry.benefit),
             Int(entry.cost)};
-        if (entry.cabin_id != 0 && optimizer_signals_ != nullptr) {
-            const stats::SnapshotCabin q = optimizer_signals_->QualityOf(entry.cabin_id);
+        if (published->quality[at].has_value()) {
+            // The collector's folded state as the publishing tick left it.
+            const stats::SnapshotCabin& q = *published->quality[at];
             row.push_back(PercentOf(q.hint_failures_q8, q.lookups_q8));
             row.push_back(PercentOf(q.coverage_misses_q8, q.lookups_q8));
         } else {

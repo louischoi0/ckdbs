@@ -22,6 +22,8 @@
 #include <gtest/gtest.h>
 
 #include "kds/base/latch.hpp"
+#include "kds/storage/in_memory_page_store.hpp"
+#include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/wait_state.hpp"
 #include "kds/stats/access_stats.hpp"
 #include "kds/stats/ash_ring.hpp"
@@ -202,6 +204,123 @@ TEST(StatisticsNoWaitContract, LockWaitRowsBesideAReaderAreTakenOrCounted) {
     EXPECT_EQ(RelationStats::Snapshot()[9].lock_waits.get(), kRounds);
     LockWaitLog::ResetForTest();
     RelationStats::ResetForTest();
+}
+
+// ---- A statement's read of a statistic (clause (d)) ---------------------------
+
+// A compile's pin of the planner's snapshot waits for no install: under a
+// held publish latch - the way an install's swap holds it - the pin returns
+// with the snapshot it has, and takes the new one at its next pin.
+TEST(StatisticsNoWaitContract, ACompilesPinReturnsUnderAHeldPublishLatchWithTheSnapshotItHas) {
+    PlanStats stats(/*cores=*/1);
+    stats.PublishForTest({{7, 4}}, {});
+    PlanStatsSource source(&stats);
+    const std::shared_ptr<const PlanStatsSnapshot> first = source.Pin();
+    ASSERT_NE(first, nullptr);
+    ASSERT_EQ(first->generation(), stats.generation());
+
+    stats.PublishForTest({{7, 6}}, {});
+    ASSERT_NE(stats.generation(), first->generation());
+    std::shared_ptr<const PlanStatsSnapshot> under;
+    ASSERT_TRUE(ReturnsUnderTheHold(stats.PublishLatchForTest(), [&] { under = source.Pin(); }))
+        << "a compile's pin waited for the publish latch";
+    EXPECT_EQ(under, first) << "a pin that met the swap keeps the snapshot it has";
+    const std::shared_ptr<const PlanStatsSnapshot> next = source.Pin();
+    ASSERT_NE(next, nullptr);
+    EXPECT_EQ(next->generation(), stats.generation()) << "the next pin asks again";
+
+    // A source with nothing cached yet prices from no statistics, as a
+    // compile before the first publish does - and does not wait either.
+    PlanStatsSource fresh(&stats);
+    std::shared_ptr<const PlanStatsSnapshot> none = first;
+    ASSERT_TRUE(ReturnsUnderTheHold(stats.PublishLatchForTest(), [&] { none = fresh.Pin(); }));
+    EXPECT_EQ(none, nullptr);
+    EXPECT_NE(fresh.Pin(), nullptr);
+}
+
+// ---- A DDL's forget of a statistic (DL-Q19) -----------------------------------
+
+// A relation's drop forgets its managed statistics and waits for neither the
+// managed store's latch - an operator's statistics statement holds it - nor
+// an install: what it meets held is done by the steward's next step. With
+// nothing held it is done where the drop ran.
+TEST(StatisticsNoWaitContract, ARelationsDropForgetsItsStatisticsAndWaitsForNoStatement) {
+    PlanStats stats(/*cores=*/1);
+    const auto publish = [&](catalog::Oid oid) {
+        RelationStatistic stat;
+        stat.rows = 50000;
+        ASSERT_TRUE(stats.managed().Store(oid, stat, /*pending=*/false, /*force=*/false).ok());
+        ASSERT_TRUE(stats.RepublishManaged());
+        ASSERT_TRUE(stats.Current()->Managed(oid));
+    };
+    stats.PublishForTest({{7, 4}, {8, 4}, {9, 4}}, {});
+
+    // Nothing held: forgotten and republished at once.
+    publish(7);
+    stats.ForgetRelation(7);
+    EXPECT_FALSE(stats.Current()->Managed(7));
+
+    // The store's latch held: the drop returns; the object goes at the
+    // steward's next step.
+    publish(8);
+    ASSERT_TRUE(ReturnsUnderTheHold(stats.ManagedLatchForTest(), [&] { stats.ForgetRelation(8); }))
+        << "a relation's drop waited for the managed store's latch";
+    EXPECT_TRUE(stats.Current()->Managed(8)) << "forgotten under a latch another thread held";
+
+    // An install in flight: the object goes where the drop ran, and its
+    // republish is owed to the steward.
+    publish(9);
+    ASSERT_TRUE(ReturnsUnderTheHold(stats.InstallLatchForTest(), [&] { stats.ForgetRelation(9); }))
+        << "a relation's drop waited for an install";
+    EXPECT_TRUE(stats.managed().PublishedBands().size() == 1u)
+        << "relation 9's object was not forgotten, or relation 8's already was";
+    EXPECT_TRUE(stats.Current()->Managed(9)) << "republished under an installer's hold";
+
+    // The steward's step: both are gone from what a compile prices from.
+    // (No catalog or page is read: nothing is wanted and no prior is due.)
+    storage::InMemoryPageStore store{server::kFirstUserPageId};
+    auto boot = bootstrap::BootstrapDatabase(store, 1000);
+    ASSERT_TRUE(boot.ok()) << boot.status().message();
+    ASSERT_TRUE(stats.StewardStep(boot.value().catalog, store, /*now_ns=*/1).ok());
+    EXPECT_TRUE(stats.managed().PublishedBands().empty());
+    EXPECT_FALSE(stats.Current()->Managed(8));
+    EXPECT_FALSE(stats.Current()->Managed(9));
+}
+
+// Installs, republishes and pins at once, three threads: the thread
+// sanitizer's cell for the snapshot's two latches and the generation.
+TEST(StatisticsNoWaitContract, InstallsRepublishesAndPinsRunAtOnce) {
+    PlanStats stats(/*cores=*/1);
+    stats.PublishForTest({{7, 4}}, {});
+    std::atomic<bool> done{false};
+    std::thread republisher([&] {
+        RelationStatistic stat;
+        std::uint64_t rows = 16;
+        while (!done.load(std::memory_order_acquire)) {
+            stat.rows = rows;
+            rows = rows > (std::uint64_t{1} << 40) ? 16 : rows * 4;  // a new band each time
+            (void)stats.managed().Store(7, stat, /*pending=*/false, /*force=*/true);
+            (void)stats.RepublishManaged();
+        }
+    });
+    BesideAReader(
+        [&] {
+            for (std::int16_t band = 0; band < 2000; ++band) {
+                stats.PublishForTest({{7, static_cast<std::int16_t>(band % 40)}}, {});
+            }
+        },
+        [&] {
+            PlanStatsSource source(&stats);
+            std::uint64_t last = 0;
+            for (int i = 0; i < 64; ++i) {
+                const std::shared_ptr<const PlanStatsSnapshot> pinned = source.Pin();
+                if (pinned == nullptr) continue;  // every try so far met a swap
+                EXPECT_GE(pinned->generation(), last) << "a pin went back a generation";
+                last = pinned->generation();
+            }
+        });
+    done.store(true, std::memory_order_release);
+    republisher.join();
 }
 
 // ---- The stores with no latch (W1): records beside a reader ------------------

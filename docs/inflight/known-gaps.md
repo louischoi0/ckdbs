@@ -488,16 +488,6 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   latch would produce it. Not investigated, not re-measured. Owner: whoever
   measures next, from `wal.md` §3 and `page.md` §6.
 
-- **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
-  Core 0's cadence tick (`src/server/expeditor.cpp`) holds the controller's
-  view latch, a `std::mutex` (`include/kds/base/latch.hpp`), across a tick
-  that may create a Cabin and walk its relation; a peer's `SHOW` takes the
-  same latch (`src/server/sys_views.cpp`) and sleeps that reactor, and every
-  session on it, for the build. Liveness, not correctness. The fix is for
-  the tick to publish a copy of the view and the `SHOW` to read the copy.
-  Re-verified at `7dd9b789` by reading. Owner:
-  `docs/spec/cabin-controller.md`.
-
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
   `ExpeditorTest`'s fixtures probe a free loopback port and then bind it;
   above one core every listener sets `SO_REUSEPORT`, so two concurrent ctest
@@ -2835,21 +2825,8 @@ reading - DL-S0's census - and priced by
 §1.3 carries the `path:line` of each and the stage that brings it in. An
 entry is struck here when its path lands, never before.
 
-- **A core's first compile after a plan-statistics publish takes the
-  instance's `publish_latch_`**, which an install holds across the
-  snapshot's construction - three sorts over up to 16,384 posteriors, the
-  managed store's latch nested (`PlanStats::Current`, `InstallLocked`).
-  Breaks (d).
-- **Two statistics callbacks still wait on core 0's reactor**: the
-  planner's steward takes the publish latch, and the controller's tick the
-  view latch (before the switch is asked), by the blocking form, so a wait
-  of theirs stops every statement on core 0. (Their parts, the space table
-  and the ASH sampler's ring are tried since DL-S1 and DL-S2.)
-- **`SHOW CABIN_OPTIMIZER` and `SHOW META` can stall their core for a
-  whole Cabin build**: both take the controller's view latch, which core
-  0's tick holds across a Cabin's creation and its seeded build (the entry
-  under "Multi-core state, continued" names the first; `sys.meta`'s
-  `cabin_optimizer` section is the second, found by the census).
+Every path the census listed is brought in (DL-S1 to DL-S3); what is left
+is the check that keeps it so (DL-S5) and the close's measurement (DL-S6).
 
 **Not a statistic's, and not DL's** (DL-Q0 (a)): **the controller's seeded
 build stops core 0 for a whole-relation walk.** A created or extended
@@ -2867,7 +2844,11 @@ statistics part (DL-S2: `RelationStats`, `LeafStats`, `IndexStats`,
 `AccessStats` and the session registry with no latch at all;
 `StatementStats`, the lock-wait and checkpoint rings, the ASH ring and the
 planner's parts tried and never waited for, their readers a copy and
-nothing else); `RefusalStats`, `TxnStats`, the wait statistics' totals,
+nothing else); a compile's pin of the planner's snapshot, which tries
+for a pointer and keeps what it has (DL-S3), and the steward's publish,
+which tries every latch of it; the controller's views, which read a
+published copy and wait for no tick (DL-S3); `RefusalStats`, `TxnStats`,
+the wait statistics' totals,
 the contention instrument and the per-core load slots - single-writer
 words a core, read with no latch. The
 wait-free words every core writes (the buffer pool's counts, the plan

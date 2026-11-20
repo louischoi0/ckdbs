@@ -93,6 +93,12 @@ public:
     // Answers whether a published version went with it, so a drop of a
     // relation nobody gathered moves no generation.
     bool Forget(catalog::Oid oid);
+    // The same for a relation's drop, which waits for no statistics
+    // statement: nullopt, and nothing forgotten, where the store's latch is
+    // held (`PlanStats::ForgetRelation` queues it).
+    std::optional<bool> TryForget(catalog::Oid oid);
+    // The store's latch, for a test that holds it as a statement does.
+    Latch* LatchForTest() const noexcept { return &latch_; }
     // The lock's refusal, for an act about to change the published object
     // (CY-Q28 (a)); OK on an unlocked slot or with `force`.
     Status CheckPublishable(catalog::Oid oid, bool force) const;
@@ -101,12 +107,21 @@ public:
     // publishing over a gather keeps CC's hysteresis (PS5); an import, a
     // restore and a mount publish fresh (CY-Q19 (a)).
     std::vector<std::pair<catalog::Oid, std::int16_t>> PublishedBands() const;
+    // The same for the steward, which runs on a reactor and waits for no
+    // operator's statement: false, and `out` untouched, where the store's
+    // latch is held.
+    bool TryPublishedBands(std::vector<std::pair<catalog::Oid, std::int16_t>>* out) const;
     // Every slot, by oid, for the views and the shutdown's write.
     std::vector<StatisticsSlotView> Slots() const;
     // The mount's load of what a clean shutdown wrote: replaces the store.
     void Load(std::vector<StatisticsSlotView> slots);
 
 private:
+    // `Forget`'s body, `latch_` held.
+    bool ForgetLocked(catalog::Oid oid);
+    // `PublishedBands`' body, `latch_` held.
+    std::vector<std::pair<catalog::Oid, std::int16_t>> PublishedBandsLocked() const;
+
     struct Slot {
         std::optional<RelationStatistic> published;
         std::int16_t band = 0;

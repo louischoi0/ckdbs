@@ -43,9 +43,20 @@ class PageStore;
 // counted where the steward's copy holds it (`plan_stats_part_busy`), and
 // the steward - a timer callback on core 0's reactor - tries too and leaves
 // a busy part to its next step (DL-Q17). The steward's own state
-// (`master_`, `priors_`, `wanted_`) is touched by the steward alone. The published snapshot is immutable; it is swapped under
-// `publish_latch_` and announced by `generation_` (release), which a compile
-// reads with one acquire load (`PlanStatsSource`).
+// (`master_`, `priors_`, `wanted_`) is touched by the steward alone.
+//
+// **The published snapshot is immutable, built outside the latch a compile
+// tries, and a compile waits for no install** (`rules.md` §3a (d); DL-S3).
+// An installer - the steward, an operator's statistics statement, a mount -
+// holds `install_latch_` across the snapshot's construction, which no
+// compile and no record takes; the finished snapshot is then swapped in
+// under `publish_latch_`, held for that pointer and nothing else, and
+// announced by `generation_` (release). A compile reads the generation with
+// one acquire load and, where it moved, **tries** `publish_latch_` for a
+// copy of the pointer (`PlanStatsSource::Pin`): one that meets the swap
+// keeps the snapshot it has and asks again at its next pin. The steward
+// tries both latches and the managed store's too (DL-Q17): a publish that
+// meets any of them stays owed to its next step.
 //
 // The steward reads pages **one at a time** (`ReadRelationPrior`): it lets a
 // page go before asking for the next, as every read descent does
@@ -129,6 +140,7 @@ public:
     static constexpr std::size_t kPriorDescents = 4;
 
     explicit PlanStats(std::uint32_t cores);
+    ~PlanStats();
 
     // ---- The statement's path: its own core's part only -------------------
     void Fold(std::uint32_t core, const PlanObservation& observation) noexcept;
@@ -143,7 +155,13 @@ public:
     std::uint64_t generation() const noexcept {
         return generation_.load(std::memory_order_acquire);
     }
+    // The published snapshot, for a test: every view and every compile
+    // pins (`PlanStatsSource`). Waits for a swap of the pointer and nothing
+    // longer.
     std::shared_ptr<const PlanStatsSnapshot> Current() const;
+    // The same for a compile's pin, which waits for nothing: false, and
+    // `out` untouched, where a swap holds the pointer this instant.
+    bool TryCurrent(std::shared_ptr<const PlanStatsSnapshot>* out) const;
 
     // ---- Space (DF-S4, DF-Q9 (a)) -------------------------------------------
     //
@@ -178,19 +196,35 @@ public:
     // ---- Managed statistics (CY-S1b, CY-S4; plan-stats.md §9) -------------
     //
     // The operator's objects. Any core's statement changes them, then asks
-    // `RepublishManaged`, so the next compile on every core prices from them.
+    // `RepublishManaged`, so a following compile on every core prices from them
+    // (the next, but for one that meets the pointer's swap: `PlanStatsSource`).
     ManagedStatistics& managed() noexcept { return managed_; }
     const ManagedStatistics& managed() const noexcept { return managed_; }
     // The next generation - the published snapshot's steward facts as they
     // stand, with the managed objects' bands read again - where a published
     // band moved; nothing where none did (CY-Q31 (a)). Any thread.
-    void RepublishManaged();
+    // `wait` false tries every latch and answers false - nothing
+    // republished - where one is held: a relation's drop and the steward.
+    bool RepublishManaged(bool wait = true);
+
+    // A relation dropped: its managed object goes, and the planner is
+    // republished where a published one went. **Waits for nothing**
+    // (`rules.md` §3a; DL-Q19): a DDL is not a statistics statement. Every
+    // latch is tried, and what is busy is done by the steward's next step.
+    // Any thread.
+    void ForgetRelation(catalog::Oid oid) noexcept;
 
     // `core`'s part's latch, for a test that holds it as the steward's copy
     // does; null where there is no such part.
     Latch* PartLatchForTest(std::uint32_t core) noexcept {
         return core < parts_.size() ? &parts_[core]->latch : nullptr;
     }
+
+    // The pointer's latch and the installers', for a test that holds one as
+    // a swap or another install does.
+    Latch* PublishLatchForTest() const noexcept { return &publish_latch_; }
+    Latch* InstallLatchForTest() const noexcept { return &install_latch_; }
+    Latch* ManagedLatchForTest() const noexcept { return managed_.LatchForTest(); }
 
     // A test's seam: publishes these facts as the next generation.
     void PublishForTest(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
@@ -248,13 +282,23 @@ private:
     void Merge(std::uint64_t now_ns);
     Status Seed(catalog::Catalog& catalog, storage::PageStore& store, catalog::Oid oid,
                 std::uint64_t now_ns, std::size_t& budget);
-    void Publish();
-    // Builds a snapshot of these facts as the next generation and swaps it in.
-    void Install(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-                 std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors);
-    // `Install`'s body, `publish_latch_` held: the managed bands read here.
-    void InstallLocked(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-                       std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors);
+    void Publish(bool wait_for_install);
+    // Builds a snapshot of these facts as the next generation and swaps it
+    // in. `wait` false is the steward's, which runs on a reactor: every
+    // latch is tried, and the answer is false - nothing installed - where
+    // one is held.
+    bool Install(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
+                 std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors,
+                 bool wait);
+    // `Install`'s body, `install_latch_` held: the snapshot built over
+    // `bands`, and the pointer swapped under `publish_latch_`.
+    bool InstallLocked(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
+                       std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors,
+                       std::vector<std::pair<catalog::Oid, std::int16_t>> bands, bool wait);
+    // The managed store's published bands, waited for or tried.
+    bool ManagedBands(bool wait, std::vector<std::pair<catalog::Oid, std::int16_t>>* bands) const;
+    // The steward's: the forgets a relation's drop left owed.
+    void ApplyOwedForgets();
 
     std::vector<std::unique_ptr<Part>> parts_;
     std::vector<catalog::Oid> wanted_;  // merged, the steward's
@@ -269,8 +313,14 @@ private:
     mutable Latch space_latch_{LatchKind::kStatsRing};
     std::unordered_map<catalog::Oid, std::uint64_t> delete_marked_;
 
-    // Taken before `managed_`'s latch, never after it: `Install` and
-    // `RepublishManaged` read the bands under this one.
+    // The installers', one at a time across a snapshot's construction: the
+    // steward, an operator's statistics statement, a mount. Taken before
+    // `managed_`'s latch and before `publish_latch_`, never after either:
+    // `Install` and `RepublishManaged` read the bands under this one. No
+    // compile and no record takes it.
+    mutable Latch install_latch_{LatchKind::kStatsRing};
+    // Held for `current_`'s swap and for a copy of it, and nothing else:
+    // what a compile's pin tries.
     mutable Latch publish_latch_{LatchKind::kStatsRing};
     ManagedStatistics managed_;
     std::shared_ptr<const PlanStatsSnapshot> current_;
@@ -278,6 +328,15 @@ private:
 
     std::atomic<std::uint64_t> part_drops_{0};
     std::atomic<std::uint64_t> part_busy_{0};
+    // A relation's drop whose forget met a held latch: pushed by any
+    // thread's compare-exchange, taken whole by the steward.
+    struct OwedForget {
+        catalog::Oid oid;
+        OwedForget* next;
+    };
+    std::atomic<OwedForget*> owed_forgets_{nullptr};
+    // A drop that forgot a published object and could not republish.
+    std::atomic<bool> republish_owed_{false};
     std::atomic<std::uint64_t> seeds_{0};
     std::atomic<std::uint64_t> seed_pages_{0};
     std::atomic<std::uint64_t> publishes_{0};
@@ -285,8 +344,9 @@ private:
 };
 
 // A core's view of the published snapshot (PS5): one acquire load a pin,
-// and the publish latch and a reference copy only when the generation
-// moved. Owned by one core's dispatcher; not shared.
+// and a try of the publish latch for a reference copy only when the
+// generation moved - never a wait (`rules.md` §3a (d)): a pin that meets
+// the swap keeps what it has. Owned by one core's dispatcher; not shared.
 class PlanStatsSource {
 public:
     explicit PlanStatsSource(const PlanStats* stats = nullptr) noexcept : stats_(stats) {}

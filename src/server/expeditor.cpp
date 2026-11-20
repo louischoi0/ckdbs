@@ -1368,6 +1368,11 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
             expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
             *expeditor->cabin_controller_, &*expeditor->txn_manager_);
         expeditor->cabin_executor_->set_plans(&expeditor->admin_plans_);
+        // The views' first copy, before any core can read one: an empty
+        // controller and its budget. No reader exists yet, so the try holds.
+        (void)expeditor->cabin_view_board_.Publish(exec::BuildCabinOptimizerView(
+            &*expeditor->cabin_controller_, &*expeditor->cabin_executor_,
+            expeditor->optimizer_signals_ ? &*expeditor->optimizer_signals_ : nullptr));
         if (expeditor->optimizer_signals_) {
             expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
         }
@@ -1454,11 +1459,7 @@ OptimizerSurface Expeditor::Optimizer() {
     surface.index_stats = &index_stats_;
     surface.access_stats = &*access_stats_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
-    if (cabin_controller_) {
-        surface.controller = &*cabin_controller_;
-        surface.executor = &*cabin_executor_;
-    }
-    surface.view_latch = config_.cores > 1 ? &cabin_view_latch_ : nullptr;
+    if (cabin_controller_) surface.view_board = &cabin_view_board_;
     return surface;
 }
 
@@ -2141,15 +2142,26 @@ Status Expeditor::Start() {
         const sched::MonoTimeNs interval =
             config_.cabin_optimizer_snapshot_interval_ms * 1'000'000ULL;
         scheduler.SubmitEvery(interval, [this] {
-            // Under the view latch (AT-S8): a `SHOW CABIN_OPTIMIZER` on any
-            // core reads the controller this tick mutates. The switch is the
-            // instance's, so a `SET` on a peer reaches it.
-            const LatchGuard view(Optimizer().view_latch);
+            // **No latch across the tick** (DL-S3): the controller, the
+            // executor and the collector's folded state are this callback's
+            // alone, and a view on any core reads the copy published below.
+            // The switch is the instance's, so a `SET` on a peer reaches it.
+            // Whether this tick ran is the executor's tick count, not a read
+            // of the switch beside it: a `SET` between such a read and
+            // `Tick`'s own would leave a tick's changes unpublished.
+            const std::uint64_t ticks_before = cabin_executor_->counters().ticks;
             Status ticked = cabin_executor_->Tick(*optimizer_signals_, [this] {
                 return cabin_optimizer_on_.load(std::memory_order_relaxed);
             });
             if (!ticked.ok() && logger_->enabled(LogLevel::kWarn)) {
                 logger_->Warn("expeditor", "cabin optimizer tick failed: " + ticked.message());
+            }
+            // What the views show, as this tick left it; a tick that was off
+            // changed nothing. Tried, never waited for (DL-Q17): a publish
+            // that met a view's copy of the pointer is owed to the next tick.
+            if (cabin_executor_->counters().ticks != ticks_before || cabin_view_owed_) {
+                cabin_view_owed_ = !cabin_view_board_.Publish(exec::BuildCabinOptimizerView(
+                    &*cabin_controller_, &*cabin_executor_, &*optimizer_signals_));
             }
         });
         logger_->Info("expeditor",

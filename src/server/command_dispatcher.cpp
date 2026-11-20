@@ -2157,15 +2157,16 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         os << " cabin_optimizer_notes_busy=" << lost.busy
            << " cabin_optimizer_notes_full=" << lost.full;
     }
-    {
-        const LatchGuard latched(cabin_optimizer_view_latch_);
-        if (cabin_controller_ != nullptr) {
-            os << " cabin_optimizer_managed=" << cabin_controller_->managed_count()
-               << " cabin_optimizer_pages_committed=" << cabin_controller_->pages_committed()
-               << " cabin_optimizer_page_budget=" << cabin_controller_->config().page_budget;
+    // The controller's fields are the copy its tick published (DL-S3): a
+    // `SHOW META` waits for no tick, and so for no Cabin's build.
+    if (const auto view = ControllerView(); view != nullptr) {
+        if (view->has_controller) {
+            os << " cabin_optimizer_managed=" << view->managed
+               << " cabin_optimizer_pages_committed=" << view->pages_committed
+               << " cabin_optimizer_page_budget=" << view->page_budget;
         }
-        if (cabin_executor_ != nullptr) {
-            const exec::CabinOptimizerExecutor::Counters& c = cabin_executor_->counters();
+        if (view->has_executor) {
+            const exec::CabinOptimizerExecutor::Counters& c = view->counters;
             os << " cabin_optimizer_ticks=" << c.ticks << " cabin_optimizer_creates=" << c.creates
                << " cabin_optimizer_extends=" << c.extends << " cabin_optimizer_heals=" << c.heals
                << " cabin_optimizer_drops=" << c.drops
@@ -3734,7 +3735,9 @@ std::string StatisticsDocument(std::string_view label, const stats::RelationStat
 
 void CommandDispatcher::ForgetRelationStatistics(catalog::Oid oid) {
     if (plan_stats_ == nullptr) return;
-    if (plan_stats_->managed().Forget(oid)) plan_stats_->RepublishManaged();
+    // A DDL's forget, not a statistics statement: it waits for neither the
+    // store's latch nor an install (`rules.md` §3a; DL-Q19).
+    plan_stats_->ForgetRelation(oid);
 }
 
 DispatchOutcome CommandDispatcher::HandleStatistics(std::string_view line, Session& session) {

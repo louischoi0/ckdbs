@@ -79,11 +79,11 @@
 // folds first, so the same notes in the same per-core order give the same
 // snapshot (DL-R5). PHY02's `Decide` takes the snapshot and nothing else.
 //
-// Concurrency: the notes as above. **The folded state has no latch of its
-// own: it is the consumer's**, touched by `Fold`, `Snapshot`, `QualityOf`
-// and the `tracked_*` counts alone, which the controller's view latch
-// (`OptimizerSurface::view_latch`) serialises - the tick holds it across a
-// tick, a view across its read.
+// Concurrency: the notes as above. **The folded state has no latch: it is
+// the consumer's alone**, touched by `Fold`, `Snapshot`, `QualityOf` and
+// the `tracked_*` counts on the tick's thread and by nothing else - a view
+// reads the quality the tick published (`exec/cabin_optimizer_view.hpp`,
+// DL-S3), never this state.
 
 namespace kds::stats {
 

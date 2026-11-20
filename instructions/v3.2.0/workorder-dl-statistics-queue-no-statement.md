@@ -484,9 +484,10 @@ operator's own mark.
 | DL-Q10 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file | (b) lifted for DL-S0 | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone) |
 | DL-Q14 | The session registry of the wait statistics: one process-wide mutex a session's creation and its end take, and a `sys.session_waits` or `sys.session_state` reader holds for a copy of every session (`src/sched/wait_state.cpp:27-58`; found by DL-S0). | the registry takes no latch: a session's statistics live in a slot of chunks that are never moved or freed, claimed and given back by compare-exchange, and a reader walks the slots and reads each as its words stand, leaving out one that changed hands under the read | (b) a registry a core under a latch, the reader's hold cut to a copy of pointers - a creation still waits for it; (c) outside the rule: a connection's setup is not a statement | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
 | DL-Q15 | `AccessStats::Forget` - a column change's removal of the shapes naming a column, from every core's part (`src/server/command_dispatcher.cpp:4702`) - once a record takes no latch (found by DL-S0). | it waits for nothing: a shape's slot is marked dead where it stands and its own key takes it again from zero; a dead slot keeps its place and counts toward its part's bound until a restart (DA's "no tombstone counts against the bound" goes). **As built at DL-S2, better than proposed**: a generation in the slot's state word lets the part's core give a dead slot to any new shape, so a forgotten slot is free again and DA's sentence stands | (b) the parts keep a latch and the column change waits a bounded copy for each (breaks clause (a)); (c) the forget is queued to each owning core and a reader filters until it is applied | **(a) as revised at DL-S2**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census. The revision drops the cost (a) accepted - DA's tests of a forgotten slot's reuse pass unchanged - and changes nothing else: the forget still waits for nothing |
-| DL-Q16 | A statement whose subject is the statistic - the operator's `STATISTICS` statements (a `GATHER`'s store and republish, `PUBLISH`, `RESTORE`, ...), `ADVISE PLAN`'s row, a relation drop's `Forget` of a managed object (found by DL-S0). | outside the rule, as DL-Q7's readers are: it is not a statement the statistic reports on, and what it may wait for is one bounded install or copy by another such statement - never one a statement's record or a compile holds, since those take none of these latches | (b) inside: it tries, and a busy latch is refused `TxnConflict` | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
+| DL-Q16 | A statement whose subject is the statistic - the operator's `STATISTICS` statements (a `GATHER`'s store and republish, `PUBLISH`, `RESTORE`, ...), `ADVISE PLAN`'s row (found by DL-S0). As first written this item also named a relation drop's `Forget` of a managed object; a drop's subject is the relation, not the statistic, and it is DL-Q19's. | outside the rule, as DL-Q7's readers are: it is not a statement the statistic reports on, and what it may wait for is one bounded install or copy by another such statement - never one a statement's record or a compile holds, since those take none of these latches | (b) inside: it tries, and a busy latch is refused `TxnConflict` | **(a) as revised at DL-S3**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census. The revision takes a relation drop's forget out of the item (DL-Q19), found at DL-S3's review against DL-Q15's own reasoning |
 | DL-Q17 | A statistics task that runs as a timer callback on a reactor (the steward, the controller's tick, the ASH sampler): a latch it waits for stops every statement on its core (found by DL-S0; the callbacks are `Scheduler::SubmitEvery`'s, run inline). | every latch such a callback takes that another thread can hold is taken by the try form; a busy one is left to the next period (a part not merged this second, a publish left dirty, a sample not taken) and counted where a count exists | (b) the callbacks move to a thread of their own; (c) they may wait a bounded copy | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
 | DL-Q18 | The latch kinds the contention block counts by: the plan tables (captured plans, administrator's plans, plan advice) carry `kStatsRing` and are not statistics (DL-Q0 (a)); `kCabinStats` names a latch DL-S1 removes (found by DL-S0). | the plan tables take a kind of their own (`plan_table`), `cabin_stats` goes with its latch, and `stats_ring` counts the statistics stores alone - so the wait the rule forbids has one name in `sys.meta` and DL-S5's guard has one kind to refuse | (b) left as they are, the guard listing latches by address | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
+| DL-Q19 | A relation drop's forget of a managed statistics object (`DROP TABLE` and a DDL's end, `CommandDispatcher::ForgetRelationStatistics`): it took the managed store's latch and then republished under the installers' latch, which the steward holds across a snapshot's construction (found at DL-S3's review; DL-Q16 as first written put it outside the rule). | it waits for nothing, as DL-Q15's forget does: the store's latch and the republish are tried, and what is busy is left to the steward's next step - the oid queued, the republish owed. An object that outlives its relation by a step prices nothing: an oid is never issued again | (b) outside the rule, bounded by one install (DL-Q16 as first written); (c) the drop is refused `TxnConflict` where a latch is held | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S3's review |
 
 ## 5. Stages
 
@@ -778,3 +779,66 @@ Carried to DL-S6.
 
 **Suite.** 0 failed of 4,922 (2 disabled, 2 skipped) on the committed tree. The first run of the reviewed tree failed one cell, `StatementCostRig.BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheViews` (79 calls of 80): the second test the change made false - it read the views while both cores recorded and required every record. It now requires every statement recorded or counted busy; thirty repeats of the statistics rigs and cells then showed no failure. **`tsan`** (gcc 14, `build-tsan/`): 171 cells - the contract suite, the counter table, the stores and their rigs - 0 reports.
 **Overhead not measured; measured at the milestone's close.**
+
+### DL-S3: a statement's read (P4) and the controller's views (P5)
+
+On worktree `dl-statistics-queue-no-statement`, on `f511df53`.
+
+**P4 - a compile waits for no publish (W5, clause (d)).** A snapshot is
+built under a latch only installers take (`PlanStats::install_latch_`):
+the steward, an operator's statistics statement, a mount. The publish
+latch is held for the finished pointer's swap and for a copy of it, and a
+compile's pin tries it: one that meets the swap prices from the snapshot
+it has and asks again at its next pin (`PlanStatsSource::Pin`,
+`plan-stats.md` PS5a). **The steward tries every latch of a publish
+(DL-Q17)** - the installers', the managed store's, the pointer's - and a
+publish that meets one stays owed to its next step.
+
+**P5 - the controller's views read a published copy (W5).** The
+controller, its executor and the collector's folded state are the tick's
+alone, and **no latch is held across a tick**: the tick, when it has run,
+publishes an immutable copy of what `SHOW CABIN_OPTIMIZER` and `SHOW
+META`'s section show (`exec/cabin_optimizer_view.hpp`), trying the board's
+latch and owing the publish to the next tick where a view's copy holds
+it. A view on any core reads the copy, so it waits for no tick and no
+Cabin's build. `Expeditor::cabin_view_latch_` and
+`OptimizerSurface::view_latch` are gone, and so are the surface's pointers
+to the controller and the executor: no core but the tick's can reach
+them. The quality columns are as of the last tick that ran.
+
+**DL-Q19, raised by the review and adopted (a); DL-Q16 revised.** A
+relation drop's forget of a managed statistics object took the store's
+latch and republished under the installers' - a `DROP TABLE` waiting for
+the steward's snapshot. DL-Q16 as first written had put it outside the
+rule beside the operator's statistics statements; a drop's subject is the
+relation, and DL-Q15 had already ruled the other DDL forget the other
+way. It now tries both and leaves what is busy to the steward
+(`PlanStats::ForgetRelation`, PS5b).
+
+**Review (`critics-developer`).** One defect, fixed: **a tick that ran
+could go unpublished** - the cadence read the switch beside `Tick`'s own
+read of it, so a `SET CABIN_OPTIMIZER ON` between the two ran a tick whose
+changes no view saw until the switch was next on; the publish is now
+decided by the executor's tick count. No defect found in the snapshot
+protocol (the generation's ordering, the two latches, the lock order with
+the managed store, a pin with nothing cached). Applied: DL-Q19; the
+surface's two pointers cut; `Install`'s two branches folded; the view's
+quality an optional an entry in place of a flag and a parallel filler;
+`Current()`'s comment (a test's: every view pins); the header's "the next
+compile" corrected to "a following compile" (a pin that meets the swap
+keeps the last snapshot once). Rejected: none.
+
+**Cells.** A pin under a held publish latch keeps its snapshot and takes
+the new one next; a steward step under a held part, installers', managed
+and publish latch returns each time, publishes nothing, and publishes
+all of it at the next step; a peer's `SHOW CABIN_OPTIMIZER` and `SHOW
+META` show the published copy while the controller has moved on, and a
+publish under a reader's hold answers "not published" at once; a
+relation's drop under a held store latch and under a held installers'
+latch returns, and the steward finishes both. **Not covered by a cell**:
+the cadence's owed re-publish and its tick-count gate (the lambda is the
+`Expeditor`'s), and a real two-core instance's `SHOW` while its tick
+builds a Cabin.
+
+**Suite.** 0 failed of 4,926 (2 disabled, 2 skipped) on the committed tree. **`tsan`** (gcc 14): 166 cells - the contract suite with the pin's, the drop's forget's and the three-thread install cell, the planner's and the controller's tests - 0 reports. **Overhead not
+measured; measured at the milestone's close.**

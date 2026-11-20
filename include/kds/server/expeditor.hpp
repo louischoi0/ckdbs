@@ -861,14 +861,13 @@ private:
 
     // **The optimizer surface's shared state** (AT-S8, `OptimizerSurface`):
     // the `CABIN_OPTIMIZER` switch every core's `SET` flips and the cadence
-    // and every note read; and the view latch core 0's cadence holds across
-    // a tick while any core's `SHOW CABIN_OPTIMIZER` reads the controller
-    // and the collector's folded state. The collector has no latch here: a
+    // and every note read; and the board core 0's cadence publishes the
+    // controller's view to (`exec/cabin_optimizer_view.hpp`, DL-S3). **The
+    // controller, the executor and the collector's folded state are the
+    // tick's alone, and no latch is held across a tick**: a
+    // `SHOW CABIN_OPTIMIZER` or a `SHOW META` on any core reads the copy
+    // the last tick published. The collector has no latch here either: a
     // note takes its own core's part (`stats/optimizer_signals.hpp`).
-    // **The tick holds the view latch across I/O**
-    // - a `CreateCabin` and the whole seeded build's walk - so a
-    // `SHOW CABIN_OPTIMIZER` on a peer sleeps that peer's reactor for a
-    // build (`known-gaps.md`); a reader never holds it across I/O.
     std::atomic<bool> cabin_optimizer_on_{false};
     // `join_order`, the instance's one value, seeded from the config and
     // flipped by any core's `SET JOIN_ORDER`; and the captured plans of
@@ -891,7 +890,10 @@ private:
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;
-    Latch cabin_view_latch_{LatchKind::kOptimizer};
+    exec::CabinOptimizerViewBoard cabin_view_board_;
+    // A publish that met a view's copy of the pointer and is owed again;
+    // the cadence's alone.
+    bool cabin_view_owed_ = false;
     wal::CheckpointGate checkpoint_gate_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;

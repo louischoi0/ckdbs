@@ -38,6 +38,7 @@
 #include "kds/exec/cabin_ddl.hpp"
 #include "kds/exec/cabin_expr.hpp"
 #include "kds/exec/cabin_optimizer_exec.hpp"
+#include "kds/exec/cabin_optimizer_view.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/parser/ast.hpp"
 #include "kds/stats/access_stats.hpp"
@@ -458,11 +459,14 @@ struct StatementLimits {
 
 // **The Cabin controller's surface, as one value** (AT-S8, on the
 // operator's word). The pieces are the instance's - one
-// signal collector (latched above one core), one switch, one controller and
+// signal collector (a part a core), one switch, one controller and
 // executor - and every core's dispatcher is handed the same value.
-// `view_latch` is what core 0's cadence holds across a tick; a view read
-// from another core takes it too. A null switch leaves the dispatcher's
-// own; every other member is taken as given.
+// **`view_board` is where core 0's cadence publishes what the controller's
+// views show** (DL-S3, `exec/cabin_optimizer_view.hpp`): a view on any core
+// reads the published copy and never the controller, which is the tick's
+// alone. A null board is a dispatcher whose one thread owns the controller
+// too - a fixture - which reads it where it stands. A null switch leaves
+// the dispatcher's own; every other member is taken as given.
 struct OptimizerSurface {
     stats::OptimizerSignals* signals = nullptr;
     // The join planner's statistics (docs/spec/plan-stats.md), the
@@ -487,9 +491,9 @@ struct OptimizerSurface {
     // null leaves the dispatcher's own.
     stats::AccessStats* access_stats = nullptr;
     std::atomic<bool>* cabin_optimizer_on = nullptr;
-    const stats::CabinOptimizer* controller = nullptr;
-    const exec::CabinOptimizerExecutor* executor = nullptr;
-    Latch* view_latch = nullptr;
+    // The controller and its executor are not here: they are the tick's
+    // alone, and a core that held a pointer to them could read them.
+    const exec::CabinOptimizerViewBoard* view_board = nullptr;
 };
 
 // A fingerprinted SELECT's two identities, both from the parse (AP-R2,
@@ -2228,8 +2232,7 @@ public:
         }
         if (surface.access_stats != nullptr) access_stats_ = surface.access_stats;
         if (surface.cabin_optimizer_on != nullptr) cabin_optimizer_on_ = surface.cabin_optimizer_on;
-        set_cabin_optimizer_view(surface.controller, surface.executor);
-        cabin_optimizer_view_latch_ = surface.view_latch;
+        cabin_view_board_ = surface.view_board;
     }
 
 
@@ -3091,9 +3094,14 @@ private:
     // handed none points at its own.
     std::atomic<bool> own_cabin_optimizer_on_{false};
     std::atomic<bool>* cabin_optimizer_on_ = &own_cabin_optimizer_on_;
-    // Held across the controller view's read (AT-S8): core 0's cadence
-    // mutates the controller under it. Null where one thread owns both.
-    Latch* cabin_optimizer_view_latch_ = nullptr;
+    // Where the controller's views are read from (DL-S3): the copy core 0's
+    // cadence published. Null where one thread owns the controller and this
+    // dispatcher - a fixture - and the views then read it where it stands.
+    const exec::CabinOptimizerViewBoard* cabin_view_board_ = nullptr;
+    // What `sys.cabin_optimizer` and `sys.meta` show of the controller: the
+    // published copy, or - with no board - one built here. Null where there
+    // is nothing to show yet.
+    std::shared_ptr<const exec::CabinOptimizerViewData> ControllerView() const;
     const MountRecovery* recovery_ = nullptr;  // RC09, set_recovery()
     BackupControl* backup_ = nullptr;          // BR-S2, set_backup()
     const WalArchiver* archiver_ = nullptr;    // BR-S4, set_archiver()

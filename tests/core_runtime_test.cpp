@@ -663,11 +663,10 @@ TEST_F(CoreRuntimeTest, APeerHandedTheOptimizerSurfaceSetsTheInstancesSwitchAndS
     // `set_optimizer_surface` from `CoreRuntime::Open` and both halves fail.
     std::atomic<bool> instance_switch{false};
     stats::CabinOptimizer controller;
-    Latch view_latch;
+    exec::CabinOptimizerViewBoard board;
     OptimizerSurface surface;
     surface.cabin_optimizer_on = &instance_switch;
-    surface.controller = &controller;
-    surface.view_latch = &view_latch;
+    surface.view_board = &board;
 
     CoreRuntime::Config config = ConfigFor(1);
     config.optimizer = surface;
@@ -679,22 +678,44 @@ TEST_F(CoreRuntimeTest, APeerHandedTheOptimizerSurfaceSetsTheInstancesSwitchAndS
     EXPECT_EQ(set.rfind("OK", 0), 0u) << set;
     EXPECT_TRUE(instance_switch.load()) << "the peer's SET moved a flag the controller never reads";
 
+    // Nothing published yet: the surface reads as absent, never as a
+    // controller's state the peer made up.
+    EXPECT_EQ(d.Dispatch("SHOW CABIN_OPTIMIZER").response.rfind("ERR", 0), 0u);
+    ASSERT_TRUE(board.Publish(exec::BuildCabinOptimizerView(&controller, nullptr, nullptr)));
     const std::string show = d.Dispatch("SHOW CABIN_OPTIMIZER").response;
     EXPECT_NE(show.rfind("ERR", 0), 0u) << "the peer cannot see the controller: " << show;
 
-    // And the read waits out a tick: the view latch held here as core 0's
-    // cadence holds it. **Mutation**: drop the handler's guard and the SHOW
-    // answers under the hold.
-    std::optional<LatchGuard> tick(std::in_place, &view_latch);
-    std::atomic<bool> answered{false};
-    std::thread reader([&] {
-        (void)d.Dispatch("SHOW CABIN_OPTIMIZER");
-        answered.store(true);
+    // **The read is of the published copy, and waits for no tick** (DL-S3;
+    // `docs/rules/rules.md` §3a). The controller moves here as a tick moves
+    // it - a Cabin created - and nothing is published: the peer's view and
+    // its `SHOW META` still show what the last publish held, so neither
+    // read the controller, which is the tick's alone. **Mutation**: read
+    // `cabin_controller_` in the view's builder and the entry shows early.
+    controller.NoteCreated(/*rel_oid=*/77, /*col_pos=*/1, /*cabin_id=*/5, /*pages=*/3);
+    ASSERT_EQ(controller.managed_count(), 1u);
+    EXPECT_EQ(testing_view::MetaField(d.Dispatch("SHOW META").response, "cabin_optimizer_managed"),
+              "0")
+        << "SHOW META read the controller, not the published copy";
+    ASSERT_TRUE(board.Publish(exec::BuildCabinOptimizerView(&controller, nullptr, nullptr)));
+    EXPECT_EQ(testing_view::MetaField(d.Dispatch("SHOW META").response, "cabin_optimizer_managed"),
+              "1");
+
+    // And a tick's publish waits for no reader: tried under a reader's hold
+    // of the pointer, it answers "not published" at once and is owed.
+    std::optional<LatchGuard> reading(std::in_place, board.LatchForTest());
+    std::atomic<int> published{-1};
+    std::thread tick([&] {
+        published.store(
+            board.Publish(exec::BuildCabinOptimizerView(&controller, nullptr, nullptr)) ? 1 : 0);
     });
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(answered.load()) << "SHOW CABIN_OPTIMIZER read the controller mid-tick";
-    tick.reset();
-    reader.join();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (published.load() < 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const int under_the_hold = published.load();
+    reading.reset();
+    tick.join();
+    EXPECT_EQ(under_the_hold, 0) << "the tick's publish waited for a reader's hold";
 }
 
 TEST_F(CoreRuntimeTest, APeersCheckpointAnchorReachesTheInstanceSuperblock) {

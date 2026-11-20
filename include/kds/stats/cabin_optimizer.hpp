@@ -60,9 +60,11 @@
 // never healed, extended, or dropped - and debug-asserts at emission that
 // every action targets its own table.
 //
-// Concurrency: no synchronization of its own. The controller is the
-// instance's one since AT-S8, ticked and read under
-// `OptimizerSurface::view_latch` (`command_dispatcher.hpp`).
+// Concurrency: no synchronization of its own, and none needed: the
+// controller is the instance's one since AT-S8 and **the tick's alone**
+// since DL-S3 - core 0's cadence mutates and reads it, and a view on any
+// core reads the copy that tick published
+// (`exec/cabin_optimizer_view.hpp`), never the controller.
 
 namespace kds::stats {
 

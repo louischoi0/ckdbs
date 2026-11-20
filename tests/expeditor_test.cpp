@@ -622,7 +622,7 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
     db.dispatcher().set_cabin_optimizer_enabled(true);
     EXPECT_TRUE(surface.cabin_optimizer_on->load()) << "core 0 and the peer hold two switches";
     EXPECT_NE(surface.signals, nullptr) << "the peer's reads feed no optimizer signal";
-    EXPECT_NE(surface.view_latch, nullptr) << "two cores and no view latch";
+    EXPECT_NE(surface.view_board, nullptr) << "the peer's views read no published copy";
 }
 
 // CX-R10: the configured `join_order` is the instance's one value - core 0
