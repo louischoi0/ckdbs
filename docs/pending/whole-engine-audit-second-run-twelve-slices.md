@@ -1600,7 +1600,9 @@ three `AsPage` calls CV added went with the helper.
 **The merged tree's suite was not executed before the push.** CV brought
 source, so the run at `8f5d4388` does not cover `755e9000`; the operator
 asked for the push with the hook skipped while the merged tree was still
-building (`raft-marks-2026-11-20.md` §11). **The simulation corpus was not
+building (`raft-marks-2026-11-20.md` §11). `[measured]` **Run after the
+push, it passed**: 4,895 of 4,895 on the tree `main` carries at `1cd689ae`
+(`v3.4.16-6-g1cd689ae`; `ctest -LE bs-nightly`, Debug, `-j8`). **The simulation corpus was not
 run to its end**: `scripts/sim.sh 4` passed its first 17 runs on
 `8f5d4388`'s Debug build and was stopped for the merge.
 
