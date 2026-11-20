@@ -189,7 +189,7 @@ std::string TrxIdText(std::uint64_t id) { return id == 0 ? "none" : std::to_stri
 bool ReadOnlyAdmits(std::string_view cmd) {
     for (std::string_view admitted :
          {"SELECT", "WITH", "ANALYZE", "SHOW", "DESCRIBE", "DESC", "PING", "USE", "SET",
-          "BEGIN", "START", "COMMIT", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "SYNC",
+          "RESET", "BEGIN", "START", "COMMIT", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE", "SYNC",
           "STOP", "BACKUP"}) {
         if (IEquals(cmd, admitted)) return true;
     }
@@ -1605,7 +1605,7 @@ Role RequiredRole(std::string_view cmd, std::string_view rest) {
     if (IEquals(cmd, "PING") || IEquals(cmd, "SELECT") || IEquals(cmd, "WITH") ||
         IEquals(cmd, "ANALYZE") || IEquals(cmd, "SHOW") || IEquals(cmd, "DESCRIBE") ||
         IEquals(cmd, "DESC") || IEquals(cmd, "BEGIN") ||
-        IEquals(cmd, "START") || IEquals(cmd, "USE") ||
+        IEquals(cmd, "START") || IEquals(cmd, "USE") || IEquals(cmd, "RESET") ||
         IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT") ||
         IEquals(cmd, "SAVEPOINT") || IEquals(cmd, "RELEASE")) {
         // SAVEPOINT and RELEASE are refused for every role; at this floor a
@@ -1761,6 +1761,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return Refused(s);
     }
     if (IEquals(cmd, "USE")) return HandleUse(line, rest, session);
+    if (IEquals(cmd, "RESET")) return HandleReset(line, rest, session);
     if (IEquals(cmd, "SET")) {
         auto [sub, sub_rest] = SplitFirstToken(rest);
         if (IEquals(sub, "ISOLATION")) return HandleSetIsolation(sub_rest, session);
@@ -13138,6 +13139,57 @@ DispatchOutcome CommandDispatcher::HandleUse(std::string_view line, std::string_
     }
     session.set_default_namespace(ns.value());
     return {"USE namespace=" + std::string(name), false};
+}
+
+// `RESET SESSION` - the session's settings back to a new connection's (DJ-S2,
+// DJ-Q8 (a)): the isolation level, the namespace, the durability rung and
+// the priority level (`Session::ResetToDefaults`), and - through the
+// outcome's `session_reset` - the protocol session's named statements and
+// portals. Routed here, on the tokens `DispatchInner` split, for
+// `HandleSetDurability`'s reason: it is a session statement and the engine
+// holds one model of those.
+//
+// **Whole or refused** (DJ-R8): inside a transaction it is refused and
+// nothing changes - a level or a rung cannot change under a transaction
+// that began with another - and outside one every setting goes at once. One
+// spelling: `RESET` takes `SESSION` and nothing else, so `RESET ALL` or
+// `RESET durability` is refused by name rather than read as a narrower or a
+// wider reset than was written.
+DispatchOutcome CommandDispatcher::HandleReset(std::string_view line, std::string_view args,
+                                               Session& session) {
+    // One trailing `;`, as every parsed statement takes.
+    std::string_view body = Trim(args);
+    if (!body.empty() && body.back() == ';') body = Trim(body.substr(0, body.size() - 1));
+    const auto [what, tail] = SplitFirstToken(body);
+    const std::string_view extra = Trim(tail);
+    // A wrong or a trailing word is refused where it is; a missing one where
+    // it was owed - at the `;`, or at the line's end where nothing follows
+    // the verb.
+    const auto byte = [&](std::string_view word) {
+        const std::string_view whole = Trim(line);
+        const std::string_view after = Trim(args);
+        const char* at = !word.empty()    ? word.data()
+                         : !after.empty() ? after.data()
+                                          : whole.data() + whole.size();
+        return " (byte " + std::to_string(at - line.data()) + ")";
+    };
+    if (!IEquals(what, "SESSION")) {
+        return Refused(Status::InvalidArgument("RESET takes SESSION and nothing else" + byte(what)));
+    }
+    if (!extra.empty()) {
+        return Refused(
+            Status::InvalidArgument("RESET SESSION takes nothing after SESSION" + byte(extra)));
+    }
+    if (session.in_explicit_txn()) {
+        return Refused(Status::InvalidArgument(
+            "RESET SESSION is refused inside a transaction (byte " +
+            std::to_string(Trim(line).data() - line.data()) +
+            "): the session and the transaction are unchanged - COMMIT or ROLLBACK first"));
+    }
+    session.ResetToDefaults();
+    DispatchOutcome out{"RESET SESSION", false};
+    out.session_reset = true;
+    return out;
 }
 
 DispatchOutcome CommandDispatcher::HandleSetIsolation(std::string_view args, Session& session) {

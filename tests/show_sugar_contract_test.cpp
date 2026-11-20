@@ -17,6 +17,7 @@
 #include "kds/stats/relation_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
 #include "kds/stats/txn_stats.hpp"
+#include "kds/stats/wait_event.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
@@ -979,7 +980,10 @@ TEST_F(ShowSugarTest, SysWaitEventNamesListsTheRegistryByName) {
         "SELECT event_id, name, class, kind, in_db_time, p1, p2, p3 FROM sys.wait_event_names "
         "ORDER BY event_id");
     const auto shown = testing_view::ReadViewText(reply);
-    ASSERT_EQ(shown.rows.size(), 21u) << reply;
+    // One row per registered event; the registry's own count is pinned as
+    // a literal in `wait_event_test.cpp`.
+    ASSERT_EQ(shown.rows.size(), stats::kWaitEventCount) << reply;
+    EXPECT_EQ(shown.Find("name", "res.txn_slot", "class"), "Resource") << reply;
     EXPECT_EQ(shown.Find("name", "cpu.on_cpu", "event_id"), "0") << reply;
     EXPECT_EQ(shown.Find("name", "commit.wal_flush", "class"), "Commit") << reply;
     EXPECT_EQ(shown.Find("name", "commit.wal_flush", "p3"), "group_size") << reply;

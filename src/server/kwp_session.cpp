@@ -365,7 +365,16 @@ void KwpSession::SendError(std::vector<std::byte>& out, const wire::WireError& e
 void KwpSession::SendReady(std::vector<std::byte>& out) {
     wire::PayloadWriter w;
     w.U8(TxnStateOf(session_));
-    Send(out, ServerFrameType::kReady, 0, w.Take());
+    // DJ-S2: the flag only to a client that offered the bit - it is a new
+    // meaning on an existing frame - and only while it is true now.
+    const bool tell =
+        (capabilities_ & static_cast<std::uint64_t>(wire::Capability::kSessionDefaults)) != 0;
+    Send(out, ServerFrameType::kReady, tell && AtDefaults() ? wire::kReadySessionDefaults : 0,
+         w.Take());
+}
+
+bool KwpSession::AtDefaults() const noexcept {
+    return session_.AtDefaults() && statements_.empty() && portals_.empty();
 }
 
 FrameAction KwpSession::Refuse(std::vector<std::byte>& out, const wire::WireError& error) {
@@ -480,6 +489,7 @@ FrameAction KwpSession::OnHello(std::span<const std::byte> payload, std::vector<
     auto outcome = wire::Negotiate(hello.value(), handshake_, auth_gate_ != nullptr,
                                    session_id_, cancel_key_);
     if (!outcome.accepted) return Refuse(out, outcome.error);
+    capabilities_ = outcome.hello.capabilities;
 
     if (outcome.auth_owed) {
         // **No `S_HELLO` yet.** The session id and the cancel key are what
@@ -537,7 +547,9 @@ FrameAction KwpSession::OnAuth(std::span<const std::byte> payload, std::vector<s
 
     wire::ServerHello hello;
     hello.version = handshake_.max_version;
-    hello.capabilities = handshake_.capabilities;
+    // §3: the intersection, as the unauthenticated path answers - not the
+    // server's whole set, which would report a bit the client never offered.
+    hello.capabilities = capabilities_;
     hello.session_id = session_id_;
     hello.cancel_key = cancel_key_;
     hello.server_info = handshake_.server_info;
@@ -803,6 +815,16 @@ void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
     }
     Deliver(running_portal_, *portal, out);
     running_portal_.clear();
+    // **`RESET SESSION` drops the protocol's half too** (DJ-S2): every
+    // statement and portal, the portal that carried the reset included - its
+    // completion has just been written, and a `C_CLOSE` pipelined behind it
+    // closes an absent name, which is silent. After the delivery, so `portal`
+    // is not read again.
+    if (outcome.session_reset) {
+        statements_.clear();
+        portals_.clear();
+        expired_portals_.clear();
+    }
 }
 
 void KwpSession::ArmStream(WireResultSink::Stream* stream) {

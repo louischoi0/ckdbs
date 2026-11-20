@@ -113,7 +113,8 @@ HandshakeOutcome Negotiate(const ClientHello& hello, const HandshakeConfig& conf
 // **A bit is offered when the frame behind it is answered, and not before.**
 //
 // `kStreaming` is here because portals are built (§7). `kCapBulkLoad` is
-// here because the v0 load endpoint answers its block.
+// here because the v0 load endpoint answers its block. `kSessionDefaults` is
+// here because `S_READY` carries the flag behind it (DJ-S2).
 //
 // `kCancel` is **not** here, because it is not this build's to promise: it
 // is the rule above applied per listener. `C_CANCEL` is answered only where
@@ -130,6 +131,7 @@ HandshakeOutcome Negotiate(const ClientHello& hello, const HandshakeConfig& conf
 // demand a *client* makes, never a service a server advertises, so a server
 // that listed it would be claiming to require TLS of itself.
 inline constexpr std::uint64_t kServerCapabilities =
-    static_cast<std::uint64_t>(Capability::kStreaming) | kCapBulkLoad;
+    static_cast<std::uint64_t>(Capability::kStreaming) | kCapBulkLoad |
+    static_cast<std::uint64_t>(Capability::kSessionDefaults);
 
 }  // namespace kds::wire

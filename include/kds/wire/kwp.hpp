@@ -160,7 +160,16 @@ enum class Capability : std::uint64_t {
     kCancel = std::uint64_t{1} << 1,
     kTlsRequired = std::uint64_t{1} << 2,
     kCompression = std::uint64_t{1} << 3,  // [OPEN] - shape not yet specified
+    // `S_READY` carries `kReadySessionDefaults` in its frame flags (DJ-S2,
+    // §3, §10): the session is at a new connection's settings. A flag on an
+    // existing frame, so it is sent only to a client that offered this bit.
+    kSessionDefaults = std::uint64_t{1} << 4,
 };
+
+// `S_READY`'s frame flags, bit 0 (§3), under `Capability::kSessionDefaults`:
+// the session's settings are a new connection's and it holds no statement
+// and no portal.
+inline constexpr std::uint8_t kReadySessionDefaults = 0x1;
 
 // ---- Durability (docs/spec/protocol.md §9) --------------------------------------
 // Per-transaction protocol field, carried by `C_TXN_BEGIN`. The numbering

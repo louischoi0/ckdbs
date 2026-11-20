@@ -403,6 +403,10 @@ struct DispatchOutcome {
     };
     std::optional<Examined> examined;
     std::optional<std::uint64_t> compile_ns;
+    // `RESET SESSION` ran (DJ-S2): the engine's half of the session is at
+    // its defaults, and the protocol's half - named statements and portals,
+    // which the dispatcher cannot reach - is the caller's to drop.
+    bool session_reset = false;
 };
 
 // The one spelling of an error reply on the newline protocol (docs/spec/txn.md
@@ -839,6 +843,9 @@ private:
     DispatchOutcome HandleCommit(Session& session);
     DispatchOutcome HandleRollback(Session& session);
     DispatchOutcome HandleUse(std::string_view line, std::string_view args, Session& session);
+    // `RESET SESSION` (DJ-S2, `docs/spec/protocol.md` §10): the session's
+    // settings back to what a new connection has, whole or refused.
+    DispatchOutcome HandleReset(std::string_view line, std::string_view args, Session& session);
     DispatchOutcome HandleSetIsolation(std::string_view args, Session& session);
     // `SET DURABILITY {STRICT|GROUP|RELAXED}` (protocol-wp.md P03,
     // docs/spec/protocol.md §9). The session rung of the same chain

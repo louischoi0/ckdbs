@@ -286,6 +286,17 @@ public:
     // first frame.
     void set_connection_limits(ConnectionLimits* limits) noexcept { limits_ = limits; }
 
+    // **Whether a pool may hand this session on as it stands** (DJ-S2,
+    // `S_READY`'s `kReadySessionDefaults`): the engine session's settings are
+    // a new connection's (`Session::AtDefaults`, which also means no
+    // transaction) and no statement and no portal is held - the unnamed
+    // ones included, since the empty name is a name: a `C_CONTINUE ""`
+    // would take the last borrower's rows and a `C_BIND` of statement ""
+    // would run its text. Computed from the state itself at every
+    // `S_READY`, never remembered, so no path can leave it standing over a
+    // setting (DJ-R8).
+    bool AtDefaults() const noexcept;
+
     std::size_t statement_count() const noexcept { return statements_.size(); }
     std::size_t portal_count() const noexcept { return portals_.size(); }
     // Whether the session holds a portal that still owes something: one
@@ -393,6 +404,10 @@ private:
     // whole rule.
     bool skipping_to_sync_ = false;
     CancelRegistry* cancels_ = nullptr;
+    // The capability bits this connection negotiated (§3's intersection),
+    // from its `C_HELLO`: what `S_HELLO` reports and what gates a frame
+    // shape the client did not ask for.
+    std::uint64_t capabilities_ = 0;
     ConnectionLimits* limits_ = nullptr;  // `set_connection_limits`
     ConnectionSeat seat_;
     std::uint64_t session_id_ = 0;

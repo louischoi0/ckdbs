@@ -567,3 +567,75 @@ attempts.
 
 Suite: 0 failed of 4,969 (2 disabled, 2 skipped) at `69d754ae`. Overhead
 not measured; measured at the milestone's close.
+
+### DJ-S2 - a session handed back clean (2026-11-20)
+
+On `dj-connections-sessions-cursors` at `the commit below`. Built under DJ-Q8 (a):
+
+- **`RESET SESSION`** (`CommandDispatcher::HandleReset`), a session
+  statement routed as `SET` is, open to every role, on both protocols. It
+  returns the four settings a statement can leave on a connection - the
+  isolation level (to the level the session began at, the server's
+  `isolation`), the namespace, the durability rung, the priority level and
+  its batch seat (`Session::ResetToDefaults`) - and, through
+  `DispatchOutcome::session_reset`, drops the KWP session's statements,
+  portals and expired-portal names after the reset's own completion is
+  written. **Whole or refused** (DJ-R8): inside a transaction it is refused
+  `INVALID_ARGUMENT` and changes nothing, the transaction included. One
+  spelling; `RESET ALL` and `RESET <setting>` are refused with their byte.
+- **`SESSION_DEFAULTS`**, capability bit 4, and `S_READY`'s frame flag
+  bit 0 behind it: set when the session has no transaction, its four
+  settings at their defaults, and no statement and no portal
+  (`KwpSession::AtDefaults`), **computed at every `S_READY` and never
+  remembered**. A client that did not offer the bit is sent flags `0`.
+- **`S_HELLO` on the authenticated path carries the negotiated
+  intersection**, as `protocol.md` §3 said and the unauthenticated path
+  did; it carried the server's whole set. Found in passing, since the flag
+  is gated on what the client offered, and fixed here.
+
+Not reset, because they are not settings: the role, the
+acknowledged-commit bound, the wait statistics, the session id, the
+placement words, the cancel flag.
+
+Documents: `protocol.md` §3, §10; `manual/sql/sql.md` (session
+statements); `client-manual.md` (the role table). `tools/kwp.py` does not
+offer the bit: no driver in the tree pools connections.
+
+**Tests** (`tests/kwp_session_test.cpp`, eight cells): the flag sent only
+to a client that offered the bit; each item a client can leave - the four
+settings, a named statement, a named portal, a suspended unnamed portal,
+the unnamed statement - clearing the flag alone and `RESET SESSION`
+restoring it and the item; the reset refused inside an open transaction,
+a `READ ONLY` one and a failed one, each left as it was; the level
+returned to being the session's own starting level and not READ COMMITTED;
+the batch seat given back; `RESET`'s refusals at their bytes. Not covered:
+the flag over a real socket and a session that moved cores (the state
+machine is socket-free and travels whole); an expired transaction
+(answered by the failed-transaction gate, as a failed one).
+
+**Review** (`critics-developer`). Found and fixed by it: inside
+`BEGIN READ ONLY` the read-only gate answered first, telling the client to
+"write in autocommit" and counting a write refused - `RESET` is on that
+gate's allowlist now and the reset's own refusal answers; and the
+documents said a refused reset fails its transaction, which no code does.
+Applied from it: **the flag counts the unnamed statement and portal** (its
+P1: the empty name is a name - a `C_CONTINUE ""` would take the last
+borrower's rows - so the first cut's "the unnamed ones do not count" could
+read clean over a suspended portal, against DJ-R8); the capability renamed
+`kSessionDefaults`, clear of `DurabilityLevel::kSessionDefault`; the `;`
+handling collapsed to the dispatcher's idiom; the in-transaction refusal
+at the statement's byte; five cells (the three kinds of transaction, the
+starting level, the batch seat, the transaction still open after the
+refusal, both held statements counted). **Rejected**: none.
+
+Suite on the commit's tree (it also carries DJ-S3's registered and not
+yet used `res.txn_slot` wait event): **2 failed of 4,976**, both timing
+cells on a host at load 17 from another session -
+`StrictParkRigTest.AnExplicitStrictCommitParksAndPublishesAtItsSync`, the
+flake `known-gaps.md` records, and
+`DropTableReclaimCrashTest.AReclaimCutAnywhereIsFinishedByTheNextMount` -
+and each passed three runs alone on the same binary. An earlier run of the
+same code failed one other cell, `ShowSugarTest.SysWaitEventNamesListsTheRegistryByName`,
+which pinned the registry's count as a literal; it reads the registry's
+constant now. Not a clean full run: stated, not reported as a pass. Overhead not
+measured; measured at the milestone's close.
