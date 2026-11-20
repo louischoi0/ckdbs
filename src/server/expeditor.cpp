@@ -1943,8 +1943,9 @@ Status Expeditor::Start() {
         // with more than one stream. The one pool was opened at the whole
         // `buffer_pool_frames` (`Open`, BE-R3); nothing divides it.
 
-        // The gate rotates the cadence's runs over one period (BI-Q7 (a),
-        // `wal::CheckpointGate`), set before any reactor can ask it.
+        // The gate admits one cadence run a period, the cores in turn
+        // (BI-Q7 (a), DH-Q10 (a); `wal::CheckpointGate`), set before any
+        // reactor can ask it.
         checkpoint_gate_.SetRotation(config_.checkpoint_interval_ns);
         for (std::uint32_t core_id = 1; core_id < config_.cores; ++core_id) {
             // A peer's config; it borrows the pool (AM-S2 step 3).

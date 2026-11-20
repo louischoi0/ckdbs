@@ -299,14 +299,35 @@ private:
 //
 // **The gate rotates since BI-S2** (BI-Q7 (a)). A first-come gate let the
 // same cores win every period once a run outlasted `period / cores`: the
-// stagger puts one tick per slot, a long run swallows the next core's tick,
-// and those cores skipped for good while the fold held their old anchors and
-// `D` stopped. A cadence attempt names its core and the time; the gate admits
-// it only if, among the cores that asked within the last period, it is the
-// one whose last *entry* is oldest. Keyed on entry rather than completion,
+// stagger of the time put one tick per slot, a long run swallowed the next
+// core's tick, and those cores skipped for good while the fold held their
+// old anchors and `D` stopped. A cadence attempt names its core and the
+// time; the gate admits it only if, among the cores that asked recently
+// (two periods since DH, below), it is the one whose last *entry* is oldest. Keyed on entry rather than completion,
 // so a core whose runs fail does not hold the rest back; and on recent asks,
 // so a core that stopped asking does not either. An attempt that names no
 // core - shutdown's, mount's, a test's - is first-come, as before.
+//
+// **The cadence is the instance's since DH** (DH-Q10 (a)): a rotated gate
+// admits one cadence run a period, whichever core's turn it is, so the pool
+// is written back as often at eight cores as at one - every copy of a page
+// is an image its next write owes (wal.md section 10), and a per-core
+// cadence copied the hot set `cores` times a period. Two rules make it so.
+// Every core ticks in phase (`core_runtime.cpp`), so each period every core
+// asks within the start-up skew of the others, and "recent" is two periods:
+// a tick that fires a little late must not read the others as cores that
+// stopped asking, or it would take a turn owed to one of them. And a cadence
+// attempt
+// is refused inside half a period of the last one admitted
+// (`kSpacingDivisor`), so the next core in turn, asking after a run shorter
+// than the skew has already ended, waits for its own period.
+//
+// What a core's rarer run costs is the age of its contribution to the fold
+// (`superblock_checkpoint_anchor.hpp`): up to `cores` periods, and one more
+// per turn it loses to a run in progress. The replay range is that and the
+// age of the oldest page dirty at that run, about a period more. That is
+// what a crash replays and what the log keeps, never an answer - recovery
+// finds every core's `CHECKPOINT_BEGIN` above the fold at any age.
 class CheckpointGate {
 public:
     static constexpr std::uint32_t kAnyCore = ~std::uint32_t{0};
@@ -334,9 +355,19 @@ public:
         bool entered_;
     };
 
-    // Rotates the cadence's attempts over a window of `period_ns`; 0, the
-    // default, leaves the gate first-come. Set once, before any reactor runs.
+    // Rotates the cadence's attempts and spaces them one to a `period_ns`;
+    // 0, the default, leaves the gate first-come. Set once, before any
+    // reactor runs.
     void SetRotation(std::uint64_t period_ns) noexcept { period_ns_ = period_ns; }
+
+    // A cadence attempt is refused within `period / kSpacingDivisor` of the
+    // last one admitted. Half a period: far above the cores' start-up skew,
+    // which is what lets a second core ask after a short run has ended, and
+    // far below the period its own next tick comes at. Not a tuned number -
+    // any value between the two would do.
+    static constexpr std::uint64_t kSpacingDivisor = 2;
+    // An ask older than this many periods is a core that stopped asking.
+    static constexpr std::uint64_t kRecentAskPeriods = 2;
 
     // Attempts that found the run held, or another core's turn, over the
     // process. A test's evidence that two cores met the gate; nothing else
@@ -352,7 +383,20 @@ private:
             skipped_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        if (rotated) last_entry_[core].store(now + 1, std::memory_order_relaxed);
+        if (rotated) {
+            // Read under `running_`, which every cadence entry stamps under:
+            // the last admitted entry cannot move while this compares it.
+            const std::uint64_t last = last_cadence_entry_.load(std::memory_order_relaxed);
+            // A stamp ahead of `now` - the other core read the clock later -
+            // is as recent as an entry gets.
+            if (last != 0 && (last > now + 1 || now + 1 - last < period_ns_ / kSpacingDivisor)) {
+                running_.store(false, std::memory_order_release);
+                skipped_.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+            last_entry_[core].store(now + 1, std::memory_order_relaxed);
+            last_cadence_entry_.store(now + 1, std::memory_order_relaxed);
+        }
         return true;
     }
 
@@ -366,7 +410,10 @@ private:
             const std::uint64_t asked = last_ask_[c].load(std::memory_order_relaxed);
             // An ask stamped after `now` - another core read the clock later
             // - is recent, not one that wrapped to "stale".
-            if (asked == 0 || (asked <= now + 1 && now + 1 - asked > period_ns_)) continue;
+            if (asked == 0 ||
+                (asked <= now + 1 && now + 1 - asked > kRecentAskPeriods * period_ns_)) {
+                continue;
+            }
             const std::uint64_t entry = last_entry_[c].load(std::memory_order_relaxed);
             if (entry < oldest || (entry == oldest && c < chosen)) {
                 chosen = c;
@@ -381,6 +428,9 @@ private:
     std::uint64_t period_ns_ = 0;
     std::array<std::atomic<std::uint64_t>, kCores> last_ask_{};
     std::array<std::atomic<std::uint64_t>, kCores> last_entry_{};
+    // The last cadence entry by any core, `now + 1` as the others; written
+    // and compared under `running_`.
+    std::atomic<std::uint64_t> last_cadence_entry_{0};
 };
 
 struct CheckpointerConfig {

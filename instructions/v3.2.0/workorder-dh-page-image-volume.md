@@ -518,6 +518,49 @@ Run ahead of DH-S1a because it decides whether DH-S1b exists.
 So DH-Q3 (a)'s premise holds on throughput where L3 does nothing, and
 DH-Q12 (a) costs 20 to 900 bytes an image against LZ4 for no dependency.
 
+### DH-S1a - the instance's cadence (2026-11-20)
+
+On `dh-page-image-volume`, over `df0dcd70`. **Overhead not measured;
+measured at the milestone's close.**
+
+**Built** (DH-Q10 (a)). `checkpoint_interval_ms` is the instance's period:
+one cadence run starts each period at any `cores`, the cores taking turns.
+
+- `wal::CheckpointGate` (`include/kds/wal/checkpointer.hpp`): a cadence
+  attempt is refused inside half a period of the last one the gate
+  admitted - compared under the run flag, which every cadence entry stamps
+  under - and "a core that asked recently" is two periods, where it was
+  one. The rotation itself (the turn goes to the asking core whose last
+  entry is oldest) is BI-S2's, unchanged.
+- `src/server/core_runtime.cpp`: a peer's cadence is no longer started
+  `core_id / cores` of a period late. Every core ticks in phase, so each
+  period every core asks and the gate admits the one whose turn it is.
+- `cores = 1` is first-come as before: the gate is rotated only above one
+  core (DH-R4).
+- Nothing in recovery, the checkpointer's run, the anchor or the log
+  changed.
+
+**What it costs**, stated in `wal.md` §11 and `known-gaps.md` (WAL): a
+core's own run comes every `cores` periods, so the fold's oldest
+contribution, and with it the replay range, the log kept from recycling,
+the reclaim bound and a backup's start, is up to about `cores + 1` periods
+old where it was about two.
+
+**Tests.** `CheckpointGateCadenceTest`: one run a period with each core in
+turn when a run is shorter than the skew between two cores' ticks; the
+order of arrival does not choose the core; a tick that fires late does
+not take another core's turn (the case a one-period window fails); a run
+that outlasts the period costs turns, not a core; an attempt naming no
+core is not spaced. Two `CheckpointGateRotationTest` cases re-pinned for
+the wider window and the spacing.
+
+**Suite**: 0 failed of 4,869 run (4,871 listed, 2 disabled, 2 skipped;
+546 s) on the stage's tree before the review's edits. Those edits are two
+test cases, one new one and comments in the gate's header; after them the
+tree was rebuilt and the gate's, the checkpoint task's and the core
+runtime's cadence cases run again, all passing. The full suite was not
+run again for them; it runs again at DH-S1b.
+
 ### Review (`critics-developer`), per step
 
 **DH-S0 and DH-S1b's premise** (documents, results files and tools; no
@@ -547,3 +590,31 @@ Rejected: **re-running the pressure cell.** The spike decides only
 whether DH-S1b is built, the two rounds agree with each other and with
 DH-S0, and the close measures the real packer on the same cell.
 
+**DH-S1a.** No bug found in the gate: it traced the exclusion, the races
+of the relaxed stamps (a stale read costs a turn, never a core), clock
+readings out of order, a core that stops asking (the rest wait two
+periods, where they waited one), start-up skew at a tiny interval (extra
+runs, no starvation) and every consumer of a per-core run (each slows
+with the fold; none breaks; recovery reads only the fold). Applied:
+
+- the documents understated the replay range - the oldest core's redo
+  start lies below its run by the age of the oldest dirty page, about a
+  period more: `wal.md` §11, `known-gaps.md` and the gate's header now say
+  so (the reviewer's edits, and one of its sentences reworded: after a
+  mount the fold stays at the completion checkpoints, which is not the
+  warm-up);
+- `AnAskStampedAfterThisCoresReadingStillCounts` had become vacuous (the
+  spacing refused what the turn was meant to): re-timed so the turn
+  refuses it;
+- nothing pinned the two-period window, and one case's comment claimed
+  it did: `ATickThatFiresLateDoesNotTakeAnotherCoresTurn` added, the
+  comment corrected;
+- the header's BI paragraph still described the stagger and a one-period
+  window in the present tense.
+
+Rejected: **a test of the in-phase arming itself** (two reactors on one
+rotated gate at a 20 ms period, counting runs by time). On a shared host
+that is a timing test of two threads' timers, and a put-back stagger
+would show as a rate of 1 / (1 + 1/`cores`) of the expected, inside what
+load does to such a count. The gap is recorded in `known-gaps.md` as not
+covered. Also left: merging the gate's two refusal exits (cosmetic).

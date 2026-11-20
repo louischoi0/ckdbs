@@ -266,6 +266,31 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   restart. Read on `de-page-read-off-the-reactor` at `1942cb9a`,
   2026-11-19; DE's close corrected the same claim in §5 ("Durability
   points") and left §6 as found - it is not DE's.
+- **Above one core the replay range is up to `cores` checkpoint
+  intervals, and one more for each turn a core loses.** Since DH-S1a
+  (on `dh-page-image-volume` over `df0dcd70`, read and unit-tested there)
+  the cadence is the instance's: one run starts each
+  `checkpoint_interval_ms` and the cores take turns (`wal.md` §11), so a
+  core's contribution to the anchor's fold comes from a run up to `cores`
+  intervals old, its redo start about one interval below that run, where
+  the run was one interval old - about 45 s at eight cores and the
+  default. Until every core has run once after a mount the fold stays
+  where the mount's completion checkpoints put it, now for up to `cores`
+  intervals. What follows the fold follows it there: a crash replays that much log, the log keeps that
+  much from recycling, a dropped relation's pages and a dropped index's
+  wait that long to be reclaimed, and a backup's start is that far behind
+  its `BACKUP START`. A core whose tick meets a run in progress, or the
+  spacing rule, waits a whole period for its next ask, and its turn stays
+  owed; nothing retries sooner. A cadence checkpoint that outlasts the
+  period costs the turns its run spans: 1.2 periods halves the rate
+  (`CheckpointGateCadenceTest`). Not measured: the
+  mount time over a `cores`-interval replay range, and the log directory's
+  size at eight cores. **Not covered by the suite**: that the cores' ticks
+  are armed in phase (`src/server/core_runtime.cpp`) - the gate's cases
+  drive the gate with in-phase asks, and a stagger put back would pass
+  them, giving one run every interval x (1 + 1/`cores`); a test of two
+  reactors' timers at a 20 ms period was judged a flake on a shared host
+  and not written. Owner: `docs/spec/wal.md` §11.
 - **A refused catalog report on a new page, or a catalog row no empty page
   holds, spends one page.** Re-read on `worktree-fix-catalog-page-ceiling`
   at `0e539d46`, 2026-10-18. `InsertRow` leaves the page allocated, empty

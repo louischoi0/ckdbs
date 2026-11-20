@@ -210,6 +210,11 @@ auth = off
 # risk on a crash and more I/O. 0 disables the cadence entirely, which puts
 # durability back on SYNC and clean shutdown alone.
 #
+# The interval is the instance's, not a core's: one checkpoint starts each
+# interval at any `cores`, the cores taking turns, so a core's own checkpoint
+# comes every `cores` intervals and crash recovery replays up to about that
+# much log.
+#
 # Checkpoint cadence is an [OPEN] decision in docs/spec/wal.md §13 — this default
 # is a starting point, not a recommendation.
 checkpoint_interval_ms = 5000
