@@ -1,6 +1,14 @@
 # Work order DI - a shape's statistics named by what the statement binds: `sys.statement_stats` keyed by the relations a statement resolved to, and a plan that matches nothing said so, the census before anything is built
 
-Status: **WRITTEN 2026-11-20, not opened.** Written in the main checkout on
+Status: **OPENED 2026-11-20 on the operator's standing go-ahead**
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §6), on worktree
+`di-shape-identity` from `1c7bb774` (`v3.4.15-4-g1c7bb774`). Every item the
+operator had not marked is **adopted as CLA proposed under that word, by
+CLA and not as the operator's own mark**: DI-Q0 (a); **DI-Q3 `[quiet-wrong]`
+(a) as revised by DI-S0** (§7); DI-Q6..Q13 as their stages reach them, each
+recorded in §4 and §7. **DI-S0 landed** (§7).
+
+Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §3). The letter DI is CLA's proposal.
 **DI-Q1, DI-Q2, DI-Q4 and DI-Q5 are marked (a) by the operator's word "as
@@ -12,8 +20,8 @@ keyed by a statement's text alone, so **DI-Q4 is re-marked (b)** - the
 Waystone opt-in is in DI - and the Cabin controller's signals, read at
 `5915182c`, are in it too.
 
-No stage is started. Every `[source-read]` claim below was read at
-`f4138860`. No suite was run: the order changes no build input.
+Every `[source-read]` claim of §0 to §2 was read at `f4138860` (§0a at
+`5915182c`); §7 carries what each stage read and at which commit.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -300,10 +308,10 @@ word (§0a).** Every other item is unmarked.
 
 | | item | (a) | other |
 |---|---|---|---|
-| DI-Q0 | The order's standing. | **a census first**: DI-S0 builds nothing and may narrow DI-S1 and DI-S2, or cut one | (b) a build order from §2 as written |
+| DI-Q0 **adopted (a)** on the standing go-ahead | The order's standing. | **a census first**: DI-S0 builds nothing and may narrow DI-S1 and DI-S2, or cut one | (b) a build order from §2 as written |
 | DI-Q1 **marked (a)** | Where the binding enters. | **I-a**: the statistics key; the fetch id does not move | (b) I-b |
 | DI-Q2 **marked (a)** | A statement with no binding. | **one row per `(fetch_id, kind)`, binding empty, the view says so** | (b) not recorded |
-| DI-Q3 `[quiet-wrong]` | What the binding is. Spoken as "the plan key"; restated because the plan key exists for searched joins only (§0). | **B1**, capped at `kMaxPlannedRelations`; what a statement binding more does is DI-S0's finding, brought back before DI-S1 | (b) B2; (c) B3, with a collision's merge accepted and stated; (d) as spoken: the plan key where one exists, today's row elsewhere |
+| DI-Q3 `[quiet-wrong]` **adopted (a) as revised by DI-S0** on the standing go-ahead (§7, "DI-Q3 revised") | What the binding is. Spoken as "the plan key"; restated because the plan key exists for searched joins only (§0). | **B1**, capped at `kMaxPlannedRelations`; what a statement binding more does is DI-S0's finding, brought back before DI-S1. **Revised**: the distinct relations in first-declared order with the namespace the statement's unqualified names were resolved in; a statement over the cap is one row whose binding is not known | (b) B2; (c) B3, with a collision's merge accepted and stated; (d) as spoken: the plan key where one exists, today's row elsewhere |
 | DI-Q4 **re-marked (b)** | The Waystone opt-in's reach across namespaces and a drop. | not in DI: no result is wrong, and it is a `sys.patterns` format decision - marked first, then overruled by "every path" | **(b) in DI**, the operator's |
 | DI-Q12 | The Cabin controller's signal (§0a). | **keyed by the pattern and its candidate together**, so one text over two relations is two signals and each relation's Cabin is priced by its own heat; `kMaxTrackedFingerprints` then bounds signals, not patterns | (b) keyed by DI-Q3's binding, as the statistics are; (c) a pattern whose candidate moved between two relations is not credited to either |
 | DI-Q13 `[quiet-wrong]` | What an opt-in names once it is in DI. | **the shape under the relations `WAYSTONE ON`'s example resolved to** - it already compiles its example under the session's namespace (`waystone-concpets.md` §4a) - so a drop ends it and another namespace's same text is not opted. A `sys.patterns` row change, so a format event (DI-Q11); `WAYSTONE OFF <select>` after a drop, which today needs no relation, is restated in DI-S0 | (b) the opt-in stays by text and the manual says so, the recording cost accepted - what "every path" rules out unless the operator re-marks |
@@ -356,3 +364,180 @@ DI-Q4 re-marked (b); the stages renumbered (the controller's signal S2, the
 Waystone opt-in S3, the plan's state S4, the close S5). Nothing was run.
 Open with the operator: DI-Q0, DI-Q3, DI-Q6..Q13 but DI-Q4, and whether DI
 opens.
+
+### DI-S0 - census and premise, 2026-11-20
+
+On worktree `di-shape-identity`, opened from `1c7bb774`
+(`v3.4.15-4-g1c7bb774`); every line below was read there. No engine code
+is committed by the stage: two cells (`tests/shape_identity_test.cpp`) and
+documents.
+
+**The merge, shown.** `ShapeIdentityTest`'s two cells run one text under
+`USE east` and `USE west` (one row answered, then three), and one `INSERT`
+before and after a `DROP TABLE` and a `CREATE TABLE` of its name, and each
+ends in **one** `sys.statement_stats` row with `calls = 2`. They are green
+at `1c7bb774` and are the cells DI-S1 turns over.
+
+**The census, completed.** `grep` finds 40 files under `include/kds` and
+`src` naming `fetch_id` or `pattern_id`; every one was opened - by CLA, or
+by one of the stage's two read-only census agents, whose decisive lines
+CLA read again (`trail_replay.cpp:38`, `optimizer_signals.cpp:72`,
+`plan_catalog.cpp:548-555` and `:583-601`, `kwp_session.cpp:697-701`).
+Keyed by the text alone, with what a merge of two bindings makes of it:
+
+| structure | key | read at | a merge of two bindings |
+|---|---|---|---|
+| `sys.statement_stats`, `sys.statement_histogram` | `(fetch_id, kind)` | `statement_stats.hpp:145-149`, `statement_stats.cpp:68` | one row, the sum; shown by the two cells |
+| the Cabin controller's signal | `pattern_id` (`optimizer_signals.hpp:215`) | `optimizer_signals.cpp:68-72`, `cabin_optimizer.cpp:216-259` | executions and pages of both in one entry, the candidate overwritten by whichever ran last, and `Decide` credits the whole sum to it: every CREATE, EXTEND and DROP reads that sum. **The feed and its latch run whether the controller is on or off** (`command_dispatcher.cpp`'s `RecordOptimizerSignals` checks only that a surface exists); only `Tick` is switched |
+| the controller's wait samples | `pattern_id` (`optimizer_signals.cpp:83-89`, from `ash_sampler.cpp:148-153`) | the same entry | "read by nothing that decides" (`optimizer_signals.hpp`) |
+| the Waystone opt-in | `fetch_id`: `sys.patterns`' row, each core's opted map (`catalog_cache.hpp:278`), `PatternAccess` holding no relation (`schema.hpp:583-600`) | `catalog.cpp:3051-3123`, the gate at `command_dispatcher.cpp`'s `FindOptedPattern(fingerprint->fetch_id)` | one `WAYSTONE ON` opts the text in under every namespace; ON's refusals (D2, no descent) were checked for the namespace it ran under only; no `sys.patterns` writer runs on a drop or a rename |
+| a Waystone trail | the row's directory by `fetch_id`, a page by `arg_hash` (`instance_key.hpp:37-45`, `waystone_dir.hpp:15-16`) | `trail_store.cpp:59`, `:87`, `:129`; `trail_replay.cpp:24-53` | **two bindings take turns overwriting one page**: each run reads the other's trail, `TrailReplay::Build` drops every entry whose `rel_oid` is not the step's (`trail_replay.cpp:38`, counted nowhere), the statement descends, and the recorder finds the trail "changed" and rewrites it. No row is wrong (the `rel_oid` check and the page's owner check); the replay is lost and the page dirtied at every run. **This is the cell §0a left unread** |
+| the recorder's sightings | `InstanceKey` (`trail_recorder.hpp:145`) | `trail_recorder.cpp:69-124` | one count for both bindings |
+| the session's published statement, `sys.ash` | the fetch id (`wait_state.hpp:119-127`; `sys.ash.fingerprint`) | `command_dispatcher.cpp`'s `DispatchAsync` head; `sys_views.cpp`'s `sys.ash` | **no engine code joins a sample to a statistics row**; `tools/ash_panel.sql` and `.py` group by `fingerprint` and read no statistics view. `sys.session_state` carries no fingerprint |
+
+Keyed with the relations beside the text, so outside DI, as §0a said and
+now read whole: `exec::CapturedKey` (captured and administrator's plans,
+`sys.plans`, `sys.plan_advice`), `stats::PlanKey` and the order memo
+(`plan_stats.cpp:145-146` mixes the oids). **A prepared statement holds its
+text and nothing compiled** (`kwp_session.hpp:285-289`; `C_EXECUTE`
+dispatches `portal->sql`, `kwp_session.cpp:697-701`), so `PARSE`, `USE`,
+`EXECUTE` runs under the namespace at the execute and no structure is keyed
+by it. The other files name the ids as inputs or in comments only.
+
+**Every DDL that changes what a text resolves to**, against the four
+structures DI changes (a reading at the lines above unless a test is named):
+
+| | statistics row | controller's signal | opt-in | trail |
+|---|---|---|---|---|
+| `USE` | merged (`ShapeIdentityTest`) | merged, credited to the candidate seen last | applies to both | overwritten in turn |
+| `DROP` and re-`CREATE` | merged (`ShapeIdentityTest`) | the new relation inherits the old one's decayed heat | survives the drop and applies to the new relation (`known-gaps.md`, "An opt-in is by text") | the old entries drop at `Build`, then re-recorded |
+| `RENAME TO`, `RENAME COLUMN` of a written name | the new spelling is another fetch id: a new row, the same relations | another pattern; `Decide` sums by candidate, so the relation keeps its heat | the old text no longer compiles; the row is inert | inert |
+| `DROP NAMESPACE` | RESTRICT: its relations are dropped first, so `DROP`'s row | as `DROP` | as `DROP` | as `DROP` |
+| `REINDEX` | none: no structure keyed by a fetch id holds an index oid (the trail entry's, the candidate's and the binding's fields) | none | none | none |
+| `ADD COLUMN`, `DROP COLUMN` | none: the text and the relation are the same | see "found and not DI's" | none | entries verify by page epoch, unchanged |
+
+**Where a statement's relations are at its end** (DI-S0's second reading).
+Nowhere, today: every fingerprinted statement declares each relation it
+binds to a `ReadBorrow` (`read_borrow.hpp`), whose record dies with the
+borrow and is not kept at all where the dispatcher has no lock table.
+But every bind of every statement kind passes one of six borrows, all made
+by the dispatcher inside the statement's synchronous body:
+
+| kind | where its binds are declared |
+|---|---|
+| a native `SELECT` | the run's borrow (`SelectBody`), by the compiler's one bind loop for `FROM`, every `JOIN` and every subquery block (`step_compiler.cpp`, "One site for FROM, every JOIN and every subquery block") - before the walk, so before the run can park |
+| a query layer `SELECT` | `LayerHostImpl`'s one borrow; every `DescribeRelation` and walk compiles its probe through it, each walk run to its end inline (`WalkForLayer`'s `RunToEnd`) |
+| `INSERT`, `UPDATE`, `DELETE`, `SELECT ... FOR UPDATE` | the target at its resolve; a `WHERE`'s subquery relations through `CompileWhere` into the same borrow; a `SET`'s scalar subquery and an `INSERT ... SELECT`'s source through the `SELECT` path |
+| a statement refused before its bind | nothing is declared; its fetch id is set at the parse, so it is a row with a fetch id and no binding |
+
+A re-run (`DispatchAndStage` again: a structural refusal, a page wait, a
+`PURGE`'s wait) begins a new body and declares afresh. `ResolveNames` can
+make one resolve twice when a DDL's generation moved under it. A reply
+rebuilt over an outcome (`SelectRun::Execute`'s `Finish`, a refused commit)
+keeps `plan_source` and `compile_ns` by copying them across; the binding
+takes the same path.
+
+**DI-Q3 revised** `[quiet-wrong]`. B1 as written - the bound relations "in
+written order", a reference at a time, as `CapturedKey` holds a searched
+block's - is not a function of the statement: a compile can run twice, a
+query layer statement binds a relation once per walk, and a write binds its
+target and its subqueries through separate compiles. What is a function of
+it is **the distinct relations in first-declared order**. That alone is not
+exact: `a.t JOIN b.t JOIN t` under `USE a` and under `USE b` is one
+distinct list (`a.t`, `b.t`) and two statements, which is the merge DI-R2
+forbids. **With the namespace the statement's unqualified names were
+resolved in, it is exact**: under one default namespace every name goes
+through one map from names to relations at a time, two written names are
+one relation only where they are one name, so the list's repeats fall where
+the text's do, and two equal lists are two equal resolutions of every
+reference. The namespace word is 0 for a statement that wrote no
+unqualified name, so a fully qualified statement is one row whatever
+namespace its session is in. The list stays ordered: a sorted set would
+merge `a JOIN b` before and after the two relations swap names by three
+renames. So the binding is `(namespace of the unqualified names, up to 16
+distinct oids in first-declared order)`, `stats::StatementBinding`. **Past
+16 distinct relations the binding is not held**: the statement is recorded
+in one row per `(fetch_id, kind)` that says its binding is over the cap,
+never shown as a binding's. A statement refused part way through its bind
+is recorded under what it had declared by then - a prefix, never another
+statement's relations. DI-R3: `CapturedKey`'s oids are a searched top-level
+block's references with their repeats, and exist for that block only; the
+binding is the statement's, across its blocks and compiles. For a planned
+block with no self-join the two lists are the same oids in the same order,
+and that is all DI promises of them. Options (b), (c) and (d) stand as
+written. **Adopted, revised, on the standing go-ahead.**
+
+**The other items, restated against what was read:**
+
+- **DI-Q6** (a), with what "the view says so" needs: three columns on each
+  view where (a) named two. `binding` (`bound`, `none`, `over`),
+  `namespace` (the name of the namespace the unqualified names were
+  resolved in; NULL where the statement wrote none) and `relation_oids`
+  (the oids as bound, the identity a reader groups and joins by), and on
+  `sys.statement_stats` a fourth, `relations`, rendered as `sys.plans`
+  renders its own (`ns.name`, or `oid <n>` once the relation is gone). No
+  view renders a list of oids today (`sys_views.cpp`); the names alone
+  would not tell a dropped relation's row from its successor's by a join.
+- **DI-Q7** (a). A part has no reader of the catalog and no drop tells a
+  core's part anything, so "the first reclaimed" is placed at the one
+  moment a part needs room: a new shape arriving at a full part has the
+  recording core ask its own catalog which rows name a relation that is
+  gone, at most once per schema version that core has seen, and reclaims
+  those. No cross-core act, nothing on the path of a statement whose shape
+  is known (DI-R4).
+- **DI-Q9** (a) stands: no engine reader joins a sample to a statistics
+  row, so the published statement stays on the fetch id. A reader outside
+  the engine who joins `sys.ash.fingerprint` to `sys.statement_stats` gets
+  every binding's rows of that text; `sys-views.md` §6.7 is to say so
+  (DI-S1).
+- **DI-Q10** (a), restated: **P1 as written cannot be done from the row.**
+  Neither a captured row nor an administrator's stores the namespace its
+  statement was made under (`plan_catalog.cpp:246-276`, `:417-430`: the
+  shape text, the oids, the bindings), so its text cannot be resolved
+  again. What the row does hold is the oids. So: a renamed relation is
+  established by comparing the name each written reference spells with the
+  current name of the oid recorded at its position - no resolution, no
+  namespace; a renamed column, and a captured order that no longer
+  compiles, by what DI-S4 can establish from the stored text and the
+  recorded oids, and where it cannot the row reads as it does today
+  (DI-R9). An administrator's row already reads `invalid` where an oid is
+  gone or its fingerprint version is another build's
+  (`plan_catalog.cpp:548-555`), and **a mount leaves such a row in place,
+  uninstalled, for the administrator to drop** (`plan_catalog.cpp:583-588`)
+  while it removes a captured row of another version (`:598-601`) - the
+  reading DI-S0 owed.
+- **DI-Q12** (a) stands. A wait sample knows the pattern and no candidate
+  (DI-Q9 (a)), and nothing that decides reads it: DI-S2 says where it goes.
+- **DI-Q13** `[quiet-wrong]` (a): the premise holds - `WAYSTONE ON`
+  compiles its example under the session's namespace
+  (`command_dispatcher.cpp`, `HandleWaystone`'s `StatementContextFor`) and
+  writes no relation. `sys.patterns`' row has 13 reserved bytes
+  (`rows.hpp:580-687`), which hold no binding, so the row grows: the format
+  event of DI-Q11. `WAYSTONE OFF <select>` restated: it resolves its
+  example as ON does and clears that binding's opt-in; **a `DROP TABLE`
+  ends every opt-in naming the relation**, so an example that no longer
+  resolves has nothing left to clear and is answered as a shape not opted;
+  `WAYSTONE OFF <fetch_id>` clears every binding of the fetch id, and is
+  the form that needs no relation.
+- **DI-Q8** and **DI-Q11** stand as written.
+
+**Found and not DI's** (DI-R2a: named, not left out):
+
+- **The controller's candidate names a column by its position**
+  (`CandidateRef{rel_oid, col_pos, cabin_id}`), and nothing tells the
+  signals of a `DROP COLUMN`. A position `ADD COLUMN` reuses after
+  `PURGE DROPPED COLUMNS` inherits the dropped column's decayed heat until
+  it decays. Not a text identity; not fixed by DI.
+- `SessionWaitStats::arg_hash` has no writer, so `sys.ash.arg_hash_valid`
+  is never 1.
+- An entry `TrailReplay::Build` drops for its `rel_oid` is counted nowhere.
+- The controller's feed takes its latch at every fingerprinted statement
+  with the controller off.
+
+**Measured**: not at this commit. The stage's four arms are built and
+their run is held at its quiet gate by another session's work on the host;
+the results and what they say of DI-Q3's width land in the stage's next
+commit, and DI-S1 does not land before them.
+
+**The suite**: 0 failed of 4867 (2 disabled, 2 skipped), the hook's range
+at `-j8`, on this commit's build inputs (`1c7bb774` and the two cells).
