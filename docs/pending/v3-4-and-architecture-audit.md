@@ -2290,3 +2290,77 @@ Suspicions checked and found sound:
 
 Reader's notes: [source-read] at fba5529f (v3.4.17), worktree audit-v3-4-and-architecture; nothing built or run. About 11 minutes of the budget used. No quiet-wrong found on the UPDATE/DELETE walk itself. Every suspected execution in the brief ended at a guard, listed in cleared with path:line. The one finding is a narrow logic defect in how a write's verdict is derived from its reply text, reachable only over the text reply path. Observed and deliberately not reported, because each is a refusal (not a wrong answer) and the code or spec states it: - READ COMMITTED: a row whose head was committed after the statement's view and still matches the WHERE is refused TxnConflict rather than re-read (manager.cpp:204-208 says so); with a delete-marked head the same refusal stands where PostgreSQL would skip. - REPEATABLE READ: a row whose newer committed head matches the WHERE while the snapshot's version does not is refused first-updater-wins rather than skipped (Qualify tests the head first, command_dispatcher.cpp:11572-11574). - Autocommit: a writer that commits between BeginWrite's Begin and the snapshot mint is visible to Qualify but not to the conflict check, giving a spurious retryable TxnConflict (13265 vs 10899). - A statement refused before writing keeps the row U and parent S units it already took until the decide in an explicit transaction (over-locking only). Not traced to the end: exec::CheckTransitionUpdate/Delete bodies, exec::MaintainIndexes, NoteCabinWrite, txn::ResolveThroughUndo, TransactionManager::Abort's trail compensation, BtreeVisitLeafPage's slot iteration, ReadRowByKey on a delete-marked slot (DELETE ... RETURNING). The statement-boundary flag on a resumed READ COMMITTED write is round 1's txn-locks-delta#3 and was left out.
 
+
+## 10. What the scheduled run of 2026-11-20 did with each
+
+`[operator]` On 2026-11-20 (16:55 KST): *"At 10 PM KST today, schedule the
+work of applying the items whose audit results are out. The time ceiling is
+3 hours. After that, as an exception for this case only, push no verify.
+Where a decision is needed follow CLA's proposal, but where a large issue
+needs the operator's decision, withhold the application."* The run began at
+12:59 UTC on worktree `audit-h-findings-apply`, from `origin/main` at
+`054dbc5e` (whose source is `fba5529f`'s). Every choice below that is not
+quoted is CLA's, not the operator's mark. Overhead was not measured.
+
+**Applied** (each verified against the tree first; a gtest cell each unless
+it is a comment or a removal):
+
+- H3 - an integer literal past 64 bits is refused at its byte in a type
+  argument and an assertion's bound (one digits decoder shared with
+  `ParsePaginationCount`); a bound above `INT64_MAX` is refused by name.
+- H6 - a call that compiled with no plan note clears its core's
+  `plan_source`/`plan_label`, so a plan that stopped applying reads NULL.
+  The cross-core merge is left as `sys-views.md` §6.1 states it (the core
+  that saw the shape last, with a source); a merge by the latest compile
+  across cores would change that sentence and is not taken.
+- H8 - a set operation pairs a stored column with a computed value of its
+  type (`set_expr`'s `SameType` rule), and the layer's join hashes a pair
+  whose declared widths differ for every type but decimal and `char`.
+- H10 - the 4 KiB pre-auth cap counts the KWP decoder's held bytes
+  (`FrameDecoder::buffered()`).
+- H11 - `BEGIN`'s clause refusals carry the offending token's byte.
+- H12 - a quoted config value runs to its matching quote; text after it but
+  a comment is refused `origin:line`, as is an unterminated quote.
+- H13 / H25 - the plan statistics' master eviction takes no key merged in
+  the same step.
+- H16 - a decimal literal's precision is checked before it is scaled.
+- H17 - the forward ordered index walk ends a slice only on a pass that
+  moved, so it advances at `pages_per_slice = 1`.
+- H21 - a cancel taken at a `C_SYNC` sends `S_ERROR` (`CANCELLED`) and then
+  `S_READY` (`protocol.md` §3 item 4 and §10 together).
+- H22 - three refusals given their byte; the fourth was unreachable and is
+  removed. H34, H93, H94, H95, H97, H100, H106, H108 and H107's
+  `KeywordText` - as each finding says.
+
+**Withheld for the operator:**
+
+- H1, H2 - quiet-wrong whose fix is a design choice (the banking gate's view
+  of a `READ ONLY` view; whether pass 2 re-tests the `WHERE`).
+- H4 - the lexer fix moves the golden corpus's line 169 from three hashes to
+  `-`, which the corpus header does not admit; it needs a ruling under
+  `fingerprint.hpp`'s bump rule. The patch is described in this run's
+  report: the string arm returns `kError` at the opening quote.
+- H5 - moves `fetch_id`s; `kFingerprintVersion`'s rule.
+- H7 - `foreign-keys.md` §2a prescribes today's retryable refusal; B2's
+  ruling covers the reverse walk and the unique check only. Options: (a)
+  B2's ceiling wait in the forward check (CLA's proposal), (b) keep the
+  refusal and warn only for an in-flight holder, (c) leave it.
+- H26 - taking the verdict from the outcome would commit a write whose text
+  reply still begins `ERR `; the fault is the text rendering, whose shape is
+  the operator's. The attempt was backed out.
+- H9, H14, H15, H18, H19, H20, H23, H24 - each needs a choice between a
+  behaviour and a documented limit, or touches the scheduler's idle policy.
+- H99 - a spec's two contracts; H117 - unverified, SQL-visible typing.
+- H27-H60 (inefficiency and performance) - a hot-path change wants a
+  measurement this run did not budget; H61-H91 (architecture and
+  duplication) - larger than the ceiling.
+- H107's `S_NOTICE` (a wire enumerator holding the numbering) and
+  `varheap_slots_swept`; H98, H101-H105, H109 - removals whose callers are
+  tests or whose comment names a heal path, not taken in this run.
+
+Review (`critics-developer`): no correctness bug. Taken: H6's cross-core
+merge put back to the spec's rule; a test's fatal assertion with a server
+thread running made non-fatal. Not taken: folding `RefuseWhole` and the
+`READ ONLY` gate onto the new `AtByte` (outside the findings), and a cancel
+pending while a session already skips to `C_SYNC` (pre-existing, not a
+finding of this record).

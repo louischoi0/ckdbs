@@ -40,12 +40,13 @@ namespace kds::server {
 // (the superblock's own page, the free map, the catalog's fixed roots). It
 // is where DevicePageStore starts handing out ids, not something the
 // superblock itself tracks. Every page a catalog chain grows onto past its
-// root is handed out here like a user page (superblock 31); ids 18..127
-// are unused, left for a future bootstrap root.
+// root is handed out here like a user page (superblock 31); ids 19..127
+// are unused, left for a future bootstrap root, and page 11 is reserved and
+// unused since superblock 38 (kds/catalog/well_known.hpp).
 inline constexpr PageId kFirstUserPageId = 128;
 
 // Fixed page id the SuperBlock itself lives at. Reserved, same convention
-// as the catalog's fixed roots (kds::catalog::kCatalogPage*, ids 4-17):
+// as the catalog's fixed roots (kds::catalog::kCatalogPage*, ids 4-18):
 // registered via PageStore::CreateAt() with this exact value, never
 // handed out by a general-purpose allocator.
 inline constexpr PageId kSuperBlockPageId = 0;

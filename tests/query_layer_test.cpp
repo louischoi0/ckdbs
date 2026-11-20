@@ -555,5 +555,28 @@ TEST_F(QueryLayerTest, ADerivedTableReadsNothingOutsideIt) {
                   "NOT_IMPLEMENTED");
 }
 
+// Audit H8: a stored column reaches the layer with its raw `sys.columns`
+// width in `len` and a computed value with 0, and only a decimal's `len` is
+// part of its type - so a column paired with a literal, a COUNT(*) or
+// CURRENT_DATE of its own type is one type, and a join on such a pair is
+// hashed. A different type is still refused.
+TEST_F(QueryLayerTest, ASetOperationPairsAStoredColumnWithAComputedValueOfItsType) {
+    ExpectRows("SELECT id FROM cust WHERE id < 3 UNION SELECT 5", {"id", "1", "2", "5"});
+    ExpectRows("SELECT id FROM cust WHERE id < 3 UNION ALL SELECT COUNT(*) FROM ord",
+               {"id", "1", "2", "8"});
+    ExpectRows("SELECT COUNT(*) AS n FROM cust UNION SELECT id FROM cust WHERE id > 4",
+               {"n", "5", "6"});
+    ExpectRows("SELECT COUNT(*) AS n FROM "
+               "(SELECT placed FROM ord UNION ALL SELECT CURRENT_DATE) AS x",
+               {"n", "9"});
+    ExpectRefused("SELECT id FROM cust UNION SELECT placed FROM ord", "no implicit conversion");
+    ExpectRefused("SELECT placed FROM ord UNION SELECT 5", "no implicit conversion");
+    // An int64 column against a derived table's COUNT(*): ord's counts per
+    // customer are 2, 2, 2, 1 and 1.
+    ExpectRows("SELECT c.id, x.n FROM cust AS c JOIN "
+               "(SELECT cust_id, COUNT(*) AS n FROM ord GROUP BY cust_id) AS x ON x.n = c.id",
+               {"c.id,x.n", "1,1", "1,1", "2,2", "2,2", "2,2"});
+}
+
 }  // namespace
 }  // namespace kds::server

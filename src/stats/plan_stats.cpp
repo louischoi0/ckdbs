@@ -417,12 +417,18 @@ void PlanStats::Merge(std::uint64_t now_ns) {
     }
 
     // Room for the new keys, made once a step: the least recently seen go.
+    // A key this step merged is the most recently seen whatever its stored
+    // stamp says (that is refreshed only by the fold below), so it is never
+    // a victim: erased here it would be re-created empty, its value, band
+    // hysteresis and declines lost, and `master_` would end above the bound.
     std::size_t fresh = 0;
     for (const auto& [key, entry] : merged) fresh += master_.count(key) == 0 ? 1 : 0;
     if (master_.size() + fresh > kMaxMasterKeys) {
         std::vector<std::pair<std::uint64_t, PlanKey>> by_age;
         by_age.reserve(master_.size());
-        for (const auto& [key, master] : master_) by_age.emplace_back(master.seen_ns, key);
+        for (const auto& [key, master] : master_) {
+            if (merged.count(key) == 0) by_age.emplace_back(master.seen_ns, key);
+        }
         const std::size_t drop = std::min(by_age.size(), master_.size() + fresh - kMaxMasterKeys);
         std::nth_element(by_age.begin(), by_age.begin() + static_cast<std::ptrdiff_t>(drop),
                          by_age.end());

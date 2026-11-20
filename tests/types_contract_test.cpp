@@ -612,5 +612,25 @@ TEST(TypesContract, AWrappedIntegerLiteralOnTheLeftIsRefusedToo) {
     EXPECT_EQ(out.substr(0, 3), "ERR") << out;
 }
 
+// Audit H16: an 18-digit integer literal fits the digit walk but not a
+// decimal(18, 2) once scaled; the insert and the comparison are each refused
+// on the column's precision, and nothing is stored. The scale-up used to
+// multiply before that check, a signed overflow the sanitizer build traps.
+TEST(TypesContract, An18DigitIntegerLiteralIsRefusedByADecimal18Scale2) {
+    Instance db;
+    ASSERT_EQ(db.Run("CREATE TABLE t (id int64, d decimal(18, 2))").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO t VALUES (1, '1')").substr(0, 8), "INSERTED");
+    for (const char* sql : {"INSERT INTO t VALUES (2, '999999999999999999')",
+                            "INSERT INTO t VALUES (2, '-999999999999999999')",
+                            "SELECT id FROM t WHERE d = 999999999999999999",
+                            "SELECT id FROM t WHERE d = '999999999999999999'"}) {
+        const std::string out = db.Run(sql);
+        EXPECT_EQ(out.substr(0, 3), "ERR") << sql << " -> " << out;
+        EXPECT_NE(out.find("precision 18"), std::string::npos) << sql << " -> " << out;
+    }
+    EXPECT_EQ(db.Run("SELECT COUNT(*) FROM t"), "count(*)\\n1");
+    EXPECT_EQ(db.Run("INSERT INTO t VALUES (3, '9999999999999999')").substr(0, 8), "INSERTED");
+}
+
 }  // namespace
 }  // namespace kds::server

@@ -192,7 +192,4 @@ struct Token {
 // the same reason it is written out by hand there.
 bool LookupKeyword(std::string_view text, Keyword& out) noexcept;
 
-// The canonical spelling of a reserved word, for error messages.
-std::string_view KeywordText(Keyword kw) noexcept;
-
 }  // namespace kds::parser

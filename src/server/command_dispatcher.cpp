@@ -178,6 +178,15 @@ Status RefuseWhole(std::string_view line, std::string_view word, const std::stri
                                "transaction commits or rolls back whole (docs/spec/txn.md §9)");
 }
 
+// A refusal's position suffix: the byte `token` - a view into `line` -
+// starts at, and a missing token (`SplitFirstToken`'s empty rest has no
+// address in `line`) the line's end.
+std::string AtByte(std::string_view line, std::string_view token) {
+    const std::size_t byte =
+        token.empty() ? line.size() : static_cast<std::size_t>(token.data() - line.data());
+    return " (byte " + std::to_string(byte) + ")";
+}
+
 // A transaction id as a reply names it: `none` for a `READ ONLY`
 // transaction, which draws none (CS-Q6), and the number otherwise.
 std::string TrxIdText(std::uint64_t id) { return id == 0 ? "none" : std::to_string(id); }
@@ -1748,7 +1757,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
     if (IEquals(cmd, "BEGIN") || IEquals(cmd, "START")) {
         // `START TRANSACTION` is the SQL spelling; both reach one handler,
         // which strips the noise word.
-        return HandleBegin(rest, session);
+        return HandleBegin(line, rest, session);
     }
     if (IEquals(cmd, "COMMIT") || IEquals(cmd, "ROLLBACK") || IEquals(cmd, "ABORT")) {
         if (Status s = RefuseTxnEndTail(line, cmd, rest, session); !s.ok()) {
@@ -4814,9 +4823,10 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         if (before_drop_column_write_for_test_) before_drop_column_write_for_test_();
         DdlScope ddl = DdlScopeFor(scope);
         std::vector<catalog::CatalogRowChange> changed;
-        // By the position the RESTRICT was asked of: a RENAME COLUMN takes
-        // no relation lock, so a second resolution by name could reach
-        // another column (the door refuses a renamed one).
+        // By the position the RESTRICT was asked of, under this statement's
+        // relation `X` - which a RENAME COLUMN takes too (`alter.md` AL4a),
+        // so no rename lands between the ask and the drop; the name is
+        // passed only for the door's own guard (it refuses a renamed one).
         const Status dropped =
             catalog_.DropColumn(oid.value(), pos, stmt.old_column, ddl.trx_id, &changed);
         NoteCatalogRowChanges(ddl, changed);
@@ -12768,7 +12778,8 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
 
 // ---- Transaction control (docs/spec/txn.md sections 1, 6) ---------------------
 
-DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& session) {
+DispatchOutcome CommandDispatcher::HandleBegin(std::string_view line, std::string_view args,
+                                               Session& session) {
     if (txn_ == nullptr) {
         return {"ERR this server was built without a transaction manager", false};
     }
@@ -12801,7 +12812,8 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
         if (IEquals(word, "ISOLATION")) {
             auto [level_word, after] = SplitFirstToken(rest);
             if (!IEquals(level_word, "LEVEL")) {
-                return {"ERR expected LEVEL after ISOLATION", false};
+                return Refused(Status::InvalidArgument("expected LEVEL after ISOLATION" +
+                                                       AtByte(line, level_word)));
             }
             // **The level name is not one token** - `repeatable read` is two
             // - and its first word can be `READ`, the access clause's too,
@@ -12818,7 +12830,10 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
                 tail = after_second;
             }
             auto parsed = txn::ParseIsolationLevel(Trim(name));
-            if (!parsed.ok()) return Refused(parsed.status());
+            if (!parsed.ok()) {
+                return Refused(parsed.status().WithMessage(parsed.status().message() +
+                                                           AtByte(line, first)));
+            }
             level = parsed.value();
             std::tie(word, rest) = SplitFirstToken(tail);
             continue;
@@ -12828,7 +12843,10 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
             // single word (`strict`/`group`/`relaxed`, `d1`/`d2`/`d3`).
             auto [name, tail] = SplitFirstToken(rest);
             auto parsed = wal::ParseDurabilityClass(Trim(name));
-            if (!parsed.ok()) return Refused(parsed.status());
+            if (!parsed.ok()) {
+                return Refused(parsed.status().WithMessage(parsed.status().message() +
+                                                           AtByte(line, name)));
+            }
             durability = parsed.value();
             std::tie(word, rest) = SplitFirstToken(tail);
             continue;
@@ -12841,14 +12859,15 @@ DispatchOutcome CommandDispatcher::HandleBegin(std::string_view args, Session& s
                 read_only = false;
             } else {
                 return Refused(Status::InvalidArgument(
-                    "expected ONLY or WRITE after READ, got '" + std::string(mode) + "'"));
+                    "expected ONLY or WRITE after READ, got '" + std::string(mode) + "'" +
+                    AtByte(line, mode)));
             }
             std::tie(word, rest) = SplitFirstToken(tail);
             continue;
         }
         return Refused(Status::InvalidArgument(
             "expected ISOLATION LEVEL, DURABILITY, READ ONLY or READ WRITE after BEGIN, got '" +
-            std::string(word) + "'"));
+            std::string(word) + "'" + AtByte(line, word)));
     }
 
     if (session.role() == Role::kReadOnly) {

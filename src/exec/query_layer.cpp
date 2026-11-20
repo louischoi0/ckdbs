@@ -590,7 +590,11 @@ StatusOr<std::unique_ptr<CompiledQuery>> Runner::Compile(const Query& q, const S
         c.driving_keystone = l[i].driving_keystone && r[i].driving_keystone;
         const SetType& a = l[i].type;
         const SetType& b = r[i].type;
-        const bool same = a.type_val == b.type_val && (IsText(a.type_val) || a.len == b.len);
+        // set_expr's `SameType`: only a decimal's `len` is part of its type.
+        // A stored column carries its raw `sys.columns` width and a computed
+        // value 0, so comparing any other `len` makes one type two.
+        const bool same =
+            a.type_val == b.type_val && (!IsDecimalType(a.type_val) || a.len == b.len);
         const bool text = IsText(a.type_val) && IsText(b.type_val);
         if (!same && !text) {
             return Status::InvalidArgument(
@@ -834,8 +838,15 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
                 const bool left_side = a->column_no < right.offset;
                 const bool right_side =
                     c->column_no >= right.offset && c->column_no < right.offset + right.columns.size();
-                if (!left_side || !right_side || a->type.type_val != c->type.type_val ||
-                    a->type.len != c->type.len) {
+                // The key is the value's by its `type_val` (`AppendKey`), so
+                // a `len` matters only where it changes what the value
+                // means: a decimal's scale, and a char's width, kept apart
+                // because its padding is the width's. Any other `len` is a
+                // stored width a computed column carries as 0.
+                const std::uint32_t tv = a->type.type_val;
+                if (!left_side || !right_side || tv != c->type.type_val ||
+                    ((IsDecimalType(tv) || tv == catalog::kTypeValChar) &&
+                     a->type.len != c->type.len)) {
                     continue;
                 }
                 j.eq.emplace_back(a, c);

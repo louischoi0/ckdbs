@@ -218,8 +218,7 @@ bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row);
 // (that is `PlanRowIsValid`'s), a column written unqualified or dropped, a
 // statement that no longer compiles for any other reason. Reads the
 // catalog, writes nothing. `tables` is `Catalog::ListTables`' rows, for a
-// caller that asks of many plans; the two-argument form lists them itself.
-bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row);
+// caller that asks of many plans.
 bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
                      const std::vector<catalog::SysObjectRow>& tables);
 

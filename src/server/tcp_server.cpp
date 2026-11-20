@@ -523,7 +523,13 @@ void TcpServer::OnClientReadable(int client_fd) {
     // session at accept, so that pointer is null on every one of them.
     const bool pre_auth = conn.auth_gate != nullptr ||
                           (conn.kwp.has_value() && !conn.kwp->handshake_done());
-    if (pre_auth && conn.inbox.size() + static_cast<std::size_t>(n) > kPreAuthInboxCap) {
+    // **The budget counts the bytes where they live.** On the KWP path
+    // `DrainFrames` hands the inbox to the decoder and clears it at every
+    // read, so a half-sent `C_HELLO` or `C_AUTH` sits in the decoder's
+    // buffer, not the inbox - counted here, or the cap never fires and an
+    // anonymous peer holds up to `kMaxFrame` per connection.
+    const std::size_t held = conn.inbox.size() + conn.decoder.buffered();
+    if (pre_auth && held + static_cast<std::size_t>(n) > kPreAuthInboxCap) {
         if (logging(LogLevel::kInfo)) {
             log_->Info("client", "fd=" + std::to_string(client_fd) +
                                      " overflowed the pre-auth budget; closing");

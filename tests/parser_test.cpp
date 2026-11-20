@@ -618,5 +618,67 @@ TEST(ParserTest, ForAndUpdateAreStillColumnNames) {
     EXPECT_TRUE(Parse("CREATE TABLE q (id int64, for int64, update int64)").ok());
 }
 
+// An integer literal past 64 bits is refused at its byte, never wrapped into
+// a number the client did not write: 2^64 + k used to be taken as k by an
+// assertion's bound and by every type argument (audit H3).
+TEST(ParserTest, AnIntegerLiteralPast64BitsIsRefusedNotWrapped) {
+    struct Case {
+        const char* sql;
+        const char* byte;
+    };
+    for (const Case& c : {
+             Case{"CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 18446744073709551716",
+                  "(byte 55)"},
+             Case{"CREATE TABLE t (id int64, v varchar(18446744073709551632))", "(byte 36)"},
+             Case{"CREATE TABLE t (id int64, d decimal(18446744073709551634, 2))", "(byte 36)"},
+             Case{"CREATE TABLE t (id int64) SPARE 18446744073709551620", "(byte 32)"},
+         }) {
+        auto stmt = Parse(c.sql);
+        ASSERT_FALSE(stmt.ok()) << c.sql;
+        EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument) << c.sql;
+        EXPECT_NE(stmt.status().message().find("does not fit in 64 bits"), std::string::npos)
+            << c.sql << ": " << stmt.status().message();
+        EXPECT_NE(stmt.status().message().find(c.byte), std::string::npos)
+            << c.sql << ": " << stmt.status().message();
+    }
+}
+
+// An assertion's bound is an int64: the largest one is taken, and one past it
+// is refused by name rather than as "not a non-negative literal" (audit H3).
+TEST(ParserTest, AnAssertionBoundPastInt64IsRefusedByName) {
+    EXPECT_TRUE(
+        Parse("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 9223372036854775807").ok());
+    auto stmt = Parse("CREATE ASSERTION a ON t GROUP BY (x) CHECK COUNT(*) <= 9223372036854775808");
+    ASSERT_FALSE(stmt.ok());
+    EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument);
+    EXPECT_NE(stmt.status().message().find("exceeds the largest int64"), std::string::npos)
+        << stmt.status().message();
+    EXPECT_NE(stmt.status().message().find("(byte 55)"), std::string::npos)
+        << stmt.status().message();
+}
+
+// Every parser refusal names the offending token's byte (audit H22).
+TEST(ParserTest, TheLeadingWordAndJoinRefusalsCarryAByte) {
+    struct Case {
+        const char* sql;
+        const char* text;
+        const char* byte;
+    };
+    for (const Case& c : {
+             Case{"SELECT a.x FROM a JOIN b WHERE a.x = 1", "expected ON after JOIN",
+                  "(byte 25)"},
+             Case{"  42 SELECT", "expected SQL keyword", "(byte 2)"},
+             Case{"  FROB t", "unknown SQL keyword 'FROB'", "(byte 2)"},
+         }) {
+        auto stmt = Parse(c.sql);
+        ASSERT_FALSE(stmt.ok()) << c.sql;
+        EXPECT_EQ(stmt.status().code(), StatusCode::kInvalidArgument) << c.sql;
+        EXPECT_NE(stmt.status().message().find(c.text), std::string::npos)
+            << c.sql << ": " << stmt.status().message();
+        EXPECT_NE(stmt.status().message().find(c.byte), std::string::npos)
+            << c.sql << ": " << stmt.status().message();
+    }
+}
+
 }  // namespace
 }  // namespace kds::parser
