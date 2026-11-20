@@ -173,11 +173,6 @@ Status CheckGroupKeyKinds(const LiveAssertion& a) {
 // Every accessor takes the directory latch, which is null unarmed; see the
 // header for what it guards and the order it sits in.
 
-bool AssertionEnforcer::empty() const {
-    const LatchGuard guard(latch_.get());
-    return live_.empty();
-}
-
 bool AssertionEnforcer::Holds(std::uint64_t assertion_id) const {
     const LatchGuard guard(latch_.get());
     return live_.count(assertion_id) != 0;
@@ -205,11 +200,6 @@ Status AssertionEnforcer::CannotEnforceRefusal() {
 
 void AssertionEnforcer::PublishDeclaredLocked() noexcept {
     declared_.store(by_oid_.size() + unenforceable_.size(), std::memory_order_release);
-}
-
-std::size_t AssertionEnforcer::unenforceable() const {
-    const LatchGuard guard(latch_.get());
-    return unenforceable_.size();
 }
 
 std::optional<LiveAssertion::Counters> AssertionEnforcer::CountersOf(

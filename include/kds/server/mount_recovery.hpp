@@ -82,8 +82,6 @@ struct MountRecovery {
     // ---- What redo wrote ----
     std::uint64_t redo_applied = 0;
     std::uint64_t redo_skipped_by_lsn = 0;  // already on the page (RV5)
-    // The PW1c-2 not-dirty filter's count, checkable at a real mount.
-    std::uint64_t redo_skipped_not_dirty = 0;
     std::uint64_t pages_healed = 0;         // checksum detected, an FPI healed
     // Redo's start and, when its floor raised it (BC-R2), what analysis had
     // recomputed - `SHOW META` prints the pair only when they differ.

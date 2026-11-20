@@ -4,7 +4,7 @@ Status: **OPEN since 2026-11-20; DH-S0 done.** Written on `main` at `673f025d`
 (`v3.4.14-30-g673f025d`) on the operator's word of 2026-11-20
 (`raft-marks-2026-11-20.md` §1). The letter DH is CLA's proposal.
 **Opened on the operator's standing go-ahead of 2026-11-20
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §3)**, on worktree
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §17)**, on worktree
 `dh-page-image-volume` from `f4138860` (`v3.4.15-1-gf4138860`): every DH-Q
 item below is CLA's proposal adopted under that word, and none is the
 operator's own mark (§4.1). **Exploratory by CLA's proposal** (DH-Q0 (a)):
@@ -383,7 +383,7 @@ Binding once DH opens.
 
 **Every mark below is CLA's proposal adopted on the operator's standing
 go-ahead of 2026-11-20 (go-ahead-achieving-milestone); none is the
-operator's own per-item mark** (`raft-marks-2026-11-20.md` §3). Each is
+operator's own per-item mark** (`raft-marks-2026-11-20.md` §17). Each is
 open to the operator's own mark.
 
 | item | adopted | note |

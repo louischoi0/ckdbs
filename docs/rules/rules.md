@@ -52,6 +52,19 @@ Normative coding rules for the KDS storage engine. Rules only: design rationale 
 - Locks stay a last-resort mechanism, and the justification comment is now the mechanism that keeps the declared list honest: any lock requires a comment in the subsystem header stating what it protects and its acquisition order, and the owning spec must say the same thing. Two locks held at once need a stated order between them; the table above is that list, and `sched.md` §9-2 carries the same list for the reactor. **A stated order that nothing checks is a comment**, which is what the page latch's row still says of its own; the free map's is checked, in debug, by `HoldsLatch` (`base/latch.hpp`), which turns "a second acquisition hangs" into an abort that names the caller.
 - The tuple super-column word is manipulated only via `std::atomic<uint64_t>` operations (CAS for updates); fields within the word must never tear.
 
+## 3a. Statistics
+
+- **Statistics queue no statement** (the operator's rule, 2026-11-20; `instructions/v3.2.0/raft-marks-2026-11-20.md` §9): *"statistics must not, in any case, line up a write or a read (query execution)."* A statistic is a count, a sum, a sample or a timing the engine keeps about what ran, whose loss changes no statement's answer. Recording one, gathering one and consulting one never make a statement wait:
+  - (a) a record on a statement's path writes its own core's state and takes nothing a statement on another core can hold - no latch shared across cores or instance-wide, no page hold, no lock unit;
+  - (b) a record waits for no reader of the statistic - a view's builder, a steward, a controller's tick. A record that would wait is dropped and counted instead: the count is what may be lost, never the statement's time;
+  - (c) what a record does under anything it holds is bounded by a constant: no scan of a table, and no allocation but a stated first sight;
+  - (d) a statement that consults a statistic - a compile reading the planner's snapshot - reads a published copy and waits for no writer of it;
+  - (e) a task that gathers a statistic off the statement's path takes nothing a plain read of the same data does not take, and is paced.
+
+- **A switched-off consumer collects nothing** (the operator's rule, 2026-11-20; the same file, §10). Where a setting turns off the only consumer of a statistic, a statement's path records nothing for it: what the statement pays is the read of the switch, and nothing is built, noted or kept on its behalf. Turning the consumer on starts it from no evidence - a performance event, never a fabricated count. The rule adds no switch: a statistic a `sys` view reports is consumed by whoever reads the view.
+
+  **Both rules are binding on every statistics path added or changed from 2026-11-20. The tree does not yet meet them everywhere**: the paths that predate them and break one are listed in `docs/inflight/known-gaps.md` ("Statistics that can queue a statement"), and `instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md` is the milestone that brings them in and adds what checks the rules. Until it closes, a per-core statistics part still does what the orders that built it allowed - a record "waits for at most one copy of its own part by a reader" (DF-R2, DA-R3) - and clause (b) is the end state, not yet the tree's. Which structures count as statistics at the edges, which consumers a switch turns off, and the clauses' finer readings, are that order's open items; a mark there amends this section.
+
 ## 4. Deterministic Testability
 
 - Deterministic simulation is a first-class constraint. All of the following must go through injectable interfaces: file/disk I/O, wall-clock and monotonic time, randomness, and cross-core wakes.

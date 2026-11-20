@@ -843,7 +843,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // **A restore owed starts at the backup's start, never at the copied
     // anchor** (BR-R4, `br-s0-census.md` §2): a fuzzy copy's page 0 can carry
     // an anchor above pages copied before it was written, and recovering
-    // from there would skip records those pages need. `MarkRestoreOwed`
+    // from there would skip records those pages need. `MarkRestoreOwedOn`
     // rewrote slot 0 to the backup's start with the stop as its durable
     // point, which analysis refuses to end short of (BR-R2), so slot 0 is
     // the one value read by the log's open, recovery and the assertion

@@ -87,23 +87,11 @@
 
 namespace kds::index {
 
-// One page an insert created or restructured, as the WAL needs it
-// described (spec §12.1).
-struct IndexChange {
-    PageId page_id = kInvalidPageId;
-    // A brand-new page. There is no `INDEX_PAGE_INIT` record (`index.md`
-    // §12.1): a divide leaves a new sibling holding half the entries, so
-    // only a page image describes it, and the split logs every page it
-    // created or rewrote as one `BTREE_SPLIT`. Everything else - a node whose
-    // entries were divided, a leaf whose sibling link moved - is false.
-    bool is_new_page = false;
-};
-
 // A dividing split touches **two** pages per level it propagates through -
 // the node that overflowed and the sibling that took half of it - plus one
-// new root. `storage::kMaxStructuralChanges` is derived from the clustered
-// tree's split, which creates one page per level and moves nothing, so it is
-// the wrong bound here and is deliberately not reused.
+// new root. Counted from this tree's own split, and so a constant of its
+// own beside `storage::kMaxStructuralChanges`, which counts the clustered
+// tree's.
 inline constexpr std::size_t kMaxIndexChanges =
     2 * static_cast<std::size_t>(storage::kMaxBtreeDepth) + 1;
 
@@ -124,11 +112,12 @@ struct IndexInsertResult {
     // then name that entry and nothing was written.
     bool already_present = false;
 
-    // Pages the append **restructured**, which no record type describes -
-    // so a caller logs a full page image of each. Empty for the
-    // overwhelmingly common insert that just filled a slot, which the entry
-    // bytes describe completely.
-    std::array<IndexChange, kMaxIndexChanges> structural{};
+    // Pages the append **restructured** - created or rewrote - by id. No
+    // record type describes one and there is no `INDEX_PAGE_INIT`
+    // (`index.md` §12.1), so the split logs an image of each as one
+    // `BTREE_SPLIT`. Empty for the overwhelmingly common insert that just
+    // filled a slot, which the entry bytes describe completely.
+    std::array<PageId, kMaxIndexChanges> structural{};
     std::uint8_t n_structural = 0;
 
     // The pins granted for the parents below past the first; before
@@ -142,16 +131,16 @@ struct IndexInsertResult {
     // A divide that grew a root: its anchor's `UnlatchedPin`.
     storage::UnlatchedPin anchor;
 
-    std::span<const IndexChange> changes() const {
-        return std::span<const IndexChange>(structural.data(), n_structural);
+    std::span<const PageId> changes() const {
+        return std::span<const PageId>(structural.data(), n_structural);
     }
     bool restructured() const { return n_structural > 0; }
-    void Record(PageId id, bool is_new_page) {
+    void Record(PageId id) {
         // Bounded by kMaxIndexChanges above, which is a derivation and not a
         // hope. Dropping a change silently would be a page mutated with no
         // record describing it - the hole the WAL exists to close - so there
         // is deliberately no "if full, skip" arm.
-        structural[n_structural++] = IndexChange{id, is_new_page};
+        structural[n_structural++] = id;
     }
 };
 
@@ -205,6 +194,30 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
 // makes a duplicated key readable across a leaf boundary.
 StatusOr<PageId> IndexSeekLeaf(storage::PageStore& store, PageId root, const IndexLayout& layout,
                                std::span<const std::byte> sort_key);
+
+// A leaf, fetched under `access` and checked - its type and its widths
+// against `layout` - as every fetch of the walk below is: the page an
+// ordered index run (CV) reads one at a time, holding it while it reads.
+StatusOr<storage::PageRef> IndexFetchLeaf(storage::PageStore& store, PageId leaf,
+                                          const IndexLayout& layout, storage::PageAccess access);
+
+// The leaf that holds the greatest entries at or below `sort_key`, fetched
+// for read and **held** (CV O3, the reverse ordered walk's step). A read
+// descent lands at or left of `sort_key`'s leaf (`IndexSeekLeaf`), so
+// the leaf is asked, while it is held, whether its right sibling's first
+// entry is above `sort_key` - a leaf covers `[its separator, the right
+// sibling's first entry)`, which holds while no entry is removed (above) -
+// and the walk moves right until it is. Holding a leaf and asking its right
+// neighbour is a forward walk's order. Every entry at or below `sort_key`
+// the tree held before the call is in the leaf returned or to its left.
+StatusOr<storage::PageRef> IndexFetchLeafAtOrBelow(storage::PageStore& store, PageId root,
+                                                   const IndexLayout& layout,
+                                                   std::span<const std::byte> sort_key);
+
+// `key` made, in place, the greatest sort key of its width below it - the
+// reverse walk's next bound below a leaf's first entry. `key` must not be
+// all zeros, which no caller's is: it is above the walk's low bound.
+void PrecedingSortKey(std::span<std::byte> key);
 
 // Calls `fn` once per entry of every leaf from `first_leaf` rightwards -
 // which is key order. Signature and contract match heap::ChainVisit and

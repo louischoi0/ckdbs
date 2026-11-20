@@ -75,9 +75,9 @@
 //
 // Nothing in this file or in index_tree.hpp interprets a key byte. Ordering
 // is `memcmp` over the whole entry, and what those bytes mean is
-// `exec::EncodeIndexKey`'s business. That is what keeps the tree free of
-// the schema, of a per-type dispatch, and of any chance of disagreeing with
-// `CompareValues`.
+// `exec::EncodeIndexKeyColumn`'s business. That is what keeps the tree free
+// of the schema, of a per-type dispatch, and of any chance of disagreeing
+// with `CompareValues`.
 //
 // ---- Checked redundancy -------------------------------------------------
 //
@@ -275,8 +275,6 @@ public:
                                                 std::uint64_t owner_oid);
 
     std::uint16_t entry_count() const;
-    std::uint16_t key_width() const;
-    std::uint16_t entry_width() const;
     PageId right_sibling() const;
     void set_right_sibling(PageId page_id);
 
@@ -332,10 +330,8 @@ public:
                                                     std::uint64_t owner_oid);
 
     std::uint16_t entry_count() const;
-    std::uint16_t key_width() const;
     std::uint16_t level() const;
     PageId leftmost_child() const;
-    void set_leftmost_child(PageId page_id);
 
     StatusOr<std::span<const std::byte>> Separator(std::uint16_t idx) const;
     StatusOr<PageId> Child(std::uint16_t idx) const;
