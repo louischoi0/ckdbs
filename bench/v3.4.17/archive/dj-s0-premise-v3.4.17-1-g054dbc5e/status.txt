@@ -1,0 +1,28 @@
+08:20:10 memory: opening to 1000 idle sessions
+08:20:41 memory: opening to 10000 idle sessions
+08:21:17 beside rep 0 idle0
+08:21:21 beside rep 0 idle1000
+08:21:25 beside rep 0 idle10000
+08:21:30 beside rep 0 idle0_again
+08:21:34 beside rep 1 idle0
+08:21:38 beside rep 1 idle1000
+08:21:45 beside rep 1 idle10000
+08:21:49 beside rep 1 idle0_again
+08:21:56 churn_plain rep 0 S
+08:21:59 churn_plain rep 0 C
+08:22:03 churn_plain rep 0 S2
+08:22:06 churn_plain rep 1 S
+08:22:09 churn_plain rep 1 C
+08:22:12 churn_plain rep 1 S2
+08:22:15 churn_plain loop alone
+08:22:25 churn_tls rep 0 S
+08:22:28 churn_tls rep 0 C
+08:22:31 churn_tls rep 0 S2
+08:22:34 churn_tls rep 1 S
+08:22:37 churn_tls rep 1 C
+08:22:41 churn_tls rep 1 S2
+08:22:44 churn_tls loop alone
+08:22:49 begin: 1500 sessions hold a transaction, cores = 1
+08:22:51 begin: 1500 sessions loop BEGIN, INSERT, COMMIT
+08:22:57 begin: 1900 sessions hold a transaction, cores = 2
+08:22:58 driver finished

@@ -1,6 +1,16 @@
 # Work order DJ - connections, sessions and cursors: a connection cap and an idle-session timeout an operator sets, a session a pool can hand back clean, a wait in place of a refusal, and a reply that is bounded
 
-Status: **WRITTEN 2026-11-20, not opened.** Written in the main checkout on
+Status: **OPENED 2026-11-20 on the operator's standing go-ahead**
+(`/go-ahead-achieving-milestone DJ`, `raft-marks-2026-11-20.md` §22), on
+worktree `dj-connections-sessions-cursors` from `054dbc5e`
+(`v3.4.17-1-g054dbc5e`). **DJ-S0 and DJ-S1 are done** (§7): the census and
+the premise (`bench/v3.4.17/results-dj-s0-premise-v3.4.17-1-g054dbc5e.md`),
+and the two settings at `69d754ae`. **Every DJ-Q item is adopted (a) on that
+standing word, DJ-Q2 and DJ-Q3 as revised at DJ-S1, and none is the
+operator's own mark**; DJ-Q13..Q16 were raised at DJ-S1. Not landed: no
+push, merge, tag or version.
+
+Written in the main checkout on
 `main` at `4d72be11` (`v3.4.15-3-g4d72be11`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §5). The letter DJ is CLA's proposal.
 **Two things are the operator's word and are built whatever DJ-S0 finds**:
@@ -255,7 +265,11 @@ Binding once DJ opens.
 
 ## 4. Items for the operator (DJ-Q), CLA's proposals
 
-(a) is CLA's proposal in each. None is marked.
+(a) is CLA's proposal in each. **Each is adopted (a) on the operator's
+standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone)**
+(`raft-marks-2026-11-20.md` §22) - DJ-Q2 and DJ-Q3 as revised at DJ-S1
+(§7) - and none is the operator's own mark: the options not taken stay
+open to it.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -272,6 +286,10 @@ Binding once DJ opens.
 | DJ-Q10 | P5a's bound. | **the transaction lifetime ceiling's value, applied to a parked walk whether or not a transaction is open** - no new key (DJ-R5) | (b) a key of its own |
 | DJ-Q11 `[quiet-wrong]` | P5b. | **a byte bound on a portal's buffer, refused by name past it; the resumable read written up as a concept note, not built in DJ**, because it gives up "`SnapshotTooOld` is never raised" | (b) the resumable read built, a passed snapshot refused by name; (c) nothing |
 | DJ-Q12 | Whether DJ-S0 prices the TLS handshake. | **yes, and reports it; moving it off the reactor is not in DJ** | (b) in DJ |
+| DJ-Q13 | The reserve where no gate stamps a role. Raised at DJ-S1: with `auth = off` every session is `admin` (`session.hpp`), so DJ-Q3's "a session whose role is `admin`" names every session. | **nothing is reserved there: the ceiling is `max_connections` itself, the default reserve is silently none, and naming `reserved_admin_connections` with `auth = off` - or with `max_connections = 0` - is refused at boot**, because a key that reserves nothing would enforce something other than what was written | (b) the reserve admits everyone, so the ceiling is the cap plus the reserve; (c) `max_connections` with `auth = off` refused at boot |
+| DJ-Q14 | A connection that never finishes its handshake, under the timeout. Raised at DJ-S1: it holds no seat (DJ-Q2) and nothing else ends it while its peer is alive (`protocol.md` §3: no pre-auth deadline). | **idle from its accept: the sweep closes it at the timeout, told why as far as its transport lets it be** | (b) the timeout is an authenticated session's alone |
+| DJ-Q15 | The timeout on the debug text port. Raised at DJ-S1. | **it applies**: the sweep is the listener's on both protocols, as the lifetime ceiling's is, and an idle debug session is told by an `ERR` line; **the cap does not** (DJ-Q2) | (b) the default port alone |
+| DJ-Q16 | What an operator reads the count from. Raised at DJ-S1: a cap nobody can see the distance to is set by guessing. | **a `connections` section in `sys.meta`: the two limits as they apply, the seats held, the sessions refused, the default port's idle closes** - three words written where a session is seated, refused or closed, none on a statement's path (DJ-R6) | (b) the server log alone; (c) a `sys.sessions` view (excluded by the operator, `sys-views.md` §8) |
 
 ## 5. Stages
 
@@ -318,3 +336,234 @@ read: how many `TcpServer`s an instance has above one core and what
 counts their connections together (§1.1), and what the handshake costs
 its core (§1.6). Open with the operator: DJ-Q0..Q12, and whether DJ
 opens.
+
+### DJ-S0 - the census (2026-11-20)
+
+On worktree `dj-connections-sessions-cursors`, read at `054dbc5e`
+(`v3.4.17-1-g054dbc5e`), the commit DJ opened from. `[source-read]`, each
+with its `path:line` at that commit. No engine code.
+
+**Listeners, and what each accepts into.**
+
+- **The default port: one `TcpServer` a core.** Core 0's is
+  `Expeditor::ServeRuntime::listener` (`src/server/expeditor.cpp:1555`,
+  bound at `:1743`); each peer's is `CoreRuntime::listener_`
+  (`include/kds/server/core_runtime.hpp:542`), bound with `SO_REUSEPORT` by
+  `ListenAndAttach` (`src/server/core_runtime.cpp:505`) or socketless
+  (`TcpServer::Hosting()`) under D19's fallback (`:520`). Every one is
+  configured from one `ClientSetup` (`expeditor.cpp:1764`), and each holds
+  its own `clients_` map (`include/kds/server/tcp_server.hpp:501`).
+- **The debug text port: one `TcpServer` on core 0** (`expeditor.cpp:1803`),
+  loopback, the text protocol, the default port's gate where there is one.
+- **The KWP load port: a `KwpLoadServer` on core 0** (`expeditor.cpp:1821`),
+  a class of its own with its own accept loop and connection map
+  (`src/server/kwp_load_server.cpp:225`) and no auth stage.
+
+**What counts connections above one core: nothing, for the instance.** Each
+listener counts its own map (`open_connections()`, `tcp_server.hpp:267`).
+Above one core each reactor also keeps `sched::CoreLoad::Of(core).sessions`,
+moved by `CountSession` at adopt, close and move
+(`src/server/tcp_server.cpp:433`, `:430`, `:1141`, `:774`, `:786`) and
+shared by both listeners of core 0; at one core it is not written (`:437`).
+No word sums the cores, and a connection in transit between two cores is in
+neither's count.
+
+**What moves with a session that changes core** (`tcp_server.cpp:758-800`):
+the map node whole - the socket's unread and unsent bytes, the TLS channel,
+the frame decoder, the `KwpSession` (statements, portals, the skip-to-sync
+posture) and the `Session`. Nothing per core travels: at a head the session
+holds no transaction, lock, borrow, view or lease, and the clock, the cancel
+registry and its entry are the instance's.
+
+**Session state, where it is set and what clears it.**
+
+| item | set by | cleared by |
+|---|---|---|
+| isolation level (`include/kds/server/session.hpp:162`) | the server's `isolation` at accept (`tcp_server.cpp:358`), `SET ISOLATION LEVEL` (`src/server/command_dispatcher.cpp:13144`) | disconnect |
+| default namespace (`session.hpp:172`) | `USE` (`command_dispatcher.cpp:13126`) | disconnect |
+| durability rung (`session.hpp:191`) | `SET DURABILITY` (`command_dispatcher.cpp:13174`) | disconnect |
+| priority level, and its seat in the batch count (`session.hpp:444`) | `SET PRIORITY` (`command_dispatcher.cpp:13203`) | disconnect |
+| role (`session.hpp:253`) | the auth gate (`src/server/kwp_session.cpp:519`, `tcp_server.cpp:899`) | never: it is who the session is |
+| named statements, portals, expired-portal names (`include/kds/server/kwp_session.hpp:373-387`) | `C_PARSE`, `C_BIND`, the portal sweep | `C_CLOSE`, a failed statement (its portal), the portal timeout, disconnect |
+| the transaction, its durability rung, the failed and expired states | `BEGIN` | `COMMIT`/`ROLLBACK` (`Session::Finish`), the lifetime sweep (`Expire`) |
+| acknowledged-commit bound (`session.hpp:214`) | a commit | a snapshot that covers it; it must outlive any reset (BA-R1c) |
+| wait statistics and the published wait state (`session.hpp:128`; `src/sched/wait_state.cpp:33`) | the session's first statement | disconnect; statistics, not settings |
+| placement words: last move, counted window (`session.hpp:438`, `:449`) | the placer, the load window | not a client's |
+| cancel flag (`session.hpp:242`) | a `C_CANCEL`, the connection's own close | taken by a walk or by the next frame |
+
+`SET CABIN_OPTIMIZER`, `SET JOIN_ORDER` and `SET ASH` set the instance's
+state, not a session's. Nothing returns the first four rows to their
+defaults but a disconnect: `RESET` is not routed
+(`command_dispatcher.cpp:1763-1773`).
+
+**`Begin`'s refusal and the placer.** `TransactionManager::Begin` refuses
+`ResourceExhausted` before it issues an id (`src/txn/manager.cpp:134-139`).
+It is reached by `BEGIN` (`command_dispatcher.cpp:12863`), by an autocommit
+write's scope (`:13265`) and by a declaration's lock-holder (`:5151`); a
+`BEGIN ... READ ONLY` takes no slot. The placer is asked before the
+statement is submitted (`tcp_server.cpp:685-696`) and reads three words a
+core - busy fraction, active sessions, the window's end
+(`src/server/load_placer.cpp:50-58`) - and nothing of a core's slots: a
+session whose core is full is not moved for it, and by the time `Begin`
+refuses the statement is past its head.
+
+**A portal's buffer and a parked walk's holds.** A portal's sink keeps
+every sealed batch in a vector with no bound (`kwp_session.hpp:180`); a
+capped portal never streams (`:176`), so `C_EXECUTE {max_rows}` of any
+statement holds its whole result until the portal goes. A walk parked on a
+client that does not read waits on the connection's `resume_when`
+(`src/exec/step_vm.cpp:2618-2621`, `tcp_server.cpp:723-729`) under
+`net.send_backpressure`, holding its view, its borrow and its core's
+reader-lease slot; the predicate ends on a close, an emptied outbox or a
+cancel, and on no time.
+
+**The handshake.** TLS is fed on the reactor that reads the socket
+(`tcp_server.cpp:549`); the pre-auth inbox is capped at 4 KiB (`:520`) and
+no deadline ends a connection that never finishes its handshake (`:519`).
+
+### DJ-S0 - the measurement, and the items restated (2026-11-20)
+
+`bench/v3.4.17/results-dj-s0-premise-v3.4.17-1-g054dbc5e.md`, measured at
+`v3.4.17-1-g054dbc5e` with `tools/dj_s0_premise.py`, release, one binary,
+its reactor pinned. The host was shared with another session's builds and
+suite: the first run's timed cells were discarded for it, and the timed
+cells reported are from runs that held each arm for a quiet host (held
+2,652 s and 336 s, outside the stage's budget; about 4 minutes of arms).
+`[measured]`:
+
+- **An idle session is 2.5 to 3.0 KiB of resident memory, 4.2 to 4.7 KiB
+  once it has run a statement, and 59.4 KiB under TLS.** Closing 10,000
+  returned nothing to the host.
+- **10,000 idle sessions cost the working session nothing readable**: its
+  point read's p50 (71.1 to 71.5 us), p99 (86.6 to 91.4 us) and server CPU
+  (30.2 to 30.4 us) sit inside the spread of the two arms with none. The
+  two sweeps that walk every connection do not show in an idle server's
+  CPU at 1,000 or at 10,000.
+- **A connect, one point read and close costs its core about 68 us plain
+  and about 750 us under TLS.** About 6,500 plain ones a second move the
+  standing session's p50 from 71.5 to 93.9 us and its p99 from 88.4 to
+  146.5 us; about 545 TLS ones a second move its p50 from 127.5 to
+  158.8 us and its p99 from 162.2 to 614.9 us. The rates are one Python
+  client's.
+- **`Begin` refuses the 1,025th open transaction of a core,
+  `retryable = 0`, and an autocommit write with it**; reads and
+  `BEGIN READ ONLY` are answered. 1,500 sessions looping `BEGIN`, one
+  `INSERT`, `COMMIT` on one core had 2.64 % of their `BEGIN`s refused. At
+  `cores = 2` 1,900 held transactions met no refusal; a skew that fills
+  one core beside one with room was not produced.
+- **`C_EXECUTE {max_rows = 100}` of a 100,000-row result answers its first
+  hundred rows after 19.8 ms where `LIMIT 100` answers in 92 us, and the
+  suspended portal holds 4.4 MiB.**
+
+Not measured: any arm under SCRAM; a handshake burst from more than one
+client process; `cores > 1` but for one `begin` arm; a parked walk's hold
+(read, in the census above, not timed).
+
+**Each DJ-Q against what was read and measured**, all adopted on the
+operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone,
+`raft-marks-2026-11-20.md` §22), none the operator's own mark:
+
+- **DJ-Q0 (a)** stands. P4 and P5 are taken up on the numbers above: the
+  refusal is real and reaches writers that opened no transaction (P4), and
+  a capped portal's price is the whole result (P5b); P5a rests on the
+  census, not a number.
+- **DJ-Q1 (a)** stands: nothing measured argues for a default other than
+  no limit. The figures to size a cap by are 3 to 5 KiB a plain session and
+  59 KiB a TLS one.
+- **DJ-Q2 (a) `[quiet-wrong]`, revised twice at DJ-S1.** The proposal
+  counted "authenticated sessions ... and connections still in their
+  handshake". Read against the tree: a connection is a cancel or a session
+  only once its first frame is read, so counting from the accept would
+  refuse a `C_CANCEL` at a full server (DJ-R2); and - the step's review -
+  counting during the exchange lets a peer with no credentials hold every
+  seat, the reserve's too, by saying hello and never authenticating.
+  **Adopted as revised: a session is counted from the end of its
+  handshake to its close.** A connection that has not finished its
+  handshake is neither counted nor capped (`known-gaps.md`).
+- **DJ-Q3 (a)** stands in its number (3, `[provisional]`) and is revised
+  in its mechanism with DJ-Q2: the seat is taken once the role is known,
+  so each session is refused at its own ceiling, and no seat is taken and
+  given back.
+- **DJ-Q4 (a), DJ-Q5 (a), DJ-Q6 (a), DJ-Q7 (a)** stand. DJ-Q5 is
+  sharpened by the build: what resets the idle clock is a statement run,
+  so a `C_SYNC`, a `C_PARSE` and a `C_CLOSE` reset nothing either; and
+  "a held portal" is one that still owes rows or a run - a spent portal is
+  not held, or a client that never closes its unnamed portal would be idle
+  only once the portal timeout had run.
+- **DJ-Q8 (a)** stands.
+- **DJ-Q9 (a)** stands as a park alone: the placer reads no slot count and
+  the statement is past its head when `Begin` refuses, so "first tries
+  another core" is not built.
+- **DJ-Q10 (a), DJ-Q11 (a) `[quiet-wrong]`** stand. DJ-Q11's premise was
+  re-read: every view is registered with the horizon and `SnapshotTooOld`
+  is never raised (`CLAUDE.md`, the Transactions row; `txn.md` §4.1), so a
+  read resumed under a snapshot the server does not hold would have to be
+  refused or answered from another snapshot; the byte bound gives nothing
+  up.
+- **DJ-Q12 (a)** stands, and is done: priced above.
+- **DJ-Q13..Q16 (a)**, raised at DJ-S1 and written into §4 before they
+  were adopted.
+
+### DJ-S1 - the two settings (2026-11-20)
+
+On `dj-connections-sessions-cursors` at `69d754ae`. Built under DJ-Q1..Q7
+and DJ-Q13..Q16:
+
+- **`max_connections`** (`0`: no limit) and
+  **`reserved_admin_connections`** (3, `[provisional]`; in force beside a
+  cap and `auth = scram`, refused at boot where named without either).
+  One `ConnectionLimits` for the instance
+  (`include/kds/server/connection_limits.hpp`), an `Expeditor` member
+  handed to every core's listener in its `ClientSetup`. A `KwpSession`
+  holds a `ConnectionSeat`, taken where its handshake ends
+  (`KwpSession::TakeSeat`) and given back by its destructor - so by every
+  path that destroys a connection, a move between cores carrying it
+  untouched in the map node. Refused: `RESOURCE_EXHAUSTED` /
+  `kConnectionLimit` (6), fatal.
+- **`idle_session_timeout_s`** (`0`: off; 1 to 59 refused).
+  `TcpServer::CloseIdleSessions`, a third sweep, registered only where the
+  key is set, every eighth of the timeout, on both protocols. A statement's
+  path carries `Connection::worked`, one byte written in `SubmitStatement`
+  while the key is set. Told: `RESOURCE_EXHAUSTED` / `kIdleSessionTimeout`
+  (7), fatal, or an `ERR` line.
+- **`sys.meta`'s `connections` section**: the two limits as they apply,
+  `connection_sessions`, `connection_refusals`, `idle_session_closes`.
+
+Documents: `protocol.md` §3, §10, §11; `sys-views.md` §7;
+`client-manual.md`; `manual/server/server.md`; `kds.conf.sample`;
+`known-gaps.md` ("Connections and sessions (DJ)").
+
+**Tests** (`tests/connection_limits_test.cpp`, 15 cells; two in
+`expeditor_test.cpp`; three in `config_file_test.cpp`; the detail numbers
+in `kwp_error_test.cpp`), each of §5's owed cells: a session past the cap
+refused by name and one below it served, at one core and at two; a
+`C_CANCEL` admitted at a full server and its target cancelled; an `admin`
+admitted inside the reserve and a `readwrite` refused there; the count
+back at zero after a hangup, a hangup mid-exchange, a refused exchange, a
+`C_TERMINATE`, a detached listener and a session moved between cores; an
+idle session closed at the timeout and told why; a session with an open
+transaction, a held portal or a statement in flight not closed; a `C_PING`
+not resetting the clock and a statement resetting it; both keys at `0`
+closing and refusing nothing. Not covered: `known-gaps.md` lists it.
+
+**Review** (`critics-developer`). Found and fixed by it: the sweep cleared
+a session's `worked` mark while its statement was still running, so a long
+statement's session could be closed up to a tick short of the timeout
+after the statement ended; and a text-port cell read with no timeout and
+could hang the suite. Applied from it: **the seat moved from `C_HELLO` to
+the end of the handshake** (its G1: hellos with no credentials could fill
+the reserve; the move also removes its G2, a session refused for another's
+unfinished exchange); `connection_limits_` declared above `handoff_`, so a
+connection destroyed in transit gives its seat back to a live object; a
+cell that pins the spent-portal rule inside the portal's 60 s; one helper
+for a fatal refusal (`wire::FatalErrorFromStatus`); two dead accessors
+removed; a derivation on the keys' 1,000,000 ceiling. **Rejected**: a
+shared helper for "encode an error frame and append it" between the sweep
+and `DrainFrames`' malformed-frame path - four lines, and the second site
+is another step's code with another flow after it. Stated, not changed:
+the clock-jump cells rest on one tick running between two jumps, and
+"both cores' listeners were asked" is the kernel's spread over eight
+attempts.
+
+Suite: 0 failed of 4,969 (2 disabled, 2 skipped) at `69d754ae`. Overhead
+not measured; measured at the milestone's close.

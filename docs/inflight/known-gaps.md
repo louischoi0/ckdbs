@@ -3087,6 +3087,47 @@ What already meets the rule: `RefusalStats`, `TxnStats`, `IndexStats`'
 counts, the wait statistics, the contention instrument and the per-core
 load slots - single-writer words a core, read with no latch.
 
+## Connections and sessions (DJ)
+
+Verified on `dj-connections-sessions-cursors` at `69d754ae` (DJ-S1). Owned by
+`docs/spec/protocol.md` §10; the order is
+`instructions/v3.2.0/workorder-dj-connections-sessions-cursors.md`.
+
+- **`max_connections` bounds sessions, not sockets.** A connection that has
+  not finished its handshake holds no seat - so that a `C_CANCEL` is never
+  refused (DJ-R2) and a peer with no credentials cannot fill the cap - and
+  nothing counts or caps such connections. Each holds a descriptor, its
+  accept's state and at most the 4 KiB pre-auth inbox, and is ended only by
+  keepalive once its peer is gone or by `idle_session_timeout_s` where that
+  is set; with the key at `0` a live peer that never says hello stays. A
+  descriptor limit is the host's, not the engine's.
+- **A refused session has paid for its handshake**, TLS and SCRAM included:
+  the refusal is a KWP frame, given where the handshake ends. DJ-S0 priced a
+  plain connect, statement and close at about 68 us of its core.
+- **The idle close tells best effort.** The refusal is written and the
+  socket closed in one pass: a client that writes before it next reads may
+  be answered by a reset, and a connection inside its TLS handshake, or one
+  whose send buffer is full, is closed with no frame. A client is owed the
+  close, not the reason.
+- **The idle timeout is loose by a quarter**: the sweep ticks every eighth
+  of it, so a connection is closed between the timeout and one and a quarter
+  times it after its last statement ended.
+- **A debug text session is closed by the timeout and counted nowhere**:
+  `idle_session_closes` is the default port's.
+- **The three keys are boot keys** (DJ-Q7 (a)): raising the cap on a full
+  server is a restart, which the reserve exists to make an `admin` able to
+  ask for.
+- **No per-role, per-user or per-address limit** stands beside the reserve.
+- **What `connection_limits_test.cpp` and the two `expeditor_test.cpp`
+  cells do not cover**: a seat given back by keepalive's reap (the read
+  error path a hangup takes, which is covered); D19's fallback listener; a
+  session under TLS or real SCRAM (a gate that admits on one line stands in);
+  more than two cores, where "both listeners were asked" is the kernel's
+  spread over eight attempts and not a guarantee; and the clock-jump cells
+  rest on one tick running between two jumps, 100 ms against a 10 ms idle
+  block - a loaded host can fail one, not hang it. No mutation named in a
+  cell's comment was run.
+
 ## Assertion admission
 
 - **A departure that raises a SUM is never admitted** `[quiet-wrong]` (a
