@@ -1,0 +1,28 @@
+03:47:39 q1age=0 s4hb=0 load=5.17 cc1=0 
+03:48:17 q1age=0 s4hb=0 load=6.14 cc1=8 
+03:48:39 q1age=0 s4hb=0 load=6.79 cc1=7 
+03:49:17 q1age=0 s4hb=0 load=7.88 cc1=8 
+03:49:39 q1age=0 s4hb=0 load=7.91 cc1=8 
+03:50:17 q1age=0 s4hb=0 load=8.50 cc1=6 
+03:50:39 q1age=0 s4hb=0 load=8.55 cc1=5 
+03:51:17 q1age=0 s4hb=0 load=4.60 cc1=0 
+03:51:39 q1age=0 s4hb=0 load=4.20 cc1=8 
+03:52:17 q1age=0 s4hb=0 load=5.54 cc1=8 
+03:52:39 q1age=0 s4hb=0 load=6.38 cc1=6 
+03:53:17 q1age=0 s4hb=0 load=7.60 cc1=6 
+03:53:39 q1age=0 s4hb=0 load=7.79 cc1=8 
+03:54:17 q1age=0 s4hb=0 load=8.27 cc1=8 
+03:54:39 q1age=0 s4hb=0 load=8.35 cc1=7 
+03:55:17 q1age=0 s4hb=0 load=8.33 cc1=8 
+03:55:39 q1age=0 s4hb=0 load=8.31 cc1=7 
+03:56:17 q1age=0 s4hb=0 load=4.54 cc1=0 
+03:56:39 q1age=0 s4hb=0 load=3.77 cc1=0 
+03:57:17 q1age=0 s4hb=0 load=2.75 cc1=0 
+03:57:40 q1age=1 s4hb=0 load=2.73 cc1=0 run 1/5 done load=2.70
+03:58:17 q1age=0 s4hb=0 load=2.32 cc1=0 run 4/5 done load=2.43
+03:58:40 q1age=21 s4hb=0 load=1.87 cc1=1 ALL DONE
+03:59:17 q1age=58 s4hb=0 load=2.90 cc1=0 ALL DONE
+03:59:40 q1age=81 s4hb=1 load=2.16 cc1=0 ALL DONE
+04:00:17 q1age=118 s4hb=0 load=1.73 cc1=0 ALL DONE
+04:00:40 q1age=141 s4hb=2 load=1.53 cc1=0 ALL DONE
+04:01:17 q1age=178 s4hb=1 load=1.60 cc1=0 ALL DONE

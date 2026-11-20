@@ -391,7 +391,8 @@ direction wrong is the difference between a lost row and a wasted descent.
 - `kIndexRange` — equalities covering a prefix, plus an inclusive range on
   the next key column; or a range on the first.
 
-> **IX8a — an index step emits its rows in tuple key order.**
+> **IX8a — an index step emits its rows in tuple key order** - every index
+> step but one an elided `ORDER BY` rests on (IX8c).
 
 The walk collects tuple keys in *index key* order; a scan of the same relation emits
 them in tuple key order. Without a sort between the two phases, creating an index
@@ -403,6 +404,52 @@ test compares byte for byte precisely so this cannot be missed.
 It costs one sort of the matched set against one descent per element of it,
 and it buys locality as well: on a btree relation tuple key order *is* leaf order,
 so the descents walk the tree forwards instead of jumping.
+
+> **IX8c — an index step an `ORDER BY` rests on emits in entry order (CV
+> O1).** Where the compiler drops a statement's sort onto the driving step's
+> index (IX9's last rule), the step walks its entries in entry order - the
+> whole key, then the tuple key (IX4b) - a leaf at a time: the leaf's
+> matching entries are collected under its hold, the leaf released, and
+> each entry resolved in that order, so a LIMIT stops the walk at the last
+> row it lets out. After a leaf's entries are resolved, the next leaf is
+> sought again from the last entry the leaf held, never reached by pointer:
+> no divide moves an entry left and no maintenance removes one, so a divide
+> on another core between two leaves neither skips an entry nor repeats
+> one. Within one pass, a leaf that adds nothing - its entries past what
+> was read, or all filtered by the covering filter - is followed by its
+> right sibling, as any index walk follows it. It yields at a leaf boundary
+> every `pages_per_slice` leaves while it is the statement's outermost
+> walk, holding no page.
+
+**Descending (CV O3)**, the same entries from the high end down, ties by
+descending tuple key (CV-Q4 (a), `parser-v2.md` I12). An index leaf links
+forward only (CV-Q1 (a)), so a step left is a descent: once a leaf is read,
+the next holds the greatest entries below its first, sought for that entry
+less one - the greatest byte string below it - and the leaf found is asked,
+under its hold, whether its right sibling's first entry is above that key,
+moving right while it is not (`index::IndexFetchLeafAtOrBelow`). A leaf's
+first entry never changes - a divide keeps the lower half and no entry is
+removed - but the leftmost's, which only gains entries below it, each newer
+than the walk's view; so each step is a seek by key. The walk ends at the
+low bound, or when the descent returns the leaf it just read: the leftmost.
+**Not priced**: the join planner prices an elided chain at the rows its
+LIMIT lets out, and adds no descent per leaf for either reverse walk.
+
+Two checks at each entry are a correctness statement `[quiet-wrong]`
+(CV-R2):
+
+- **The key check**: a row is emitted only from the entry whose key equals
+  its visible version's, encoded again from the decoded row. Maintenance is
+  append-only (IX1), so a row whose order column moved has an entry at
+  every value it held; only the one the reader's view sees is in its place.
+- **The seen set**: each tuple key is emitted at most once, for the entries
+  a covered column's move leaves side by side under one key.
+
+**The decline keeps the order.** Where the step must decline -
+`indexes = off`, an index dropped or redefined under the chain - a walk
+would emit tuple key order. So the walk collects each matching row's
+encoded key and tuple key, sorts them into the index's order and resolves
+the rows in it, holding every match as IX8a's collection does.
 
 > **IX8b — a value list on a prefix column is served by one walk per value
 > into one seen set (CU-S2).**
@@ -561,6 +608,25 @@ Two rules that keep every existing proof standing:
   scan or a statement-local build. Where a range belongs against those arms
   is undecided, and the two spellings rank apart until it is decided
   (`TupleKeyRangeOf`, `src/exec/step_compiler.cpp`).
+
+- **An `ORDER BY` an index holds moves the driving step to that index**
+  (CV-Q3 (a) as revised, CV-S2). After the ladder has chosen, on the
+  driving step alone, under a LIMIT (CV-Q2 (a)) and where the plan's pin
+  admits the index class and names no other index: among the indexes whose
+  key columns are exactly the equality prefix the ladder's own index choice
+  used, in any order, followed by the `ORDER BY` keys - one direction, a
+  last key on the tuple key allowed - the lowest `index_oid` is taken and
+  the sort dropped (IX8c), walked forward for an ascending order and from
+  the high end down for a descending one. It never displaces a lookup, a key set, a
+  correlated probe or a longer prefix, and it reads no statistic. Over a
+  bare walk the prefix is empty, and the index is taken only where the step
+  carries no conjunct at all. **A string order key keeps its sort**
+  (CV-Q7 (a)): IX6 truncates it, and values sharing the prefix sit in tuple
+  key order. A key the prefix also binds by equality keeps the sort too.
+  Because the keys after the prefix are exactly the `ORDER BY`'s, ties come
+  out by ascending tuple key, the sort's tie order over IX8a's emission -
+  and by descending tuple key under a descending order (`parser-v2.md`
+  I12).
 
 The compiler asks the relation's cached index list (`TableAccess::IndexOn`,
 §12), which answers for an index's **leading** key column only — exactly the

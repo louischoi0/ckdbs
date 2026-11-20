@@ -167,6 +167,11 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     if (step.range.has_value()) {
         os << " range=[" << step.range->low << ", " << step.range->high << ']';
     }
+    // The order an elided `ORDER BY` rests on (CV): visible before
+    // execution, as the sort it replaced was.
+    if (step.emit_order == EmitOrder::kTupleKeyBackward) os << " order=tuple_key_desc";
+    if (step.emit_order == EmitOrder::kIndexKeyForward) os << " order=index_asc";
+    if (step.emit_order == EmitOrder::kIndexKeyBackward) os << " order=index_desc";
     if (step.cabin.has_value()) {
         os << " cabin=" << step.cabin->cabin_id;
         if (step.cabin->f != nullptr) {

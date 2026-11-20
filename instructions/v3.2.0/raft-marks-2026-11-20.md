@@ -51,3 +51,11 @@ took under them.
 | **Does not settle** | DJ-Q0..Q12 - among them the two keys' names and defaults, what the cap counts (a `C_CANCEL` connection never, DJ-R2 `[quiet-wrong]`), an administrator's reserve, whether a `C_PING` resets the idle clock; whether DJ opens |
 | **Recorded at** | this file; the DJ order's header and §0; the DJ row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 6. CV opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone CV` - the standing word *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*, given for CV |
+| **Mark** | **CV is opened**, on worktree `cv-ordered-index-walk` from `f4138860` (`v3.4.15-1-gf4138860`). **No CV-Q item is the operator's own mark.** Each is **adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone)**, as CLA proposed it: CV-Q0..Q6 each (a), CV-Q3 (a) as revised at CV-S0 (a list-filled prefix is no ordered candidate), and CV-Q7 (a), raised at CV-S0 and written into the order's §4 with its options before it was adopted. The two `[quiet-wrong]` items, CV-Q3 (the index choice's ties) and CV-Q7 (no string order key: IX6 truncates), were adopted after their premises were re-read on the tree at `f4138860` (the order's §7, CV-S0) |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; the options the standing go-ahead did not take (CV-Q0 (b), CV-Q1 (b), CV-Q2 (b), CV-Q3 (b), CV-Q4 (b)/(c), CV-Q5 (b), CV-Q6 (b), CV-Q7 (b)), which stay open to the operator's own mark |
+| **Recorded at** | this file; the order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |

@@ -568,8 +568,16 @@ Op Workload::Query(bool ddl) {
         case 2:
             op.kind = Op::Kind::kSelectOrdered;
             op.key = 1 + query_rng_.Below(10);
-            op.sql = "SELECT id, v FROM " + a.name + " ORDER BY v DESC, id LIMIT " +
-                     std::to_string(op.key);
+            // Which order, from the limit and no draw of its own, so the
+            // stream is the one it was before CV (`Op::lo`, workload.hpp):
+            // the order CV leaves to the sort, the reverse walk's (O2) and
+            // the reverse index walk's with its ties (O3, CV-Q4).
+            op.lo = op.key % 3;
+            op.sql = "SELECT id, v FROM " + a.name +
+                     (op.lo == 0   ? " ORDER BY v DESC, id"
+                      : op.lo == 1 ? " ORDER BY id DESC"
+                                   : " ORDER BY v DESC, id DESC") +
+                     " LIMIT " + std::to_string(op.key);
             return op;
         case 3:
             op.kind = Op::Kind::kSelectSubquery;

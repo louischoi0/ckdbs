@@ -2625,6 +2625,61 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
   holds no entry for a set step, which is pinned only through
   `IsTrailReplayable(const Step&)` and the absence of `replays=`.
 
+## Ordered walks (CV)
+
+Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
+`docs/spec/parser-v2.md` I11; the order is
+`instructions/v3.2.0/workorder-cv-ordered-index-walk.md`.
+
+- **A root growth on another core makes the rest of a reverse walk pay
+  hops**: the statement's memo names the root it bound, so each later step
+  descends from that root into what is now the left subtree and moves
+  right, under the leaf's hold, to the leaf it wants - one hop per leaf of
+  the subtree's right part, per step. Correct (the rig cell grows a level
+  under the walk), not measured; a LIMIT keeps it short, and a filter that
+  matches nothing walks it whole.
+- **A one-sided bound does not seed the reverse walk**: `WHERE id < ?
+  ORDER BY id DESC LIMIT 20` - keyset pagination - starts at the relation's
+  top and filters every row above the bound, because a one-sided bound is
+  no tuple key range (`TupleKeyRangeOf`). `BETWEEN` seeds it.
+
+- **A reverse walk's leaf miss is a blocking read on its reactor.** DE
+  gives the forward walk's leaf fetch a read off the reactor and a park
+  (`page.md` §12); the reverse walk (O2) fetches each leaf, and makes each
+  step's descent, as a blocking read. A resident relation pays nothing for
+  it; a cold one stops its core for each leaf it misses, as every walk did
+  before DE.
+- **A reverse walk makes one descent per leaf** (CV-Q1 (a)): no left
+  sibling link exists, so each step left is a seek from the last leaf's
+  `min_key`. The join planner prices an elided chain at the rows its LIMIT
+  lets out and does not add those descents.
+- **The reverse walks are priced without their descents**: CV §2 asked
+  `EstimateChain` to add one descent per leaf for a reverse walk (O2, O3);
+  it adds none, pricing an elided chain at the rows its LIMIT lets out, as
+  a forward one. And a reverse run's `pages_fetched` counts the leaf it
+  reads, not those its move right passes over.
+- **`ORDER BY <tuple key> DESC` without a `LIMIT` is still a sort**
+  (CV-Q2 (a)), and so is one over a key set, a build or a Cabin arm.
+- **An ordered index step's decline holds every match** (CV-S2, `index.md`
+  IX8c): under `indexes = off`, or an index gone under the chain, the walk
+  collects each matching row's key and tuple key, sorts them and resolves
+  each one - memory in the matches, as IX8a's collection, and a descent per
+  row where the walk would have emitted in place. Bounded by nothing but
+  `exec::Budget`, which it charges twice for each row (the walk's decode
+  and the resolve's), so under `indexes = off` a budget is met at about
+  half the rows `plain` reaches - a refusal that depends on the switch.
+- **An ordered index walk resolves entry by entry**: a row its prefix
+  admits and a residual rejects still costs its descent, so `WHERE user_id
+  = ? AND kind = ? ORDER BY created_at LIMIT 20` over `(user_id,
+  created_at)` can resolve every one of the user's entries to find 20 of a
+  rare kind - no more than IX8a's step resolves, and the order no sort. Its
+  index leaf reads are blocking reads, as every index step's are.
+- **A reverse walk across many leaves is not measured**: CV's close
+  (`bench/v3.4.15/results-cv-close-v3.4.15-5-g7d11ba44.md`) measured
+  `LIMIT 20` windows, served from one to a few leaves, where the descent
+  per leaf does not show; what it costs over hundreds of leaves - a
+  filter that rejects most rows, a deep `OFFSET` - is not known.
+
 ## Locking reads (DC)
 
 Verified on `dc-select-for-update` at `7e18598d` (DC's close). Owned by

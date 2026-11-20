@@ -374,8 +374,10 @@ bool CheckDerived(Iteration& it, const Op& op, const std::string& reply, std::si
         case Op::Kind::kSelectOrdered: {
             std::vector<std::pair<std::int64_t, std::uint64_t>> by;
             for (const auto& [id, row] : *a) by.emplace_back(row.v, id);
-            std::sort(by.begin(), by.end(), [](const auto& l, const auto& r) {
-                return l.first != r.first ? l.first > r.first : l.second < r.second;
+            std::sort(by.begin(), by.end(), [&op](const auto& l, const auto& r) {
+                if (op.lo == 1) return l.second > r.second;  // id DESC
+                if (l.first != r.first) return l.first > r.first;
+                return op.lo == 2 ? l.second > r.second : l.second < r.second;
             });
             for (std::size_t i = 0; i < by.size() && i < op.key; ++i) {
                 expected.push_back(std::to_string(by[i].second) + "," + std::to_string(by[i].first));
