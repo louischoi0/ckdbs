@@ -1,10 +1,16 @@
 # Work order CV - `ORDER BY ... LIMIT` served by the order a structure already holds: the ordered index walk and the reverse walk
 
-Status: **WRITTEN 2026-11-15, not opened.** Written on `main` at
+Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+(go-ahead-achieving-milestone)**, on worktree `cv-ordered-index-walk` from
+`f4138860` (`v3.4.15-1-gf4138860`). Written 2026-11-15 on `main` at
 `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
-(`raft-marks-2026-11-15.md` §7). No stage is started. CV-S0 waits for the
-operator's word and for the marks on §4's items. Every `[source-read]`
-claim below was read at `a61ab905`.
+(`raft-marks-2026-11-15.md` §7). **No CV-Q item is the operator's own
+mark**: CV-Q0..Q6 are each adopted as CLA proposed them, and CV-Q7, raised
+at CV-S0, is written into §4 with its options before it is adopted - each
+**on the operator's standing go-ahead of 2026-11-20
+(go-ahead-achieving-milestone)** (`raft-marks-2026-11-20.md` §3). The
+`[source-read]` claims of §1 were read at `a61ab905` and read again at
+`f4138860` (§7, CV-S0); where a line moved, §7 says so.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -195,17 +201,21 @@ unless LIMIT bounds it") already prices that.
 
 ## 4. Items for the operator (CV-Q), CLA's proposals
 
-None is assumed; each waits for a mark.
+No item is the operator's own mark. Each is **adopted on the operator's
+standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone)** as CLA
+proposed it (the mark column); the options not taken stay open to the
+operator's own mark.
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| CV-Q0 | Does CV-S0 gate the build? | (a) yes: if "latest 20 of a user with 10k rows" and `ORDER BY id DESC LIMIT 20` over 100k rows are not both faster than today's top-N, CV stops. (b) built whatever S0 shows | (a) |
-| CV-Q1 | The reverse step | (a) one descent per leaf, with no on-disk change. (b) a `left_sibling` link in both trees, with a superblock bump | (a). (b) is a format change and adds a second link to keep true under every split. S0 measures (a)'s per-leaf cost, and (b) can follow if it shows |
-| CV-Q2 | Without `LIMIT` | (a) not elided: an ordered walk of every match is `n` random resolutions against a walk and a sort, and IX9 refuses the estimate that would choose between them. (b) elided always | (a) |
-| CV-Q3 | The index choice `[quiet-wrong]` only in its ties | (a) among indexes covering IX9's chosen equality prefix, prefer one that continues with the `ORDER BY` keys, when `LIMIT` is present; ties to the lowest `index_oid`. (b) IX9 unchanged: elide only when IX9's own choice happens to serve the order | (a). (b) leaves the common shape to index creation order |
-| CV-Q4 | The tie order under a reverse walk | (a) descending tuple key, I12 amended: ties under an elided `DESC` return in the walk's order, as CB-Q1 already allows for every order not asked for. (b) ascending as today, by buffering each run of equal keys and reversing it. (c) elide `DESC` only when the order is total (the keys include the tuple key, or a unique index's every column) | (a), with the manual saying it. (b) costs an unbounded buffer for a long run of equal keys, and (c) excludes "latest N" on a non-unique timestamp, the shape CV exists for |
-| CV-Q5 | `OFFSET` | (a) served by the same walk, counting skipped rows. (b) not elided under `OFFSET` | (a). The cost is what the top-N heap pays today, without the sort |
-| CV-Q6 | Joins | (a) the driver's order is kept through nested inner steps, and an ordered driver is a planned block's candidate like any other. (b) a single-relation statement only | (a). The chain already nests in driver order (I12) |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| CV-Q0 | Does CV-S0 gate the build? | (a) yes: if "latest 20 of a user with 10k rows" and `ORDER BY id DESC LIMIT 20` over 100k rows are not both faster than today's top-N, CV stops. (b) built whatever S0 shows | (a) | (a), adopted on the standing go-ahead |
+| CV-Q1 | The reverse step | (a) one descent per leaf, with no on-disk change. (b) a `left_sibling` link in both trees, with a superblock bump | (a). (b) is a format change and adds a second link to keep true under every split. S0 measures (a)'s per-leaf cost, and (b) can follow if it shows | (a), adopted on the standing go-ahead |
+| CV-Q2 | Without `LIMIT` | (a) not elided: an ordered walk of every match is `n` random resolutions against a walk and a sort, and IX9 refuses the estimate that would choose between them. (b) elided always | (a) | (a), adopted on the standing go-ahead |
+| CV-Q3 | The index choice `[quiet-wrong]` only in its ties | (a) among indexes covering IX9's chosen equality prefix, prefer one that continues with the `ORDER BY` keys, when `LIMIT` is present; ties to the lowest `index_oid`. (b) IX9 unchanged: elide only when IX9's own choice happens to serve the order | (a). (b) leaves the common shape to index creation order | (a) as revised at CV-S0 (§7): a prefix a value list fills is no ordered candidate (§0.3); adopted on the standing go-ahead after its premise was re-read at `f4138860` |
+| CV-Q4 | The tie order under a reverse walk | (a) descending tuple key, I12 amended: ties under an elided `DESC` return in the walk's order, as CB-Q1 already allows for every order not asked for. (b) ascending as today, by buffering each run of equal keys and reversing it. (c) elide `DESC` only when the order is total (the keys include the tuple key, or a unique index's every column) | (a), with the manual saying it. (b) costs an unbounded buffer for a long run of equal keys, and (c) excludes "latest N" on a non-unique timestamp, the shape CV exists for | (a), adopted on the standing go-ahead |
+| CV-Q5 | `OFFSET` | (a) served by the same walk, counting skipped rows. (b) not elided under `OFFSET` | (a). The cost is what the top-N heap pays today, without the sort | (a), adopted on the standing go-ahead |
+| CV-Q6 | Joins | (a) the driver's order is kept through nested inner steps, and an ordered driver is a planned block's candidate like any other. (b) a single-relation statement only | (a). The chain already nests in driver order (I12) | (a), adopted on the standing go-ahead |
+| CV-Q7 | Which `ORDER BY` key types an ordered index walk serves `[quiet-wrong]` (raised at CV-S0) | (a) only a column whose index encoding is whole and order-preserving (IX5: the integers, `date`, `timestamp`, `decimal`, `decimal128`); a `char`/`varchar` order key keeps the sort. (b) every key type | (a). A string key is truncated to `kIndexStringKeyBytes` (IX6), so two values sharing the prefix sit in tuple key order, not their own: (b) would emit them out of order with no error. An equality prefix on a string column is unaffected - the residual drops the other values, and the matching ones keep the order column's order | (a), adopted on the standing go-ahead |
 
 ## 5. Stages
 
@@ -233,3 +243,83 @@ None is assumed; each waits for a mark.
 
 On `main` at `a61ab905`, on the operator's word. No stage is opened and
 no code is written. Documents only.
+
+### CV-S0 - the premise and the census (2026-11-20)
+
+On worktree `cv-ordered-index-walk` at `f4138860`
+(`v3.4.15-1-gf4138860`), before any CV code.
+
+**The premise** (`bench/v3.4.15/results-cv-s0-premise-v3.4.15-1-gf4138860.md`,
+`tools/cv_s0_premise.py`, `cores = 1`, `build-release`): a user's latest 20
+of 10,000 rows costs 7,337.8 µs at p50 today and 101.0 µs for a statement
+that reads only the 20 rows an ordered walk reads; `ORDER BY id DESC LIMIT
+20` over 110,100 rows costs 38,987.6 µs against 88.3 µs. One tuple key point
+descent, round trip included, is 54.7 µs at p50, an upper bound on a
+re-descent per leaf. **CV-Q0's bar is met by more than an order of
+magnitude on both cells, and CV proceeds.** No spike of the reverse descent
+was built: the bounded statement and the point descent stand in for it, as
+the results file says.
+
+**§1 read again at `f4138860`.** Every claim holds; the lines moved:
+the elision is `src/exec/step_compiler.cpp:3478-3500`, `EmitsTupleKeyOrder`
+`include/kds/exec/step_chain.hpp:186-208`, IX8a's sort
+`src/exec/step_vm.cpp:1650-1663`, phase 2's quota break `step_vm.cpp:1678`.
+One fact §1 did not state: **a one-sided bound enters neither tree** - an
+index range needs both ends on its column (`IndexChoiceOver`'s `ranged`)
+and so does a tuple key range (`TupleKeyRangeOf`) - so `created_at > ?`
+leaves an index step a probe of its equality prefix, and `id > ?` leaves a
+walk.
+
+**The census.**
+
+- *Every reader of `sort_keys` after the elision*: `OutputSort::Reset`
+  (`src/exec/sort.cpp:27`, empty keys arm no sort); `ANALYZE`'s `sort` line
+  (`plan_printer.cpp:420`); `ReadColumnsOf` (`step_compiler.cpp:2031`), so a
+  dropped key is no longer decoded for the sort - an ordered index step's
+  key check reads its key columns, so CV-S2 adds them to that step's read
+  set; the join planner's `EstimateChain` through `sorted()`
+  (`join_order.cpp:313`), which prices an unsorted chain at `per_row *
+  wanted / rows` - the ordered driver's `min(matches, limit + offset)` CV
+  §2 asks for, with nothing added - and CC-Q10's `written_sorted`
+  (`step_compiler.cpp:2575`), which an order that keeps the elision never
+  meets, and one that loses it meets bounded, since every elided statement
+  has a LIMIT (CV-Q2 (a)).
+- *Every assumption of IX8a's order downstream of an index step*: the
+  ascending tuple key elision (`EmitsTupleKeyOrder` lists both index kinds,
+  `step_chain.hpp:195`). An ordered index step does not emit tuple key
+  order, but the two elisions cannot meet: the ascending one fires only for
+  a lone tuple key key, and an ordered index walk is taken only for keys
+  that begin with an index column. The Cabin serve's sort into the walk's
+  order (`step_vm.cpp:1863`) is the Cabin's and untouched: a Cabin arm
+  keeps the sort. Access statistics key on `access_columns`, which CV does
+  not move; Waystone records and replays only lookup-class steps
+  (`IsTrailReplayable`), never a walk or an index step, so the driver's
+  order reaches no trail.
+- **The decline is where IX8a's order is assumed hardest**: `RunIndexStep`
+  answers `indexes = off`, a dropped or redefined index and a refused
+  encode with a walk (`step_vm.cpp:1466-1544`), which emits tuple key
+  order. An elided `ORDER BY` over such a walk would be a wrong order with
+  no error (`[quiet-wrong]`), and the index contract suite compares
+  `indexes = off` byte for byte. **CV-S2 therefore gives an ordered index
+  step an ordered decline**: the walk collects the matching rows' keys,
+  sorts them into the walk's order, and resolves them in it.
+- *The yield and resume path*: only `RunWalkStep` yields, at the bottom of
+  its leaf loop, every `pages_per_slice` pages while it is the outermost
+  walk (`step_vm.cpp:2241-2269`), and only its leaf fetch parks on a read
+  that would wait (DE). An index step yields nowhere today. CV-R4's yield
+  is therefore new code in the reverse walk and the ordered index run, at
+  their leaf boundaries; the boundary itself is factored out of
+  `RunWalkStep` into one function both call (`YieldAtSliceBoundary`).
+- **A string order key is not served** (CV-Q7, raised here): IX6 truncates
+  a string to `kIndexStringKeyBytes`, and two values sharing the prefix sit
+  in tuple key order, not their own.
+
+**CV-Q3's premise re-read** (`[quiet-wrong]` in its ties): IX9 still picks
+the longest equality prefix, ties to the lowest `index_oid`
+(`IndexProbeOf`, `step_compiler.cpp:1320`), and since CU a value list may
+fill one prefix column. CV-Q3 (a) is adopted **as revised**: a prefix a
+value list fills is no ordered candidate (§0.3 already keeps CU's key set
+out), and the forward walk's ties are the sort's - ascending tuple key -
+only when the `ORDER BY` keys are every index key column after the prefix,
+so that is the shape served (an index entry sorts by its whole key, then
+its tuple key, IX4b).

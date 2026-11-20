@@ -20,3 +20,12 @@ took under them.
 | **Mark** | **The version of record is `v3.4.15`**, the operator's own word: an annotated tag on `main` at `1eeab8ce`, pushed by the operator from their own shell (`git push origin v3.4.15`) after the permission classifier refused CLA's push. Its message states what is built since `v3.4.14` (DF, DE narrow, DB, DA), that the superblock did not move, the suite and what was not executed, and the gaps that bound it - first DB's unruled close deltas (-11.7 %, -25.3 %), then DF's cost, DE's narrowness and DA-S3 owed |
 | **Does not settle** | anything after `1eeab8ce` but this record; the ruling on DB's close deltas; DA-S3's host |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
+## 3. CV opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone CV` - the standing word *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*, given for CV |
+| **Mark** | **CV is opened**, on worktree `cv-ordered-index-walk` from `f4138860` (`v3.4.15-1-gf4138860`). **No CV-Q item is the operator's own mark.** Each is **adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone)**, as CLA proposed it: CV-Q0..Q6 each (a), CV-Q3 (a) as revised at CV-S0 (a list-filled prefix is no ordered candidate), and CV-Q7 (a), raised at CV-S0 and written into the order's §4 with its options before it was adopted. The two `[quiet-wrong]` items, CV-Q3 (the index choice's ties) and CV-Q7 (no string order key: IX6 truncates), were adopted after their premises were re-read on the tree at `f4138860` (the order's §7, CV-S0) |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; the options the standing go-ahead did not take (CV-Q0 (b), CV-Q1 (b), CV-Q2 (b), CV-Q3 (b), CV-Q4 (b)/(c), CV-Q5 (b), CV-Q6 (b), CV-Q7 (b)), which stay open to the operator's own mark |
+| **Recorded at** | this file; the order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
