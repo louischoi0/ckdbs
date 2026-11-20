@@ -429,9 +429,12 @@ order, so no undo-page-header record type is needed. Page creation logs
 `PAGE_INIT{min_key = 0, page_type = kUndo}`; `PageInitPayload` provides for
 `min_key` 0 on non-heap page types.
 
-**No `FULL_PAGE_IMAGE` for undo pages.** An undo page is fully reconstructible
-from its `PAGE_INIT` plus its `UNDO_WRITE`s, which makes it FPI-exempt on the
-merits rather than by omission.
+**An undo page is imaged like any logged page since DB.** Undo is in the
+write fetch's whitelist (`wal.md` §10), and DH-S0 counted 4 to 5 % of an
+update workload's images as undo pages
+(`bench/v3.4.15/results-dh-s0-premise-v3.4.15-1-gf4138860.md`). An undo page
+created and never copied still owes none: it is rebuilt from its `PAGE_INIT`
+and its `UNDO_WRITE`s, which is what made it FPI-exempt before DB.
 
 ### 3.6 Every write leaves an undo record, the insert included
 
