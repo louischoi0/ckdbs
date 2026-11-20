@@ -70,3 +70,12 @@ took under them.
 | **Corrected** | In the conversation CLA said a failed internal node could be re-read in place rather than from the root. It is sound, the leaf's check catching any stray left, but it saves a root restart only once D2 is built, since an internal node has no low key or right link to move along (DK-Q6) |
 | **Does not settle** | DK-Q1..Q9; whether DK opens; whether CW opens |
 | **Recorded at** | this file; the DK order's header and §0; the DK row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. v3.4.16 named and tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.16"* - after CLA's report that CV landed on `main` at `fda024cf` with the hook skipped on the word "push no verify", the full suite 0 failed of 4897 at `7d11ba44`, whose code is the merge's |
+| **Mark** | **The version of record is `v3.4.16`**, the operator's own word: an annotated tag on `main` at `0078e149` (CV's merge `fda024cf` and DK's documents above it). Its message states what is built since `v3.4.15` (CV), that the superblock did not move, the suite and what was not executed, and the gaps that bound it - first the unmeasured many-leaf reverse walk, then the reverse walk's blocking leaf reads, the unseeded one-sided bound and the decline's memory, with v3.4.15's carried gaps |
+| **Does not settle** | anything after `0078e149` but this record |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
