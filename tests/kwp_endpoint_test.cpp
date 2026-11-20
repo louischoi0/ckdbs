@@ -1,9 +1,11 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -264,6 +266,64 @@ TEST_F(KwpEndpointTest, AHostileLengthIsRefusedAndTheConnectionCloses) {
 
     // The good connection is untouched.
     SendFrame(good, ClientFrameType::kPing, {});
+    auto pong = ReadFrame(good, good_decoder);
+    ASSERT_TRUE(pong.has_value());
+    EXPECT_EQ(pong->type, static_cast<std::uint8_t>(ServerFrameType::kPong));
+
+    StopServer(good, good_decoder);
+    ::close(good);
+    server.join();
+}
+
+TEST_F(KwpEndpointTest, AnUnfinishedHandshakeFrameOverThePreAuthCapClosesTheConnection) {
+    // §3: with no pre-auth deadline, the pre-auth inbox is capped at 4 KiB.
+    // On this path the bytes of a half-sent frame live in the decoder, not
+    // the inbox, and the cap counts them: a `C_HELLO` declaring 64 KiB and
+    // dripping its payload is closed once it holds more than 4 KiB, while a
+    // finished handshake's connection takes a frame of that size.
+    constexpr std::uint16_t kPort = 25460;
+    auto listener = TcpServer::Listen(kPort);
+    ASSERT_TRUE(listener.ok());
+    std::thread server([&] { RunReactor(listener.value()); });
+
+    int good = Connect(kPort);
+    ASSERT_GE(good, 0);
+    wire::FrameDecoder good_decoder;
+    ASSERT_TRUE(Handshake(good, good_decoder));
+
+    int hostile = Connect(kPort);
+    ASSERT_GE(hostile, 0);
+    const timeval timeout{5, 0};
+    ASSERT_EQ(::setsockopt(hostile, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)), 0);
+    constexpr std::uint32_t kDeclared = 64 * 1024;
+    std::vector<std::byte> header(wire::kFrameHeaderSize);
+    for (int i = 0; i < 4; ++i) {
+        header[i] = static_cast<std::byte>((kDeclared >> (8 * i)) & 0xFF);
+    }
+    header[4] = static_cast<std::byte>(ClientFrameType::kHello);
+    ASSERT_EQ(::send(hostile, header.data(), header.size(), MSG_NOSIGNAL),
+              static_cast<ssize_t>(header.size()));
+    // Dripped a kilobyte at a time, so each server read is one chunk well
+    // under the cap: only the decoder's held bytes can trip it.
+    const std::vector<std::byte> chunk(1024, std::byte{0x41});
+    bool closed = false;
+    for (int i = 0; i < 16 && !closed; ++i) {
+        if (::send(hostile, chunk.data(), chunk.size(), MSG_NOSIGNAL) < 0) closed = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!closed) {
+        std::byte buf[256];
+        const ssize_t n = ::read(hostile, buf, sizeof(buf));
+        EXPECT_FALSE(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            << "the server held 16 KiB of an unfinished C_HELLO without closing";
+        closed = n <= 0;
+    }
+    EXPECT_TRUE(closed) << "the server answered an unfinished C_HELLO";
+    ::close(hostile);
+
+    // Authenticated, the connection is uncapped: an 8 KiB frame is answered.
+    const std::vector<std::byte> big(8 * 1024, std::byte{0x42});
+    SendFrame(good, ClientFrameType::kPing, big);
     auto pong = ReadFrame(good, good_decoder);
     ASSERT_TRUE(pong.has_value());
     EXPECT_EQ(pong->type, static_cast<std::uint8_t>(ServerFrameType::kPong));

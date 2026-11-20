@@ -19,16 +19,6 @@ std::string_view Trim(std::string_view s) {
     return s.substr(b, e - b + 1);
 }
 
-// Strips one layer of matching quotes, so a value with meaningful
-// surrounding whitespace (or a trailing '#') can be written explicitly.
-std::string_view Unquote(std::string_view s) {
-    if (s.size() >= 2 && ((s.front() == '"' && s.back() == '"') ||
-                          (s.front() == '\'' && s.back() == '\''))) {
-        return s.substr(1, s.size() - 2);
-    }
-    return s;
-}
-
 }  // namespace
 
 StatusOr<ConfigFile> ConfigFile::Load(const std::string& path) {
@@ -55,21 +45,17 @@ StatusOr<ConfigFile> ConfigFile::Parse(std::string_view text, const std::string&
         pos = nl + 1;
         ++line_no;
 
-        // A '#' outside quotes starts a comment. Checked before trimming so
-        // a full-line comment costs nothing.
-        std::size_t hash = raw.find('#');
-        if (hash != std::string_view::npos) {
-            std::string_view before = Trim(raw.substr(0, hash));
-            // Only honour the '#' as a comment when it is not inside a
-            // quoted value - otherwise a path containing '#' is unwritable.
-            bool in_quotes = false;
-            std::size_t eq_probe = before.find('=');
-            if (eq_probe != std::string_view::npos) {
-                std::string_view val = Trim(before.substr(eq_probe + 1));
-                in_quotes = !val.empty() && (val.front() == '"' || val.front() == '\'') &&
-                            val.back() != val.front();
-            }
-            if (!in_quotes) raw = raw.substr(0, hash);
+        const std::string where = origin + ":" + std::to_string(line_no);
+
+        // A '#' outside quotes starts a comment. A '#' ahead of the line's
+        // first '=' is always one - no key holds a '#' - so a full-line
+        // comment and a commented-out `# key = value` are dropped here; a
+        // '#' after the '=' is the value's to place (below).
+        const std::size_t first_hash = raw.find('#');
+        const std::size_t first_eq = raw.find('=');
+        if (first_hash != std::string_view::npos &&
+            (first_eq == std::string_view::npos || first_hash < first_eq)) {
+            raw = raw.substr(0, first_hash);
         }
 
         std::string_view line = Trim(raw);
@@ -77,23 +63,43 @@ StatusOr<ConfigFile> ConfigFile::Parse(std::string_view text, const std::string&
 
         std::size_t eq = line.find('=');
         if (eq == std::string_view::npos) {
-            return Status::InvalidArgument(origin + ":" + std::to_string(line_no) +
-                                            ": expected 'key = value', got '" +
+            return Status::InvalidArgument(where + ": expected 'key = value', got '" +
                                             std::string(line) + "'");
         }
 
         std::string key(Trim(line.substr(0, eq)));
-        std::string value(Unquote(Trim(line.substr(eq + 1))));
+        std::string_view rest = Trim(line.substr(eq + 1));
+        std::string value;
+        if (!rest.empty() && (rest.front() == '"' || rest.front() == '\'')) {
+            // **A quoted value runs to its matching quote**, keeping any '#'
+            // and whitespace inside it, and only whitespace or a '#' comment
+            // may follow that quote. Anything else is refused rather than
+            // folded into the value: guessing is how a config file lies.
+            const std::size_t close = rest.find(rest.front(), 1);
+            if (close == std::string_view::npos) {
+                return Status::InvalidArgument(where + ": unterminated quoted value for key '" +
+                                                key + "'");
+            }
+            const std::string_view after = Trim(rest.substr(close + 1));
+            if (!after.empty() && after.front() != '#') {
+                return Status::InvalidArgument(where + ": unexpected text '" +
+                                                std::string(after) +
+                                                "' after the quoted value of key '" + key + "'");
+            }
+            value.assign(rest.substr(1, close - 1));
+        } else {
+            // Unquoted: the first '#' starts the comment.
+            const std::size_t hash = rest.find('#');
+            value.assign(Trim(hash == std::string_view::npos ? rest : rest.substr(0, hash)));
+        }
 
         if (key.empty()) {
-            return Status::InvalidArgument(origin + ":" + std::to_string(line_no) +
-                                            ": empty key");
+            return Status::InvalidArgument(where + ": empty key");
         }
         if (auto it = config.values_.find(key); it != config.values_.end()) {
             // Not last-wins: which one the operator meant is exactly what
             // is unclear, and guessing is how a config file lies.
-            return Status::InvalidArgument(origin + ":" + std::to_string(line_no) + ": key '" +
-                                            key + "' already set on line " +
+            return Status::InvalidArgument(where + ": key '" + key + "' already set on line " +
                                             std::to_string(it->second.line));
         }
 

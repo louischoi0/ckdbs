@@ -223,5 +223,24 @@ TEST_F(StatementStatsTest, TheShapeTextIsNeverCutInsideAUtf8Sequence) {
     EXPECT_EQ(StatementStats::Snapshot().front().shape_text, line.substr(0, 255));
 }
 
+TEST_F(StatementStatsTest, ThePlanSourceIsTheLatestCompilesOnACore) {
+    // sys-views.md §6.1: `plan_source` is the source at the latest compile,
+    // NULL where no plan chose it. A compile with no source clears what an
+    // earlier one left; a call that compiled nothing keeps it (audit H6).
+    StatementCost compiled;
+    compiled.compiled = true;
+    const std::string line = "SELECT v FROM t WHERE id = 1";
+    StatementStats::Record(0, 5, line, false, 1, 100, "admin", "p/v", compiled);
+    EXPECT_EQ(StatementStats::Snapshot().front().plan_source, "admin");
+    StatementStats::Record(0, 5, line, false, 1, 200);  // compiled nothing
+    EXPECT_EQ(StatementStats::Snapshot().front().plan_source, "admin");
+    EXPECT_EQ(StatementStats::Snapshot().front().plan_label, "p/v");
+    StatementStats::Record(0, 5, line, false, 1, 300, {}, {}, compiled);  // the plan gone
+    StatementShape s = StatementStats::Snapshot().front();
+    EXPECT_EQ(s.plan_source, "");
+    EXPECT_EQ(s.plan_label, "");
+    EXPECT_EQ(s.calls, 3u);
+}
+
 }  // namespace
 }  // namespace kds::stats

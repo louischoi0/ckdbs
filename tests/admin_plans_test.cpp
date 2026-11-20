@@ -24,6 +24,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/expeditor.hpp"
 #include "kds/stats/plan_stats.hpp"
+#include "kds/stats/statement_stats.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/txn/manager.hpp"
 #include "reclaim_census.hpp"
@@ -1909,6 +1910,51 @@ TEST(AdminPlanMountTest, ADisabledPlansRelationCanBeDroppedAndThePlanReadsInvali
     EXPECT_EQ(Reply(db, "DROP PLAN p").rfind("DROPPED PLAN name=p", 0), 0u);
     EXPECT_EQ(Reply(db, "SELECT name FROM sys.plans").find("p"), std::string::npos);
     reclaim_census::CleanShutdownCheckpoint(db);
+}
+
+// sys-views.md §6.1: `plan_source` is the source at the shape's latest
+// compile, NULL where no plan chose it - so a shape a plan stops applying
+// to, or one `written` no longer orders, reads NULL at its next compile
+// rather than the plan it ran under before (audit H6).
+TEST_F(AdminPlanTest, StatementStatsReadNullOnceThePlanStopsApplyingToAShape) {
+    stats::StatementStats::ResetForTest();
+    Ok("CREATE INDEX results_model ON results (model_id)");
+    const std::string sql = "SELECT pnl FROM results WHERE model_id = 3";
+    const auto view = [&] {
+        return Run("SELECT plan_source, plan_name, variant, kind FROM sys.statement_stats");
+    };
+    Ok("CREATE PLAN dropped_plan FOR " + sql +
+       " VARIANT only ELSE ORDER (results) ACCESS results NOT INDEX");
+    (void)Run(sql);
+    ASSERT_NE(view().find("admin,dropped_plan,only,SELECT"), std::string::npos) << view();
+    // Disabled: the one-relation compile asks no plan, and the row says so.
+    Ok("ALTER PLAN dropped_plan DISABLE");
+    (void)Run(sql);
+    std::string read = view();
+    EXPECT_EQ(read.find("dropped_plan"), std::string::npos) << read;
+    EXPECT_EQ(read.find("admin,"), std::string::npos) << read;
+    // Enabled again, then dropped.
+    Ok("ALTER PLAN dropped_plan ENABLE");
+    (void)Run(sql);
+    ASSERT_NE(view().find("admin,dropped_plan,only,SELECT"), std::string::npos) << view();
+    Ok("DROP PLAN dropped_plan");
+    (void)Run(sql);
+    read = view();
+    EXPECT_EQ(read.find("dropped_plan"), std::string::npos) << read;
+
+    // A join of tuple key descents alone reads `written` under `written`
+    // and NULL once `fixed` runs it unsearched.
+    const std::string point =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE results.id = 5";
+    Ok("SET JOIN_ORDER written");
+    (void)Run(point);
+    ASSERT_NE(view().find("written,NULL,NULL,SELECT"), std::string::npos) << view();
+    Ok("SET JOIN_ORDER fixed");
+    (void)Run(point);
+    read = view();
+    EXPECT_EQ(read.find("written,"), std::string::npos) << read;
+    stats::StatementStats::ResetForTest();
 }
 
 }  // namespace

@@ -1837,6 +1837,11 @@ private:
                 ++step_stats.index_walks;
                 PageId cur = first.value();
                 storage::PageChainGuard guard("ordered index walk");
+                // Whether this pass has read an entry past the previous
+                // pass's `from`: the seek re-reads the leaf that pass ended
+                // on, and a due slice ending the pass there would end every
+                // later pass there too, at a slice of one page.
+                bool moved = false;
                 // Leaf by leaf until one holds an entry for the batch or the
                 // range ends: a seek lands at or left of the leaf it wants.
                 for (;;) {
@@ -1855,6 +1860,7 @@ private:
                         if (std::memcmp(e.data(), from.data(), entry_width) == 0) {
                             continue;  // read already: entries are unique
                         }
+                        moved = true;
                         if (std::memcmp(e.data(), probe.high.data(), entry_width) > 0) {
                             end = true;
                             break;
@@ -1876,10 +1882,14 @@ private:
                     }
                     const PageId right = leaf.right_sibling();
                     if (right == kInvalidPageId) end = true;
-                    // A slice due ends the pass too: `from` is set, so the
-                    // next seek resumes past what this leaf held.
+                    // A slice due ends the pass too, once the pass has
+                    // moved: `from` is set, so the next seek resumes past
+                    // what this leaf held - by re-reading this leaf, a read
+                    // counted like any other. A pass that has read nothing
+                    // past the last one's `from` steps right first, its
+                    // leaves still counted, and yields at the bottom.
                     const bool slice_due = outermost && slice_ != nullptr &&
-                                           ++slice_pages_ >= slice_->pages_per_slice;
+                                           ++slice_pages_ >= slice_->pages_per_slice && moved;
                     if (end || !batch.empty() || slice_due) break;
                     cur = right;
                 }

@@ -1050,6 +1050,27 @@ TEST_F(KwpSessionTest, ACancelIsObservedAtTheNextFrame) {
     EXPECT_EQ(RunStatement("SELECT id FROM t").size(), 3u);
 }
 
+TEST_F(KwpSessionTest, ACancelMeetingACSyncRefusesItAndStillAnswersTheBarrier) {
+    // A client that pipelined `EXECUTE, SYNC` has its cancel taken at the
+    // `C_SYNC`: the refusal is sent, and so is the barrier's `S_READY` -
+    // §3 item 4's "after every C_SYNC" - with nothing left skipped.
+    Handshake();
+    session_->RequestCancel();
+    const auto frames = Feed(ClientFrameType::kSync, {});
+    ASSERT_EQ(frames.size(), 2u);
+    ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+    auto err = wire::DecodeError(frames[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_EQ(err.value().category(), wire::ErrorCategory::kCancelled);
+    EXPECT_EQ(frames[1].type, static_cast<std::uint8_t>(ServerFrameType::kReady));
+
+    // Not skipping: the next frame is answered, with no second sync.
+    const auto pong = Feed(ClientFrameType::kPing, {});
+    ASSERT_EQ(pong.size(), 1u);
+    EXPECT_EQ(pong[0].type, static_cast<std::uint8_t>(ServerFrameType::kPong));
+    EXPECT_EQ(RunStatement("SELECT id FROM t").size(), 3u);
+}
+
 // ---- BA-S15: the cancel connection --------------------------------------
 
 TEST_F(KwpSessionTest, ACancelConnectionSetsTheNamedSessionsFlagSilentlyAndCloses) {

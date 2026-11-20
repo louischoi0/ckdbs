@@ -312,6 +312,11 @@ public:
 
     bool failed() const noexcept { return failed_; }
 
+    // Bytes held and not yet popped: a partial frame, and any whole frames
+    // behind it. What a caller's memory budget (the server's pre-auth cap)
+    // must count, since `Feed` takes the bytes out of the caller's inbox.
+    std::size_t buffered() const noexcept { return buffer_.size(); }
+
 private:
     std::vector<std::byte> buffer_;
     bool failed_ = false;
