@@ -842,3 +842,27 @@ builds a Cabin.
 
 **Suite.** 0 failed of 4,926 (2 disabled, 2 skipped) on the committed tree. **`tsan`** (gcc 14): 166 cells - the contract suite with the pin's, the drop's forget's and the three-thread install cell, the planner's and the controller's tests - 0 reports. **Overhead not
 measured; measured at the milestone's close.**
+
+### DL-S4: the collection tasks - nothing to build, the census its record
+
+On worktree `dl-statistics-queue-no-statement`, on `e659a137`. Clause (e)
+(a task that gathers a statistic takes nothing a plain read of the same
+data does not take, and is paced) read against §1.3's four tasks, DL-Q6
+(a) adopted:
+
+| task | what it takes of the data | paced | (e) |
+|---|---|---|---|
+| the planner's steward | pages one at a time under a shared latch, the anchor let go before the root; no lock unit | 16 pages a step, a step a second | met at `b0a824db`; nothing built |
+| `GATHER STATISTICS` | a slice's `IS` by an ask that never queues, 16 leaves a slice one at a time, the borrow and the page let go before each park | a 2 ms floor a slice | met at `b0a824db`; nothing built. Run whole and unpaced only by a dispatcher that cannot park, which nothing in `src/` is |
+| the ASH sampler | no page, no lock: each task's published wait words | `ash_interval_ms` | met; nothing built |
+| the controller's tick | the statistic's part - the fold and the snapshot - takes no page and no lock | the cadence | met. Its `Apply` is a Cabin's build, not a statistic's (DL-Q0 (a)), and stays `known-gaps.md`'s |
+
+**What a task could wait for was the stages' own work, not this one's**
+(DL-Q17): every latch one of these callbacks takes that another thread
+can hold is tried since DL-S1 (the collector's parts), DL-S2 (the
+planner's parts, the space table, the ASH ring) and DL-S3 (a publish's
+three latches, the view board), and a busy one is left to the task's next
+period. DL-Q6 (b) - a task that also gives way to a writer on a busy page
+- is not built: (a) is the mark.
+
+No build input changes in this stage; no suite was executed for it.
