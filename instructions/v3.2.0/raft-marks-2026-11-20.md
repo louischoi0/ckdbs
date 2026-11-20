@@ -41,3 +41,13 @@ took under them.
 | **Does not settle** | DI-Q0, DI-Q3, DI-Q6..Q13 but DI-Q4; whether DI opens; that the census is complete - 40 files name the two ids and DI-S0 opens the ones this reading did not |
 | **Recorded at** | this file; the DI order's header, §0a, §3, §4, §5 and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 5. DJ written: connections, sessions and cursors
+
+| | |
+|---|---|
+| **Word** | *"From the viewpoint of connections, cursors and connection pools, against the commercial databases (PostgreSQL, Oracle, Azure SQL), find the directions to fill in, or to improve into a design that fits kdbs better."* and, after CLA's reading of the tree and five directions, *"Write a work order for the improvement directions. And make the following options settable: a connection count limit, an idle session timeout."* (given in Korean; recorded in English) |
+| **Mark** | **DJ is written, not opened**: `instructions/v3.2.0/workorder-dj-connections-sessions-cursors.md`, in the main checkout on `main` at `4d72be11` (`v3.4.15-3-g4d72be11`), documents only. **The two settings are the operator's word and are DJ-S1**, built whatever DJ-S0 finds; their names, defaults and edges (DJ-Q1..Q7) are CLA's proposals, unmarked. The other parts - a session handed back clean, a wait at the transaction's head in place of `Begin`'s refusal, a bounded reply - are CLA's directions under "the improvement directions", each gated on DJ-S0 and a mark. The letter is CLA's proposal |
+| **Differs from what CLA said** | CLA told the operator an idle-session timeout was not needed, an idle session holding memory only. The word asks for the setting; it is built, and CLA proposes it off unless set (DJ-Q4 (a)), which is today's behaviour |
+| **Does not settle** | DJ-Q0..Q12 - among them the two keys' names and defaults, what the cap counts (a `C_CANCEL` connection never, DJ-R2 `[quiet-wrong]`), an administrator's reserve, whether a `C_PING` resets the idle clock; whether DJ opens |
+| **Recorded at** | this file; the DJ order's header and §0; the DJ row and this file's row in `instructions/v3.2.0/index.md` |
+
