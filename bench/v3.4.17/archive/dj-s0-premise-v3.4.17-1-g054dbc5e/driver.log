@@ -1,0 +1,28 @@
+memory: opening to 1000 idle sessions
+memory: opening to 10000 idle sessions
+beside rep 0 idle0
+beside rep 0 idle1000
+beside rep 0 idle10000
+beside rep 0 idle0_again
+beside rep 1 idle0
+beside rep 1 idle1000
+beside rep 1 idle10000
+beside rep 1 idle0_again
+churn_plain rep 0 S
+churn_plain rep 0 C
+churn_plain rep 0 S2
+churn_plain rep 1 S
+churn_plain rep 1 C
+churn_plain rep 1 S2
+churn_plain loop alone
+churn_tls rep 0 S
+churn_tls rep 0 C
+churn_tls rep 0 S2
+churn_tls rep 1 S
+churn_tls rep 1 C
+churn_tls rep 1 S2
+churn_tls loop alone
+begin: 1500 sessions hold a transaction, cores = 1
+begin: 1500 sessions loop BEGIN, INSERT, COMMIT
+begin: 1900 sessions hold a transaction, cores = 2
+driver finished

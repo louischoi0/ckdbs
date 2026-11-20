@@ -616,6 +616,12 @@ public:
     // row wait.
     bool IsInFlight(std::uint64_t trx_id) const noexcept;
 
+    // **This core publishes as many transactions as it can** - the cap
+    // `Begin` refuses at (`kInFlightSlotsPerCore`). Read by the statement
+    // that `Begin` refused for it, to wait for a slot (DJ-S3); a stale
+    // answer only delays that wait's end by one poll.
+    bool InFlightFull() const noexcept;
+
     // The instance's open-DDL count (`InstanceVisibility::AnyDdlOpen`).
     InstanceVisibility& visibility() const noexcept { return *visibility_; }
 

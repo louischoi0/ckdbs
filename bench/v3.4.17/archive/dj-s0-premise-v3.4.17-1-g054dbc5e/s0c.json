@@ -1,0 +1,90 @@
+{
+ "args": {
+  "bin": "/home/louis/dj-work/bin/kds_server.A",
+  "workdir": "/home/louis/dj-work/s0/run_c",
+  "out": "/home/louis/dj-work/s0/s0c.json",
+  "port": 15681,
+  "cells": "portal",
+  "idle": [
+   1000,
+   10000
+  ],
+  "tls_idle": 1000,
+  "idle_window": 30.0,
+  "begin_sessions": 1500,
+  "begin_margin": 148,
+  "portals": 20,
+  "reps": 2,
+  "seconds": 3.0,
+  "heartbeat": "/home/louis/dj-work/s0/heartbeat_c",
+  "status": "/home/louis/dj-work/s0/status_c.txt"
+ },
+ "bin_sha256": "3df8801d61b6cbd8f9d9c6b16693c88b6de429069865bc8f527f2f5350587cbb",
+ "cells": [
+  {
+   "cell": "portal",
+   "arm": "held_portals",
+   "portals": 20,
+   "relation_rows": 100000,
+   "max_rows": 100,
+   "first": {
+    "first_batch_ms": 20.06,
+    "rows": 100,
+    "suspended": true
+   },
+   "rss_kb_base": 36156,
+   "rss_kb_with_portals": 126528,
+   "kb_per_suspended_portal": 4518.6,
+   "host": {
+    "loadavg": "5.28 10.14 10.35 2/637 3900550",
+    "noise_processes": 1
+   }
+  },
+  {
+   "stmts": 148,
+   "rows_first_batch": 100,
+   "server_cpu_us_per_stmt": 20135.1,
+   "first_batch": {
+    "n": 148,
+    "p0_us": 19339.0,
+    "p25_us": 19650.1,
+    "p50_us": 19836.5,
+    "p75_us": 20045.6,
+    "p95_us": 21218.2,
+    "p99_us": 27604.6,
+    "max_us": 31265.4
+   },
+   "attempts": 1,
+   "cell": "portal",
+   "arm": "capped_whole",
+   "host": {
+    "loadavg": "4.93 9.99 10.30 1/636 3900604",
+    "noise_processes": 0
+   }
+  },
+  {
+   "stmts": 23055,
+   "rows_first_batch": 100,
+   "server_cpu_us_per_stmt": 79.8,
+   "first_batch": {
+    "n": 23055,
+    "p0_us": 72.8,
+    "p25_us": 91.5,
+    "p50_us": 92.3,
+    "p75_us": 93.7,
+    "p95_us": 98.0,
+    "p99_us": 103.9,
+    "max_us": 2479.6
+   },
+   "attempts": 2,
+   "cell": "portal",
+   "arm": "limit_100",
+   "host": {
+    "loadavg": "9.71 12.10 11.25 1/618 3903994",
+    "noise_processes": 0
+   }
+  }
+ ],
+ "skipped": [],
+ "held_for_quiet_s": 336.0
+}

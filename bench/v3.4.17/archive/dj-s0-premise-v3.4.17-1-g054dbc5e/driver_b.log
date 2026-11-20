@@ -1,0 +1,37 @@
+beside rep 0 idle0
+beside rep 0 idle1000
+beside rep 0 idle10000
+beside rep 0 idle0_again
+beside rep 1 idle0
+beside rep 1 idle1000
+beside rep 1 idle10000
+beside rep 1 idle0_again
+beside rep 2 idle0
+beside rep 2 idle1000
+beside rep 2 idle10000
+beside rep 2 idle0_again
+churn_plain rep 0 S
+churn_plain rep 0 C
+churn_plain rep 0 S2
+churn_plain rep 0 loop alone
+churn_plain rep 1 S
+churn_plain rep 1 C
+churn_plain rep 1 S2
+churn_plain rep 1 loop alone
+churn_plain rep 2 S
+churn_plain rep 2 C
+churn_plain rep 2 S2
+churn_plain rep 2 loop alone
+churn_tls rep 0 S
+churn_tls rep 0 C
+churn_tls rep 0 S2
+churn_tls rep 0 loop alone
+churn_tls rep 1 S
+churn_tls rep 1 C
+churn_tls rep 1 S2
+churn_tls rep 1 loop alone
+churn_tls rep 2 S
+churn_tls rep 2 C
+churn_tls rep 2 S2
+churn_tls rep 2 loop alone
+driver finished

@@ -71,7 +71,7 @@ statement (`docs/spec/protocol.md` §10):
 
 | Role | May run |
 |---|---|
-| `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION`, `SET DURABILITY`, `SET PRIORITY` (all but `TRANSACTIONAL`, which is `admin`'s) |
+| `readonly` | `SELECT`, `WITH`, `ANALYZE`, `SHOW *`, `DESCRIBE`, `PING`, `BEGIN`/`COMMIT`/`ROLLBACK`, `SET ISOLATION`, `SET DURABILITY`, `SET PRIORITY` (all but `TRANSACTIONAL`, which is `admin`'s), `USE`, `RESET SESSION` |
 | `readwrite` | everything above, plus `INSERT`, `UPDATE`, `DELETE` |
 | `admin` | everything, including `CREATE`/`DROP`/`ALTER`, `STOP`, `SYNC`, `SET CABIN_OPTIMIZER`, `SET JOIN_ORDER`, `SET ASH`, `CREATE PLAN`, `ALTER PLAN`, `DROP PLAN` |
 
@@ -105,6 +105,9 @@ defaults → config file (`--config <path>`) → command-line flags.** See
 | `listen_address` | — | `127.0.0.1` | The IPv4 address the default port binds. `0.0.0.0` is every interface; a name is refused. `debug_text_port` and `kwp_port` stay loopback whatever this says. With `auth = off`, a non-loopback address serves anyone who can reach it. |
 | `kwp_port` | — | `0` | The KWP load endpoint's port; `0` opens no socket. Loopback only. |
 | `tcp_keepalive_s` | — | `60` | Idle seconds before keepalive probes a connection; a dead peer is reaped after about twice this value. `0` turns it off; above 32767 is refused. |
+| `max_connections` | — | `0` | How many sessions the default port serves on every core together; `0` is no limit. Past it a session is refused where its handshake ends, `RESOURCE_EXHAUSTED` with the connection-limit detail, fatal. A cancel connection is never refused (`docs/spec/protocol.md` §10). |
+| `reserved_admin_connections` | — | `3` | Seats past `max_connections` for sessions authenticated as `admin`; in force only beside `max_connections` and `auth = scram`, and refused at startup where named without either. |
+| `idle_session_timeout_s` | — | `0` | Seconds a connection may sit with no statement running, no transaction open and no portal held before the server tells it why (`RESOURCE_EXHAUSTED`, idle-session-timeout detail) and closes it; `0` is no timeout, `1`-`59` is refused. A `C_PING` is not activity. |
 | `max_locks_per_txn` | — | `65536` | The lock family's per-transaction entry budget (`docs/spec/txn.md` §5). |
 | `lock_wait_fault_net_ms` | — | `1000` | The longest a lock wait runs before it is refused `TxnConflict`; `0` refuses immediately. |
 | `ash_enabled` / `ash_interval_ms` / `ash_capture_arg_hash` / `ash_ring_bytes_per_core` | — | `on` / `1000` / `off` / `4194304` | The active-session sampler behind `sys.ash` (`docs/spec/sys-views.md` §6.7). The interval is 100-10000 ms and the ring 1-64 MiB; `SET ASH` changes the first three at runtime, the ring only on restart. |

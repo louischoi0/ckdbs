@@ -1991,6 +1991,20 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   overrides for one transaction, and the two clauses may be written in
   either order. Three rungs: the server's configured class, then the
   session's, then the transaction's.
+- **`RESET SESSION`** (verified in `HandleReset`; reply `RESET SESSION`)
+  returns the connection to what a new one has: `SET ISOLATION LEVEL`,
+  `USE`, `SET DURABILITY` and `SET PRIORITY` are undone together - the
+  server's `isolation`, the `public` namespace, no durability class of the
+  session's own, `NORMAL` - and over KWP every prepared statement and
+  portal is dropped. It is what a connection pool sends before it lends a
+  connection again, so that one borrower's `USE` or `SET DURABILITY
+  RELAXED` is not the next borrower's. Refused inside a transaction, with
+  nothing changed, the transaction included, which stays open - `COMMIT`
+  or `ROLLBACK` first. `RESET` takes `SESSION` and
+  nothing else: `RESET ALL` and `RESET <setting>` are refused with the byte
+  of the word. Any role may run it. A KWP client that offered the
+  `SESSION_DEFAULTS` capability is told in every `S_READY` whether the
+  session stands at its defaults (`docs/spec/protocol.md` §3).
 - **`SET PRIORITY {TRANSACTIONAL|NORMAL|ANALYTIC|BACKGROUND}`** (verified
   in `HandleSetPriority`; reply `SET priority=<level>`) declares the work
   this session does, `NORMAL` until it declares one, from its next

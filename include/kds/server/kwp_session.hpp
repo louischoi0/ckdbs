@@ -14,6 +14,7 @@
 #include "kds/server/auth.hpp"
 #include "kds/server/cancel_registry.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/connection_limits.hpp"
 #include "kds/server/result_sink.hpp"
 #include "kds/server/session.hpp"
 #include "kds/wire/error_registry.hpp"
@@ -101,6 +102,19 @@ inline constexpr sched::MonoTimeNs kPortalIdleTimeoutNs = 60ull * 1000 * 1000 * 
 // help. The cap is per **session**, so it bounds one connection's state and
 // not the server's; what bounds the server is the connection count.
 inline constexpr std::size_t kMaxSessionStatements = 64;
+
+// **What one capped portal may hold** (DJ-S4, DJ-Q11 (a)): the encoded rows
+// a `C_EXECUTE {max_rows > 0}`'s statement has produced and not yet
+// delivered. A capped portal runs its statement whole into the buffer
+// (`protocol.md` §7) - DJ-S0 measured 4.4 MiB held for a 100,000-row
+// result asked for 100 rows at a time - so past this the statement is
+// refused `RESOURCE_EXHAUSTED` / `kPortalHeldBytes` rather than grown
+// without bound. `kMaxFrame`, 16 MiB: one frame's ceiling, so a capped
+// portal holds no more than one frame could carry. `[provisional]`
+// (DJ-R10): the derivation is the protocol's, not a measured need. An
+// uncapped portal is not bounded by it: it streams, or answers at
+// completion as before.
+inline constexpr std::size_t kMaxPortalHeldBytes = wire::kMaxFrame;
 inline constexpr std::size_t kMaxSessionPortals = 64;
 
 // The result sink that produces `S_ROW_DESC` and `S_ROW_BATCH` payloads.
@@ -133,6 +147,9 @@ public:
     //
     // 0 is no cap, which is `max_rows`'s own meaning (§7).
     void set_batch_row_cap(std::uint32_t rows) noexcept { batch_row_cap_ = rows; }
+
+    // A capped sink refused a row for `kMaxPortalHeldBytes` (DJ-S4).
+    bool held_too_much() const noexcept { return held_bytes_ > kMaxPortalHeldBytes; }
 
     // Seals whatever is still open. Call once, after the statement.
     void Finish();
@@ -182,6 +199,8 @@ private:
     std::uint16_t open_rows_ = 0;
     std::uint64_t rows_ = 0;
     std::uint32_t batch_row_cap_ = 0;
+    // The encoded row bytes a capped sink holds (DJ-S4).
+    std::size_t held_bytes_ = 0;
     Stream* stream_ = nullptr;
     bool streamed_ = false;
 };
@@ -276,8 +295,41 @@ public:
     // as any unexpected first frame is.
     void set_cancel_registry(CancelRegistry* registry) noexcept { cancels_ = registry; }
 
+    // **The instance's connection cap** (DJ-S1, `connection_limits.hpp`), or
+    // null where the listener has none. This session takes its seat where
+    // its handshake ends - never a cancel connection, which has none, and
+    // never a connection still in its exchange - and holds it until it is
+    // destroyed; one refused a seat is answered `RESOURCE_EXHAUSTED` /
+    // `kConnectionLimit`, fatal, in place of `S_HELLO`. Set before the
+    // first frame.
+    void set_connection_limits(ConnectionLimits* limits) noexcept { limits_ = limits; }
+
+    // **Whether a pool may hand this session on as it stands** (DJ-S2,
+    // `S_READY`'s `kReadySessionDefaults`): the engine session's settings are
+    // a new connection's (`Session::AtDefaults`, which also means no
+    // transaction) and no statement and no portal is held - the unnamed
+    // ones included, since the empty name is a name: a `C_CONTINUE ""`
+    // would take the last borrower's rows and a `C_BIND` of statement ""
+    // would run its text. Computed from the state itself at every
+    // `S_READY`, never remembered, so no path can leave it standing over a
+    // setting (DJ-R8).
+    bool AtDefaults() const noexcept;
+
     std::size_t statement_count() const noexcept { return statements_.size(); }
     std::size_t portal_count() const noexcept { return portals_.size(); }
+    // Whether the session holds a portal that still owes something: one
+    // bound and not yet executed, or suspended with rows to continue. A
+    // spent portal - its `S_COMPLETE` sent - is a name and nothing a client
+    // can resume, so the idle-session sweep does not read it as held
+    // (DJ-R3, `TcpServer::CloseIdleSessions`): a client that never closes
+    // its unnamed portal would otherwise be idle only once the portal
+    // timeout had released it.
+    bool holds_live_portal() const noexcept {
+        for (const auto& [name, portal] : portals_) {
+            if (!portal.complete_sent) return true;
+        }
+        return false;
+    }
 
 private:
     enum class Phase : std::uint8_t { kAwaitHello, kAwaitAuth, kReady };
@@ -343,6 +395,11 @@ private:
     // never typed, delivered as a one-column TEXT result set.
     void DeliverTextLines(std::string_view reply, std::vector<std::byte>& out);
 
+    // Takes this session's seat under the cap as its handshake ends, or
+    // answers the refusal. `gated` says a gate stamped `role`; the reserve
+    // is open to a gated `admin` alone (`connection_limits.hpp`).
+    std::optional<wire::WireError> TakeSeat(bool gated, Role role);
+
     Portal* FindPortal(const std::string& name);
     // The refusal for a frame naming a portal this session does not hold:
     // `kPortalIdleTimeout` for one the sweep released, `kUnknownPortal`
@@ -365,6 +422,12 @@ private:
     // whole rule.
     bool skipping_to_sync_ = false;
     CancelRegistry* cancels_ = nullptr;
+    // The capability bits this connection negotiated (§3's intersection),
+    // from its `C_HELLO`: what `S_HELLO` reports and what gates a frame
+    // shape the client did not ask for.
+    std::uint64_t capabilities_ = 0;
+    ConnectionLimits* limits_ = nullptr;  // `set_connection_limits`
+    ConnectionSeat seat_;
     std::uint64_t session_id_ = 0;
     std::uint64_t cancel_key_ = 0;
 

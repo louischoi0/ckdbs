@@ -12,6 +12,7 @@
 #include "kds/server/auth.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/connection_handoff.hpp"
+#include "kds/server/connection_limits.hpp"
 #include "kds/server/kwp_session.hpp"
 #include "kds/server/transaction_placement.hpp"
 #include "kds/server/wire_channel.hpp"
@@ -207,6 +208,8 @@ public:
     void set_protocol(Protocol protocol) noexcept { protocol_ = protocol; }
     Protocol protocol() const noexcept { return protocol_; }
     std::uint32_t keepalive_s() const noexcept { return keepalive_s_; }
+    sched::MonoTimeNs idle_session_timeout_ns() const noexcept { return idle_session_timeout_ns_; }
+    const ConnectionLimits* connection_limits() const noexcept { return limits_; }
 
     // The server's own class, for `S_TXN_OK`'s RELAXED flag (§9). Only the
     // KWP path reads it; the text protocol reports durability nowhere.
@@ -251,12 +254,21 @@ public:
         // `txn_lifetime_ceiling_ms` (AN-R14). Never 0; the Expeditor
         // refuses it (docs/spec/txn.md §1).
         sched::MonoTimeNs txn_lifetime_ceiling_ns = kDefaultTxnLifetimeCeilingNs;
+        // The instance's connection cap (DJ-S1, `connection_limits.hpp`), or
+        // null for a listener that has none. A KWP session takes its seat
+        // there where its handshake ends; the text protocol's never do.
+        ConnectionLimits* limits = nullptr;
+        // `idle_session_timeout_s` (DJ-S1); 0, the default, closes nothing
+        // (DJ-R1). `CloseIdleSessions` is its meaning.
+        sched::MonoTimeNs idle_session_timeout_ns = 0;
     };
     void Configure(const ClientSetup& setup) {
         protocol_ = setup.protocol;
         durability_ = setup.durability;
         keepalive_s_ = setup.keepalive_s;
         txn_lifetime_ceiling_ns_ = setup.txn_lifetime_ceiling_ns;
+        idle_session_timeout_ns_ = setup.idle_session_timeout_ns;
+        if (setup.limits != nullptr) limits_ = setup.limits;
         if (setup.identity) identity_source_ = setup.identity;
         if (setup.cancels != nullptr) cancels_ = setup.cancels;
         if (setup.channel) channel_factory_ = setup.channel;
@@ -339,6 +351,29 @@ private:
         // none, is timed too (CS).
         sched::MonoTimeNs txn_began_at_ns = 0;
         std::uint64_t txn_stamped_seq = 0;
+
+        // **The idle-session sweep's two words** (DJ-S1,
+        // `CloseIdleSessions`), neither touched while
+        // `idle_session_timeout_s` is 0. `worked` is set where a statement
+        // is submitted and cleared by the first sweep that finds it no
+        // longer in flight, so a session that ran
+        // statements between two ticks is seen to have worked without a
+        // clock read on any statement's path (DJ-R6). `idle_since_ns` is the
+        // last instant the sweep found the connection not idle - its accept
+        // at first - and what the timeout is counted from.
+        bool worked = false;
+        sched::MonoTimeNs idle_since_ns = 0;
+
+        // **When this connection's running walk parked on its socket**, or
+        // the client last took a byte since (DJ-S4, P5a); 0 while it is not
+        // parked. Set by the walk's `resume_when`, cleared there and by
+        // `FlushOutbox`'s progress: the clock is read only while a walk is
+        // parked, never on a statement's path. `parked_unsent` is the
+        // kernel's unacknowledged send queue at that instant (`SIOCOUTQ`):
+        // a client that reads drains it long before the socket turns
+        // writable again, so a drain is the client's progress too.
+        sched::MonoTimeNs parked_since_ns = 0;
+        int parked_unsent = 0;
 
         // The finished statement's reply, waiting to be appended to the
         // outbox. Owned by the connection because the coroutine writes
@@ -424,6 +459,29 @@ private:
     // the contract). Rolls back each idle connection's overdue explicit
     // transaction and leaves its session expired (`Session::Expire`).
     void ExpireOverdueTransactions();
+
+    // **The idle-session sweep** (DJ-S1, `idle_session_timeout_s`;
+    // `docs/spec/protocol.md` §10 is the contract). Closes each connection
+    // that has been idle for the timeout, telling it why first (DJ-R4).
+    //
+    // **Idle is: no statement running, no transaction open, no portal held,
+    // and no statement run since the last tick** (DJ-R3). A statement in
+    // flight is the engine's to end, an open transaction the lifetime
+    // ceiling's and a portal the portal timeout's - each keeps the bound it
+    // has, and the sweep takes a connection only once it holds none of them.
+    // A session whose transaction the ceiling already rolled back holds
+    // nothing and is idle, and so does one whose only portals are spent
+    // (`S_COMPLETE` sent): a held portal is one that still owes rows or a
+    // run. A `C_PING` is no statement and resets nothing
+    // (DJ-Q5 (a)), nor does a `C_SYNC` or a `C_PARSE`; a connection that
+    // never finished its handshake is idle from its accept.
+    //
+    // The clock is read once a tick, here. A tick is an eighth of the
+    // timeout, so a connection is closed no sooner than the timeout after
+    // its last statement ended and within a quarter more of it: the sweep
+    // sees the work at the next tick and closes at the first tick a timeout
+    // after that.
+    void CloseIdleSessions();
     // Appends one reply line to the outbox, through the wire channel if
     // one is installed. Returns false if the connection was closed (a
     // channel Send failure).
@@ -498,6 +556,12 @@ private:
     // every listener and cancelled by `Detach`.
     sched::MonoTimeNs txn_lifetime_ceiling_ns_ = kDefaultTxnLifetimeCeilingNs;
     sched::TimerId txn_sweep_ = sched::kInvalidTimerId;
+    // `ClientSetup::limits`; null caps nothing.
+    ConnectionLimits* limits_ = nullptr;
+    // The idle-session sweep's (DJ-S1), registered by `Attach` only where
+    // the timeout is set and cancelled by `Detach`.
+    sched::MonoTimeNs idle_session_timeout_ns_ = 0;
+    sched::TimerId idle_session_sweep_ = sched::kInvalidTimerId;
     Clients clients_;
     std::uint64_t reply_writes_ = 0;  // `reply_writes()`
 };
