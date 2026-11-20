@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "kds/catalog/oid.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/stats/oid_parts.hpp"
 
 // **`sys.relation_stats`' activity columns: the rows each relation's writes
@@ -26,18 +27,22 @@
 // leaf divisions are `stats/leaf_stats.hpp`'s and a relation's delete-marked
 // rows the planner's steward's (`sys-views.md` §6.2c).
 //
-// **A lock wait is counted where its `sys.lock_waits` row is written**
+// **A lock wait is counted where its `sys.lock_waits` row is recorded**
 // (`LockWaitLog::Record`), from that row's relation, time and outcome, so
-// the four lock columns keep what that ring overwrites and hold nothing it
-// never recorded. A wait is not a write: a `DROP TABLE` that waited on a
+// the four lock columns keep what that ring overwrites - and a row the ring
+// lost to a reader's copy, since a count here takes no latch - and hold
+// nothing that was never handed to it. A wait is not a write: a `DROP TABLE` that waited on a
 // reader's borrow counts here and in no activity column.
 //
-// ---- Where the rows live, and the latch protocol ---------------------------
+// ---- Where the rows live, and the protocol ---------------------------------
 //
-// `OidParts` (`stats/oid_parts.hpp`): one latched part per core, the core a
-// statement ran on its only writer - once per write statement at its end,
-// once per lock wait at its end - and a reader summing the parts by oid. No
-// cross-core write is added to a statement's path.
+// `OidParts` (`stats/oid_parts.hpp`): one part per core and **no latch**
+// (`docs/rules/rules.md` §3a; DL-S2), the core a statement ran on its only
+// writer - once per write statement at its end, once per lock wait at its
+// end - and a reader summing the parts by oid. A relation's counts in a
+// part are relaxed single-writer words: a record takes nothing and waits
+// for nothing, and a row a view reads may differ by a statement in flight.
+// No cross-core write is added to a statement's path.
 //
 // **A count never fails, delays or reorders what it describes.** A new
 // relation past `kRelationsPerCore` is dropped and counted (a `sys.meta`
@@ -55,27 +60,28 @@ namespace kds::stats {
 enum class RelationWrite : std::uint8_t { kInsert, kUpdate, kDelete, kPurge };
 
 struct RelationActivity {
-    std::uint64_t inserts = 0;
-    std::uint64_t updates = 0;
-    std::uint64_t deletes = 0;
-    std::uint64_t purged = 0;
+    sched::RelaxedU64 inserts;
+    sched::RelaxedU64 updates;
+    sched::RelaxedU64 deletes;
+    sched::RelaxedU64 purged;
     // The lock waits registered on a unit of the relation, cumulative
     // (DF-S3): every row `sys.lock_waits` was written, counted where it is
     // written, so the columns hold what that ring has overwritten too.
-    std::uint64_t lock_waits = 0;
-    std::uint64_t lock_wait_us = 0;
-    std::uint64_t lock_deadlocks = 0;   // of `lock_waits`, ended `deadlock`
-    std::uint64_t lock_fault_nets = 0;  // of `lock_waits`, ended `fault_net`
+    sched::RelaxedU64 lock_waits;
+    sched::RelaxedU64 lock_wait_us;
+    sched::RelaxedU64 lock_deadlocks;   // of `lock_waits`, ended `deadlock`
+    sched::RelaxedU64 lock_fault_nets;  // of `lock_waits`, ended `fault_net`
 
+    // A reader's merge of two cores' parts.
     RelationActivity& operator+=(const RelationActivity& o) noexcept {
-        inserts += o.inserts;
-        updates += o.updates;
-        deletes += o.deletes;
-        purged += o.purged;
-        lock_waits += o.lock_waits;
-        lock_wait_us += o.lock_wait_us;
-        lock_deadlocks += o.lock_deadlocks;
-        lock_fault_nets += o.lock_fault_nets;
+        inserts.add(o.inserts);
+        updates.add(o.updates);
+        deletes.add(o.deletes);
+        purged.add(o.purged);
+        lock_waits.add(o.lock_waits);
+        lock_wait_us.add(o.lock_wait_us);
+        lock_deadlocks.add(o.lock_deadlocks);
+        lock_fault_nets.add(o.lock_fault_nets);
         return *this;
     }
 };

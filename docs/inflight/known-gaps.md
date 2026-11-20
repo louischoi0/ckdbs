@@ -1928,10 +1928,11 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   or undo page is labelled `HEAP` and its contents read as heap slots. A
   diagnostic's mislabel, not an answer; the page type byte is the
   authority, and the view's `page_type` should spell it.
-- **A view's read delays the writer of each part it copies** by the copy: a
-  reader takes each core's statistics latch in turn. Bounded by the part
-  (4096 shapes, 4096 relations, 4096 waits, 1024 runs), unmeasured as a
-  tail on the writing core.
+- **A view's read costs the writer of a latched part the records that meet
+  its copy**, never a wait (DL-S2): a record tries its part's latch and is
+  dropped and counted where a reader holds it (`sys.meta`'s `*_busy`
+  fields). Bounded by the part (4096 shapes, 4096 waits, 1024 runs, an ASH
+  ring); the rate was not measured before DL's close.
 - **An in-process restart keeps the statistics stores**: they are
   process-wide, so the sim harness's restart (`sim/`) and a test's second
   instance in one process see the rows the first wrote. A real restart
@@ -2834,39 +2835,16 @@ reading - DL-S0's census - and priced by
 §1.3 carries the `path:line` of each and the stage that brings it in. An
 entry is struck here when its path lands, never before.
 
-- **A record into a per-core statistics part waits for a reader's copy of
-  that part**, and the latch is a `std::mutex`, so the wait sleeps the
-  core's reactor and every session on it: `StatementStats` (whose
-  `Snapshot` merges and allocates under the latch, up to 4,096 shapes a
-  part), `RelationStats`, `LeafStats` (counted under a leaf's exclusive
-  hold and its secured parents'), `IndexStats` at a core's first sight of
-  an index, `AccessStats`, `LockWaitLog`, `CheckpointLog`, `AshRing` (whose
-  reader decodes the whole ring under the latch) and `PlanStats`' parts
-  (the steward's `Merge` allocates under the latch). Allowed by DF-R2 and
-  DA-R3 as written; breaks (b), the strict end state, and for the
-  allocating readers (c). The BO entry above ("A view's read delays the
-  writer of each part it copies") is the same gap, older.
-- **A column change's `AccessStats::Forget` takes every core's part latch
-  in turn**, so an `ALTER TABLE ... ADD COLUMN` that reuses a position
-  waits for a reader's walk of each part. Breaks (a).
-- **A session's creation and its end take one process-wide mutex**, the
-  end with a linear erase, and a `sys.session_waits` or `sys.session_state`
-  reader holds it for a copy of every session
-  (`src/sched/wait_state.cpp`): a connect or a close on any core waits
-  behind another core's, or behind a reader. Breaks (a).
 - **A core's first compile after a plan-statistics publish takes the
   instance's `publish_latch_`**, which an install holds across the
   snapshot's construction - three sorts over up to 16,384 posteriors, the
   managed store's latch nested (`PlanStats::Current`, `InstallLocked`).
   Breaks (d).
-- **The statistics callbacks wait on core 0's reactor**: the planner's
-  steward and the controller's tick are timer callbacks run inline in core
-  0's loop, and each takes its latches by the blocking form - a part's, the
-  space table's, the publish latch, the controller's view latch (taken
-  before the switch is asked) - so a wait of theirs stops every statement
-  on core 0. The ASH sampler, a phase of every core's loop, does the same
-  on its ring's latch. (The collector's parts are tried by the tick and by
-  the sampler's wait note since DL-S1.)
+- **Two statistics callbacks still wait on core 0's reactor**: the
+  planner's steward takes the publish latch, and the controller's tick the
+  view latch (before the switch is asked), by the blocking form, so a wait
+  of theirs stops every statement on core 0. (Their parts, the space table
+  and the ASH sampler's ring are tried since DL-S1 and DL-S2.)
 - **`SHOW CABIN_OPTIMIZER` and `SHOW META` can stall their core for a
   whole Cabin build**: both take the controller's view latch, which core
   0's tick holds across a Cabin's creation and its seeded build (the entry
@@ -2882,12 +2860,16 @@ scan and a log append; every session on core 0 waits for the walk. Off by
 default (`cabin_optimizer`). Verified at `b0a824db` by reading. Owner:
 `docs/spec/cabin-controller.md`.
 
-What already meets the rule: the Cabin controller's collector and the
-Cabin store's counters (DL-S1: a part a core tried and never waited for,
-nothing noted while `cabin_optimizer` is off; a core's own words),
-`RefusalStats`, `TxnStats`, `IndexStats`' counts, the wait statistics'
-totals, the contention instrument and the per-core load slots -
-single-writer words a core, read with no latch. The
+What meets the rule: the Cabin controller's collector and the Cabin
+store's counters (DL-S1: a part a core tried and never waited for, nothing
+noted while `cabin_optimizer` is off; a core's own words); every per-core
+statistics part (DL-S2: `RelationStats`, `LeafStats`, `IndexStats`,
+`AccessStats` and the session registry with no latch at all;
+`StatementStats`, the lock-wait and checkpoint rings, the ASH ring and the
+planner's parts tried and never waited for, their readers a copy and
+nothing else); `RefusalStats`, `TxnStats`, the wait statistics' totals,
+the contention instrument and the per-core load slots - single-writer
+words a core, read with no latch. The
 wait-free words every core writes (the buffer pool's counts, the plan
 tables' counters) are within the rule and priced in the results file.
 

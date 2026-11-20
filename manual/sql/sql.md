@@ -2171,7 +2171,10 @@ These seven are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
 (`statement_stats_dropped`, `relation_stats_dropped`, `index_stats_dropped`,
 `leaf_stats_dropped`, `lock_waits_*`,
-`checkpoints_*`); `sys.refusal_stats` is bounded by the error codes,
+`checkpoints_*`). **Recording never makes a statement wait**: where a view
+is being read at the instant a statement would record into it, that one
+record is skipped and counted instead (`statement_stats_busy`,
+`lock_waits_busy`, `checkpoints_busy`, and `ash_busy` for `sys.ash`); `sys.refusal_stats` is bounded by the error codes,
 `sys.txn_histogram` by its buckets, and neither gives up any.
 
 **How transactions ended, and what holds the read horizon**, are fields of

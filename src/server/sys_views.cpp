@@ -631,7 +631,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::IndexesView(const txn::ReadView* 
              Int((row.flags & catalog::kIndexFlagUnique) != 0 ? 1 : 0), Int(use.probes.get()),
              Int(use.ranges.get()), Int(use.entries_scanned.get()),
              Int(use.rows_resolved.get()), last_used(use.last_used_ns.get()),
-             Int(divided == leaf_acts.end() ? 0 : divided->second.divisions)});
+             Int(divided == leaf_acts.end() ? 0 : divided->second.divisions.get())});
     }
     return view;
 }

@@ -12,10 +12,10 @@ void RelationStats::Record(std::uint32_t core, catalog::Oid oid, RelationWrite k
     if (rows == 0) return;
     parts().With(core, oid, [&](RelationActivity& a) {
         switch (kind) {
-            case RelationWrite::kInsert: a.inserts += rows; break;
-            case RelationWrite::kUpdate: a.updates += rows; break;
-            case RelationWrite::kDelete: a.deletes += rows; break;
-            case RelationWrite::kPurge: a.purged += rows; break;
+            case RelationWrite::kInsert: a.inserts.add(rows); break;
+            case RelationWrite::kUpdate: a.updates.add(rows); break;
+            case RelationWrite::kDelete: a.deletes.add(rows); break;
+            case RelationWrite::kPurge: a.purged.add(rows); break;
         }
     });
 }
@@ -24,10 +24,10 @@ void RelationStats::RecordLockWait(std::uint32_t core, catalog::Oid oid, std::ui
                                    bool deadlock, bool fault_net) noexcept {
     if (oid == 0) return;
     parts().With(core, oid, [&](RelationActivity& a) {
-        ++a.lock_waits;
-        a.lock_wait_us += waited_us;
-        if (deadlock) ++a.lock_deadlocks;
-        if (fault_net) ++a.lock_fault_nets;
+        a.lock_waits.add(1);
+        a.lock_wait_us.add(waited_us);
+        if (deadlock) a.lock_deadlocks.add(1);
+        if (fault_net) a.lock_fault_nets.add(1);
     });
 }
 

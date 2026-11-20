@@ -36,10 +36,14 @@ class PageStore;
 //
 // One `Part` per core under its own `LatchKind::kStatsRing` latch, written
 // only by its core - at a planned statement's end - and emptied only by the
-// steward on core 0, which copies a part's entries out under its latch and
-// folds them after letting it go (`statement_stats.hpp`'s protocol). The
-// steward's own state (`master_`, `priors_`, `wanted_`) is touched by the
-// steward alone. The published snapshot is immutable; it is swapped under
+// steward on core 0, which copies a part's entries out under its latch,
+// into room made before the hold, and folds them after letting it go.
+// **Neither waits for the other** (`docs/rules/rules.md` §3a; DL-S2): a
+// statement's fold takes its part by the try form and is dropped and
+// counted where the steward's copy holds it (`plan_stats_part_busy`), and
+// the steward - a timer callback on core 0's reactor - tries too and leaves
+// a busy part to its next step (DL-Q17). The steward's own state
+// (`master_`, `priors_`, `wanted_`) is touched by the steward alone. The published snapshot is immutable; it is swapped under
 // `publish_latch_` and announced by `generation_` (release), which a compile
 // reads with one acquire load (`PlanStatsSource`).
 //
@@ -182,6 +186,12 @@ public:
     // band moved; nothing where none did (CY-Q31 (a)). Any thread.
     void RepublishManaged();
 
+    // `core`'s part's latch, for a test that holds it as the steward's copy
+    // does; null where there is no such part.
+    Latch* PartLatchForTest(std::uint32_t core) noexcept {
+        return core < parts_.size() ? &parts_[core]->latch : nullptr;
+    }
+
     // A test's seam: publishes these facts as the next generation.
     void PublishForTest(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
                         std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors);
@@ -193,6 +203,9 @@ public:
 
     struct Counters {
         std::uint64_t part_drops = 0;
+        // A statement's fold or wanted priors that met the steward's copy
+        // of its part (DL-R2).
+        std::uint64_t part_busy = 0;
         std::uint64_t seeds = 0;
         std::uint64_t seed_pages = 0;
         std::uint64_t publishes = 0;
@@ -250,7 +263,9 @@ private:
     catalog::Oid reseed_cursor_ = 0;
     bool dirty_ = false;
     // `EstDeleteMarked`'s side table, under its own latch: the steward
-    // writes, a view on any core reads, and nothing else touches it.
+    // writes, a view on any core reads, and nothing else touches it. The
+    // steward takes it by the try form (DL-Q17): a sample that meets a
+    // view's read is left for the relation's next seed.
     mutable Latch space_latch_{LatchKind::kStatsRing};
     std::unordered_map<catalog::Oid, std::uint64_t> delete_marked_;
 
@@ -262,6 +277,7 @@ private:
     std::atomic<std::uint64_t> generation_{0};
 
     std::atomic<std::uint64_t> part_drops_{0};
+    std::atomic<std::uint64_t> part_busy_{0};
     std::atomic<std::uint64_t> seeds_{0};
     std::atomic<std::uint64_t> seed_pages_{0};
     std::atomic<std::uint64_t> publishes_{0};

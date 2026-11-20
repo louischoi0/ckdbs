@@ -332,7 +332,14 @@ PlanStats::PlanStats(std::uint32_t cores) {
 void PlanStats::Fold(std::uint32_t core, const PlanObservation& observation) noexcept {
     if (core >= parts_.size()) return;
     Part& part = *parts_[core];
-    const LatchGuard hold(&part.latch);
+    // Tried, never waited for (`rules.md` §3a (b)): the one other taker is
+    // the steward's copy, and an observation that meets it is the count's
+    // loss - the planner's statistics are advisory.
+    const LatchGuard hold(&part.latch, std::try_to_lock);
+    if (!hold.owns()) {
+        part_busy_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     // Open addressing over a fixed table: no allocation on this path. A new
     // key past half the table is dropped and counted, so probes stay short;
     // the steward empties the table every step.
@@ -361,7 +368,13 @@ void PlanStats::Fold(std::uint32_t core, const PlanObservation& observation) noe
 void PlanStats::WantPriors(std::uint32_t core, std::span<const catalog::Oid> oids) noexcept {
     if (core >= parts_.size() || oids.empty()) return;
     Part& part = *parts_[core];
-    const LatchGuard hold(&part.latch);
+    // Tried: a want that meets the steward's copy is asked again by the
+    // next planned run that meets the relation without a prior.
+    const LatchGuard hold(&part.latch, std::try_to_lock);
+    if (!hold.owns()) {
+        part_busy_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     for (const catalog::Oid oid : oids) {
         const auto end = part.wanted.begin() + static_cast<std::ptrdiff_t>(part.nwanted);
         if (std::find(part.wanted.begin(), end, oid) != end) continue;
@@ -380,28 +393,39 @@ bool PlanStats::Reband(std::int16_t& band, bool& banded, double v) noexcept {
 }
 
 void PlanStats::Merge(std::uint64_t now_ns) {
-    // Every part's entries are copied out under its latch, and the latch is
-    // let go before anything here touches `master_` - a core's statement end
-    // waits for a copy, never for a fold.
+    // Every part's entries are copied out under its latch - into room made
+    // before the hold, so the hold is a copy and nothing else - and the
+    // latch is let go before anything here touches `master_` or `wanted_`.
+    // A core's statement end meets the copy or nothing, and never waits
+    // for it; nor does this step wait for a statement's fold (DL-Q17): a
+    // part found busy keeps its entries for the next step.
     std::unordered_map<PlanKey, PartEntry, PlanKeyHash> merged;
+    std::vector<PartEntry> taken;
+    taken.reserve(kKeysPerPart / 2);  // a part holds at most half its slots
     for (const std::unique_ptr<Part>& part_ptr : parts_) {
         Part& part = *part_ptr;
-        std::vector<PartEntry> taken;
+        taken.clear();
+        std::array<catalog::Oid, kWantedPerPart> wanted{};
+        std::size_t nwanted = 0;
         {
-            const LatchGuard hold(&part.latch);
-            taken.reserve(part.used);
-            for (PartEntry& entry : part.entries) {
-                if (!entry.used) continue;
-                taken.push_back(entry);
-                entry.used = false;
-            }
-            part.used = 0;
-            for (std::size_t i = 0; i < part.nwanted; ++i) {
-                if (std::find(wanted_.begin(), wanted_.end(), part.wanted[i]) == wanted_.end()) {
-                    wanted_.push_back(part.wanted[i]);
+            const LatchGuard hold(&part.latch, std::try_to_lock);
+            if (!hold.owns()) continue;
+            if (part.used != 0) {
+                for (PartEntry& entry : part.entries) {
+                    if (!entry.used) continue;
+                    taken.push_back(entry);
+                    entry.used = false;
                 }
+                part.used = 0;
             }
+            wanted = part.wanted;
+            nwanted = part.nwanted;
             part.nwanted = 0;
+        }
+        for (std::size_t i = 0; i < nwanted; ++i) {
+            if (std::find(wanted_.begin(), wanted_.end(), wanted[i]) == wanted_.end()) {
+                wanted_.push_back(wanted[i]);
+            }
         }
         // Summed across the cores first, so a posterior moves by one step
         // however many cores ran its statement.
@@ -467,8 +491,12 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
         // Dropped or unreadable: its prior is gone; posteriors naming it are
         // unreachable, since oids are never reissued.
         if (priors_.erase(oid) != 0) dirty_ = true;
-        const LatchGuard hold(&space_latch_);
-        delete_marked_.erase(oid);
+        // Tried (DL-Q17). An entry a view's read kept this step from erasing
+        // stays for the process's life - the prior is gone, so nothing
+        // seeds the oid again - and no view shows it: the relation is gone.
+        if (const LatchGuard hold(&space_latch_, std::try_to_lock); hold.owns()) {
+            delete_marked_.erase(oid);
+        }
         return Status::OK();
     }
     const std::size_t before = budget;
@@ -487,8 +515,11 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
     // After the prior's own entry, so every relation here has one there and
     // the erase above finds both.
     if (marked.has_value()) {
-        const LatchGuard hold(&space_latch_);
-        delete_marked_[oid] = static_cast<std::uint64_t>(std::llround(*marked));
+        // Tried (DL-Q17): this step runs on a reactor. A sample that meets
+        // a view's read is left for the relation's next seed.
+        if (const LatchGuard hold(&space_latch_, std::try_to_lock); hold.owns()) {
+            delete_marked_[oid] = static_cast<std::uint64_t>(std::llround(*marked));
+        }
     }
     prior.seeded_ns = now_ns;
     prior.carried = false;
@@ -727,6 +758,7 @@ void PlanStats::PublishForTest(
 PlanStats::Counters PlanStats::counters() const noexcept {
     Counters c;
     c.part_drops = part_drops_.load(std::memory_order_relaxed);
+    c.part_busy = part_busy_.load(std::memory_order_relaxed);
     c.seeds = seeds_.load(std::memory_order_relaxed);
     c.seed_pages = seed_pages_.load(std::memory_order_relaxed);
     c.publishes = publishes_.load(std::memory_order_relaxed);

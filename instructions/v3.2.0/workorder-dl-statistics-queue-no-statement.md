@@ -483,7 +483,7 @@ operator's own mark.
 | DL-Q13 | Evidence already collected when a consumer is switched off. | kept, decaying by the clock, with no new note; a switch-on then reads what is left of it | (b) cleared at the switch-off, so "from no evidence" is exact | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone) |
 | DL-Q10 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file | (b) lifted for DL-S0 | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone) |
 | DL-Q14 | The session registry of the wait statistics: one process-wide mutex a session's creation and its end take, and a `sys.session_waits` or `sys.session_state` reader holds for a copy of every session (`src/sched/wait_state.cpp:27-58`; found by DL-S0). | the registry takes no latch: a session's statistics live in a slot of chunks that are never moved or freed, claimed and given back by compare-exchange, and a reader walks the slots and reads each as its words stand, leaving out one that changed hands under the read | (b) a registry a core under a latch, the reader's hold cut to a copy of pointers - a creation still waits for it; (c) outside the rule: a connection's setup is not a statement | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
-| DL-Q15 | `AccessStats::Forget` - a column change's removal of the shapes naming a column, from every core's part (`src/server/command_dispatcher.cpp:4702`) - once a record takes no latch (found by DL-S0). | it waits for nothing: a shape's slot is marked dead where it stands and its own key takes it again from zero; a dead slot keeps its place and counts toward its part's bound until a restart (DA's "no tombstone counts against the bound" goes) | (b) the parts keep a latch and the column change waits a bounded copy for each (breaks clause (a)); (c) the forget is queued to each owning core and a reader filters until it is applied | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
+| DL-Q15 | `AccessStats::Forget` - a column change's removal of the shapes naming a column, from every core's part (`src/server/command_dispatcher.cpp:4702`) - once a record takes no latch (found by DL-S0). | it waits for nothing: a shape's slot is marked dead where it stands and its own key takes it again from zero; a dead slot keeps its place and counts toward its part's bound until a restart (DA's "no tombstone counts against the bound" goes). **As built at DL-S2, better than proposed**: a generation in the slot's state word lets the part's core give a dead slot to any new shape, so a forgotten slot is free again and DA's sentence stands | (b) the parts keep a latch and the column change waits a bounded copy for each (breaks clause (a)); (c) the forget is queued to each owning core and a reader filters until it is applied | **(a) as revised at DL-S2**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census. The revision drops the cost (a) accepted - DA's tests of a forgotten slot's reuse pass unchanged - and changes nothing else: the forget still waits for nothing |
 | DL-Q16 | A statement whose subject is the statistic - the operator's `STATISTICS` statements (a `GATHER`'s store and republish, `PUBLISH`, `RESTORE`, ...), `ADVISE PLAN`'s row, a relation drop's `Forget` of a managed object (found by DL-S0). | outside the rule, as DL-Q7's readers are: it is not a statement the statistic reports on, and what it may wait for is one bounded install or copy by another such statement - never one a statement's record or a compile holds, since those take none of these latches | (b) inside: it tries, and a busy latch is refused `TxnConflict` | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
 | DL-Q17 | A statistics task that runs as a timer callback on a reactor (the steward, the controller's tick, the ASH sampler): a latch it waits for stops every statement on its core (found by DL-S0; the callbacks are `Scheduler::SubmitEvery`'s, run inline). | every latch such a callback takes that another thread can hold is taken by the try form; a busy one is left to the next period (a part not merged this second, a publish left dirty, a sample not taken) and counted where a count exists | (b) the callbacks move to a thread of their own; (c) they may wait a bounded copy | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
 | DL-Q18 | The latch kinds the contention block counts by: the plan tables (captured plans, administrator's plans, plan advice) carry `kStatsRing` and are not statistics (DL-Q0 (a)); `kCabinStats` names a latch DL-S1 removes (found by DL-S0). | the plan tables take a kind of their own (`plan_table`), `cabin_stats` goes with its latch, and `stats_ring` counts the statistics stores alone - so the wait the rule forbids has one name in `sys.meta` and DL-S5's guard has one kind to refuse | (b) left as they are, the guard listing latches by address | **(a)**, adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone); raised by DL-S0's census |
@@ -702,3 +702,79 @@ quiet host - carried to DL-S6's close, whose gate also looks for another
 session's driver and during which this session builds nothing. **No word
 of DL-Q4's list moves on this run**: (a) moves one priced above the
 cell's floor, and none is priced.
+
+### DL-S2: the per-core parts (P3, P6, and a column change's forget)
+
+On worktree `dl-statistics-queue-no-statement`, on `1636d96d`.
+
+**The rows of fixed counters take no latch (W1).** `OidParts` is a
+`CounterTable` a core, so `RelationStats`, `LeafStats` and `IndexStats`
+record with nothing taken - a leaf division's count under its exclusive
+page hold included - and a view reads the words as they stand.
+`AccessStats` is latch-free too: a slot's state is an atomic word, two bits
+of state over a generation, and every field an atomic. **DL-Q15 as built
+is better than it was proposed**: a forget marks a slot dead and waits for
+nothing, and the part's core gives a dead slot to its own shape or to a
+new one under a new generation, and gives a dead slot at a run's end back
+to empty - so a forgotten slot is free again, no tombstone counts against
+the bound and none lengthens a later miss. DA's tests of a forgotten
+slot's reuse, the oracle over tiny tables among them, pass unchanged.
+**The session registry (DL-Q14)** is slots in chunks that are never freed,
+taken and given back by compare-exchange; `sys.session_waits` and
+`sys.session_state` walk them with no latch.
+
+**The rows that are more than counters are tried (W2), and their readers
+copy and let go (W3).** `StatementStats`, the lock-wait and checkpoint
+rings, the ASH ring and the planner's parts take their part's latch by
+the try form; a record that meets a reader's copy is counted
+(`statement_stats_busy`, `lock_waits_busy`, `checkpoints_busy`, `ash_busy`
+in a new `ash` section, `plan_stats_part_busy`: DL-R2). A reader makes
+its copy's room before the hold: `StatementStats` keeps a row's two texts
+as shared immutable strings, so a copy is counts and two reference
+counts; the ASH reader copies raw records and decodes after. **The
+steward tries too (DL-Q17)**: a busy part keeps its entries for the next
+step, and its two writes to the space table are tried.
+
+**What a view may now show** (DL-Q5 (a), DL-R3): a row of a latch-free
+store whose columns differ by an event in flight, as `IndexStats` stated
+before DL; a `sys.lock_waits` ring that lacks a row its relation's
+cumulative columns counted; a `sys.ash` that skips a sample. No view lost
+a column, a key or a refusal.
+
+**DL-R9.** `sys-views.md` §6, `plan-stats.md` §3-§4, the store headers and
+the manual say what is built; `known-gaps.md` loses the per-core parts',
+the forget's and the session mutex's entries, and its BO entry now reads
+"costs the writer the records that meet its copy, never a wait".
+
+**Review (`critics-developer`).** Three defects, each fixed: (1) **a quiet
+truncation** - `sys.indexes`' `leaf_divisions` read through a conditional
+whose type became `int` once the count was an atomic word, so a count
+past 2^31 would have shown wrapped; (2) the two copy-then-recheck readers
+(`AccessStats::Snapshot`, the session listing) had no fences, so a row
+mixing two owners was permitted by the language on a weakly ordered
+target though not on x86; (3) the ring reader's exact reserve a part
+copied the rows already taken once per part after them. Applied from its
+open findings: the trailing dead slots given back (above), the revive
+past the bound dropped at once, the leaked space-table entry stated, the
+part tables' memory stated in `sys-views.md` §6, a contract cell that
+tells a torn key (a churned shape's relation derived from its mask), the
+cells it listed as uncovered, the manual's counter list. Rejected: moving
+`RelaxedU64` to a base header - `IndexStats` has included the wait-state
+header for it since DF-S3, and the move touches ten files this stage does
+not need.
+
+**A test the change made false, found by the thread sanitizer's run and
+not by the suite**: `AshRing.ASnapshotDuringWritingHoldsWholeRecordsInOrder`
+required every sample to be consecutive beside a reader; a sample that
+meets the reader's copy is now skipped. It passed in the suite by timing.
+It now requires whole records in order and every sample recorded or
+counted busy.
+
+**Not moved: DL-Q4's words.** The plan tables' counters and the pool's
+hit count stay where they are: (a) moves a word priced above its cell's
+floor, and DL-S0 priced none (a change that moved the plan counters on a
+misread of the `join8` cell was made and taken out before this commit).
+Carried to DL-S6.
+
+**Suite.** 0 failed of 4,922 (2 disabled, 2 skipped) on the committed tree. The first run of the reviewed tree failed one cell, `StatementCostRig.BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheViews` (79 calls of 80): the second test the change made false - it read the views while both cores recorded and required every record. It now requires every statement recorded or counted busy; thirty repeats of the statistics rigs and cells then showed no failure. **`tsan`** (gcc 14, `build-tsan/`): 171 cells - the contract suite, the counter table, the stores and their rigs - 0 reports.
+**Overhead not measured; measured at the milestone's close.**

@@ -1,15 +1,15 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <vector>
 
-#include "kds/base/latch.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
 #include "kds/exec/step_chain.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/stats/per_core_ring.hpp"
 
 // **`sys.access_stats`' rows: what a statement's steps actually did, per
@@ -27,35 +27,52 @@
 // kind: "how often is this relation looked up versus filter-scanned" is only
 // answerable if both are counted the same way.
 //
-// ---- Where the rows live, and the latch protocol --------------------------
+// ---- Where the rows live, and the protocol --------------------------------
 //
 // **The instance owns the store** (DA-R6): a restart, a restore and a second
 // instance in one process each start empty, with no reset call. The
 // instance hands one object to every core's dispatcher; a dispatcher handed
 // none uses one of its own.
 //
-// One part per core (`kStatsParts`) under a latch of its own
-// (`LatchKind::kStatsRing`): the core a statement ran on is the only writer
-// of its part (DA-R4); a reader takes each part's latch in turn, copies its
-// live slots, and merges the copies with no latch held - `uses` summed and
-// saturating, `last_seen` the latest. A forget takes each part's latch in
-// turn (DA-R5).
+// One part per core (`kStatsParts`), **and no latch** (`docs/rules/rules.md`
+// §3a; DL-S2): the core a statement ran on is the only writer of its part
+// (DA-R4) and takes nothing to record; a reader walks each part's slots and
+// reads them as they stand, then merges the copies - `uses` summed and
+// saturating, `last_seen` the latest; a forget marks slots and waits for
+// nothing (DA-R5, DL-Q15).
 //
 // **A part is a flat table of fixed-size slots** (DA-Q8 (a)), sized by the
 // boot key `access_stats_bytes_per_core`: `bytes / kSlotBytes` slots,
 // linear-probed from the key's hash, **at most half of them live** - the
 // load bound that keeps a miss on a part at its bound a short walk rather
 // than a walk of every slot. The table is allocated whole, once, at the
-// part's first record, and never grown: a core that records nothing costs
-// nothing, and a dispatcher's own fallback store costs nothing once the
-// instance's replaces it. A forget deletes by backward shift, so no
-// tombstone counts against the bound.
+// part's first record, published by a compare-exchange and never grown or
+// moved: a core that records nothing costs nothing, and a dispatcher's own
+// fallback store costs nothing once the instance's replaces it.
+//
+// **A slot's state is one atomic word**: two bits of state - empty, being
+// claimed, live, dead - above a generation that moves every time the slot
+// is given to a key. Every field of a slot is an atomic, so no read beside
+// a write is a data race. The part's core claims an empty slot by a
+// compare-exchange, writes its key and publishes it live. **A forget marks
+// a matching slot dead where it stands** (a compare-exchange from live, by
+// any thread) and waits for nothing: a reader skips a dead slot, and the
+// part's core takes it again - for its own key, from zero, or for a new
+// shape whose walk passes it - under a new generation, and gives a dead
+// slot at the end of a run back to empty (`Record`'s note says why that
+// breaks no key's run). **So a forgotten slot is free again, no tombstone
+// counts against the bound, and none stays to lengthen every later miss**,
+// as a backward shift left it before DL. A reader copies a live slot and reads
+// its state again: a slot that changed hands under the copy is left out,
+// so no row is ever two shapes'. One writer a part is the caller's premise
+// and nothing depends on it for memory safety: two threads recording as
+// one part can lose a count, or leave one shape two slots that a reader's
+// merge adds - nothing else.
 //
 // **A record never fails, delays or reorders the statement it describes**
-// (DA-R3), and waits for at most one reader's copy of its own part. A new
-// shape past the bound is dropped and counted; a part whose table cannot be
-// allocated drops and counts every record (`sys.meta`'s
-// `access_stats_dropped`).
+// (DA-R3) and waits for nothing. A new shape past the bound is dropped and
+// counted; a part whose table cannot be allocated - tried once - drops and
+// counts every record (`sys.meta`'s `access_stats_dropped`).
 
 namespace kds::stats {
 
@@ -99,8 +116,10 @@ public:
     void Record(std::uint32_t core, exec::AccessKind kind, catalog::Oid rel_id,
                 std::uint64_t column_mask, std::uint64_t now) noexcept;
 
-    // Removes every shape of `rel_id` whose mask names `col_pos`, from every
-    // part, before it returns (CD-OI-13 (a), DA-R5).
+    // Forgets every shape of `rel_id` whose mask names `col_pos`, in every
+    // part, before it returns (CD-OI-13 (a), DA-R5): no reader shows one
+    // after it, and the shape's next execution counts from one. Waits for
+    // nothing.
     void Forget(catalog::Oid rel_id, std::uint16_t col_pos) noexcept;
 
     // Every shape, the parts merged by key, in key order (DA-Q2 (a)):
@@ -114,29 +133,53 @@ public:
     std::uint64_t ShapesPerCore() const noexcept { return slots_ / 2; }
 
 private:
+    // A slot's state word: the state in the low two bits, the slot's
+    // generation above them.
+    enum SlotState : std::uint32_t { kEmpty = 0, kClaiming = 1, kLive = 2, kDead = 3 };
+    static constexpr std::uint32_t kStateMask = 3;
+    static constexpr std::uint32_t kGeneration = 4;  // one generation
+    static std::uint32_t StateOf(std::uint32_t word) noexcept { return word & kStateMask; }
+    // `word`'s slot under its next generation, in `state`.
+    static std::uint32_t NextAs(std::uint32_t word, SlotState state) noexcept {
+        return ((word & ~kStateMask) + kGeneration) | state;
+    }
     struct Slot {
-        std::uint64_t rel_id;
-        std::uint64_t column_mask;
-        std::uint64_t uses;
-        std::uint64_t last_seen;
-        exec::AccessKind kind;
-        bool used;
+        // The key: written while `kClaiming`, by the part's core alone.
+        sched::RelaxedU64 rel_id;
+        sched::RelaxedU64 column_mask;
+        sched::RelaxedU64 uses;
+        sched::RelaxedU64 last_seen;
+        std::atomic<std::uint8_t> kind;
+        std::atomic<std::uint32_t> state;
 
         bool Is(exec::AccessKind k, catalog::Oid rel, std::uint64_t mask) const noexcept {
-            return used && kind == k && rel_id == rel && column_mask == mask;
+            return kind.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(k) &&
+                   rel_id.get() == rel && column_mask.get() == mask;
         }
     };
     static_assert(sizeof(Slot) == kSlotBytes,
                   "the key counts bytes in slots, so a slot's size is the unit");
     struct Part {
-        Latch latch{LatchKind::kStatsRing};
-        std::unique_ptr<Slot[]> table;  // `slots_` slots once allocated
-        std::size_t live = 0;
-        std::uint64_t dropped = 0;
-        bool failed = false;  // the allocation failed: every record drops
+        std::atomic<Slot*> table{nullptr};  // `slots_` slots once allocated
+        // Slots ever claimed, and those of them a forget left dead and no
+        // key has taken again: the difference is the live shapes, which the
+        // load bound counts.
+        std::atomic<std::size_t> claimed{0};
+        std::atomic<std::size_t> dead{0};
+        std::atomic<std::uint64_t> dropped{0};
+        std::atomic<bool> failed{false};  // the allocation failed: every record drops
     };
+    // Whether the part admits a shape it does not hold live: fewer than
+    // half its slots are.
+    bool RoomForANewShape(const Part& part) const noexcept;
+    // Gives `slot`, which the part's core has just moved to `kClaiming`,
+    // to a key with one execution, and publishes it live.
+    static void Fill(Slot& slot, std::uint32_t claiming, exec::AccessKind kind,
+                     catalog::Oid rel_id, std::uint64_t column_mask, std::uint64_t now) noexcept;
+    // The part's table, made at its first record; null where it cannot be.
+    Slot* TableOf(Part& part) noexcept;
     const std::size_t slots_;
-    mutable std::array<Part, kStatsParts> parts_;
+    std::array<Part, kStatsParts> parts_;
 };
 
 // Records one execution of every step in `chain`, sub-chains and hoisted

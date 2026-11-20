@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,14 +32,23 @@
 //
 // One part per core under a latch of its own (`LatchKind::kStatsRing`, the
 // statistics stores' kind): the core a statement ran on is the only writer
-// of its part, once per statement at its end; a reader on any core takes
-// each part's latch in turn, copies it, and merges the parts by key - one
-// row per shape for the instance. No cross-core write is added to a
-// statement's path.
+// of its part, once per statement at its end; a reader on any core copies
+// each part in turn and merges the copies by key - one row per shape for
+// the instance. No cross-core write is added to a statement's path.
 //
-// **A write never fails, delays or reorders the statement it describes.** A
-// new shape past `kShapesPerCore` is dropped and counted (a `sys.meta`
-// field, SV3); a shape that cannot be allocated is dropped the same way.
+// **A write never fails, delays or reorders the statement it describes**
+// (`docs/rules/rules.md` §3a; DL-S2). **A record takes its part's latch by
+// the try form and never waits for it**: the one other taker is a reader's
+// copy, and a record that meets it is dropped and counted
+// (`statement_stats_busy`). A new shape past `kShapesPerCore` is dropped
+// and counted (`statement_stats_dropped`, SV3); a shape that cannot be
+// allocated is dropped the same way. **A reader's hold is a copy and
+// nothing else**: it reserves the copy's room before it takes the latch,
+// copies the part's rows - counts, and shared pointers to the two texts a
+// row carries, so the copy allocates nothing - and merges, sorts and
+// builds strings after letting the part go. The one allocation under the
+// latch is the owner's, at a shape's first statement and where its plan
+// source moves.
 //
 // ---- What a shape costs (DF-S1) --------------------------------------------
 //
@@ -138,8 +149,17 @@ public:
     // New shapes no part could take, over every core.
     static std::uint64_t Dropped() noexcept;
 
+    // Records that met a reader's copy of their part and were not taken,
+    // over every core (DL-R2).
+    static std::uint64_t Busy() noexcept;
+
     // Empties every part; a test's alone.
     static void ResetForTest() noexcept;
+
+    // `core`'s part's latch, for a test that holds it as a reader's copy does.
+    static Latch* PartLatchForTest(std::uint32_t core) noexcept {
+        return &parts()[core % kStatsParts].latch;
+    }
 
 private:
     struct Key {
@@ -150,10 +170,28 @@ private:
     struct KeyHash {
         std::size_t operator()(const Key& k) const noexcept;
     };
+    // A shape's plan source and label, replaced whole where it moves.
+    struct PlanNote {
+        std::string source;
+        std::string label;
+    };
+    // What a part keeps for a shape. `counts` holds every number and none
+    // of the texts - its strings stay empty, so copying a row allocates
+    // nothing - and the texts are shared and immutable: a reader's copy is
+    // a count of references.
+    struct Row {
+        StatementShape counts;
+        std::shared_ptr<const std::string> shape_text;
+        std::shared_ptr<const PlanNote> plan;
+    };
     struct Part {
         Latch latch{LatchKind::kStatsRing};
-        std::unordered_map<Key, StatementShape, KeyHash> shapes;
-        std::uint64_t dropped = 0;
+        std::unordered_map<Key, Row, KeyHash> shapes;  // under `latch`
+        // `shapes.size()`, stored under the latch and read without it: what
+        // a reader reserves before its hold.
+        std::atomic<std::size_t> held{0};
+        std::atomic<std::uint64_t> dropped{0};
+        std::atomic<std::uint64_t> busy{0};
     };
     static std::array<Part, kStatsParts>& parts() noexcept;
 };

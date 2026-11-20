@@ -87,7 +87,11 @@ nothing.
 
 **One part per core**, a fixed table under its own `LatchKind::kStatsRing`
 latch, written only by its core at a planned statement's end and read only
-by the steward - `statement_stats.hpp`'s protocol. A part holds, per key and
+by the steward. **Neither waits for the other** (`docs/rules/rules.md`
+§3a; DL-S2): a statement's fold and its wanted priors take the part by the
+try form and are dropped where the steward's copy holds it
+(`plan_stats_part_busy`), and the steward tries too and leaves a busy part
+to its next step. A part holds, per key and
 mask, the sum and count since the last merge, the decline bits, and the
 oids it saw without a prior (the wanted set). A part half full of keys drops a new key's observation and counts it, so
 its probes stay short; the steward empties every part each step. No allocation on the statement's path, no
@@ -97,8 +101,8 @@ cross-core write.
 
 **PS4.** Core 0's `system` group, every `kPlanStatsTickNs` (1 s), one bounded step:
 
-1. copy every part's entries out under its latch, one latch at a time, and
-   sum them across the cores - so a posterior moves one step however many
+1. copy every part's entries out under its latch, one latch at a time,
+   into room made before the hold, and sum them across the cores - so a posterior moves one step however many
    cores ran its statement;
 2. fold each posterior: the first observation sets it, later ones move it
    by `alpha = 1/4`; past `kMaxMasterKeys` keys the least recently seen go,
@@ -158,8 +162,9 @@ its band's centre) and `generation`; the planner never reads the view.
 **The steward's side table** (DF-S4, `sys-views.md` §6.2c). A seed that
 reads a leaf for a prior also counts that leaf's delete-marked slots, and
 keeps the relation's scaled total in a table of its own under its own
-latch, written by the steward and read by `sys.relation_stats`'
-`est_delete_marked` alone. **It is no fact of §2**: it is in no snapshot,
+latch, written by the steward - by the try form: a sample that meets a
+view's read is left for the relation's next seed - and read by
+`sys.relation_stats`' `est_delete_marked` alone. **It is no fact of §2**: it is in no snapshot,
 it sets no band, a change of it publishes nothing and moves no generation,
 and `exec::EstimateChain` cannot reach it (PS9). It costs the seed no page
 read it did not already make. A dropped relation's entry goes when the

@@ -2196,7 +2196,8 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         os << " plan_stats_generation=" << (snapshot != nullptr ? snapshot->generation() : 0)
            << " plan_stats_relations=" << (snapshot != nullptr ? snapshot->relations() : 0)
            << " plan_stats_posteriors=" << (snapshot != nullptr ? snapshot->posteriors() : 0)
-           << " plan_stats_part_drops=" << c.part_drops << " plan_stats_seeds=" << c.seeds
+           << " plan_stats_part_drops=" << c.part_drops
+           << " plan_stats_part_busy=" << c.part_busy << " plan_stats_seeds=" << c.seeds
            << " plan_stats_seed_pages=" << c.seed_pages
            << " plan_stats_publishes=" << c.publishes
            << " plan_stats_steward_us_max=" << c.steward_ns_max / 1000;
@@ -2670,19 +2671,23 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     if (archiver_ != nullptr) archiver_->AppendMeta(os);
     // **`sys.lock_waits`' store** (BO-S3): the instance's, summed over every
     // core's part, as the contention block below is. `overwritten` is the
-    // rows a full ring gave up for newer ones and `dropped` the rows no ring
-    // could take - what the view no longer holds, and why.
+    // rows a full ring gave up for newer ones, `dropped` the rows no ring
+    // could take and `busy` the rows that met a reader's copy of their part
+    // (DL-R2) - what the view no longer holds, and why.
     section("lock_waits");
     {
         const stats::LockWaitLog::Totals waits = stats::LockWaitLog::Read();
         os << " lock_waits_recorded=" << waits.recorded
            << " lock_waits_overwritten=" << waits.overwritten
-           << " lock_waits_dropped=" << waits.dropped;
+           << " lock_waits_dropped=" << waits.dropped << " lock_waits_busy=" << waits.busy;
     }
     // **`sys.statement_stats`' store** (BO-S5), the instance's: new shapes
     // a full part could not take, which the view therefore never shows.
     section("statement_stats");
-    os << " statement_stats_dropped=" << stats::StatementStats::Dropped();
+    // `_busy`: records that met a reader's copy of their part (DL-R2), apart
+    // from `_dropped`, the new shapes a full part could not take.
+    os << " statement_stats_dropped=" << stats::StatementStats::Dropped()
+       << " statement_stats_busy=" << stats::StatementStats::Busy();
     // **`sys.relation_stats`' activity store** (BO-S6), the instance's: new
     // relations a full part could not take, whose counts the view lacks.
     section("relation_stats");
@@ -2707,7 +2712,22 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         const stats::CheckpointLog::Ring::Totals runs = stats::CheckpointLog::Read();
         os << " checkpoints_recorded=" << runs.recorded
            << " checkpoints_overwritten=" << runs.overwritten
-           << " checkpoints_dropped=" << runs.dropped;
+           << " checkpoints_dropped=" << runs.dropped << " checkpoints_busy=" << runs.busy;
+    }
+    // **`sys.ash`' rings**, every core's summed: samples written, samples no
+    // ring could be allocated for, and samples that met a reader's copy of
+    // their ring and were not taken (DL-R2).
+    section("ash");
+    {
+        std::uint64_t recorded = 0, dropped = 0, busy = 0;
+        for (std::uint32_t core = 0; core < sched::kWaitCores; ++core) {
+            const auto ring = sched::AshRingOfCore(core);
+            if (ring == nullptr) continue;
+            recorded += ring->recorded();
+            dropped += ring->dropped();
+            busy += ring->busy();
+        }
+        os << " ash_recorded=" << recorded << " ash_dropped=" << dropped << " ash_busy=" << busy;
     }
     // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
     // instance's, summed over every core when read - unlike the WAL block
