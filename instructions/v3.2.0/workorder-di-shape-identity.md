@@ -8,7 +8,8 @@ CLA and not as the operator's own mark**: DI-Q0 (a); **DI-Q3 `[quiet-wrong]`
 (a) as revised by DI-S0** (§7); DI-Q6..Q13 as their stages reach them, each
 recorded in §4 and §7. DI-S0's census and cells are committed (`92a022f8`);
 its measurement and its review's corrections follow in §7. **DI-S1 landed**
-(§7): a `sys.statement_stats` row is one binding's.
+(§7): a `sys.statement_stats` row is one binding's. **DI-S2 landed** (§7):
+the Cabin controller's signal is a fingerprint's and its candidate's.
 
 Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
@@ -315,7 +316,7 @@ word (§0a).** Every other item is unmarked.
 | DI-Q2 **marked (a)** | A statement with no binding. | **one row per `(fetch_id, kind)`, binding empty, the view says so** | (b) not recorded |
 | DI-Q3 `[quiet-wrong]` **adopted (a) as revised by DI-S0** on the standing go-ahead (§7, "DI-Q3 revised") | What the binding is. Spoken as "the plan key"; restated because the plan key exists for searched joins only (§0). | **B1**, capped at `kMaxPlannedRelations`; what a statement binding more does is DI-S0's finding, brought back before DI-S1. **Revised**: the distinct relations in first-declared order with the namespace the statement's unqualified names were resolved in; a statement over the cap is one row whose binding is not known | (b) B2; (c) B3, with a collision's merge accepted and stated; (d) as spoken: the plan key where one exists, today's row elsewhere |
 | DI-Q4 **re-marked (b)** | The Waystone opt-in's reach across namespaces and a drop. | not in DI: no result is wrong, and it is a `sys.patterns` format decision - marked first, then overruled by "every path" | **(b) in DI**, the operator's |
-| DI-Q12 | The Cabin controller's signal (§0a). | **keyed by the pattern and its candidate together**, so one text over two relations is two signals and each relation's Cabin is priced by its own heat; `kMaxTrackedFingerprints` then bounds signals, not patterns | (b) keyed by DI-Q3's binding, as the statistics are; (c) a pattern whose candidate moved between two relations is not credited to either |
+| DI-Q12 **adopted (a)** on the standing go-ahead | The Cabin controller's signal (§0a). | **keyed by the pattern and its candidate together**, so one text over two relations is two signals and each relation's Cabin is priced by its own heat; `kMaxTrackedFingerprints` then bounds signals, not patterns | (b) keyed by DI-Q3's binding, as the statistics are; (c) a pattern whose candidate moved between two relations is not credited to either |
 | DI-Q13 `[quiet-wrong]` | What an opt-in names once it is in DI. | **the shape under the relations `WAYSTONE ON`'s example resolved to** - it already compiles its example under the session's namespace (`waystone-concpets.md` §4a) - so a drop ends it and another namespace's same text is not opted. A `sys.patterns` row change, so a format event (DI-Q11); `WAYSTONE OFF <select>` after a drop, which today needs no relation, is restated in DI-S0 | (b) the opt-in stays by text and the manual says so, the recording cost accepted - what "every path" rules out unless the operator re-marks |
 | DI-Q5 **marked (a)** | A renamed relation's plan reading `enabled`. | **in DI** | (b) left a known gap |
 | DI-Q6 **adopted (a) as restated at DI-S0** on the standing go-ahead | The views' shape. The grain of a row changes from a shape to a shape under one binding. | **`sys.statement_stats` and `sys.statement_histogram` gain `relations` (oids as bound) and `namespace`; one row per binding; no second view** | (b) the old grain kept and a second view added per binding |
@@ -685,4 +686,62 @@ out, the cell fails; put back, it passes. **No cell** for `ResolveNames`' second
 statement, or for a refused commit's rebuilt reply (`known-gaps.md`).
 
 **The suite**: 0 failed of 4886 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
+build inputs. Overhead not measured; measured at the milestone's close.
+
+### DI-S2 - the Cabin controller's signal, 2026-11-20
+
+On worktree `di-shape-identity`, over `1ffbf607`. **DI-Q12 adopted (a) on
+the standing go-ahead.**
+
+**Built.** An execution signal's key is `stats::SignalKey{pattern_id, the
+candidate's relation, the candidate's column}` (`optimizer_signals.hpp`):
+one fingerprint over two relations is two signals, each credited the
+executions that targeted it, and an execution with no candidacy is the
+fingerprint's `{0, 0}` signal, priced by nothing - before, it was added to
+the frequency and the mean of the candidate the fingerprint had last
+named. The Cabin serving a candidate is what the newest execution saw and
+is no part of the key. `Decide` is untouched: it already summed by
+candidate. **A wait sample is a fingerprint's** (DI-Q9 (a): the sampler
+knows the published pattern and nothing bound): kept in `patterns_` beside
+the fingerprint's signals, one entry while the fingerprint has a signal,
+and reported in the snapshot's `waits`, not on a candidate's row.
+`cabin-controller.md` PO7c.
+
+**The review** (`critics-developer`, of the working diff over `1ffbf607`).
+Five findings:
+
+1. **A signal's pattern was counted after the victim was chosen**, so a
+   newcomer whose pattern's only signal was the victim found the pattern's
+   entry erased and its waits gone; and a second insertion that threw left
+   the count one too high for good. Applied: counted first, rolled back on
+   a throw. Pinned (`AVictimOfTheNewcomersPatternLeavesThePatternsWaitsStanding`).
+2. **The 4,096 cap now bounds signals**, so 41 texts under 100 namespaces
+   pass it, and past it every new signal evicts the coldest and pays the
+   scan under the collector's latch. Not changed - the cap is `[PROPOSED]`
+   and unmeasured (DI-R8) - and entered in `known-gaps.md`.
+3. A candidacy that moves between two columns of one relation now leaves
+   the old signal to decay where it was overwritten whole. Kept, as the
+   review advised: the alternative is the old crediting of executions a
+   column never served. In `known-gaps.md`.
+4. `tracked_fingerprints()` counted signals: renamed `tracked_signals()`;
+   the model's text in `cabin_optimizer.hpp` and `cabin-controller.md`
+   §II.4 says signal where it said fingerprint. **Not renamed**:
+   `kMaxTrackedFingerprints`, `FingerprintSignal`, `SnapshotFingerprint` -
+   a rename across the controller, its executor and three test files for a
+   word PO7c now defines.
+5. The hash: no finding.
+
+Of the three cells it named, two are added (a `Decide` cell: one pattern
+over two relations, only the hot one created; the shared-pattern
+eviction). **Not added**: one text over a relation dropped and created
+again - the namespace cell drives the same path, two oids under one
+pattern.
+
+**Cells.** `tests/optimizer_signals_test.cpp` (one pattern over two
+candidates; a candidate's Cabin moves no signal; a pattern's waits and
+their leaving; the shared-pattern eviction; one text under two namespaces
+through the dispatcher), `tests/cabin_optimizer_test.cpp` (the decision),
+`tests/ash_sampler_test.cpp` (the sample lands in `waits`).
+
+**The suite**: 0 failed of 4892 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
 build inputs. Overhead not measured; measured at the milestone's close.

@@ -2116,6 +2116,35 @@ DI-S1's commit. Owned by `docs/spec/sys-views.md` §6.1, §6.1a and
   refused page wait's rebuilt reply carrying the binding; the walk's
   rebuilt reply is pinned on the two-core rig.
 
+### The Cabin controller's signal is a candidate's (DI-S2)
+
+Verified on `di-shape-identity` (branch `worktree-di-shape-identity`) at
+DI-S2's commit. Owned by `docs/spec/cabin-controller.md` PO7c.
+
+- **A candidate is a relation and a column position, not a column.**
+  Nothing tells the signals of a `DROP COLUMN`, so a position `ADD COLUMN`
+  reuses after `PURGE DROPPED COLUMNS` inherits the dropped column's
+  decayed heat until it decays. Found at DI-S0; not a text identity and
+  not fixed by DI.
+- **A fingerprint whose candidacy moves between two columns of one
+  relation is two signals**: the old one decays where it was overwritten
+  whole before DI-S2. No decision is priced with more heat than before the
+  move.
+- **One fingerprint is now as many signals as the relations it targets,
+  plus one for its executions with no candidacy, under the same 4,096
+  cap** (`kMaxTrackedFingerprints`, `[PROPOSED]`, unmeasured): 41 texts
+  under 100 namespaces pass it where 41 entries stood before. Past the cap
+  every new signal evicts the coldest - commonly another newcomer, so
+  neither builds a count - and pays the 4,096-entry scan under the
+  collector's latch, on the success path of every `SELECT`. The eviction
+  rule is unchanged; its reach is what moved.
+- **The execution feed runs with the controller off**, under its latch
+  above one core (`RecordOptimizerSignals`): only `Tick` and the wait
+  samples follow the switch. Unchanged by DI.
+- **A dropped relation's signals are not forgotten at the drop**: they
+  name an oid no statement can bind again, decay, and are evicted when the
+  table is full.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close
