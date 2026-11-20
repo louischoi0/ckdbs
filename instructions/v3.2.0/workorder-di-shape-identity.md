@@ -6,7 +6,8 @@ Status: **OPENED 2026-11-20 on the operator's standing go-ahead**
 operator had not marked is **adopted as CLA proposed under that word, by
 CLA and not as the operator's own mark**: DI-Q0 (a); **DI-Q3 `[quiet-wrong]`
 (a) as revised by DI-S0** (§7); DI-Q6..Q13 as their stages reach them, each
-recorded in §4 and §7. **DI-S0 landed** (§7).
+recorded in §4 and §7. DI-S0's census and cells are committed (`92a022f8`);
+its measurement and its review's corrections follow in §7.
 
 Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
@@ -375,8 +376,10 @@ documents.
 **The merge, shown.** `ShapeIdentityTest`'s two cells run one text under
 `USE east` and `USE west` (one row answered, then three), and one `INSERT`
 before and after a `DROP TABLE` and a `CREATE TABLE` of its name, and each
-ends in **one** `sys.statement_stats` row with `calls = 2`. They are green
-at `1c7bb774` and are the cells DI-S1 turns over.
+ends in **one** row of the store `sys.statement_stats` reads
+(`StatementStats::Snapshot`) with `calls = 2`. They are green at `1c7bb774`
+and are the cells DI-S1 turns over. They drive a dispatcher with no lock
+table and no transaction manager; DI-S1 adds the cell on the two-core rig.
 
 **The census, completed.** `grep` finds 40 files under `include/kds` and
 `src` naming `fetch_id` or `pattern_id`; every one was opened - by CLA, or
@@ -388,18 +391,18 @@ Keyed by the text alone, with what a merge of two bindings makes of it:
 | structure | key | read at | a merge of two bindings |
 |---|---|---|---|
 | `sys.statement_stats`, `sys.statement_histogram` | `(fetch_id, kind)` | `statement_stats.hpp:145-149`, `statement_stats.cpp:68` | one row, the sum; shown by the two cells |
-| the Cabin controller's signal | `pattern_id` (`optimizer_signals.hpp:215`) | `optimizer_signals.cpp:68-72`, `cabin_optimizer.cpp:216-259` | executions and pages of both in one entry, the candidate overwritten by whichever ran last, and `Decide` credits the whole sum to it: every CREATE, EXTEND and DROP reads that sum. **The feed and its latch run whether the controller is on or off** (`command_dispatcher.cpp`'s `RecordOptimizerSignals` checks only that a surface exists); only `Tick` is switched |
+| the Cabin controller's signal | `pattern_id` (`optimizer_signals.hpp:215`) | `optimizer_signals.cpp:68-72`, `cabin_optimizer.cpp:216-259` | executions and pages of both in one entry, the candidate overwritten by whichever ran last with a candidacy, and `Decide` credits the whole sum to it: every CREATE, EXTEND and DROP reads that sum. **The execution feed runs whether the controller is on or off**, for every statement that succeeded with an identity (`RecordExecution` to `RecordOptimizerSignals`, which checks only that `optimizer_signals_` is set), under its latch above one core; the controller's switch gates `Tick` and the wait samples |
 | the controller's wait samples | `pattern_id` (`optimizer_signals.cpp:83-89`, from `ash_sampler.cpp:148-153`) | the same entry | "read by nothing that decides" (`optimizer_signals.hpp`) |
-| the Waystone opt-in | `fetch_id`: `sys.patterns`' row, each core's opted map (`catalog_cache.hpp:278`), `PatternAccess` holding no relation (`schema.hpp:583-600`) | `catalog.cpp:3051-3123`, the gate at `command_dispatcher.cpp`'s `FindOptedPattern(fingerprint->fetch_id)` | one `WAYSTONE ON` opts the text in under every namespace; ON's refusals (D2, no descent) were checked for the namespace it ran under only; no `sys.patterns` writer runs on a drop or a rename |
-| a Waystone trail | the row's directory by `fetch_id`, a page by `arg_hash` (`instance_key.hpp:37-45`, `waystone_dir.hpp:15-16`) | `trail_store.cpp:59`, `:87`, `:129`; `trail_replay.cpp:24-53` | **two bindings take turns overwriting one page**: each run reads the other's trail, `TrailReplay::Build` drops every entry whose `rel_oid` is not the step's (`trail_replay.cpp:38`, counted nowhere), the statement descends, and the recorder finds the trail "changed" and rewrites it. No row is wrong (the `rel_oid` check and the page's owner check); the replay is lost and the page dirtied at every run. **This is the cell §0a left unread** |
+| the Waystone opt-in | `fetch_id`: `sys.patterns`' row, each core's opted map (`catalog_cache.hpp:278`), `PatternAccess` holding no relation (`schema.hpp:583-600`) | `catalog.cpp:3051-3123` (the lookups), `SetPatternWaystone` and `RenewPatternDirectories` (the only writers), the gate at `command_dispatcher.cpp`'s `FindOptedPattern(fingerprint->fetch_id)` | one `WAYSTONE ON` opts the text in under every namespace; ON's refusals (D2, no descent) were checked for the namespace it ran under only; no `sys.patterns` writer runs on a drop or a rename |
+| a Waystone trail | the row's directory by `fetch_id`, a page by `arg_hash` (`instance_key.hpp:37-45`, `waystone_dir.hpp:15-16`) | `trail_store.cpp:59`, `:87`, `:129`; `trail_replay.cpp:24-53` | **two bindings take turns overwriting one page**: each run reads the other's trail, `TrailReplay::Build` drops every entry whose `rel_oid` is not the step's (`trail_replay.cpp:38`, counted nowhere), the statement descends, and the recorder finds the trail "changed" and rewrites it. No row is wrong: the `rel_oid` check is what tells the two apart (both are one `InstanceKey`, so the page's identity does not), and a replayed tuple is verified against its page besides. The replay is lost and the page dirtied at every run. **This is the cell §0a left unread** |
 | the recorder's sightings | `InstanceKey` (`trail_recorder.hpp:145`) | `trail_recorder.cpp:69-124` | one count for both bindings |
-| the session's published statement, `sys.ash` | the fetch id (`wait_state.hpp:119-127`; `sys.ash.fingerprint`) | `command_dispatcher.cpp`'s `DispatchAsync` head; `sys_views.cpp`'s `sys.ash` | **no engine code joins a sample to a statistics row**; `tools/ash_panel.sql` and `.py` group by `fingerprint` and read no statistics view. `sys.session_state` carries no fingerprint |
+| the session's published statement, `sys.ash` | the fetch id (`wait_state.hpp:119-127`; `sys.ash.fingerprint`) | `command_dispatcher.cpp`'s `DispatchAsync` head; `sys_views.cpp`'s `sys.ash` | **no engine code joins a sample to a statistics row**; `tools/ash_panel.sql` and `.py` tally samples by `fingerprint` and read no statistics view. `sys.session_state` carries no fingerprint |
 
 Keyed with the relations beside the text, so outside DI, as §0a said and
 now read whole: `exec::CapturedKey` (captured and administrator's plans,
 `sys.plans`, `sys.plan_advice`), `stats::PlanKey` and the order memo
 (`plan_stats.cpp:145-146` mixes the oids). **A prepared statement holds its
-text and nothing compiled** (`kwp_session.hpp:285-289`; `C_EXECUTE`
+text, its pattern id to echo, and nothing compiled** (`kwp_session.hpp:285-289`; `C_EXECUTE`
 dispatches `portal->sql`, `kwp_session.cpp:697-701`), so `PARSE`, `USE`,
 `EXECUTE` runs under the namespace at the execute and no structure is keyed
 by it. The other files name the ids as inputs or in comments only.
@@ -426,13 +429,17 @@ by the dispatcher inside the statement's synchronous body:
 | kind | where its binds are declared |
 |---|---|
 | a native `SELECT` | the run's borrow (`SelectBody`), by the compiler's one bind loop for `FROM`, every `JOIN` and every subquery block (`step_compiler.cpp`, "One site for FROM, every JOIN and every subquery block") - before the walk, so before the run can park |
-| a query layer `SELECT` | `LayerHostImpl`'s one borrow; every `DescribeRelation` and walk compiles its probe through it, each walk run to its end inline (`WalkForLayer`'s `RunToEnd`) |
+| a query layer `SELECT` | `LayerHostImpl`'s one borrow, through which every `DescribeRelation` compiles its probe - once per relation source, at the layer's compile, in written order (`query_layer.cpp`, `Compile`). A walk is a `SelectBody` of its own with a borrow of its own, run to its end inline (`WalkForLayer`'s `RunToEnd`); **walks are lazy and cached, so which run and in what order follows the data**, and the binding is the describes' alone |
 | `INSERT`, `UPDATE`, `DELETE`, `SELECT ... FOR UPDATE` | the target at its resolve; a `WHERE`'s subquery relations through `CompileWhere` into the same borrow; a `SET`'s scalar subquery and an `INSERT ... SELECT`'s source through the `SELECT` path |
 | a statement refused before its bind | nothing is declared; its fetch id is set at the parse, so it is a row with a fetch id and no binding |
 
 A re-run (`DispatchAndStage` again: a structural refusal, a page wait, a
 `PURGE`'s wait) begins a new body and declares afresh. `ResolveNames` can
-make one resolve twice when a DDL's generation moved under it. A reply
+make one resolve twice when a DDL's generation moved under it, and the
+first one's declarations stay in the borrow: **the binding must be the
+resolution that answered, so what the first resolve declared is forgotten
+before the second** (the review's finding 1: a rename swap between the two
+would otherwise leave one list for two resolutions). A reply
 rebuilt over an outcome (`SelectRun::Execute`'s `Finish`, a refused commit)
 keeps `plan_source` and `compile_ns` by copying them across; the binding
 takes the same path.
@@ -450,7 +457,15 @@ resolved in, it is exact**: under one default namespace every name goes
 through one map from names to relations at a time, two written names are
 one relation only where they are one name, so the list's repeats fall where
 the text's do, and two equal lists are two equal resolutions of every
-reference. The namespace word is 0 for a statement that wrote no
+reference. **Two premises carry that, and both are the tree's**: the
+list is one resolution's (a second resolve forgets the first, above), and
+the order of first declaration is a function of the text - on the native
+path the binds are declared in written order before the join search
+(`step_compiler.cpp`'s bind loop), a write's subqueries compile in a fixed
+order, and a query layer statement's describes are its compile's; a walk's
+declarations, which follow the data, are kept out. An order that followed
+the data would not merely split a binding: with a rename swap it could
+merge two. The namespace word is 0 for a statement that wrote no
 unqualified name, so a fully qualified statement is one row whatever
 namespace its session is in. The list stays ordered: a sorted set would
 merge `a JOIN b` before and after the two relations swap names by three
@@ -530,9 +545,6 @@ written. **Adopted, revised, on the standing go-ahead.**
   it decays. Not a text identity; not fixed by DI.
 - `SessionWaitStats::arg_hash` has no writer, so `sys.ash.arg_hash_valid`
   is never 1.
-- An entry `TrailReplay::Build` drops for its `rel_oid` is counted nowhere.
-- The controller's feed takes its latch at every fingerprinted statement
-  with the controller off.
 
 **Measured**: not at this commit. The stage's four arms are built and
 their run is held at its quiet gate by another session's work on the host;
@@ -541,3 +553,36 @@ commit, and DI-S1 does not land before them.
 
 **The suite**: 0 failed of 4867 (2 disabled, 2 skipped), the hook's range
 at `-j8`, on this commit's build inputs (`1c7bb774` and the two cells).
+
+**The review** (`critics-developer`, of `92a022f8`; it read the tree at
+`1c7bb774` and ran nothing). Eight findings, all applied, none rejected:
+
+1. **The binding must be the final resolution's** `[quiet-wrong]`.
+   `ResolveNames` runs a resolve again when a DDL's generation moved, and
+   the first one's declarations stayed: three renames that swap `t` and `u`
+   between the two leave `[R1, R2]` for a statement that resolved
+   `t -> R2, u -> R1`. Applied to the argument above and built at DI-S1:
+   the dispatcher marks the binding before a resolve and rewinds it before
+   the second.
+2. "An order that follows the data only splits a binding" was false: with
+   a rename swap it merges. The premise is now stated as one the tree
+   keeps, not as a consequence.
+3. **The query layer's walks are lazy and cached** (`query_layer.cpp`,
+   `SourceRows`), so which run follows the data, and each is a `SelectBody`
+   with a borrow of its own - the table above had them in the host's one
+   borrow. The binding is the layer's describes', and at DI-S1 a walk's
+   declarations are rewound.
+4. The controller's row said only `Tick` is switched; the wait samples are
+   gated too, the latch exists above one core only, and the feed is every
+   statement that succeeded with an identity. Corrected.
+5. The index row still read DI-Q4 as the operator's (a) and DI-Q0, DI-Q3
+   as unmarked. Corrected.
+6. "DI-S0 landed" before its measurement overstated. Corrected.
+7. The cells drive a dispatcher with no lock table; DI-S1 adds the cell on
+   the two-core rig, asserts the two oids differ and each reply's rows, and
+   reads the view.
+8. Nits: what guards a replay across two bindings is the `rel_oid` check
+   alone; the candidate is overwritten only by a candidacy; the opt-in's
+   writers were not cited; a prepared statement also holds its pattern id;
+   `ash_panel` tallies and does not group. The argument for DI-Q3, which
+   stood in four places, is in this section alone.
