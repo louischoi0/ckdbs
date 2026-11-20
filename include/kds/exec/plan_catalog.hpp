@@ -195,6 +195,34 @@ StatusOr<PlanRow> FindPlan(catalog::Catalog& catalog, storage::PageStore& store,
 // not take a plan - and its `DROP TABLE` RESTRICT - out of force.
 bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row);
 
+// **Whether a plan can still match a statement, where the engine can
+// establish that it cannot** (DI-S4,
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q5 (a), DI-Q10
+// (a) as DI-S0 restated it). A plan is keyed by its statement's fetch id -
+// a hash of the text - and its relations' oids. A rename keeps the oids and
+// changes what a text must spell to reach them, so after one the plan's
+// key can be produced by no statement: the old spelling no longer
+// resolves, and the new one is another fetch id.
+//
+// **False only for what is established, from the row alone** (DI-R9):
+//   - a relation the stored statement names is no longer named that -
+//     reference `i` of the statement's top-level block against the current
+//     name, and namespace where it is written, of the relation recorded at
+//     position `i`. No resolution, so no namespace is needed, and the row
+//     stores none;
+//   - a column the stored statement writes **qualified by one of its
+//     bindings** (`b.col`) is no column of that binding's relation now.
+// True for everything else, checked or not: a row this build cannot read,
+// a statement stored cut short or that the native grammar does not read
+// with its literals as `0` (a `LIKE` pattern), a relation that is gone
+// (that is `PlanRowIsValid`'s), a column written unqualified or dropped, a
+// statement that no longer compiles for any other reason. Reads the
+// catalog, writes nothing. `tables` is `Catalog::ListTables`' rows, for a
+// caller that asks of many plans; the two-argument form lists them itself.
+bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row);
+bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
+                     const std::vector<catalog::SysObjectRow>& tables);
+
 // `CREATE PLAN`'s write: `row` - an administrator's, its `id` unset - as a
 // new row under a checked name, installed in `admin` and served. The caller
 // holds the DDL claim and has asked `AdminPlans::Holder` of the shape.

@@ -1346,6 +1346,16 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   - One statement shape has at most one such plan. A table cannot be
     dropped while an enabled plan names it; a disabled plan whose table was
     dropped shows `invalid` in `sys.plans` and can only be dropped.
+  - **Renaming a table, or a column the plan's statement writes with
+    its table's name or alias in front (`o.total`), puts the plan out of
+    reach**: the statement in its old spelling no longer runs, and in its
+    new spelling it is another shape. `sys.plans` then shows the plan - an
+    administrator's or a captured one - `invalid`, whether it was enabled
+    or disabled, and it no longer stops the table's `DROP TABLE`. Rename
+    back and it reads as it did; otherwise `DROP PLAN` and create one for
+    the new spelling. Not detected, so the plan still reads as before: a
+    rename of a column the statement writes bare, a statement with a `LIKE`,
+    and a dropped column.
   - `ANALYZE` prints `planned order=plan plan=<name>/<variant>`;
     `sys.plans` lists each plan with its variants; `sys.statement_stats`
     shows, per statement shape, where its order last came from
@@ -1803,12 +1813,15 @@ WAYSTONE OFF 0xab54a98ceb1f0ad2
   values do not matter: `WHERE o.region = 'EU'` opts in every region, and
   `SELECT a ...` and `SELECT COUNT(*) ...` over the same `FROM ... WHERE`
   are one opt-in.
-- **`OFF` takes the example or the number.** `OFF <select>` only parses and
-  fingerprints the text (it compiles nothing, so it works after the tables
-  are dropped, and it accepts a `?`); `OFF <fetch_id>` takes the number in
-  decimal (as `SHOW PATTERNS` prints it) or as `0x` and 1 to 16 hex digits
-  (as `ANALYZE` prints it). `OFF` clears the shape's row of every
-  fingerprint version and keeps the row.
+- **`OFF` takes the example or the number.** `OFF <select>` resolves the
+  example's tables under your session's namespace, as `ON` does, and turns
+  off the opt-in of exactly those tables (it accepts a `?`). An example
+  whose tables no longer exist names no opt-in and answers ` unchanged` -
+  dropping a table already ended its opt-ins. `OFF <fetch_id>` takes the
+  number in decimal (as `SHOW PATTERNS` prints it) or as `0x` and 1 to 16
+  hex digits (as `ANALYZE` prints it) and turns the shape off for **every**
+  set of tables it was opted in over. `OFF` clears the rows of every
+  fingerprint version and keeps them.
 - **Admin only, autocommit only.** It is the admin role's. Inside `BEGIN`
   it is refused before anything is read, and the transaction is not
   affected.
@@ -1828,13 +1841,16 @@ WAYSTONE OFF 0xab54a98ceb1f0ad2
   it. A failure to start the sync is refused with text saying so; a sync
   that fails afterwards is refused as a failed commit is, with the log's
   own error, and the change is still in effect for the run.
-- **The opt-in is by text, not by table.** A `fetch_id` names no namespace
-  and no table: one `ON` covers the same text under every `USE`, over
-  whichever relation the name resolves to there. It **survives `DROP TABLE`**
-  and a re-create under the same name, and stays until you turn it off.
-  Answers are unaffected either way (a trail recorded on one relation is
-  never used for another); the cost is recording work on a shape you may not
-  have meant.
+- **The opt-in is the statement over its tables, not the text.** A
+  `fetch_id` names no namespace and no table, so `ON` records, beside it,
+  the tables the example resolved to under your session's namespace. The
+  same text run under another `USE`, where the names mean other tables, is
+  not opted - opt it in there too, and the two keep separate trails.
+  `SHOW PATTERNS` shows each row's `namespace` and `relations`.
+  **`DROP TABLE` ends the opt-ins over the table**: a table created again
+  under the name starts not opted. A rename ends nothing, but the renamed
+  table's statements are a new text - opt them in under the new name. A
+  statement over more than 16 tables cannot be opted in.
 - **Once durable, it survives a restart, a crash and a restore; the trails
   do not.** Every
   start discards every trail, so after a restart an opted instance records
@@ -1888,10 +1904,11 @@ probe rows, and leave point reads alone.
 
 **`SHOW PATTERNS`** (`SELECT * FROM sys.patterns`) lists every shape ever
 opted, one row each: `oid`, `fetch_id` (decimal), `fingerprint_version`,
-`stmt_class`, **`waystone`** (1 while opted, 0 after `OFF` or a lapse),
-`use_count` and `last_seen` (always 0), and `waystone_root`/`dir_depth`
-(the shape's trail directory; NULL when it has none, as under
-`waystone_recording = off`). `SHOW META`'s `waystone` section prints the
+`stmt_class`, **`waystone`** (1 while opted, 0 after `OFF`, a lapse or a
+`DROP TABLE` of a table it names), `use_count` and `last_seen` (always 0),
+`waystone_root`/`dir_depth` (the shape's trail directory; NULL when it has
+none, as under `waystone_recording = off`), and the tables the opt-in is
+over: `namespace`, `relation_oids` and `relations`. `SHOW META`'s `waystone` section prints the
 two keys and `waystone_opted`, how many shapes are opted now.
 
 ### GATHER, LOCK, PUBLISH, RESTORE, EXPORT, IMPORT, DELETE STATISTICS (built 2026-11-18, CY-S1b, CY-S4)
@@ -2114,8 +2131,15 @@ newline protocol.
 `SELECT` (nor do `sys.types` and `sys.objects`):
 
 - `sys.statement_stats`: what each statement shape costs, one row per
-  `(fetch_id, kind)` - a `SELECT`, an `INSERT`, an `UPDATE` and a `DELETE`
-  each have a shape, every other kind is one row. `calls`, `refused`,
+  `(fetch_id, kind)` and per **binding** - a `SELECT`, an `INSERT`, an
+  `UPDATE` and a `DELETE` each have a shape, every other kind is one row.
+  A `fetch_id` is the statement's text, so the same text run under two
+  namespaces (`USE`), or over a table dropped and created again, is two
+  statements and two rows: `relations` names the relations the statement
+  resolved to (`relation_oids` their oids, the columns to group and join
+  by) and `namespace` the namespace its unqualified names meant; `binding`
+  is `bound`, `none` (it resolved no relation - a refusal before that, for
+  one) or `over` (more than 16 relations, not told apart). `calls`, `refused`,
   `total_us`, `max_us`, `first_seen`, `last_seen`, where its join order
   came from, and the first statement seen; and what the shape cost:
   `conflicts` (the calls refused `TXN_CONFLICT`), `rows` (answered or
@@ -2127,7 +2151,8 @@ newline protocol.
   be counted for a shape is NULL, not 0**: an `INSERT`, an `UPDATE` and a
   `DELETE` have no `rows_examined` or `pages`.
 - `sys.statement_histogram`: a shape's latency distribution, one row per
-  `(fetch_id, kind)` and non-empty bucket - bucket k counts the calls that
+  `sys.statement_stats` row (`fetch_id`, `kind`, `binding`, `namespace`,
+  `relation_oids`) and non-empty bucket - bucket k counts the calls that
   took `[2^k, 2^(k+1))` microseconds; a shape's counts sum to its `calls`.
 - `sys.refusal_stats`: how statements were refused - one row per core and
   error code (`TXN_CONFLICT`, `ALREADY_EXISTS`, ...), its `count` and

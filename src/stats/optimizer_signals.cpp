@@ -20,14 +20,14 @@ namespace {
 // `Log2ValueAt` reads the same states through a projection that keeps
 // them ordered however long they idle (decay.hpp).
 template <typename Map, typename Primary>
-std::uint64_t ColdestOf(Map& map, const sched::Clock* clock, sched::MonoTimeNs half_life,
-                        Primary primary) {
-    if (map.empty()) return 0;
+typename Map::key_type ColdestOf(Map& map, const sched::Clock* clock,
+                                 sched::MonoTimeNs half_life, Primary primary) {
+    if (map.empty()) return {};
     // Seeded from a real entry rather than from the type's maximum: a table
     // whose every score has saturated at the ceiling would leave a
     // sentinel key nothing matches, the erase would remove nothing, and the
     // cap would quietly stop being a cap.
-    std::uint64_t coldest_key = map.begin()->first;
+    typename Map::key_type coldest_key = map.begin()->first;
     Log2Q16 coldest = Log2ValueAt(primary(map.begin()->second), clock, half_life);
     for (auto& [key, signal] : map) {
         const Log2Q16 value = Log2ValueAt(primary(signal), clock, half_life);
@@ -41,18 +41,48 @@ std::uint64_t ColdestOf(Map& map, const sched::Clock* clock, sched::MonoTimeNs h
 
 }  // namespace
 
-FingerprintSignal* OptimizerSignals::FingerprintFor(std::uint64_t pattern_id) {
-    auto found = fingerprints_.find(pattern_id);
+std::size_t SignalKeyHash::operator()(const SignalKey& k) const noexcept {
+    // splitmix64's finalizer over the three words: a pattern's signals
+    // differ in a small oid and a column position.
+    std::uint64_t h = k.pattern_id ^ (k.rel_oid * 0x9E3779B97F4A7C15ULL) ^
+                      (static_cast<std::uint64_t>(k.col_pos) << 48);
+    h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    h = (h ^ (h >> 27)) * 0x94D049BB133111EBULL;
+    return static_cast<std::size_t>(h ^ (h >> 31));
+}
+
+FingerprintSignal* OptimizerSignals::FingerprintFor(const SignalKey& key) {
+    auto found = fingerprints_.find(key);
     if (found != fingerprints_.end()) return &found->second;
+    // The newcomer is counted to its pattern **before** a victim is chosen:
+    // a victim of the same pattern then leaves the pattern's entry, and the
+    // waits in it, standing for the signal about to be made.
+    ++patterns_[key.pattern_id].signals;
     if (fingerprints_.size() >= kMaxTrackedFingerprints) {
         // Evict the coldest to admit the newcomer. Restarting the victim's
         // count is a performance event; refusing the newcomer would starve
         // every pattern that turns hot after the table filled, which is
         // exactly the pattern a heat tracker exists to notice.
-        fingerprints_.erase(ColdestOf(fingerprints_, clock_, half_life_ns_,
-                                      [](const FingerprintSignal& s) { return s.executions; }));
+        const SignalKey victim =
+            ColdestOf(fingerprints_, clock_, half_life_ns_,
+                      [](const FingerprintSignal& s) { return s.executions; });
+        fingerprints_.erase(victim);
+        // Its pattern's waits go with the pattern's last signal.
+        if (auto waits = patterns_.find(victim.pattern_id);
+            waits != patterns_.end() && --waits->second.signals == 0) {
+            patterns_.erase(waits);
+        }
     }
-    return &fingerprints_[pattern_id];
+    try {
+        return &fingerprints_[key];
+    } catch (...) {
+        // The signal was not made: its pattern is not left counting it.
+        if (auto waits = patterns_.find(key.pattern_id);
+            waits != patterns_.end() && --waits->second.signals == 0) {
+            patterns_.erase(waits);
+        }
+        throw;
+    }
 }
 
 CabinQualitySignal* OptimizerSignals::CabinFor(std::uint64_t cabin_id) {
@@ -68,7 +98,12 @@ CabinQualitySignal* OptimizerSignals::CabinFor(std::uint64_t cabin_id) {
 void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
                                      CandidateRef candidate) {
     LatchGuard hold(latch_);
-    FingerprintSignal* signal = FingerprintFor(pattern_id);
+    // The pattern and what it targeted (`optimizer_signals.hpp`, DI-S2): an
+    // execution with no candidacy is the pattern's `{0, 0}` signal.
+    FingerprintSignal* signal = FingerprintFor(
+        candidate.valid() ? SignalKey{pattern_id, candidate.rel_oid, candidate.col_pos}
+                          : SignalKey{pattern_id, 0, 0});
+    // The key's candidate, with the Cabin serving it now.
     if (candidate.valid()) signal->candidate = candidate;
     Touch(signal->executions, clock_, half_life_ns_);
     // Clamped into Accumulate's point width; a statement that read four
@@ -83,8 +118,8 @@ void OptimizerSignals::NoteExecution(std::uint64_t pattern_id, std::uint64_t pag
 void OptimizerSignals::NoteWaitSample(std::uint64_t pattern_id) noexcept {
     if (wait_gate_ != nullptr && !wait_gate_->load(std::memory_order_relaxed)) return;
     LatchGuard hold(latch_);
-    const auto found = fingerprints_.find(pattern_id);
-    if (found == fingerprints_.end()) return;
+    const auto found = patterns_.find(pattern_id);
+    if (found == patterns_.end()) return;
     Touch(found->second.wait_samples, clock_, half_life_ns_);
 }
 
@@ -120,12 +155,11 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
     snapshot.decay_epoch = clock_ != nullptr ? clock_->Now() : 0;
 
     snapshot.fingerprints.reserve(fingerprints_.size());
-    for (const auto& [id, signal] : fingerprints_) {
+    for (const auto& [key, signal] : fingerprints_) {
         SnapshotFingerprint out;
-        out.pattern_id = id;
+        out.pattern_id = key.pattern_id;
         out.frequency_q8 = ValueAt(signal.executions, clock_, half_life_ns_);
         out.pages_q8 = ValueAt(signal.pages, clock_, half_life_ns_);
-        out.wait_samples_q8 = ValueAt(signal.wait_samples, clock_, half_life_ns_);
         // The same reads in the log domain, for the consumer that must
         // still order two shapes after both have decayed past Q24.8's
         // floor. Same state, same instant - only the projection differs.
@@ -133,6 +167,10 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
         out.pages_log2 = Log2ValueAt(signal.pages, clock_, half_life_ns_);
         out.candidate = signal.candidate;
         snapshot.fingerprints.push_back(out);
+    }
+    snapshot.waits.reserve(patterns_.size());
+    for (const auto& [id, waits] : patterns_) {
+        snapshot.waits.push_back({id, ValueAt(waits.wait_samples, clock_, half_life_ns_)});
     }
     snapshot.cabins.reserve(cabins_.size());
     for (const auto& [id, signal] : cabins_) {
@@ -149,6 +187,14 @@ OptimizerSnapshot OptimizerSignals::Snapshot() {
     // iteration order is not part of the state.
     std::sort(snapshot.fingerprints.begin(), snapshot.fingerprints.end(),
               [](const SnapshotFingerprint& a, const SnapshotFingerprint& b) {
+                  if (a.pattern_id != b.pattern_id) return a.pattern_id < b.pattern_id;
+                  if (a.candidate.rel_oid != b.candidate.rel_oid) {
+                      return a.candidate.rel_oid < b.candidate.rel_oid;
+                  }
+                  return a.candidate.col_pos < b.candidate.col_pos;
+              });
+    std::sort(snapshot.waits.begin(), snapshot.waits.end(),
+              [](const SnapshotPatternWaits& a, const SnapshotPatternWaits& b) {
                   return a.pattern_id < b.pattern_id;
               });
     std::sort(snapshot.cabins.begin(), snapshot.cabins.end(),

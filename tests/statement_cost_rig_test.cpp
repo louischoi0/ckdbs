@@ -201,6 +201,103 @@ TEST_F(StatementCostRig, TwoSessionsOfOneCoreEachOwnTheLogTheyAppended) {
 }
 #endif
 
+TEST_F(StatementCostRig, OneTextUnderTwoNamespacesOnTwoCoresIsARowABinding) {
+    // DI-S1 (`stats/statement_binding.hpp`) on the real stack: a lock table,
+    // a transaction manager and its views, each statement a task of its
+    // session through `DispatchAsync`. One text, run under `USE east` on
+    // core 0 and under `USE west` on core 1, is two statements and two
+    // rows - a point read answered inline and a walk handed on, whose reply
+    // is rebuilt over the outcome that carried the binding.
+    CommandDispatcher& d = rig_->core(0).dispatcher();
+    for (const char* sql : {"CREATE NAMESPACE east", "CREATE NAMESPACE west",
+                            "CREATE TABLE east.acct (id int64, v int64) BTREE",
+                            "CREATE TABLE west.acct (id int64, v int64) BTREE",
+                            "INSERT INTO east.acct (id, v) VALUES (1, 10)",
+                            "INSERT INTO west.acct (id, v) VALUES (1, 20), (2, 21), (3, 22)"}) {
+        const std::string reply = d.Dispatch(sql).response;
+        ASSERT_NE(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
+    }
+    ASSERT_TRUE(rig_->store().Flush().ok());
+    stats::StatementStats::ResetForTest();
+
+    const std::string point = "SELECT v FROM acct WHERE id = 1";
+    const std::string walk = "SELECT id FROM acct WHERE v >= 0";
+    scripts_[0].lines = {"USE east", point, walk, point};
+    scripts_[1].lines = {"USE west", point, walk, walk, point, point};
+    SubmitAsItsSession(*rig_, 0, scripts_[0]);
+    SubmitAsItsSession(*rig_, 1, scripts_[1]);
+    rig_->Start();
+    for (std::uint32_t core = 0; core < 2; ++core) {
+        ASSERT_TRUE(KickUntil(
+            *rig_, core, [&] { return scripts_[core].done.load(std::memory_order_acquire); },
+            15000ms))
+            << "core " << core;
+    }
+    rig_->Stop();
+    for (const Script& script : scripts_) {
+        for (std::size_t i = 0; i < script.lines.size(); ++i) {
+            ASSERT_NE(script.replies[i].rfind("ERR", 0), 0u)
+                << script.lines[i] << ": " << script.replies[i];
+        }
+    }
+
+    // {calls, rows} of each binding's row, `east` first: its namespace is
+    // the older oid.
+    const auto rows_of = [](std::string_view statement) {
+        const std::uint64_t fetch_id = parser::FingerprintOf(statement)->fetch_id;
+        std::vector<stats::StatementShape> rows;
+        for (stats::StatementShape& s : stats::StatementStats::Snapshot()) {
+            if (s.kind == "SELECT" && s.fetch_id == fetch_id) rows.push_back(std::move(s));
+        }
+        return rows;
+    };
+    const std::vector<stats::StatementShape> points = rows_of(point);
+    ASSERT_EQ(points.size(), 2u);
+    EXPECT_EQ(points[0].calls, 2u);
+    EXPECT_EQ(points[0].rows, 2u);
+    EXPECT_EQ(points[1].calls, 3u);
+    EXPECT_EQ(points[1].rows, 3u);
+    const std::vector<stats::StatementShape> walks = rows_of(walk);
+    ASSERT_EQ(walks.size(), 2u);
+    EXPECT_EQ(walks[0].calls, 1u);
+    EXPECT_EQ(walks[0].rows, 1u);
+    EXPECT_EQ(walks[1].calls, 2u);
+    EXPECT_EQ(walks[1].rows, 6u);
+    for (const std::vector<stats::StatementShape>* rows : {&points, &walks}) {
+        for (const stats::StatementShape& row : *rows) {
+            EXPECT_EQ(row.binding.n, 1u);
+            EXPECT_NE(row.binding.namespace_oid, 0u);
+        }
+        EXPECT_NE((*rows)[0].binding.oids[0], (*rows)[1].binding.oids[0]);
+        EXPECT_LT((*rows)[0].binding.namespace_oid, (*rows)[1].binding.namespace_oid);
+    }
+}
+
+TEST_F(StatementCostRig, AConflictArmsSubqueryIsBoundWhetherOrNotARowConflicts) {
+    // The arm runs its `SET` subquery at each conflicting row (DI-S1's
+    // review, finding 3). What the statement bound must not follow that:
+    // the same text is one statement whether its key was free or taken.
+    CommandDispatcher& d = rig_->core(0).dispatcher();
+    ASSERT_EQ(d.Dispatch("CREATE TABLE u (id int64, x int64) BTREE").response.substr(0, 3), "CRE");
+    ASSERT_EQ(d.Dispatch("INSERT INTO u (id, x) VALUES (1, 7)").response.rfind("INSERTED", 0), 0u);
+    stats::StatementStats::ResetForTest();
+    const std::string upsert =
+        "INSERT INTO r (id, v) VALUES (50, 1) "
+        "ON CONFLICT (id) DO UPDATE SET v = (SELECT x FROM u WHERE id = 1)";
+    const DispatchOutcome free_key = d.Dispatch(upsert);   // the arm did not run
+    const DispatchOutcome taken_key = d.Dispatch(upsert);  // the arm ran
+    ASSERT_EQ(free_key.response.rfind("ERR", 0), std::string::npos) << free_key.response;
+    ASSERT_EQ(taken_key.response.rfind("ERR", 0), std::string::npos) << taken_key.response;
+    EXPECT_EQ(d.Dispatch("SELECT v FROM r WHERE id = 50").response, "v\\n7") << "the arm ran";
+
+    EXPECT_EQ(free_key.binding.n, 2u) << "the target, then the arm's subquery's relation";
+    EXPECT_TRUE(free_key.binding == taken_key.binding);
+    const stats::StatementShape* shape =
+        ShapeOf(stats::StatementStats::Snapshot(), "INSERT", upsert);
+    ASSERT_NE(shape, nullptr);
+    EXPECT_EQ(shape->calls, 2u) << "one row for both";
+}
+
 TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheViews) {
     constexpr int kRounds = 40;
     const std::string select = "SELECT v FROM r WHERE id = 1";

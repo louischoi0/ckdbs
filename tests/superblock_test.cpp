@@ -347,7 +347,14 @@ TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
 // binary refuses the record kind or leaves the loser's departure counted.
 TEST(SuperBlockTest, AVersion34VolumeDoesNotMount) {
     ExpectRefusedNamingBoth(34);
-    EXPECT_EQ(kSuperBlockVersion, 37u);
+    EXPECT_EQ(kSuperBlockVersion, 38u);
+}
+
+// DA-S3 and DI-S3: a version-37 volume still has `sys.access_stats`'
+// bootstrap - page 11, oid 130 and its two catalog rows - and its
+// `sys.patterns` rows name a shape by its text alone.
+TEST(SuperBlockTest, AVersion37VolumeDoesNotMount) {
+    ExpectRefusedNamingBoth(37);
 }
 
 // AY-Q6 (C): a version-18 volume's log may hold an ASSERT_SNAPSHOT with no

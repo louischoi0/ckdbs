@@ -11,6 +11,7 @@
 #include "kds/base/latch.hpp"
 #include "kds/sched/wait_state.hpp"
 #include "kds/stats/per_core_ring.hpp"
+#include "kds/stats/statement_binding.hpp"
 #include "kds/stats/wait_event.hpp"
 
 // **`sys.statement_stats`' rows: what a statement shape costs**
@@ -20,11 +21,19 @@
 //
 // ---- The key ---------------------------------------------------------------
 //
-// `(fetch_id, kind)` (BO-Q6 (a) as revised). `kind` is the statement's first
-// keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE` carry a
-// fingerprint (`parser/fingerprint.cpp`), so every other kind is one row at
-// `fetch_id = 0`. A first word that is no statement verb is `OTHER`, so a
-// client cannot mint a row per misspelling.
+// `(fetch_id, kind, binding)` (BO-Q6 (a) as revised; the binding since DI-S1,
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-R2). `kind` is the
+// statement's first keyword; only `SELECT`, `INSERT`, `UPDATE` and `DELETE`
+// carry a fingerprint (`parser/fingerprint.cpp`), so every other kind is one
+// row at `fetch_id = 0`. A first word that is no statement verb is `OTHER`,
+// so a client cannot mint a row per misspelling.
+//
+// **A row is one binding's** (`statement_binding.hpp`): a fetch id hashes a
+// statement's text, so one text under two namespaces, or over a relation
+// dropped and created again, is two statements and two rows. A statement
+// that bound nothing - refused before its bind, naming no relation, or of a
+// kind with no fingerprint - is the row with no binding; one that bound more
+// relations than a binding holds is the row whose binding is not known.
 //
 // ---- Where the rows live, and the latch protocol ---------------------------
 //
@@ -38,6 +47,13 @@
 // **A write never fails, delays or reorders the statement it describes.** A
 // new shape past `kShapesPerCore` is dropped and counted (a `sys.meta`
 // field, SV3); a shape that cannot be allocated is dropped the same way.
+//
+// **A relation that is gone keeps its rows until the instance stops** (DI-Q7
+// (c)): a dropped relation's oid is never reissued (DT2), so its rows take no
+// further call, and they count against the part's bound like any other.
+// Nothing reclaims them: the one moment a part needs room is a statement's
+// own record, and a sweep there would scan the part and read the catalog on
+// that statement's path, which `rules.md` §3a forbids a statistic.
 //
 // ---- What a shape costs (DF-S1) --------------------------------------------
 //
@@ -56,6 +72,7 @@ namespace kds::stats {
 struct StatementShape {
     std::uint64_t fetch_id = 0;
     std::string kind;
+    StatementBinding binding;
     std::uint64_t calls = 0;
     std::uint64_t refused = 0;
     std::uint64_t total_us = 0;
@@ -123,16 +140,18 @@ public:
     // `fetch_id` is 0 where the kind carries no fingerprint; `elapsed_us` is
     // the statement whole, re-runs included. `plan_source` is empty for a
     // statement that compiled no join block, and then the shape keeps what
-    // it had.
+    // it had. `binding` is what the statement bound, default for one that
+    // bound nothing.
     static void Record(std::uint32_t core, std::uint64_t fetch_id, std::string_view line,
                        bool refused, std::uint64_t elapsed_us, std::int64_t now_us,
                        std::string_view plan_source = {},
                        std::string_view plan_label = {},
-                       const StatementCost& cost = {}) noexcept;
+                       const StatementCost& cost = {},
+                       const StatementBinding& binding = {}) noexcept;
 
     // Every shape, the cores' parts merged by key: every count and sum
     // added, the longest call the longest, the first statement the
-    // earliest seen. Ordered by (fetch_id, kind).
+    // earliest seen. Ordered by (fetch_id, kind, binding).
     static std::vector<StatementShape> Snapshot();
 
     // New shapes no part could take, over every core.
@@ -145,6 +164,7 @@ private:
     struct Key {
         std::uint64_t fetch_id;
         std::string_view kind;  // static storage, `StatementKindOf`'s
+        StatementBinding binding;
         bool operator==(const Key&) const = default;
     };
     struct KeyHash {

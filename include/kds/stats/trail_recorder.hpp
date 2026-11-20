@@ -103,9 +103,13 @@ public:
     // statement succeeded**. A trail from a statement that errored
     // describes a state no reader should be pointed at (workplan P10).
     //
-    // `key` is the instance the statement executed as; `trail` is what the
-    // executor collected. Never fails: see the class comment.
-    void OnPatternResult(const InstanceKey& key, const exec::TrailCollector& trail);
+    // `key` is the instance the statement executed as; `pattern` is the
+    // opted `sys.patterns` row the statement's gate found for what it bound
+    // (DI-S3: a fetch id is a text, and a text opted under two bindings is
+    // two rows with two directories); `trail` is what the executor
+    // collected. Never fails: see the class comment.
+    void OnPatternResult(const InstanceKey& key, catalog::Oid pattern,
+                         const exec::TrailCollector& trail);
 
     const Stats& stats() const noexcept { return stats_; }
 
@@ -121,16 +125,30 @@ public:
     bool WouldRecord(std::uint8_t sightings) const noexcept;
 
 private:
-    // Bumps `key`'s sighting count and returns the new value, clearing the
+    // An instance as the recorder counts it: under one opted row, so two
+    // bindings of one text keep two counts.
+    struct Sighting {
+        InstanceKey key;
+        catalog::Oid pattern = 0;
+        bool operator==(const Sighting&) const = default;
+    };
+    struct SightingHash {
+        std::size_t operator()(const Sighting& s) const noexcept {
+            return InstanceKeyHash{}(s.key) ^
+                   (static_cast<std::size_t>(s.pattern) * 0x9E3779B97F4A7C15ULL);
+        }
+    };
+
+    // Bumps the sighting's count and returns the new value, clearing the
     // table wholesale if it is full.
-    std::uint8_t Observe(const InstanceKey& key);
+    std::uint8_t Observe(const Sighting& sighting);
 
     // The pattern's row **if it is opted in**, or null: no row, a row of
     // another fingerprint version, a row whose bit `WAYSTONE OFF` cleared,
     // or a row that could not be read. Null is a reason not to record and
     // never an error to report upward; the unreadable row alone is counted
     // in `write_failures`.
-    const catalog::PatternAccess* EnsurePattern(std::uint64_t fetch_id);
+    const catalog::PatternAccess* EnsurePattern(std::uint64_t fetch_id, catalog::Oid pattern);
 
     // The opted row's directory pair. NotFound when the row has none -
     // `WAYSTONE ON` under `waystone_recording = off`, a mount whose create
@@ -142,7 +160,7 @@ private:
     storage::PageStore& store_;
     const sched::Clock* clock_;
 
-    std::unordered_map<InstanceKey, std::uint8_t, InstanceKeyHash> sightings_;
+    std::unordered_map<Sighting, std::uint8_t, SightingHash> sightings_;
     Stats stats_;
 };
 

@@ -88,7 +88,10 @@ namespace kds::exec {
 class PositionSink {
 public:
     virtual ~PositionSink() = default;
-    virtual void Position(catalog::Oid rel) = 0;
+    // `unqualified_in`: the namespace the name was resolved in where it was
+    // written unqualified (NS5), 0 for a qualified name - what tells one
+    // text's two statements apart (`stats/statement_binding.hpp`).
+    virtual void Position(catalog::Oid rel, catalog::Oid unqualified_in) = 0;
 };
 
 StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,

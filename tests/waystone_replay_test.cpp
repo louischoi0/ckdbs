@@ -21,6 +21,7 @@
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "view_text.hpp"
+#include "pattern_rows.hpp"
 
 // Replay: serving a keyed step from a recorded location instead of
 // descending for it (docs/inflight/in-progress/waystone-workplan.md P11/P13).
@@ -85,7 +86,7 @@ protected:
 
     // The pattern's directory pair, for tests that rewrite a trail by hand.
     std::pair<PageId, std::uint8_t> DirectoryOf(const std::string& sql) {
-        auto pattern = boot_->catalog.FindOptedPattern(KeyOf(sql).fetch_id);
+        auto pattern = kds::testing_patterns::OptedPatternOf(boot_->catalog, KeyOf(sql).fetch_id);
         EXPECT_TRUE(pattern.ok());
         return {pattern.value()->waystone_root, pattern.value()->dir_depth};
     }
@@ -369,12 +370,12 @@ TEST_F(WaystoneReplayTest, AVersionOneRowIsNeverFoundAndTheStatementRecordsAgain
         auto encoded = row.Encode();
         ASSERT_TRUE(page.InsertTuple(encoded, catalog::kBootstrapXid).ok());
     }
-    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(fetch_id).ok());
+    EXPECT_FALSE(kds::testing_patterns::PatternRowOf(boot_->catalog, fetch_id).ok());
 
     OptIn(sql);
     const std::string first = Run(sql);
     Run(sql);  // records under the current-version row
-    auto found = boot_->catalog.FindOptedPattern(fetch_id);
+    auto found = kds::testing_patterns::OptedPatternOf(boot_->catalog, fetch_id);
     ASSERT_TRUE(found.ok());
     EXPECT_NE(found.value()->oid, 999'999u) << "the version-1 row was taken as current";
     EXPECT_EQ(found.value()->fingerprint_version, parser::kFingerprintVersion);
@@ -462,7 +463,7 @@ TEST_F(WaystoneReplayTest, AScanStepIsNeverServedFromATrail) {
     ASSERT_TRUE(chain.ok());
 
     // Nothing was recorded for it, so there is nothing to replay from...
-    auto pattern = boot_->catalog.GetSysPatternRow(KeyOf(sql).fetch_id);
+    auto pattern = kds::testing_patterns::PatternRowOf(boot_->catalog, KeyOf(sql).fetch_id);
     EXPECT_FALSE(pattern.ok()) << "a scan-only statement registers no pattern at all";
 
     // ...and even handed a fabricated trail naming its step, the executor

@@ -47,6 +47,7 @@
 #include "kds/stats/index_stats.hpp"
 #include "kds/stats/lock_wait_log.hpp"
 #include "kds/stats/relation_stats.hpp"
+#include "kds/stats/statement_binding.hpp"
 #include "kds/sched/clock.hpp"
 #include "kds/sched/coro.hpp"
 
@@ -356,6 +357,13 @@ struct DispatchOutcome {
     // not carried: a KWP bind is substituted into the text before the parse, so
     // the hash covers bind values, which WD11 forbids recording.
     std::uint64_t pattern_id = 0;
+    // **What the statement bound** (DI, `stats/statement_binding.hpp`): the
+    // relations its last run declared and the namespace its unqualified
+    // names were resolved in, which with `fetch_id` is the row
+    // `sys.statement_stats` keeps the statement in. Carried for
+    // `fetch_id`'s reason; a re-run's replaces the run before it, and a
+    // reply rebuilt over the outcome keeps it.
+    stats::StatementBinding binding;
 
     // **Where a `SELECT`'s join order came from** (CX-R11), for
     // `sys.statement_stats`: `exec::PlanSourceName`'s static text, or
@@ -503,6 +511,10 @@ struct OptimizerSurface {
 struct StatementIdentity {
     stats::InstanceKey trail;
     std::uint64_t pattern_id = 0;
+    // The opted `sys.patterns` row the statement's gate found for what it
+    // bound, 0 where it found none (DI-S3): what the recorder writes its
+    // trail through.
+    catalog::Oid opted_row = 0;
 };
 
 class CommandDispatcher {
@@ -1372,10 +1384,14 @@ private:
             txn_ != nullptr ? txn_->visibility().DdlGeneration() : 0;
         std::optional<txn::ReadView> view = ViewFor(*session);
         if (after_view_for_test_) after_view_for_test_();
+        // What the first resolve declares is forgotten if it is made again
+        // (DI): the statement's binding is the resolution that answered.
+        const stats::StatementBinding::Mark bound = statement_binding_.mark();
         auto answer = resolve(view.has_value() ? &*view : nullptr);
         if (!view.has_value() && txn_ != nullptr &&
             txn_->visibility().DdlGeneration() != generation) {
             view = MintResolveView(*session);
+            statement_binding_.Rewind(bound);
             answer = resolve(&*view);
         }
         return answer;
@@ -2325,6 +2341,8 @@ private:
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
 
+    // Ends the Waystone opt-ins naming a relation whose drop committed.
+    void EndOptInsNaming(catalog::Oid oid);
     // Hands a successful execution's trail to the recorder. Shared by the
     // row-returning path and ANALYZE so the two cannot come to disagree
     // about when a trail is written.
@@ -3004,6 +3022,10 @@ private:
     // copied onto its outcome by `DispatchAndStage` (BO-S5).
     std::uint64_t statement_fetch_id_ = 0;
     std::uint64_t statement_pattern_id_ = 0;
+    // What the running statement has bound so far (DI): every read borrow
+    // of the statement declares into it (`read_borrow.hpp`), and it is
+    // copied onto the outcome the same way.
+    stats::StatementBinding statement_binding_;
     // The running `SELECT`'s plan source and plan, set by its compile and
     // copied onto its outcome the same way (CX-R11).
     std::string_view statement_plan_source_;

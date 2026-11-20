@@ -17,6 +17,7 @@
 #include "kds/stats/waystone_dir.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "pattern_rows.hpp"
 
 // AP-S4: the function catalog and the function conjunct
 // (instructions/v3.0.0/workorder-ap-function-catalog-fetch-id.md AP-R4, the
@@ -300,7 +301,7 @@ TEST_F(FunctionConjunctTest, AD2StatementIsNeverSightedRegisteredOrRecorded) {
     EXPECT_EQ(recorder_->stats().sightings, sightings) << "a D2 statement was sighted";
     auto fp = parser::FingerprintOf(sql);
     ASSERT_TRUE(fp.has_value());
-    EXPECT_FALSE(boot_->catalog.GetSysPatternRow(fp->fetch_id).ok())
+    EXPECT_FALSE(kds::testing_patterns::PatternRowOf(boot_->catalog, fp->fetch_id).ok())
         << "a D2 statement registered";
     const std::string analyzed = Run("ANALYZE " + sql);
     EXPECT_EQ(analyzed.find("replays="), std::string::npos) << analyzed;

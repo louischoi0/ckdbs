@@ -15,9 +15,11 @@
 //
 // One collector for the instance (AT-S8), three signals:
 //
-//   S1  per-fingerprint execution frequency - a decayed count, touched
-//       once per successful fingerprinted SELECT.
-//   S2  pages scanned per execution, per fingerprint - a decayed *sum*
+//   S1  execution frequency - a decayed count, touched once per
+//       successful fingerprinted SELECT - **per fingerprint and candidate**
+//       (`SignalKey`, DI-S2): a fingerprint is a text, and one text is as
+//       many statements as the relations it resolves to.
+//   S2  pages scanned per execution, on the same key - a decayed *sum*
 //       kept beside S1's decayed count, so the decayed mean is their
 //       ratio and both halves idle on the same clock. The pages come from
 //       `StepStats::pages_fetched`, the executor counter built for this.
@@ -30,9 +32,9 @@
 //
 // Fail a statement. Every recording call returns void and drops on any
 // internal refusal - the same contract every stats collector here honors.
-// The maps are **bounded**: a full fingerprint table evicts its coldest
+// The maps are **bounded**: a full signal table evicts its coldest
 // entry (lowest decayed score) to admit a hotter newcomer, which merely
-// restarts that fingerprint's evidence - a performance event, the
+// restarts that signal's evidence - a performance event, the
 // TrailRecorder-sightings stance. The caps are `[PROPOSED]` and nothing
 // may depend on the numbers, only on the rule: **eviction restarts
 // counting, it never fabricates it.**
@@ -54,10 +56,11 @@
 
 namespace kds::stats {
 
-// Fingerprints tracked before the coldest is evicted to admit a new one.
-// `[PROPOSED]` 4096 - the sibling caps' number (kMaxSightings,
+// Execution signals tracked before the coldest is evicted to admit a new
+// one. `[PROPOSED]` 4096 - the sibling caps' number (kMaxSightings,
 // cabin_max_values), for the sibling reason: a backstop against an
-// unbounded axis, not a tuning target.
+// unbounded axis, not a tuning target. **It bounds signals, not patterns**
+// (DI-S2): a pattern has one signal per candidate it was seen to target.
 inline constexpr std::size_t kMaxTrackedFingerprints = 4096;
 
 // Cabins tracked. Cabin ids are catalog-bounded in practice; the cap is
@@ -82,19 +85,49 @@ struct CandidateRef {
     bool valid() const noexcept { return rel_oid != 0; }
 };
 
-// One fingerprint's S1/S2 state: the decayed execution count and the
-// decayed page sum. Their ratio is the decayed mean pages-per-execution.
+// **What an execution signal is keyed by: the pattern and the candidate it
+// targeted, together** (DI-S2,
+// `instructions/v3.2.0/workorder-di-shape-identity.md` DI-Q12 (a)). A
+// pattern id is a hash of the statement's text and holds no namespace and
+// no relation oid, so one pattern is two statements wherever a name in it
+// resolves to two relations - under two namespaces, or over a relation
+// dropped and created again. Keyed by the pattern alone, the heat of both
+// was one sum credited to whichever candidate ran last, and the controller
+// priced one relation's Cabin with another relation's executions. With the
+// candidate in the key each `(relation, column)` is credited the
+// executions that targeted it and no others. `{0, 0}` is a pattern's
+// executions with no candidacy: pure heat, priced by no decision.
+struct SignalKey {
+    std::uint64_t pattern_id = 0;
+    std::uint64_t rel_oid = 0;
+    std::uint16_t col_pos = 0;
+
+    bool operator==(const SignalKey&) const = default;
+};
+
+struct SignalKeyHash {
+    std::size_t operator()(const SignalKey& k) const noexcept;
+};
+
+// One signal's S1/S2 state: the decayed execution count and the decayed
+// page sum. Their ratio is the decayed mean pages-per-execution.
 struct FingerprintSignal {
     DecayState executions;
     DecayState pages;
-    // S4 (CJ's WE13, `[EXPERIMENTAL]`): ASH samples of this shape found
-    // WAITING, decayed. Read by nothing that decides.
-    DecayState wait_samples;
-    // Last-observed candidacy. A shape's target is a function of the
-    // shape, so overwriting is idempotent in the steady state; it moves
-    // only when the catalog under the shape moved (a Cabin created or
-    // dropped), and then the newest answer is the right one.
+    // The candidate the key names, with the Cabin that serves it as last
+    // observed: `cabin_id` moves when a Cabin on the column is created or
+    // dropped, and then the newest answer is the right one.
     CandidateRef candidate;
+};
+
+// S4 (CJ's WE13, `[EXPERIMENTAL]`), and how many signals a pattern has.
+// **A wait sample is a pattern's, not a candidate's**: the sampler knows
+// the session's published pattern and nothing the statement bound (DI-Q9
+// (a)), so the sample is kept beside the pattern's signals and credited to
+// none of them. Read by nothing that decides.
+struct PatternWaits {
+    DecayState wait_samples;
+    std::uint32_t signals = 0;
 };
 
 // One Cabin's S3 state.
@@ -110,10 +143,6 @@ struct SnapshotFingerprint {
     std::uint64_t pattern_id = 0;
     std::uint32_t frequency_q8 = 0;  // decayed executions, Q24.8
     std::uint32_t pages_q8 = 0;      // decayed page sum, Q24.8
-    // S4, appended: the decayed count of ASH samples of this shape that were
-    // WAITING. `Decide` does not read it (no cost model prices a wait), so it
-    // moves no decision and no digest (`{version, decay_epoch}`).
-    std::uint32_t wait_samples_q8 = 0;
 
     // The same two values in the log domain (decay.hpp's `Log2Q16`),
     // carried beside the linear pair rather than replacing it. The linear
@@ -127,6 +156,15 @@ struct SnapshotFingerprint {
     Log2Q16 pages_log2 = kLog2NegInf;
 
     CandidateRef candidate;          // zero rel_oid = no cabin candidacy
+};
+
+// S4: the decayed count of ASH samples of a pattern that were WAITING, one
+// row a pattern with a signal. `Decide` does not read it (no cost model
+// prices a wait), so it moves no decision and no digest
+// (`{version, decay_epoch}`).
+struct SnapshotPatternWaits {
+    std::uint64_t pattern_id = 0;
+    std::uint32_t wait_samples_q8 = 0;
 };
 
 struct SnapshotCabin {
@@ -143,7 +181,9 @@ struct SnapshotCabin {
 struct OptimizerSnapshot {
     std::uint64_t version = 0;         // increments per Snapshot() call
     sched::MonoTimeNs decay_epoch = 0; // the clock reading of every value
-    std::vector<SnapshotFingerprint> fingerprints;  // sorted by pattern_id
+    // Sorted by (pattern_id, candidate relation, candidate column).
+    std::vector<SnapshotFingerprint> fingerprints;
+    std::vector<SnapshotPatternWaits> waits;        // sorted by pattern_id
     std::vector<SnapshotCabin> cabins;              // sorted by cabin_id
 };
 
@@ -157,14 +197,14 @@ public:
 
     // S1 + S2: one successful fingerprinted execution that read
     // `pages_fetched` pages, targeting `candidate` if the shape has cabin
-    // candidacy. Never fails; a full table evicts its coldest fingerprint
-    // to admit this one.
+    // candidacy - the signal of `pattern_id` and that candidate. Never
+    // fails; a full table evicts its coldest signal to admit this one.
     void NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
                        CandidateRef candidate = {});
 
     // S4 (CJ's WE13): one ASH sample of `pattern_id` found WAITING. Counted
-    // only for a shape already tracked (a wait never admits or evicts one) and
-    // only while `gate` is true: the controller's own switch.
+    // only for a pattern with a signal (a wait never admits or evicts one)
+    // and only while `gate` is true: the controller's own switch.
     void NoteWaitSample(std::uint64_t pattern_id) noexcept;
     void set_wait_gate(const std::atomic<bool>* gate) noexcept { wait_gate_ = gate; }
 
@@ -187,7 +227,7 @@ public:
     // fully decayed", which is the honest reading either way.
     SnapshotCabin QualityOf(std::uint64_t cabin_id) const;
 
-    std::size_t tracked_fingerprints() const noexcept {
+    std::size_t tracked_signals() const noexcept {
         LatchGuard hold(latch_);
         return fingerprints_.size();
     }
@@ -201,10 +241,10 @@ public:
     void SetLatch(Latch* latch) noexcept { latch_ = latch; }
 
 private:
-    // The entry for `id`, evicting the coldest when the map is full and
-    // `id` is new. O(n) scan on the full-and-new case only - the map is
+    // The entry for `key`, evicting the coldest when the map is full and
+    // `key` is new. O(n) scan on the full-and-new case only - the map is
     // capped at kMaxTracked*, and the common case is a hash probe.
-    FingerprintSignal* FingerprintFor(std::uint64_t pattern_id);
+    FingerprintSignal* FingerprintFor(const SignalKey& key);
     CabinQualitySignal* CabinFor(std::uint64_t cabin_id);
 
     const sched::Clock* clock_;
@@ -212,7 +252,9 @@ private:
     Latch* latch_ = nullptr;
     const std::atomic<bool>* wait_gate_ = nullptr;
     std::uint64_t version_ = 0;
-    std::unordered_map<std::uint64_t, FingerprintSignal> fingerprints_;
+    std::unordered_map<SignalKey, FingerprintSignal, SignalKeyHash> fingerprints_;
+    // One entry per pattern with a signal in `fingerprints_`.
+    std::unordered_map<std::uint64_t, PatternWaits> patterns_;
     std::unordered_map<std::uint64_t, CabinQualitySignal> cabins_;
 };
 

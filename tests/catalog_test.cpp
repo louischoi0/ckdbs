@@ -25,6 +25,7 @@
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/record.hpp"
+#include "pattern_rows.hpp"
 
 namespace kds::catalog {
 namespace {
@@ -1133,6 +1134,8 @@ protected:
         SysPatternRow row{};
         row.oid = 900000 + fetch_id;
         row.fetch_id = fetch_id;
+        // The binding the fixture's `On` and `Off` name (DI-S3).
+        SetBinding(row, kds::testing_patterns::AnyBinding());
         row.fingerprint_version = version;
         row.waystone_root = root;
         row.dir_depth = root != kInvalidPageId ? 1 : 0;
@@ -1143,12 +1146,12 @@ protected:
 
     // `WAYSTONE ON`/`OFF`'s write, answering whether it wrote.
     bool On(std::uint64_t fetch_id, PageId root = kInvalidPageId) {
-        auto wrote = catalog_.SetPatternWaystone(fetch_id, kStmtClassUnclassified, true, root);
+        auto wrote = catalog_.SetPatternWaystone(fetch_id, kds::testing_patterns::AnyBinding(), kStmtClassUnclassified, true, root);
         EXPECT_TRUE(wrote.ok()) << wrote.status().message();
         return wrote.ok() && wrote.value().written;
     }
     bool Off(std::uint64_t fetch_id) {
-        auto wrote = catalog_.SetPatternWaystone(fetch_id, 0, false, kInvalidPageId);
+        auto wrote = catalog_.SetPatternWaystone(fetch_id, kds::testing_patterns::AnyBinding(), 0, false, kInvalidPageId);
         EXPECT_TRUE(wrote.ok()) << wrote.status().message();
         return wrote.ok() && wrote.value().written;
     }
@@ -1186,23 +1189,23 @@ TEST_F(PatternCatalogTest, BootstrapCreatesTheRelation) {
 
 TEST_F(PatternCatalogTest, OnInsertsAnOptedRowThatFindRoundTrips) {
     ASSERT_TRUE(On(0xABCDEF));
-    auto found = catalog_.FindOptedPattern(0xABCDEF);
+    auto found = catalog_.FindOptedPattern(0xABCDEF, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(found.ok()) << found.status().message();
     EXPECT_EQ(found.value()->fetch_id, 0xABCDEFu);
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
     EXPECT_NE(found.value()->flags & kPatternWaystone, 0);
     EXPECT_FALSE(found.value()->has_waystone_directory()) << "no root was passed";
 
-    auto row = catalog_.GetSysPatternRow(0xABCDEF);
+    auto row = catalog_.GetSysPatternRow(0xABCDEF, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().origin, 0) << "the reserved byte is written 0";
 }
 
 TEST_F(PatternCatalogTest, AnUnknownPatternIsNotFound) {
     // With nothing opted, and with something else opted: NotFound both ways.
-    EXPECT_EQ(catalog_.FindOptedPattern(12345).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.FindOptedPattern(12345, kds::testing_patterns::AnyBinding()).status().code(), StatusCode::kNotFound);
     ASSERT_TRUE(On(1));
-    auto found = catalog_.FindOptedPattern(12345);
+    auto found = catalog_.FindOptedPattern(12345, kds::testing_patterns::AnyBinding());
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
 }
@@ -1211,10 +1214,10 @@ TEST_F(PatternCatalogTest, AnUnknownPatternIsNotFound) {
 TEST_F(PatternCatalogTest, AnOptedOutRowIsNotFound) {
     ASSERT_TRUE(On(2));
     ASSERT_TRUE(On(3));
-    ASSERT_TRUE(catalog_.FindOptedPattern(3).ok());
+    ASSERT_TRUE(catalog_.FindOptedPattern(3, kds::testing_patterns::AnyBinding()).ok());
     ASSERT_TRUE(Off(3));
-    EXPECT_EQ(catalog_.FindOptedPattern(3).status().code(), StatusCode::kNotFound);
-    EXPECT_TRUE(catalog_.GetSysPatternRow(3).ok()) << "OFF deleted the row";
+    EXPECT_EQ(catalog_.FindOptedPattern(3, kds::testing_patterns::AnyBinding()).status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(catalog_.GetSysPatternRow(3, kds::testing_patterns::AnyBinding()).ok()) << "OFF deleted the row";
 }
 
 TEST_F(PatternCatalogTest, OnTwiceIsUnchangedAndInsertsOneRow) {
@@ -1227,13 +1230,13 @@ TEST_F(PatternCatalogTest, OnWritesTheRootItCarriesOnlyWhereTheRowHasNone) {
     ASSERT_TRUE(On(5));
     // Opted with no root, then a root: written, at depth 1.
     EXPECT_TRUE(On(5, 4096));
-    auto row = catalog_.GetSysPatternRow(5);
+    auto row = catalog_.GetSysPatternRow(5, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().waystone_root, 4096u);
     EXPECT_EQ(row.value().dir_depth, 1);
     // A row already rooted keeps its root; the page carried is unused.
     EXPECT_FALSE(On(5, 8192));
-    EXPECT_EQ(catalog_.GetSysPatternRow(5).value().waystone_root, 4096u);
+    EXPECT_EQ(catalog_.GetSysPatternRow(5, kds::testing_patterns::AnyBinding()).value().waystone_root, 4096u);
 }
 
 TEST_F(PatternCatalogTest, OffClearsTheBitAndTheRootAndKeepsTheRow) {
@@ -1253,8 +1256,8 @@ TEST_F(PatternCatalogTest, OffClearsTheBitAndTheRootAndKeepsTheRow) {
 TEST_F(PatternCatalogTest, PatternOidsComeFromThePersistentSequence) {
     ASSERT_TRUE(On(1));
     ASSERT_TRUE(On(2));
-    auto a = catalog_.GetSysPatternRow(1);
-    auto b = catalog_.GetSysPatternRow(2);
+    auto a = catalog_.GetSysPatternRow(1, kds::testing_patterns::AnyBinding());
+    auto b = catalog_.GetSysPatternRow(2, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(a.ok());
     ASSERT_TRUE(b.ok());
 
@@ -1292,14 +1295,14 @@ TEST_F(PatternCatalogTest, AForeignVersionResolvesAsAbsentNotAsAnError) {
     // not implement, so it names a shape that is not the one it claims.
     // NotFound, not a failure - nothing about a stale row should fail a
     // statement.
-    auto found = catalog_.FindOptedPattern(99);
+    auto found = catalog_.FindOptedPattern(99, kds::testing_patterns::AnyBinding());
     EXPECT_FALSE(found.ok());
     EXPECT_EQ(found.status().code(), StatusCode::kNotFound);
 
     // And the same filter applies to the row accessor, which is where it
     // lives. A caller reaching past FindOptedPattern() for heat must not see a
     // stale row either.
-    EXPECT_EQ(catalog_.GetSysPatternRow(99).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.GetSysPatternRow(99, kds::testing_patterns::AnyBinding()).status().code(), StatusCode::kNotFound);
 }
 
 TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeOptedInAtTheCurrentOne) {
@@ -1309,7 +1312,7 @@ TEST_F(PatternCatalogTest, APatternStaleAtOneVersionCanBeOptedInAtTheCurrentOne)
     // ON inserts a current row beside the lapsed one rather than writing
     // through it.
     ASSERT_TRUE(On(55));
-    auto found = catalog_.FindOptedPattern(55);
+    auto found = catalog_.FindOptedPattern(55, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
     EXPECT_EQ(RowsOf(55).size(), 2u);
@@ -1323,11 +1326,11 @@ TEST_F(PatternCatalogTest, AStaleRowDoesNotShadowTheCurrentOne) {
     WriteRawPatternRow(77, kForeignVersion);
     ASSERT_TRUE(On(77));
 
-    auto found = catalog_.FindOptedPattern(77);
+    auto found = catalog_.FindOptedPattern(77, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(found.ok());
     EXPECT_EQ(found.value()->fingerprint_version, kVersion);
 
-    auto row = catalog_.GetSysPatternRow(77);
+    auto row = catalog_.GetSysPatternRow(77, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().fingerprint_version, kVersion);
 }
@@ -1353,7 +1356,7 @@ TEST_F(PatternCatalogTest, OffClearsALapsedRowAndTheCurrentRowOfOneFetchId) {
 // A lapsed row alone: OFF by number reaches it although no lookup does.
 TEST_F(PatternCatalogTest, OffReachesALapsedRowNoLookupReturns) {
     WriteRawPatternRow(66, kForeignVersion, kPatternWaystone);
-    ASSERT_FALSE(catalog_.FindOptedPattern(66).ok());
+    ASSERT_FALSE(catalog_.FindOptedPattern(66, kds::testing_patterns::AnyBinding()).ok());
     EXPECT_TRUE(Off(66));
     const auto rows = RowsOf(66);
     ASSERT_EQ(rows.size(), 1u);
@@ -1361,7 +1364,7 @@ TEST_F(PatternCatalogTest, OffReachesALapsedRowNoLookupReturns) {
 }
 
 TEST_F(PatternCatalogTest, OffTakesNoRoot) {
-    EXPECT_EQ(catalog_.SetPatternWaystone(1, 0, false, 4096).status().code(),
+    EXPECT_EQ(catalog_.SetPatternWaystone(1, kds::testing_patterns::AnyBinding(), 0, false, 4096).status().code(),
               StatusCode::kInvalidArgument);
 }
 
@@ -1382,7 +1385,7 @@ TEST_F(PatternCatalogTest, TheRenewalRootsOptedRowsAndClearsEveryOtherRoot) {
     EXPECT_EQ(renewed.value(), 2u) << "the opted current rows";
 
     for (const std::uint64_t fetch_id : {1u, 2u}) {
-        auto row = catalog_.GetSysPatternRow(fetch_id);
+        auto row = catalog_.GetSysPatternRow(fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(row.ok());
         EXPECT_TRUE(HasWaystoneDirectory(row.value())) << fetch_id;
         EXPECT_EQ(row.value().dir_depth, 1) << fetch_id;
@@ -1418,7 +1421,7 @@ TEST_F(PatternCatalogTest, TheRenewalWithRecordingOffCreatesNoDirectory) {
     ASSERT_TRUE(renewed.ok()) << renewed.status().message();
     EXPECT_EQ(renewed.value(), 2u);
     for (const std::uint64_t fetch_id : {1u, 2u}) {
-        auto row = catalog_.GetSysPatternRow(fetch_id);
+        auto row = catalog_.GetSysPatternRow(fetch_id, kds::testing_patterns::AnyBinding());
         ASSERT_TRUE(row.ok());
         EXPECT_FALSE(HasWaystoneDirectory(row.value())) << fetch_id;
         EXPECT_NE(row.value().flags & kPatternWaystone, 0) << fetch_id;
@@ -1490,27 +1493,27 @@ TEST_F(PatternCatalogTest, AnOffAtCountZeroLeavesItZero) {
 TEST_F(PatternCatalogTest, TheOptedMapIsCompletePerGenerationAndMissesWithNoScan) {
     const auto fills = [this] { return catalog_.cache_stats().pattern_fills; };
     // Count 0: nothing fills, however often it is asked.
-    for (int i = 0; i < 3; ++i) EXPECT_FALSE(catalog_.FindOptedPattern(1).ok());
+    for (int i = 0; i < 3; ++i) EXPECT_FALSE(catalog_.FindOptedPattern(1, kds::testing_patterns::AnyBinding()).ok());
     EXPECT_EQ(fills(), 0u) << "a lookup filled the map with nothing opted";
 
     ASSERT_TRUE(On(1));
     ASSERT_TRUE(On(2));
     const std::uint64_t before = fills();
-    ASSERT_TRUE(catalog_.FindOptedPattern(1).ok());
+    ASSERT_TRUE(catalog_.FindOptedPattern(1, kds::testing_patterns::AnyBinding()).ok());
     EXPECT_EQ(fills(), before + 1) << "the first ask of a generation did not fill";
-    EXPECT_EQ(catalog_.FindOptedPattern(404).status().code(), StatusCode::kNotFound);
-    EXPECT_TRUE(catalog_.FindOptedPattern(2).ok()) << "the fill was not the whole opted set";
+    EXPECT_EQ(catalog_.FindOptedPattern(404, kds::testing_patterns::AnyBinding()).status().code(), StatusCode::kNotFound);
+    EXPECT_TRUE(catalog_.FindOptedPattern(2, kds::testing_patterns::AnyBinding()).ok()) << "the fill was not the whole opted set";
     EXPECT_EQ(fills(), before + 1) << "a miss, or a second hit, scanned";
 
     // A bit written behind the writer's back: no word, no drop, so the
     // filled generation answers "not opted" from memory.
     WriteRawPatternRow(3, kVersion, kPatternWaystone);
-    EXPECT_EQ(catalog_.FindOptedPattern(3).status().code(), StatusCode::kNotFound);
+    EXPECT_EQ(catalog_.FindOptedPattern(3, kds::testing_patterns::AnyBinding()).status().code(), StatusCode::kNotFound);
     EXPECT_EQ(fills(), before + 1);
     // The real writer moves the word, and the next ask refills - the raw
     // row included.
     ASSERT_TRUE(On(4));
-    EXPECT_TRUE(catalog_.FindOptedPattern(3).ok());
+    EXPECT_TRUE(catalog_.FindOptedPattern(3, kds::testing_patterns::AnyBinding()).ok());
     EXPECT_EQ(fills(), before + 2);
 }
 
@@ -1526,15 +1529,15 @@ TEST_F(PatternCatalogTest, APeerSeesAnOptInAndAnOptOutAtItsNextRevalidation) {
     ASSERT_TRUE(On(10));
     ASSERT_TRUE(On(11));
     peer.Revalidate();
-    ASSERT_TRUE(peer.FindOptedPattern(10).ok());  // the peer's generation, filled
-    ASSERT_FALSE(peer.FindOptedPattern(12).ok());
+    ASSERT_TRUE(peer.FindOptedPattern(10, kds::testing_patterns::AnyBinding()).ok());  // the peer's generation, filled
+    ASSERT_FALSE(peer.FindOptedPattern(12, kds::testing_patterns::AnyBinding()).ok());
 
     ASSERT_TRUE(On(12));
     peer.Revalidate();
-    EXPECT_TRUE(peer.FindOptedPattern(12).ok()) << "the peer missed an opt-in past the word";
+    EXPECT_TRUE(peer.FindOptedPattern(12, kds::testing_patterns::AnyBinding()).ok()) << "the peer missed an opt-in past the word";
     ASSERT_TRUE(Off(10));
     peer.Revalidate();
-    EXPECT_FALSE(peer.FindOptedPattern(10).ok()) << "the peer kept an opted-out row";
+    EXPECT_FALSE(peer.FindOptedPattern(10, kds::testing_patterns::AnyBinding()).ok()) << "the peer kept an opted-out row";
     EXPECT_EQ(words.opted_count.load(), 2u);
 
     catalog_.SetInstanceWords(nullptr);
@@ -1553,13 +1556,13 @@ TEST_F(PatternCatalogTest, WithTheCountAtZeroAWordMoveCausesNoFill) {
     for (int i = 0; i < 3; ++i) {
         words.schema_word.fetch_add(1);
         peer.Revalidate();
-        EXPECT_FALSE(peer.FindOptedPattern(1).ok());
+        EXPECT_FALSE(peer.FindOptedPattern(1, kds::testing_patterns::AnyBinding()).ok());
     }
     EXPECT_EQ(peer.cache_stats().pattern_fills, 0u) << "a word move filled with nothing opted";
     // The control: the same peer fills once something is opted.
     ASSERT_TRUE(On(1));
     peer.Revalidate();
-    EXPECT_TRUE(peer.FindOptedPattern(1).ok());
+    EXPECT_TRUE(peer.FindOptedPattern(1, kds::testing_patterns::AnyBinding()).ok());
     EXPECT_EQ(peer.cache_stats().pattern_fills, 1u);
 
     catalog_.SetInstanceWords(nullptr);
@@ -1573,7 +1576,7 @@ TEST_F(PatternCatalogTest, HeatIsReadFromThePageNotTheCache) {
     // PatternAccess deliberately has no use_count/last_seen to read: heat
     // moves without DDL, so it is not a cacheable fact (schema.hpp). The
     // row is where they live, reserved and 0 (rows.hpp).
-    auto row = catalog_.GetSysPatternRow(21);
+    auto row = catalog_.GetSysPatternRow(21, kds::testing_patterns::AnyBinding());
     ASSERT_TRUE(row.ok());
     EXPECT_EQ(row.value().use_count, 0u);
     EXPECT_EQ(row.value().last_seen, 0u);

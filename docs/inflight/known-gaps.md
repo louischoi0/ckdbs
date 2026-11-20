@@ -1848,14 +1848,22 @@ the claim's deepening trap, the leak per mount); these are what it leaves.
   every core but the growing one), on a `CABIN AUTO` create or drop, on a
   catalog-writing resolve and on an opt-in, so it is not "per DDL". Bounded
   by the rows ever opted; not measured.
-- **An opt-in is by text.** `fetch_id` carries no namespace and no oid, so
-  one `WAYSTONE ON` applies under every `USE` whose text matches and
-  **survives `DROP TABLE`** and a re-create under the same name: no
-  `sys.patterns` writer runs on a drop. Replay stays correct through the
-  `rel_oid` check (`exec/trail_replay.cpp`), but the recording cost comes
-  back on a shape nobody opted for the new relation, and each mount renews a
-  directory for an example that no longer resolves. It must be turned off
-  explicitly (`OFF <select>` needs no relation). `manual/sql/sql.md` says so.
+- **An opt-in is a shape under what it bound** (DI-S3, superblock 38;
+  verified on `di-shape-identity` at DI-S3's commit): the row carries the
+  binding, a committed `DROP TABLE` ends the opt-ins naming the relation,
+  and two bindings of one text keep two directories. What is left:
+  - **A dispatcher with a transaction manager and no log never sees a
+    drop commit** (`EndDdlScopeById` reads the commit's LSN), so there the
+    opt-in outlives the drop until a mount; no server is built that way.
+  - **An ended row stays**, its bit and root cleared, naming a dropped oid:
+    one 178-byte row a dropped relation's opt-in, never reclaimed.
+  - **A renamed relation's opt-in is inert, not ended**: its text no longer
+    compiles, and the row waits for `OFF <fetch_id>`.
+  - **`OFF <select>` over an example that binds only part of its
+    relations** (a join whose second relation is gone) names a binding no
+    row has and answers `unchanged`.
+  - **A `SELECT` over more than 16 distinct relations cannot be opted in**
+    (`NotImplemented`).
 - **The opted path's own costs are left as built** (CF-O-Q13 (a)): every
   re-record takes the directory page exclusive, which dirties it
   (`src/stats/waystone_dir.cpp`, `LookupOrCreateWaystonePage`'s `Get`), and
@@ -2202,6 +2210,76 @@ Owned by `docs/spec/sys-views.md` §6.2c and `docs/spec/plan-stats.md` §6.
   counts a division on a second core, drives a division that fails, or
   reaches the store's bound.
 
+### A row is one binding's (DI-S1)
+
+Verified on `di-shape-identity` (branch `worktree-di-shape-identity`) at
+DI-S1's commit. Owned by `docs/spec/sys-views.md` §6.1, §6.1a and
+`include/kds/stats/statement_binding.hpp`.
+
+- **A `SELECT` the native grammar does not parse has no fetch id.** A parse
+  that stops in the middle answers no fingerprint (`parser.hpp`), so a set
+  operation and every other form only the query layer reads is kind
+  `SELECT` at `fetch_id = 0`. Since DI-S1 that is one row a binding, so no
+  row sums statements over different relations; it still sums every such
+  text over the same relations, and its `shape_text` is the first one
+  seen. Giving such a statement its own fetch id is not built.
+- **A statement refused part way through its bind is the row of what it
+  had declared by then**, not the row its text has once it binds whole: a
+  join whose second relation does not exist is counted under its first.
+- **More than 16 distinct relations are not told apart**: one `over` row a
+  shape.
+- **A dropped relation's rows stay until a restart** and count against
+  the part's 4,096 (DI-Q7 (c)): a workload that drops and creates relations
+  fills a part with rows no call can reach, and the shapes after them are
+  dropped and counted. A reclaim was built at DI-S1 and taken out at the
+  close: run where a part needs room - a statement's own record - it
+  scanned the part and read the catalog on that statement's path, which
+  `rules.md` §3a forbids. A reclaim off the statement's path is not built.
+- **DI's cost on a write is not resolved.** At the close
+  (`bench/v3.4.15/results-di-close-v3.4.15-12-g871845e4.md`) no cell was
+  slower outside its own spread, the point reads were level, and a keyed
+  `INSERT` and the FK insert read about 0.4 us dearer at `cores = 1` in
+  10 and 9 of 12 lifetimes - inside the spread, on a host with no counter
+  to place it. Not chased.
+- **A shape's slot grew to 768 bytes from 624 and its key to 168 from 24**,
+  so the copy a view read makes under each part's latch grew with them
+  (above), unmeasured.
+- **`sys.ash`'s `fingerprint` is the text's** (DI-Q9 (a)): a reader who
+  joins a sample to `sys.statement_stats` by it meets every binding's row.
+- **No cell** drives `ResolveNames`' second resolve through a statement
+  (the rewind is pinned on the binding alone), or a refused commit's and a
+  refused page wait's rebuilt reply carrying the binding; the walk's
+  rebuilt reply is pinned on the two-core rig.
+
+### The Cabin controller's signal is a candidate's (DI-S2)
+
+Verified on `di-shape-identity` (branch `worktree-di-shape-identity`) at
+DI-S2's commit. Owned by `docs/spec/cabin-controller.md` PO7c.
+
+- **A candidate is a relation and a column position, not a column.**
+  Nothing tells the signals of a `DROP COLUMN`, so a position `ADD COLUMN`
+  reuses after `PURGE DROPPED COLUMNS` inherits the dropped column's
+  decayed heat until it decays. Found at DI-S0; not a text identity and
+  not fixed by DI.
+- **A fingerprint whose candidacy moves between two columns of one
+  relation is two signals**: the old one decays where it was overwritten
+  whole before DI-S2. No decision is priced with more heat than before the
+  move.
+- **One fingerprint is now as many signals as the relations it targets,
+  plus one for its executions with no candidacy, under the same 4,096
+  cap** (`kMaxTrackedFingerprints`, `[PROPOSED]`, unmeasured): 41 texts
+  under 100 namespaces pass it where 41 entries stood before. Past the cap
+  every new signal evicts the coldest - commonly another newcomer, so
+  neither builds a count - and pays the 4,096-entry scan under the
+  collector's latch, on the success path of every `SELECT`. The eviction
+  rule is unchanged; its reach is what moved.
+- **The execution feed runs with the controller off**, under its latch
+  above one core (`RecordOptimizerSignals`): only `Tick` and the wait
+  samples follow the switch. Unchanged by DI.
+- **A dropped relation's signals are not forgotten at the drop**: they
+  name an oid no statement can bind again, decay, and are evicted when the
+  table is full.
+
 ## Wait events and ASH (CJ)
 
 Verified on `cj-wait-events-ash` at the milestone's close
@@ -2370,8 +2448,10 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   checkpoint interval. `captured_pending` counts what is waiting. Owned
   by `parser-v2.md` I12.
 
-- **A captured plan has no state but present.** `INVALID` (CX-Q16) and
-  `DISABLED` are not built for one: a captured order that stops compiling
+- **A captured plan has no state of its own.** `DISABLED` is not built
+  for one, and `INVALID` (CX-Q16) only as DI-S4 derives it - a rename of a
+  relation, or of a column written by its binding, read off the row. A
+  captured order that stops compiling for another reason
   is declined statement by statement and counted, its row unchanged, and
   the only acts on it are `DROP PLAN` and a `CREATE PLAN` over its shape
   (`ALTER PLAN` on a captured row is refused `NotImplemented`). Verified
@@ -2510,14 +2590,32 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `SELECT` or across a restart. Owned by
   `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
-- **A renamed relation's plan reads `enabled` and matches nothing new.**
-  A fetch id hashes names, so after `ALTER TABLE ... RENAME TO` or `RENAME
-  COLUMN` of a name the statement writes, no statement in the new spelling
-  matches the plan; `sys.plans` still shows it `enabled` and it still
-  RESTRICTs the relation's `DROP TABLE`. Nothing tells the administrator
-  but `plan_served` not moving and `sys.statement_stats` naming another
-  source for the new shape. Verified at CX-S1b by reading. Owned by
-  `parser-v2.md` I12.
+- **A plan a rename put out of reach reads `invalid`, where the rename is
+  established from its row** (DI-S4, `exec::PlanRowCanMatch`; verified on
+  `di-shape-identity` at DI-S4's commit): a renamed relation, and a renamed
+  column the statement writes by its binding (`b.col`). It then restricts
+  no `DROP TABLE`. **Not established, so read as before** (DI-R9): a
+  renamed column the statement writes **unqualified** - the plan reads
+  `enabled`, still RESTRICTs, and matches nothing; a statement stored cut
+  short; a captured order that stops compiling for any reason but those
+  two. Nothing is written at the rename: the state is derived at each read
+  of `sys.plans` and at the drop's RESTRICT, and the plan stays in the
+  administrator's table and in the captured table, where no statement
+  reaches it. A rename back puts it in force again. Also not established:
+  **a statement the native grammar does not read with its literals as
+  `0`** - any `LIKE`, whose pattern must be a string - and **a dropped
+  column**, since a `DROP COLUMN` undecided would read as a rename. And
+  what the derived state costs:
+  - **`invalid` hides `enabled` and `disabled`** while the rename stands.
+  - **A rename back after the drop's check orphans the plan**: over
+    `(t, u)` with `u` renamed away, `DROP TABLE t` is let through; a
+    `RENAME` of `u` back before the drop decides puts the plan in force
+    over a relation about to be gone, where it then reads `invalid` for
+    the gone relation. `CREATE PLAN` could not do that before DI-S4 - it
+    waits for the drop's `X`.
+  - **A pinned index's `DROP INDEX` and a named Cabin's drop are still
+    restricted** by a plan that can match nothing.
+  Owned by `parser-v2.md` I12.
 
 - **What CX-S1b's cells do not reach.** A variant whose order does not
   compile for a statement (the decline has one cell, by the sort rule); a
@@ -2925,13 +3023,10 @@ Verified on `da-access-stats-memory-resident` at DA-S1
 (`instructions/v3.2.0/workorder-da-access-stats-memory-resident.md`; owner
 `docs/spec/sys-views.md` §6.2d, `docs/spec/heap-and-tuple.md` §7).
 
-- **DA-S3 is owed: page 11's bootstrap stays.** Bootstrap still makes page
-  11 and its `sys.objects` and `sys.tables` rows (oid 130), so `SHOW TABLES`
-  and `sys.tables` still list `access_stats`, and `SysAccessStatRow`, the
-  `kCatalogRoots` entry, `IsUnloggedCatalogRelation`'s and
-  `RegisterUnloggedClasses`' page-11 halves stay with it (DA-Q9 (a)). No
-  build since DA writes or reads the page. Removing them is a format event,
-  bound to the first superblock bump after 37 any order makes (DA-Q1 (a)).
+- **DA-S3 is done at superblock 38** (on `di-shape-identity`, carried by
+  DI's format event): bootstrap makes no page 11 and no `sys.objects` or
+  `sys.tables` row for oid 130, which is retired; page 11 is reserved and
+  unused, as page 10. A version-37 volume does not mount.
 - **A forget orders the writes, not the statements** (DA-R5): a `SELECT`
   whose borrow was refused and that records after an `ADD COLUMN`'s forget
   can re-admit the reused position's shape, as page 11's hold allowed.
@@ -2959,6 +3054,11 @@ and its call sites, not a census: DL-S0 is the census.
   every entry. Breaks clauses (a) and (c), and the second rule: the consumer is
   off and the statement still builds an identity and notes for it. Its cost is inside every
   `cores = 8` number of DA's results files and separated in none.
+  **DI-S2 changed this path's key and nothing else of it** (on
+  `di-shape-identity`): the table holds a signal a `(fingerprint,
+  candidate)` and a second map a fingerprint's waits, so the 4,096 is
+  reached sooner and the eviction's scan with it; the latch, the switch
+  and the scan are as they were, and are DL's.
 - **A Cabin probe's hit or miss takes three shared latches to count
   itself**: the cabin's partition latch a second time, the instance's one
   `stats_latch_`, and the collector's latch above (`CabinStore::NoteHit`,
@@ -3074,9 +3174,9 @@ Verified on `bs-test-hardening` from `5d58f3ca`
   naming `Corruption` - and lost to the instance until a restore:
   - **page 0 and the two map regions** (DB-Q3): read before recovery, never
     imaged, so a tear refuses the mount; no second copy exists;
-  - **a page of an unlogged class** (`sys.statistics`, page 11 - which no
-    build since DA writes - and a fenced index build's tree before its
-    `LogBuiltTree`), whose content no record describes;
+  - **a page of an unlogged class** (`sys.statistics`, and a fenced index
+    build's tree before its `LogBuiltTree`), whose content no record
+    describes;
   - **a tear of the mount's own write**: images are off through the mount
     (DB-R2), so a page redo or the mount wrote back and a crash tore before
     the completion checkpoint is refused when its last image is below the
