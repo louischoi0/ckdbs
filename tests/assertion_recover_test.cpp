@@ -1657,14 +1657,14 @@ TEST_F(AssertionResumeTest, AFreshRegistryResumesEnforcingWithTheRecoveredAggreg
 
     // The restart: a registry that holds nothing, refilled from the log.
     AssertionEnforcer fresh;
-    EXPECT_TRUE(fresh.empty());
+    EXPECT_FALSE(fresh.AnyOn(4000));
     const server::MountRecovery report = server::ResumeAssertionsAfterRecovery(
         boot_->catalog, *store_, *log_device_, /*stream_core=*/0,
         anchor.anchor().checkpoint_lsn, fresh, server::MountRecovery{}, /*log=*/nullptr);
 
     EXPECT_EQ(report.assertions_enforcing, 1u);
     EXPECT_EQ(report.assertions_unrecovered, 0u);
-    EXPECT_FALSE(fresh.empty()) << "SHOW ASSERTIONS derives enforcing=1 from exactly this";
+    EXPECT_TRUE(fresh.AnyOn(4000)) << "the registry holds the relation's assertion again";
 
     // And the aggregate is the **recovered** one, not zero: the admission
     // boundary has to answer identically either side of the restart, which is
@@ -1821,7 +1821,7 @@ TEST_F(AssertionResumeTest, WithNoBaseInRangeTheAssertionIsNotAdoptedAtAll) {
 
     EXPECT_EQ(report.assertions_enforcing, 0u);
     EXPECT_EQ(report.assertions_unrecovered, 1u);
-    EXPECT_TRUE(fresh.empty());
+    EXPECT_FALSE(fresh.AnyOn(4000));
 }
 
 // **CREATE ASSERTION refuses a GROUP BY or SUM column that is the tuple

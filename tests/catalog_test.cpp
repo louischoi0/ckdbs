@@ -441,6 +441,17 @@ Catalog::IndexDef SimpleIndex(Oid table_oid, std::string name, std::uint16_t col
     return def;
 }
 
+// How many index rows name `table_oid`: `ListIndexes` filtered by table, as
+// `InitTableAccess` filters it.
+std::size_t IndexCountOn(Catalog& catalog, Oid table_oid) {
+    auto rows = catalog.ListIndexes();
+    EXPECT_TRUE(rows.ok()) << rows.status().message();
+    if (!rows.ok()) return 0;
+    return static_cast<std::size_t>(
+        std::count_if(rows.value().begin(), rows.value().end(),
+                      [&](const SysIndexRow& row) { return row.table_oid == table_oid; }));
+}
+
 TEST_F(CatalogTest, IndexRowsRoundTripAndFilterByTable) {
     ASSERT_TRUE(catalog_.Bootstrap().ok());
 
@@ -454,9 +465,7 @@ TEST_F(CatalogTest, IndexRowsRoundTripAndFilterByTable) {
     ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table_a.value(), "a_amount", 2)).ok());
     ASSERT_TRUE(catalog_.CreateIndex(SimpleIndex(table_b.value(), "b_owner", 1)).ok());
 
-    auto for_a = catalog_.FindIndexesForTable(table_a.value());
-    ASSERT_TRUE(for_a.ok());
-    EXPECT_EQ(for_a.value().size(), 2u);
+    EXPECT_EQ(IndexCountOn(catalog_, table_a.value()), 2u);
 
     auto by_name = catalog_.FindIndexByName("a_owner");
     ASSERT_TRUE(by_name.ok());
@@ -550,7 +559,7 @@ TEST_F(CatalogTest, ADroppedIndexIsRetiredSoTheNameIsFreeAgain) {
     ASSERT_TRUE(catalog_.DropIndex(oid.value()).ok());
 
     EXPECT_FALSE(catalog_.FindIndexByName("ix").ok());
-    EXPECT_TRUE(catalog_.FindIndexesForTable(table.value()).value().empty());
+    EXPECT_EQ(IndexCountOn(catalog_, table.value()), 0u);
 
     // Retired rather than delete-marked, so a re-creation does not collide
     // with a row nobody can see (DropCabin's argument).

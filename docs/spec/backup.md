@@ -13,7 +13,7 @@ like any crash mount. A difference between restore and crash recovery is a
 defect in recovery.
 
 **B2 - A restore that has not reached its stop does not open.**
-`[quiet-wrong]` guard. `MarkRestoreOwed` (`server/restore.hpp`) writes, in
+`[quiet-wrong]` guard. `MarkRestoreOwedOn` (`server/restore.hpp`) writes, in
 page 0 of the laid-out volume, anchor slot 0 = `{start, start, stop,
 segment(start)}` and `restore_backup_id` (superblock v23). Slot 0's durable
 point is the stop, and analysis refuses a log that ends below it

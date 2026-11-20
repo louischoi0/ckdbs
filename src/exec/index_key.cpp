@@ -274,35 +274,4 @@ Status EncodeIndexKeyColumn(const catalog::SysColumnRow& col, const parser::AstV
     }
 }
 
-Status EncodeIndexKey(std::span<const catalog::SysColumnRow> key_cols,
-                      std::span<const parser::AstValue> values, std::span<std::byte> out) {
-    if (values.size() > key_cols.size()) {
-        return Status::InvalidArgument("index key has " + std::to_string(key_cols.size()) +
-                                       " columns but " + std::to_string(values.size()) +
-                                       " values were given");
-    }
-
-    std::size_t at = 0;
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        auto width = IndexKeyColumnWidth(key_cols[i]);
-        if (!width.ok()) return width.status();
-        if (at + width.value() > out.size()) {
-            return Status::InvalidArgument(
-                "index key buffer is " + std::to_string(out.size()) +
-                " bytes, too small for the first " + std::to_string(values.size()) + " columns");
-        }
-        if (Status s = EncodeIndexKeyColumn(key_cols[i], values[i], out.subspan(at, width.value()));
-            !s.ok()) {
-            return s;
-        }
-        at += width.value();
-    }
-
-    if (at != out.size()) {
-        return Status::InvalidArgument("index key encoded to " + std::to_string(at) +
-                                       " bytes but the buffer is " + std::to_string(out.size()));
-    }
-    return Status::OK();
-}
-
 }  // namespace kds::exec

@@ -2530,7 +2530,7 @@ Status DevicePageStore::LogOwedImage(PageId page_id, std::span<const std::byte, 
     fetch_images_logged_.Add();
     // The stamp is the image's recLSN too (`StampPageLsn` keeps the
     // minimum): a checkpoint that collects this page carries a redo start
-    // at or below the image, or redo's dirty filter would skip it.
+    // at or below the image, or redo would start past it.
     return StampPageLsn(page_id, lsn.value());
 }
 

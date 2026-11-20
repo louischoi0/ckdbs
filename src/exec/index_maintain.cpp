@@ -235,15 +235,13 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         // cannot disagree about what was written.
         auto page = store.GetForRead(placed.value().page_id);
         if (!page.ok()) return page.status();
-        index::IndexLeafView leaf(
-            std::span<std::byte, kPageSize>(page.value().bytes().data(), kPageSize));
+        index::IndexLeafView leaf(page.value().bytes());
         auto stored = leaf.Entry(placed.value().slot);
         if (!stored.ok()) return stored.status();
         write.entry.assign(stored.value().begin(), stored.value().end());
         page.value().Release();
-        for (const index::IndexChange& change : placed.value().changes()) {
-            write.restructured.push_back(change.page_id);
-        }
+        const std::span<const PageId> changed = placed.value().changes();
+        write.restructured.assign(changed.begin(), changed.end());
         write.new_root = placed.value().new_root;
         write.rel_oid = access.oid;
         write.index_oid = ix.index_oid;

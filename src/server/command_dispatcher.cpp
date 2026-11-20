@@ -6675,13 +6675,8 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed,
 
 Status CommandDispatcher::LogSplit(storage::InsertPlacement& placed, std::uint64_t txn_id,
                                    catalog::Oid oid, PageId anchor_page_id) {
-    std::vector<PageId> pages;
-    pages.reserve(placed.changes().size());
-    for (const storage::StructuralChange& change : placed.changes()) {
-        pages.push_back(change.page_id);
-    }
-    return LogTreeSplit(pages, placed.held, txn_id, oid, /*index_oid=*/0, placed.new_root,
-                        anchor_page_id, &placed.anchor);
+    return LogTreeSplit(placed.changes(), placed.held, txn_id, oid, /*index_oid=*/0,
+                        placed.new_root, anchor_page_id, &placed.anchor);
 }
 
 Status CommandDispatcher::LogTreeSplit(std::span<const PageId> pages,

@@ -9,44 +9,14 @@
 #include "kds/base/status.hpp"
 #include "kds/storage/page_store.hpp"
 
-// What one tuple insert did: where the tuple landed, and every page the
-// insert created or restructured on the way.
-//
-// This lives in its own header, above both storage organizations, because
-// both produce it and exactly one caller consumes it. A relation is either
-// a chain of heap pages (heap_chain.hpp) or a clustered B+ tree
-// (btree.hpp), and the statement layer has to log, and answer, an insert
-// into either without a branch per concern. The general shape is the
-// tree's - a set of structural changes of unbounded-ish size - and the
-// chain's growth is the two-element special case of it (one new page, one
-// link edit), so describing both this way costs the chain nothing and
-// saves the caller a second code path.
+// What one clustered-tree insert did: where the tuple landed, and every page
+// the insert created or restructured on the way.
 //
 // It is deliberately a value with an inline array and no allocation: an
 // insert is the hot path, and the bound is small and known
 // (kMaxStructuralChanges, derived below).
 
 namespace kds::storage {
-
-// One page an insert created or restructured, as the WAL needs it
-// described.
-struct StructuralChange {
-    PageId page_id = kInvalidPageId;
-
-    // A brand-new heap chain page, which `PAGE_INIT` describes completely
-    // (page type + min_key) and which the following `HEAP_INSERT` then fills.
-    //
-    // Every other heap change - an old tail whose forward link was
-    // repointed - is false and needs a `FULL_PAGE_IMAGE`. **A B+ tree never
-    // sets it**: every page a split writes is an image in the split's one
-    // `BTREE_SPLIT` record, which carries the row too (BD-R12). Structural
-    // changes happen once per 8 KB of tuples, so the image volume is paid
-    // per page of relation, never per tuple.
-    bool is_new_page = false;
-
-    // The new page's low key (`min_key`). Meaningless unless `is_new_page`.
-    std::uint64_t min_key = 0;
-};
 
 // Deepest root-to-leaf path a B+ tree descent will follow before declaring
 // the tree corrupt. With the internal node's 678-entry fanout, depth 4
@@ -105,40 +75,41 @@ struct InsertPlacement {
     // (`CommandDispatcher::LogSplit`, `Catalog::StageAnchorRoot`). Returned
     // rather than written by the storage layer because that layer has no
     // catalog - and because a root published before its contents are
-    // logged is a root recovery cannot reach. Always kInvalidPageId for a
-    // heap chain, which has no root to move.
+    // logged is a root recovery cannot reach.
     PageId new_root = kInvalidPageId;
 
-    std::array<StructuralChange, kMaxStructuralChanges> structural{};
+    // Every page a split wrote, by id. Each is an image in the split's one
+    // `BTREE_SPLIT` record, which carries the row too (BD-R12), so an id is
+    // all the caller needs: no page of a split is described by a
+    // `PAGE_INIT`.
+    std::array<PageId, kMaxStructuralChanges> structural{};
     std::uint8_t n_structural = 0;
 
     // **The pages the insert changed, still held** (AT-S21, `wal.md` §8-1):
     // the page the tuple landed in and every page it rewrote that another
-    // writer could reach - a B+ tree's leaf and the parents `SecureParents`
-    // took, a heap chain's tail. A page the insert created needs no hold of
-    // its own: it is reachable only through one of these. The caller
-    // appends and stamps every record naming them, then drops the holds -
-    // before a commit's durability wait, which must not run under a latch.
-    // Empty on a placement that holds nothing.
+    // writer could reach - the leaf and the parents `SecureParents` took.
+    // A page the insert created needs no hold of its own: it is reachable
+    // only through one of these. The caller appends and stamps every record
+    // naming them, then drops the holds - before a commit's durability wait,
+    // which must not run under a latch. Empty on a placement that holds
+    // nothing.
     std::vector<PageRef> held;
     // A split that grew a root: its anchor's `UnlatchedPin`.
     UnlatchedPin anchor;
 
-    // A heap chain's in the order redo has to apply them, before the
-    // `HEAP_INSERT` that describes the tuple itself; a B+ tree's, the pages
-    // of its one `BTREE_SPLIT`. Empty for the overwhelmingly common insert
-    // that just filled a slot.
-    std::span<const StructuralChange> changes() const {
-        return std::span<const StructuralChange>(structural.data(), n_structural);
+    // The pages of the split's one `BTREE_SPLIT`. Empty for the
+    // overwhelmingly common insert that just filled a slot.
+    std::span<const PageId> changes() const {
+        return std::span<const PageId>(structural.data(), n_structural);
     }
     bool restructured() const { return n_structural > 0; }
 
-    void Record(PageId page_id_in, bool is_new_page, std::uint64_t min_key) {
+    void Record(PageId changed) {
         // Bounded by kMaxStructuralChanges above, which is a derivation and
         // not a hope. Dropping a change silently would be a page mutated
         // with no record describing it - the exact hole the WAL exists to
         // close - so this deliberately has no "if full, skip" arm.
-        structural[n_structural++] = StructuralChange{page_id_in, is_new_page, min_key};
+        structural[n_structural++] = changed;
     }
 };
 

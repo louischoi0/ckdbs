@@ -100,6 +100,18 @@ std::vector<std::byte> Encode(const catalog::SysColumnRow& col, const parser::As
     return out;
 }
 
+// A composite key: each value encoded by its column, concatenated in
+// declared order - the loop every production encoder runs.
+std::vector<std::byte> EncodeKey(std::span<const catalog::SysColumnRow> cols,
+                                 std::span<const parser::AstValue> values) {
+    std::vector<std::byte> out;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        const std::vector<std::byte> part = Encode(cols[i], values[i]);
+        out.insert(out.end(), part.begin(), part.end());
+    }
+    return out;
+}
+
 int Sign(int v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); }
 
 int MemcmpSign(const std::vector<std::byte>& a, const std::vector<std::byte>& b) {
@@ -237,10 +249,9 @@ TEST(IndexKeyTest, ACompositeKeyOrdersColumnByColumn) {
     EXPECT_EQ(width.value(), (4u + 1u) + (kIndexStringKeyBytes + 1u));
 
     const auto encode = [&](std::int64_t a, const char* b) {
-        std::vector<std::byte> out(width.value());
         const std::vector<parser::AstValue> values{Int(a), Str(b)};
-        Status s = EncodeIndexKey(cols, values, out);
-        EXPECT_TRUE(s.ok()) << s.message();
+        std::vector<std::byte> out = EncodeKey(cols, values);
+        EXPECT_EQ(out.size(), width.value());
         return out;
     };
 
@@ -249,27 +260,6 @@ TEST(IndexKeyTest, ACompositeKeyOrdersColumnByColumn) {
     // Equal leading column: the second decides.
     EXPECT_EQ(-1, MemcmpSign(encode(2, "aaa"), encode(2, "zzz")));
     EXPECT_EQ(0, MemcmpSign(encode(2, "aaa"), encode(2, "aaa")));
-}
-
-TEST(IndexKeyTest, APrefixEncodesAsABytedPrefixOfTheWholeKey) {
-    // What makes a prefix seek work with no second code path: encoding the
-    // first column alone produces exactly the leading bytes of the full key.
-    const std::vector<catalog::SysColumnRow> cols{MakeColumn(kTypeValInt32),
-                                                  MakeColumn(kTypeValInt64)};
-    auto full_width = IndexKeyWidth(cols);
-    ASSERT_TRUE(full_width.ok());
-
-    std::vector<std::byte> full(full_width.value());
-    const std::vector<parser::AstValue> both{Int(7), Int(9)};
-    ASSERT_TRUE(EncodeIndexKey(cols, both, full).ok());
-
-    auto lead_width = IndexKeyColumnWidth(cols[0]);
-    ASSERT_TRUE(lead_width.ok());
-    std::vector<std::byte> lead(lead_width.value());
-    const std::vector<parser::AstValue> one{Int(7)};
-    ASSERT_TRUE(EncodeIndexKey(std::span(cols).subspan(0, 1), one, lead).ok());
-
-    EXPECT_EQ(0, std::memcmp(full.data(), lead.data(), lead.size()));
 }
 
 TEST(IndexKeyTest, ZeroBytesSortBelowEveryEncodedValue) {

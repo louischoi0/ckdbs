@@ -248,7 +248,6 @@ public:
         for (const auto& [ns, names] : name_to_oid_) n += names.size();
         return n;
     }
-    std::size_t pattern_entries() const noexcept { return patterns_.size(); }
     // Generations an `Invalidate` retired under a pin and not yet freed.
     std::size_t retired_generations() const noexcept { return graveyard_.size(); }
 
