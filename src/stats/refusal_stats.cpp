@@ -1,5 +1,7 @@
 #include "kds/stats/refusal_stats.hpp"
 
+#include "kds/base/statistics_scope.hpp"
+
 namespace kds::stats {
 
 std::array<RefusalStats::Part, kStatsParts>& RefusalStats::parts() noexcept {
@@ -8,6 +10,7 @@ std::array<RefusalStats::Part, kStatsParts>& RefusalStats::parts() noexcept {
 }
 
 void RefusalStats::Record(std::uint32_t core, std::uint16_t code, std::int64_t now_us) noexcept {
+    const StatisticsRecordScope recording("sys.refusal_stats");
     if (code >= kRefusalCodes) return;
     Slot& slot = parts()[core % kStatsParts][code];
     slot.count.add(1);

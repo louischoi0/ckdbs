@@ -10,6 +10,27 @@
 // A store with no latch has nothing to hold: its cells run records beside
 // readers without pause, and under the thread sanitizer show that a read
 // beside a write is no data race (DL-R8).
+//
+// **Where the rest of the suite is.** The Cabin controller's collector, a
+// part a core: `optimizer_signals_test.cpp` (`ANoteNeverWaitsForAHeldPart...`,
+// `EveryNoteBesideAFoldLandsOrIsCounted`). The latch-free table under the
+// oid-keyed stores: `counter_table_test.cpp`. The
+// planner's steward under each latch it tries: `plan_stats_test.cpp`
+// (`AStewardStepReturnsUnderHeldLatches...`). The controller's views and the
+// tick's publish: `core_runtime_test.cpp` (`APeerHandedTheOptimizerSurface...`).
+// The debug guard that aborts a record that would wait:
+// `statistics_scope_test.cpp`, armed in every debug cell of the suite.
+//
+// **The second rule's cells** - a switched-off consumer collects nothing -
+// one a switch: `cabin_optimizer`, `optimizer_signals_test.cpp`
+// (`ASwitchedOffControllerCollectsNothing`,
+// `TheDispatcherBuildsNothingForASwitchedOffController`), and where no tick
+// can run - `cabins = off`, `cabin_optimizer_snapshot_interval_ms = 0` -
+// `expeditor_test.cpp` (`WhereNoTickCanRunNoCoreIsHandedACollector`); `access_statistics`,
+// `access_stats_test.cpp` (`TheSwitchOffRecordsNothing`); `ash_enabled`,
+// `ash_sampler_test.cpp` (`TurningSamplingOffKeepsTheRingAndOnContinuesIt`);
+// `join_order = written`, `plan_stats_test.cpp`
+// (`UnderWrittenAJoinedStatementGathersNothingForThePlanner`).
 
 #include <atomic>
 #include <chrono>
@@ -26,6 +47,7 @@
 #include "kds/bootstrap/bootstrap.hpp"
 #include "kds/sched/wait_state.hpp"
 #include "kds/stats/access_stats.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/stats/ash_ring.hpp"
 #include "kds/stats/checkpoint_log.hpp"
 #include "kds/stats/index_stats.hpp"
@@ -33,7 +55,9 @@
 #include "kds/stats/lock_wait_log.hpp"
 #include "kds/stats/plan_stats.hpp"
 #include "kds/stats/relation_stats.hpp"
+#include "kds/stats/refusal_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
+#include "kds/stats/txn_stats.hpp"
 
 namespace kds::stats {
 namespace {
@@ -434,6 +458,50 @@ TEST(StatisticsNoWaitContract, AccessShapesAreRecordedForgottenAndReadAtOnce) {
     ASSERT_EQ(again.size(), kChurned);
     for (const AccessShape& shape : again) EXPECT_EQ(shape.uses, 1u);
     EXPECT_EQ(store.Dropped(), 0u);
+}
+
+// The stores that are words and nothing else - the refusal counts, the
+// transaction counts, the Cabin store's totals and a Cabin's probe counts -
+// counted beside a reader that sums them: nothing waits, nothing is lost
+// (one writer a part), and a sum read beside its writer is no data race.
+TEST(StatisticsNoWaitContract, TheWordStoresCountBesideAReaderAndLoseNothing) {
+    RefusalStats::ResetForTest();
+    TxnStats::ResetForTest();
+    CabinStore cabins;
+    constexpr std::uint64_t kRounds = 20000;
+    BesideAReader(
+        [&] {
+            for (std::uint64_t i = 0; i < kRounds; ++i) {
+                RefusalStats::Record(0, 3, static_cast<std::int64_t>(i));
+                TxnStats::Count(0, TxnEnd::kCommit);
+                TxnStats::RecordLife(0, /*read_only=*/false, 1000);
+                cabins.NoteHit(1 + i % 4);
+                cabins.NoteMiss(1 + i % 4);
+            }
+        },
+        [&] {
+            (void)RefusalStats::Snapshot();
+            (void)TxnStats::CountsOf(0);
+            (void)TxnStats::SnapshotLives();
+            const CabinStore::Stats totals = cabins.stats();
+            EXPECT_LE(totals.hits, kRounds);
+            for (std::uint64_t cabin = 1; cabin <= 4; ++cabin) (void)cabins.InfoFor(cabin);
+        });
+    std::uint64_t refused = 0;
+    for (const RefusalCount& r : RefusalStats::Snapshot()) refused += r.count;
+    EXPECT_EQ(refused, kRounds);
+    const CabinStore::Stats totals = cabins.stats();
+    EXPECT_EQ(totals.hits, kRounds);
+    EXPECT_EQ(totals.misses, kRounds);
+    std::uint64_t probed = 0;
+    for (std::uint64_t cabin = 1; cabin <= 4; ++cabin) {
+        const CabinStore::CabinInfo info = cabins.InfoFor(cabin);
+        probed += info.hits + info.misses;
+    }
+    EXPECT_EQ(probed, 2 * kRounds);
+    EXPECT_EQ(cabins.use_dropped(), 0u);
+    RefusalStats::ResetForTest();
+    TxnStats::ResetForTest();
 }
 
 // Sessions come and go on two threads while a third lists them: nothing

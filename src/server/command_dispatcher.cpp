@@ -1446,6 +1446,9 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     // An autocommit statement's view ended with it (`sys.session_state`'s
     // `view_age_us`); a transaction's is its own.
     (session != nullptr ? session : &autocommit_session_)->EndStatementView();
+    // From here to the return this is the statement's record of itself: it
+    // takes no latch but by a try and fetches no page (`rules.md` §3a).
+    const StatisticsRecordScope recording("a statement's record");
     const sched::MonoTimeNs now_ns = NowNs();
     const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
     const std::int64_t now_us = exec::StatementContextNow().now_us;
@@ -5340,6 +5343,7 @@ txn::ReadView CommandDispatcher::CheckView(const WriteScope& scope) {
 
 void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid,
                                        std::uint64_t column_mask) {
+    const StatisticsRecordScope recording("a foreign key check's access shape");
     // FK-M4. The checks are not steps (fk_check.hpp says why), so the shape
     // they touch is recorded by hand where a step would have been counted by
     // being one. Same relation and the same call every other access goes
@@ -10464,6 +10468,7 @@ void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& 
 
 void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
                                        const exec::ExecStats& stats) {
+    const StatisticsRecordScope recording("sys.indexes' usage");
     // Every step an index served, sub-chains and hoisted ones included - a
     // step's id is global to the statement, and so is `stats`. A chain with
     // no index step, which is most, pays the walk and nothing else; one that
@@ -10492,6 +10497,7 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
                                         const exec::ExecStats& stats) {
+    const StatisticsRecordScope recording("a planned run's statistics");
     if (plan_stats_ == nullptr || chain.planned_relations.empty()) return;
 
     // A relation the snapshot has no prior for is wanted by the steward -
@@ -10536,6 +10542,7 @@ void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
 }
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
+    const StatisticsRecordScope recording("a statement's access shapes");
     // Unconditional on a successful SELECT, and independent of Waystone:
     // this is access statistics (docs/spec/heap-and-tuple.md §7),
     // not a trail, and it is collected whether or not anything is recording
@@ -10714,6 +10721,7 @@ void CommandDispatcher::RecordTrail(const std::optional<StatementIdentity>& iden
 void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
                                                const exec::StepChain& chain,
                                                const exec::ExecStats& stats) {
+    const StatisticsRecordScope recording("a statement's note to the Cabin controller");
     // Success path only, like its two siblings, and only for a statement
     // with an identity - the fingerprint is the key the cost-benefit model
     // aggregates by, so a statement without one has nowhere to be counted.

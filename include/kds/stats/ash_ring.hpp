@@ -44,6 +44,7 @@ public:
     std::size_t capacity() const noexcept { return capacity_; }
 
     void Record(const AshRecord& r) noexcept {
+        const StatisticsRecordScope recording("sys.ash");
         const LatchGuard held(&latch_, std::try_to_lock);
         if (!held.owns()) {
             busy_.fetch_add(1, std::memory_order_relaxed);

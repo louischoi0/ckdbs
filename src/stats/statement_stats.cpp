@@ -60,6 +60,7 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
                             std::string_view plan_source,
                             std::string_view plan_label,
                             const StatementCost& cost) noexcept {
+    const StatisticsRecordScope recording("sys.statement_stats");
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);

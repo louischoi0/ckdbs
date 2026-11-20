@@ -866,3 +866,67 @@ period. DL-Q6 (b) - a task that also gives way to a writer on a busy page
 - is not built: (a) is the mark.
 
 No build input changes in this stage; no suite was executed for it.
+
+### DL-S5: the check
+
+On worktree `dl-statistics-queue-no-statement`, on `305bef86`. DL-Q8 (a):
+both halves.
+
+**The contract suite** is `tests/statistics_no_wait_contract_test.cpp`,
+grown stage by stage, whose header names the cells that live beside their
+stores. A store at a time, every latch the store owns is held from the
+test's thread for as long as the test likes while each record entry point
+runs on a second thread under a deadline: the statement shapes, the two
+rings, the ASH ring, the planner's parts and a compile's pin here; the
+collector's four notes in `optimizer_signals_test.cpp`; the steward under
+each of the four latches it tries in `plan_stats_test.cpp`; the tick's
+publish in `core_runtime_test.cpp`. A store with no latch runs its records
+beside its readers - the oid-keyed counts, the access shapes with a forget
+on a third thread, the session registry, the word stores - which the
+thread sanitizer reads for races.
+
+**The debug guard** is `base/statistics_scope.hpp`. A statistics record
+opens a `StatisticsRecordScope`; while one is open on a thread, the
+blocking form of a latch acquisition and every pinned page accessor abort,
+naming the record and what it tried. The scopes are in the stores' record
+entry points and in the dispatcher's five record functions and the
+statement's own record. **Every debug cell of the suite now runs with the
+guard armed**, so a statistics path that would wait is an abort in the
+first test that reaches it. A release build compiles both halves to
+nothing. What it cannot see is a raw `std::mutex`; none is on a record's
+path (the session registry's went at DL-S2).
+
+**The second rule's cells**, one a switch: `cabin_optimizer` (DL-S1's two
+cells, and `ExpeditorTest.WhereNoTickCanRunNoCoreIsHandedACollector` for
+`cabins = off` and a cadence of 0); `access_statistics`
+(`AccessStatsTest.TheSwitchOffRecordsNothing`, DA's); `ash_enabled`
+(`AshSamplerTest.TurningSamplingOffKeepsTheRingAndOnContinuesIt`, CJ's);
+`join_order = written` (`PlanStatsTest.UnderWrittenAJoinedStatementGathersNothingForThePlanner`,
+new).
+
+**Documents.** `rules.md` §3a no longer says the tree does not meet the
+rules: it states them as met, the shapes a path takes, the readings DL's
+items settled, and the two things that keep them true - and that a new
+statistics record opens a scope and gets its cell. `known-gaps.md` loses
+its "Statistics that can queue a statement" section; the one entry that
+was never DL's - the controller's seeded build stopping core 0 - moves
+under the multi-core state it belongs to.
+
+**Review (`critics-developer`).** Two holes in the guard, both fixed: (1)
+**the check sat inside the latch and not in the guard**, so a blocking
+`LatchGuard` over an unarmed latch - `cores = 1`, which most of the suite
+runs at - passed, and the form that waits above one core would have gone
+unseen; (2) three pinned page accessors had no check (`PinUnlatched`,
+`CreateNewHeaderless`, a claimed creation). No defect found in the scopes
+themselves: none crosses a coroutine's suspension, none encloses a
+legitimate wait, a release build keeps nothing of them. Applied from its
+proposals: the statement's own record scoped, the oid stores' add inside
+their scope, a forward's redundant scope cut, a cell for the word stores
+beside a reader, the no-collector cell. Rejected: cutting the stores' own
+scopes where every present caller holds one - the store's scope is what
+protects a caller that does not exist yet; one include convention for the
+scope's header - the three files that name it directly do not include
+`latch.hpp`.
+
+**Suite.** 0 failed of 4,936 (2 disabled, 2 skipped) on the committed tree, the guard armed in every cell. **`tsan`** (gcc 14): 220 cells - the guard's own, the contract suite, the stores, their rigs - 0 reports. **Overhead not
+measured; measured at the milestone's close.**

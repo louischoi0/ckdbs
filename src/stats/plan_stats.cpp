@@ -332,6 +332,7 @@ PlanStats::PlanStats(std::uint32_t cores) {
 }
 
 void PlanStats::Fold(std::uint32_t core, const PlanObservation& observation) noexcept {
+    const StatisticsRecordScope recording("a planned run's observation");
     if (core >= parts_.size()) return;
     Part& part = *parts_[core];
     // Tried, never waited for (`rules.md` §3a (b)): the one other taker is
@@ -368,6 +369,7 @@ void PlanStats::Fold(std::uint32_t core, const PlanObservation& observation) noe
 }
 
 void PlanStats::WantPriors(std::uint32_t core, std::span<const catalog::Oid> oids) noexcept {
+    const StatisticsRecordScope recording("a planned run's wanted priors");
     if (core >= parts_.size() || oids.empty()) return;
     Part& part = *parts_[core];
     // Tried: a want that meets the steward's copy is asked again by the
@@ -876,6 +878,7 @@ PlanStats::Counters PlanStats::counters() const noexcept {
 // ---- A core's source -------------------------------------------------------
 
 std::shared_ptr<const PlanStatsSnapshot> PlanStatsSource::Pin() {
+    const StatisticsRecordScope recording("a compile's pin of the planner's snapshot");
     if (stats_ == nullptr) return nullptr;
     const std::uint64_t generation = stats_->generation();
     if (generation != cached_generation_) {

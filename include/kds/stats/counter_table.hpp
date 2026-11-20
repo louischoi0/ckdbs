@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <new>
 
+#include "kds/base/statistics_scope.hpp"
+
 // **One core's counts keyed by a 64-bit id, with no latch** - the shape of
 // `docs/rules/rules.md` §3a for a row of fixed counters (DL's W1,
 // `instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md` §2):
@@ -47,6 +49,7 @@ public:
     // The counts of `id`, which is not 0, claimed at its first sight. Null,
     // and one drop counted, where the part is at its bound or has no table.
     V* CountsOf(std::uint64_t id) noexcept {
+        const StatisticsRecordScope recording("a core's counts by id");
         Slot* table = table_.load(std::memory_order_acquire);
         if (table == nullptr) table = Allocate();
         if (table == nullptr) return Drop();

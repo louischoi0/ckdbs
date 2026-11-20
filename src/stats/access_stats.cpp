@@ -88,6 +88,7 @@ bool AccessStats::RoomForANewShape(const Part& part) const noexcept {
 
 void AccessStats::Record(std::uint32_t core, exec::AccessKind kind, catalog::Oid rel_id,
                          std::uint64_t column_mask, std::uint64_t now) noexcept {
+    const StatisticsRecordScope recording("sys.access_stats");
     Part& part = parts_[core % kStatsParts];
     Slot* const table = TableOf(part);
     if (table == nullptr) {
@@ -204,6 +205,7 @@ void AccessStats::Record(std::uint32_t core, exec::AccessKind kind, catalog::Oid
 }
 
 void AccessStats::Forget(catalog::Oid rel_id, std::uint16_t col_pos) noexcept {
+    const StatisticsRecordScope recording("sys.access_stats' forget");
     const std::uint64_t bit = catalog::ColumnBit(col_pos);
     if (bit == 0) return;  // a mask names positions below 64 only
     for (Part& part : parts_) {

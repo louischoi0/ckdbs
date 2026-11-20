@@ -488,6 +488,19 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   latch would produce it. Not investigated, not re-measured. Owner: whoever
   measures next, from `wal.md` §3 and `page.md` §6.
 
+- **The Cabin controller's seeded build stops core 0 for a whole-relation
+  walk.** A created or extended Cabin's build
+  (`CabinOptimizerExecutor::BuildSeededSets`) runs inside the tick's one
+  timer callback with no yield, a shared latch on the leaf it stands on, and
+  a create holds `sys.cabins`' root exclusive across a catalog scan and a
+  log append; every session on core 0 waits for the walk. Not a statistic's
+  wait - an entry set is the Cabin's feature (`rules.md` §3a's readings) -
+  so DL did not close it; what DL closed is the other cores' wait behind
+  it: `SHOW CABIN_OPTIMIZER` and `SHOW META` read a published copy and wait
+  for no tick. Off by default (`cabin_optimizer`). Verified on worktree
+  `dl-statistics-queue-no-statement` at `b0a824db` by reading. Owner:
+  `docs/spec/cabin-controller.md`.
+
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
   `ExpeditorTest`'s fixtures probe a free loopback port and then bind it;
   above one core every listener sets `SO_REUSEPORT`, so two concurrent ctest
@@ -2814,45 +2827,6 @@ Verified on `da-access-stats-memory-resident` at DA-S1
   how many were lost; the key raises the bound.
 - **A dropped relation's shapes stay until a restart** and count against
   their cores' bounds, as they stayed until a mount before.
-
-## Statistics that can queue a statement (DL)
-
-Verified on worktree `dl-statistics-queue-no-statement` at `b0a824db` by
-reading - DL-S0's census - and priced by
-`bench/v3.4.16/results-dl-s0-premise-v3.4.16-2-gb0a824db.md`. The rules are
-`docs/rules/rules.md` §3a's two; the milestone that closes these is
-`instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md`, whose
-§1.3 carries the `path:line` of each and the stage that brings it in. An
-entry is struck here when its path lands, never before.
-
-Every path the census listed is brought in (DL-S1 to DL-S3); what is left
-is the check that keeps it so (DL-S5) and the close's measurement (DL-S6).
-
-**Not a statistic's, and not DL's** (DL-Q0 (a)): **the controller's seeded
-build stops core 0 for a whole-relation walk.** A created or extended
-Cabin's build (`CabinOptimizerExecutor::BuildSeededSets`) runs inside the
-tick's one timer callback with no yield, a shared latch on the leaf it
-stands on, and a create holds `sys.cabins`' root exclusive across a catalog
-scan and a log append; every session on core 0 waits for the walk. Off by
-default (`cabin_optimizer`). Verified at `b0a824db` by reading. Owner:
-`docs/spec/cabin-controller.md`.
-
-What meets the rule: the Cabin controller's collector and the Cabin
-store's counters (DL-S1: a part a core tried and never waited for, nothing
-noted while `cabin_optimizer` is off; a core's own words); every per-core
-statistics part (DL-S2: `RelationStats`, `LeafStats`, `IndexStats`,
-`AccessStats` and the session registry with no latch at all;
-`StatementStats`, the lock-wait and checkpoint rings, the ASH ring and the
-planner's parts tried and never waited for, their readers a copy and
-nothing else); a compile's pin of the planner's snapshot, which tries
-for a pointer and keeps what it has (DL-S3), and the steward's publish,
-which tries every latch of it; the controller's views, which read a
-published copy and wait for no tick (DL-S3); `RefusalStats`, `TxnStats`,
-the wait statistics' totals,
-the contention instrument and the per-core load slots - single-writer
-words a core, read with no latch. The
-wait-free words every core writes (the buffer pool's counts, the plan
-tables' counters) are within the rule and priced in the results file.
 
 ## Assertion admission
 

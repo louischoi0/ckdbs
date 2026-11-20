@@ -50,6 +50,7 @@ public:
     // new oid, nothing but the drop's count.
     template <typename Fn>
     void With(std::uint32_t core, catalog::Oid oid, Fn&& fn) noexcept {
+        const StatisticsRecordScope recording("a count by oid");
         if (V* counts = CountsOf(core, oid); counts != nullptr) fn(*counts);
     }
 

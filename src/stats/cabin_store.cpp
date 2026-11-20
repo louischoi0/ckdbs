@@ -129,6 +129,7 @@ CabinSet CabinStore::Find(const CabinKey& key) {
 }
 
 void CabinStore::NoteHit(std::uint64_t cabin_id) {
+    const StatisticsRecordScope recording("a Cabin probe's count");
     // This core's words: no latch (the header's "counters" note).
     if (CabinUse* use = MyUse(cabin_id); use != nullptr) use->hits.add(1);
     MyStats().hits.add(1);
@@ -138,6 +139,7 @@ void CabinStore::NoteHit(std::uint64_t cabin_id) {
 }
 
 void CabinStore::NoteMiss(std::uint64_t cabin_id) {
+    const StatisticsRecordScope recording("a Cabin probe's count");
     if (CabinUse* use = MyUse(cabin_id); use != nullptr) use->misses.add(1);
     MyStats().misses.add(1);
     if (signals_ != nullptr) signals_->NoteCabinLookup(CurrentCore(), cabin_id, /*served=*/false);

@@ -147,6 +147,34 @@ TEST_F(PlanStatsTest, AStewardStepReturnsUnderHeldLatchesAndPublishesAtTheNext) 
         << "the observation a held part kept was lost";
 }
 
+// **A switched-off consumer collects nothing** (`docs/rules/rules.md` §3a's
+// second rule), for the planner's statistics: under `join_order = written`
+// no order is searched, captured or advised from what a run measured, and a
+// joined statement folds nothing and wants no prior. The part is untouched
+// - no entry, no wanted relation, nothing busy or dropped - so a steward
+// step after it seeds nothing and publishes nothing. Back under `planned`,
+// the same statement is the first the planner has seen.
+TEST_F(PlanStatsTest, UnderWrittenAJoinedStatementGathersNothingForThePlanner) {
+    Fill();
+    const std::string sql = "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31";
+    Ok("SET JOIN_ORDER written");
+    for (int i = 0; i < 3; ++i) Ok(sql);
+    Steward(kSecond);
+    const stats::PlanStats::Counters off = stats_.counters();
+    EXPECT_EQ(off.seeds, 0u) << "a relation was wanted for a planner that is off";
+    EXPECT_EQ(off.publishes, 0u) << "an observation was folded for a planner that is off";
+    EXPECT_EQ(off.part_busy + off.part_drops, 0u);
+    EXPECT_EQ(stats_.generation(), 0u);
+
+    Ok("SET JOIN_ORDER planned");
+    Ok(sql);
+    Steward(2 * kSecond);
+    EXPECT_GT(stats_.counters().seeds, 0u);
+    const auto snapshot = stats_.Current();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_NE(Posterior(snapshot, {"u", "l"}, FetchIdOf(sql)), nullptr);
+}
+
 TEST(PlanStatsBandTest, BandsAreHalfOctavesAndTheirCentresInvert) {
     EXPECT_EQ(stats::BandOf(1.0), 0);
     EXPECT_EQ(stats::BandOf(0.2), 0) << "a clamp, never a negative band";

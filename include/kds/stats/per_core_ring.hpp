@@ -59,6 +59,7 @@ public:
     // Appends `row` to `core`'s part, stamping its `seq`; a row that meets a
     // reader's copy of the part is counted and not written.
     void Record(std::uint32_t core, Row row) noexcept {
+        const StatisticsRecordScope recording("a statistics ring's row");
         Part& part = parts_[core % kParts];
         const LatchGuard held(&part.latch, std::try_to_lock);
         if (!held.owns()) {

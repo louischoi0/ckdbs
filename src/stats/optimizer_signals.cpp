@@ -168,6 +168,7 @@ OptimizerSignals::CabinNote* OptimizerSignals::CabinNoteFor(Part& part,
 void OptimizerSignals::NoteExecution(std::uint32_t core, std::uint64_t pattern_id,
                                      std::uint64_t pages_fetched,
                                      CandidateRef candidate) noexcept {
+    const StatisticsRecordScope recording("the Cabin controller's execution signal");
     if (!collecting()) return;
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
@@ -186,6 +187,7 @@ void OptimizerSignals::NoteExecution(std::uint32_t core, std::uint64_t pattern_i
 }
 
 void OptimizerSignals::NoteWaitSample(std::uint32_t core, std::uint64_t pattern_id) noexcept {
+    const StatisticsRecordScope recording("the Cabin controller's wait signal");
     if (!collecting()) return;
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
@@ -197,6 +199,7 @@ void OptimizerSignals::NoteWaitSample(std::uint32_t core, std::uint64_t pattern_
 
 void OptimizerSignals::NoteCabinLookup(std::uint32_t core, std::uint64_t cabin_id,
                                        bool served) noexcept {
+    const StatisticsRecordScope recording("the Cabin controller's lookup signal");
     if (!collecting()) return;
     std::optional<LatchGuard> hold;
     Part* part = Enter(core, hold);
@@ -209,6 +212,7 @@ void OptimizerSignals::NoteCabinLookup(std::uint32_t core, std::uint64_t cabin_i
 
 void OptimizerSignals::NoteCabinHint(std::uint32_t core, std::uint64_t cabin_id,
                                      bool ok) noexcept {
+    const StatisticsRecordScope recording("the Cabin controller's hint signal");
     if (ok) return;  // only failures move the quality signal
     if (!collecting()) return;
     std::optional<LatchGuard> hold;
