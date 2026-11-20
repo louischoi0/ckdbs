@@ -1346,6 +1346,16 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   - One statement shape has at most one such plan. A table cannot be
     dropped while an enabled plan names it; a disabled plan whose table was
     dropped shows `invalid` in `sys.plans` and can only be dropped.
+  - **Renaming a table, or a column the plan's statement writes with
+    its table's name or alias in front (`o.total`), puts the plan out of
+    reach**: the statement in its old spelling no longer runs, and in its
+    new spelling it is another shape. `sys.plans` then shows the plan - an
+    administrator's or a captured one - `invalid`, whether it was enabled
+    or disabled, and it no longer stops the table's `DROP TABLE`. Rename
+    back and it reads as it did; otherwise `DROP PLAN` and create one for
+    the new spelling. Not detected, so the plan still reads as before: a
+    rename of a column the statement writes bare, a statement with a `LIKE`,
+    and a dropped column.
   - `ANALYZE` prints `planned order=plan plan=<name>/<variant>`;
     `sys.plans` lists each plan with its variants; `sys.statement_stats`
     shows, per statement shape, where its order last came from

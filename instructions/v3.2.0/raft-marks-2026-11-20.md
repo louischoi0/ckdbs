@@ -63,5 +63,6 @@ took under them.
 | **Adopted at DI-S1** | **DI-Q6 (a)** and **DI-Q7 (a)**, each as DI-S0 restated it (the order's §7) |
 | **Adopted at DI-S2** | **DI-Q12 (a)**: the signal keyed by the pattern and its candidate together |
 | **Adopted at DI-S3** | **DI-Q13 `[quiet-wrong]` (a)**, as DI-S0 restated it and with its premise read again (`WAYSTONE ON` compiles its example under the session's namespace): an opt-in names the shape under the relations its example bound, and a committed `DROP TABLE` ends it. **DI-Q11 (a)**: one format event, superblock 38, which also carries DA-S3 by DA-Q1 (a) |
+| **Adopted at DI-S4** | **DI-Q10 (a)** as DI-S0 restated it; and two items the stage reached and wrote into the order first: **DI-Q14 (a)** (a column's rename is established where the statement writes the column by its binding, and an unqualified one reads as before) and **DI-Q15 (a)** (a plan that can match nothing reads `invalid`, for either origin, and restricts no drop) |
 | **Does not settle** | a push, a merge to `main`, a tag or a version: each waits for the operator's word |
 | **Recorded at** | this file; the DI order's header, §4 and §7; the DI row and this file's row in `instructions/v3.2.0/index.md` |

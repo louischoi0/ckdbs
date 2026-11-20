@@ -10,6 +10,7 @@
 #include "kds/exec/declaration_relation.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/parser/lexer.hpp"
+#include "kds/parser/parser.hpp"
 #include "kds/storage/varheap.hpp"
 
 namespace kds::exec {
@@ -543,6 +544,110 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
     // it.
     auto removed = DeleteDeclarationsById(catalog, store, wal, catalog::kSysPlansTable, gone);
     return removed.ok() ? failed : removed.status();
+}
+
+bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row) {
+    auto tables = catalog.ListTables(nullptr);
+    return !tables.ok() || PlanRowCanMatch(catalog, row, tables.value());
+}
+
+bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
+                     const std::vector<catalog::SysObjectRow>& tables) {
+    if (!row.readable || row.key.n == 0) return true;
+
+    // The stored text is the statement's shape (`parser::ShapeText`): every
+    // literal a `?`, which the native grammar does not read. Each is read as
+    // a literal of the same width, so the parse sees the statement's names
+    // where they were written.
+    std::string text = row.statement;
+    {
+        parser::Lexer lexer(row.statement);
+        for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
+             tok = lexer.Next()) {
+            if (tok.type == parser::TokenType::kParam) text[tok.byte_offset] = '0';
+        }
+    }
+    parser::Parser parser(text);
+    auto parsed = parser.Parse();
+    // A statement stored cut short, or one this grammar no longer reads:
+    // nothing is established.
+    if (!parsed.ok()) return true;
+    const auto* stmt = std::get_if<parser::SelectStmt>(&parsed.value());
+    if (stmt == nullptr) return true;
+    std::vector<const parser::RelationRef*> refs;
+    refs.push_back(&stmt->from);
+    for (const parser::JoinClause& join : stmt->joins) refs.push_back(&join.relation);
+    if (refs.size() != row.key.n) return true;
+    // **The text must be the statement the key was made from, whole**: a row
+    // stores it cut to one var-heap value, and a cut that falls inside a
+    // name can still parse - as another name. A literal, a `?` and the `0`
+    // read in its place are one marker to the fingerprint, so a whole text
+    // hashes to the key's fetch id and a cut one does not.
+    const auto fingerprint = parser.fingerprint();
+    if (!fingerprint.has_value() || fingerprint->fetch_id != row.key.fetch_id) return true;
+
+    // ---- The relations: each written name against the recorded oid's ------
+    std::vector<const catalog::TableAccess*> relations(refs.size(), nullptr);
+    for (std::size_t i = 0; i < refs.size(); ++i) {
+        const auto object =
+            std::find_if(tables.begin(), tables.end(), [&](const catalog::SysObjectRow& t) {
+                return t.oid == row.key.oids[i];
+            });
+        // Gone, or not listed: `PlanRowIsValid`'s to say, not this check's.
+        if (object == tables.end()) return true;
+        if (!SameName(refs[i]->table_name, catalog::NameView(object->name))) return false;
+        if (!refs[i]->schema.empty() &&
+            !SameName(refs[i]->schema, catalog.NamespaceSpelling(object->namespace_oid))) {
+            return false;
+        }
+        auto access = catalog.InitTableAccess(row.key.oids[i]);
+        if (access.ok()) relations[i] = access.value();
+    }
+
+    // ---- The columns written `binding.column` -----------------------------
+    //
+    // Token by token: an identifier, a dot, an identifier, where the first
+    // is one of the statement's bindings and does not follow `FROM` or
+    // `JOIN` (there it is a namespace qualifying a relation). An
+    // unqualified column is not checked - which relation it means is the
+    // compiler's to say.
+    parser::Lexer lexer(text);
+    parser::Token before{};
+    parser::Token tok = lexer.Next();
+    const auto word = [](const parser::Token& t) {
+        return t.type == parser::TokenType::kIdent || t.type == parser::TokenType::kKeyword;
+    };
+    while (tok.type != parser::TokenType::kEof) {
+        const bool relation_position =
+            word(before) && (SameName(before.text, "FROM") || SameName(before.text, "JOIN"));
+        if (word(tok) && !relation_position && lexer.Peek().type == parser::TokenType::kDot) {
+            const parser::Token qualifier = tok;
+            lexer.Next();  // the '.'
+            const parser::Token column = lexer.Next();
+            if (word(column)) {
+                for (std::size_t i = 0; i < refs.size(); ++i) {
+                    if (relations[i] == nullptr) continue;
+                    if (!SameName(qualifier.text, refs[i]->binding())) continue;
+                    bool found = false;
+                    // **A dropped column still counts**: this check establishes
+                    // a rename, which is decided when it is made (`alter.md`
+                    // AL6), and a `DROP COLUMN` is a transaction's - undecided
+                    // it would read as a rename that a rollback then undoes,
+                    // after a drop was let through on it.
+                    for (const auto& c : relations[i]->schema.columns) {
+                        found = found || SameName(column.text, catalog::NameView(c.name));
+                    }
+                    if (!found) return false;
+                }
+            }
+            before = column;
+            tok = lexer.Next();
+            continue;
+        }
+        before = tok;
+        tok = lexer.Next();
+    }
+    return true;
 }
 
 bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row) {

@@ -4923,11 +4923,40 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             // either. Asked of the instance's table, which holds every such
             // plan; a disabled one does not restrict, and its row reads
             // `invalid` once the relation is gone.
-            if (const auto plan = admin_plans_->EnabledNaming(oid.value()); plan.has_value()) {
-                return DispatchOutcome{"ERR plan '" + *plan +
-                                           "' names this relation; DROP PLAN or ALTER PLAN " +
-                                           *plan + " DISABLE first",
-                                       false};
+            //
+            // **A plan that can match no statement restricts nothing** (DI-S4):
+            // after a rename of a name its statement writes, its key is out
+            // of every statement's reach (`exec::PlanRowCanMatch`), so it is
+            // in force for none and the drop protects nothing by waiting for
+            // it. Read off the rows, and only once the table says some
+            // enabled plan names the relation.
+            if (admin_plans_->EnabledNaming(oid.value()).has_value()) {
+                auto plans = exec::ListPlans(catalog_, page_store_);
+                if (!plans.ok()) return Refused(plans.status());
+                auto tables = catalog_.ListTables(nullptr);
+                if (!tables.ok()) return Refused(tables.status());
+                for (const exec::PlanRow& plan : plans.value()) {
+                    if (plan.captured || !plan.readable || !plan.enabled ||
+                        !plan.key.Names(oid.value())) {
+                        continue;
+                    }
+                    // The newest row of a name is the plan (`LoadPlans`): an
+                    // `ALTER PLAN` whose delete of the old row failed leaves
+                    // it beside the new one, and it speaks for nothing.
+                    const bool superseded = std::any_of(
+                        plans.value().begin(), plans.value().end(),
+                        [&](const exec::PlanRow& other) {
+                            return !other.captured && other.id > plan.id &&
+                                   exec::SameName(other.name, plan.name);
+                        });
+                    if (superseded || !exec::PlanRowCanMatch(catalog_, plan, tables.value())) {
+                        continue;
+                    }
+                    return DispatchOutcome{"ERR plan '" + plan.name +
+                                               "' names this relation; DROP PLAN or ALTER PLAN " +
+                                               plan.name + " DISABLE first",
+                                           false};
+                }
             }
             // CN-4 T7 as revised in BV-S2: a Transition goes with its
             // relation - but its row commits at its own statement and a drop

@@ -971,7 +971,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
     //
     // An administrator's plan (CX-S1b) reads `enabled`, `disabled`, or
     // `invalid` where it can serve no statement - a relation it names is
-    // gone, or its fetch id is another fingerprint version's. Its
+    // gone, or its fetch id is another fingerprint version's. Either origin
+    // reads `invalid` where a rename has put its key out of every
+    // statement's reach (`exec::PlanRowCanMatch`, DI-S4). Its
     // `join_order` is its `ELSE` variant's, and `variants` is every variant
     // in rule order, `<name> WHEN <rule> ORDER (<relation>, ...)` by the
     // statement's bindings, with ` ACCESS <binding> <pin>, ...` where the
@@ -991,6 +993,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
     if (!rows.ok()) return rows.status();
     auto labels = RelationLabels::Read(catalog_, nullptr);
     if (!labels.ok()) return labels.status();
+    // Listed once for every row's `PlanRowCanMatch`.
+    auto tables = catalog_.ListTables(nullptr);
+    if (!tables.ok()) return tables.status();
     for (const exec::PlanRow& plan : rows.value()) {
         const parser::AstValue origin = Str(plan.captured ? "captured" : "admin");
         if (!plan.readable) {
@@ -1020,6 +1025,11 @@ StatusOr<exec::CatalogView> CommandDispatcher::PlansView() {
                     : plan.enabled                         ? "enabled"
                                                            : "disabled";
         }
+        // **A plan that can match no statement says so** (DI-S4): its
+        // relation was renamed, or a column its statement writes by its
+        // binding was. Either origin - a captured order's key is as
+        // unreachable as an administrator's.
+        if (!exec::PlanRowCanMatch(catalog_, plan, tables.value())) state = "invalid";
         // An administrator's plan's `join_order` is its `ELSE` variant's:
         // the order a statement no rule holds for runs.
         const exec::CapturedOrder& order =

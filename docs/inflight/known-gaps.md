@@ -2321,8 +2321,10 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   checkpoint interval. `captured_pending` counts what is waiting. Owned
   by `parser-v2.md` I12.
 
-- **A captured plan has no state but present.** `INVALID` (CX-Q16) and
-  `DISABLED` are not built for one: a captured order that stops compiling
+- **A captured plan has no state of its own.** `DISABLED` is not built
+  for one, and `INVALID` (CX-Q16) only as DI-S4 derives it - a rename of a
+  relation, or of a column written by its binding, read off the row. A
+  captured order that stops compiling for another reason
   is declined statement by statement and counted, its row unchanged, and
   the only acts on it are `DROP PLAN` and a `CREATE PLAN` over its shape
   (`ALTER PLAN` on a captured row is refused `NotImplemented`). Verified
@@ -2461,14 +2463,32 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   `SELECT` or across a restart. Owned by
   `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
-- **A renamed relation's plan reads `enabled` and matches nothing new.**
-  A fetch id hashes names, so after `ALTER TABLE ... RENAME TO` or `RENAME
-  COLUMN` of a name the statement writes, no statement in the new spelling
-  matches the plan; `sys.plans` still shows it `enabled` and it still
-  RESTRICTs the relation's `DROP TABLE`. Nothing tells the administrator
-  but `plan_served` not moving and `sys.statement_stats` naming another
-  source for the new shape. Verified at CX-S1b by reading. Owned by
-  `parser-v2.md` I12.
+- **A plan a rename put out of reach reads `invalid`, where the rename is
+  established from its row** (DI-S4, `exec::PlanRowCanMatch`; verified on
+  `di-shape-identity` at DI-S4's commit): a renamed relation, and a renamed
+  column the statement writes by its binding (`b.col`). It then restricts
+  no `DROP TABLE`. **Not established, so read as before** (DI-R9): a
+  renamed column the statement writes **unqualified** - the plan reads
+  `enabled`, still RESTRICTs, and matches nothing; a statement stored cut
+  short; a captured order that stops compiling for any reason but those
+  two. Nothing is written at the rename: the state is derived at each read
+  of `sys.plans` and at the drop's RESTRICT, and the plan stays in the
+  administrator's table and in the captured table, where no statement
+  reaches it. A rename back puts it in force again. Also not established:
+  **a statement the native grammar does not read with its literals as
+  `0`** - any `LIKE`, whose pattern must be a string - and **a dropped
+  column**, since a `DROP COLUMN` undecided would read as a rename. And
+  what the derived state costs:
+  - **`invalid` hides `enabled` and `disabled`** while the rename stands.
+  - **A rename back after the drop's check orphans the plan**: over
+    `(t, u)` with `u` renamed away, `DROP TABLE t` is let through; a
+    `RENAME` of `u` back before the drop decides puts the plan in force
+    over a relation about to be gone, where it then reads `invalid` for
+    the gone relation. `CREATE PLAN` could not do that before DI-S4 - it
+    waits for the drop's `X`.
+  - **A pinned index's `DROP INDEX` and a named Cabin's drop are still
+    restricted** by a plan that can match nothing.
+  Owned by `parser-v2.md` I12.
 
 - **What CX-S1b's cells do not reach.** A variant whose order does not
   compile for a statement (the decline has one cell, by the sort rule); a

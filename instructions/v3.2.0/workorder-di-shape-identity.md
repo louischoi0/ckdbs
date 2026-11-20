@@ -11,7 +11,8 @@ its measurement and its review's corrections follow in §7. **DI-S1 landed**
 (§7): a `sys.statement_stats` row is one binding's. **DI-S2 landed** (§7):
 the Cabin controller's signal is a fingerprint's and its candidate's.
 **DI-S3 landed** (§7): a Waystone opt-in is a shape under what its example
-bound, superblock 38, DA-S3 in it.
+bound, superblock 38, DA-S3 in it. **DI-S4 landed** (§7): a plan a rename
+put out of reach reads `invalid` and restricts no drop.
 
 Written in the main checkout on
 `main` at `f4138860` (`v3.4.15-1-gf4138860`) on the operator's words of
@@ -325,7 +326,9 @@ word (§0a).** Every other item is unmarked.
 | DI-Q7 **adopted (a) as restated at DI-S0** on the standing go-ahead | Rows of a relation that is gone. | **kept and readable until the part is full, then the first reclaimed**; counted in `sys.meta` | (b) removed at the drop's commit on every core - a cross-core act DI-R4 does not allow on the statement path and DI-S0 would have to place; (c) kept until restart, as every row is today |
 | DI-Q8 | The bar at the close. | **DA's close cells and a point `SELECT` and keyed `INSERT` at `cores` 1 and 8: no cell slower outside its own spread**; no factor proposed, since DF's 0.5 us bar on this path was not resolvable | (b) a bar the operator names |
 | DI-Q9 | The session's published statement and ASH. | **left on the fetch id** unless DI-S0 finds a reader that joins a sample to a statistics row; then brought back | (b) the binding published beside the fingerprint - a word or more written at every statement's head |
-| DI-Q10 | Which plans-that-match-nothing DI shows, beyond the rename. | **the rename and a captured order that no longer compiles (CX-Q16's `INVALID`), by P1**; a fingerprint-version row stays the mount's | (b) the rename alone; (c) P2 |
+| DI-Q10 **adopted (a) as restated at DI-S0** on the standing go-ahead | Which plans-that-match-nothing DI shows, beyond the rename. | **the rename and a captured order that no longer compiles (CX-Q16's `INVALID`), by P1**; a fingerprint-version row stays the mount's | (b) the rename alone; (c) P2 |
+| DI-Q14 **adopted (a)** on the standing go-ahead | *Added at DI-S4.* How far a column's rename is established from a plan's row. The row stores the statement's shape text and its relations' oids, no namespace and no compiled form. | **a column the statement writes qualified by one of its bindings** (`b.col`), read off the stored text's tokens against that binding's relation; an unqualified column is not read - which relation it means is the compiler's to say - and the plan reads as it did, entered in `known-gaps.md` | (b) every column, by walking the parsed statement against its bound relations as the compiler resolves them - a second resolver to keep in step with the first; (c) the relation's rename alone |
+| DI-Q15 **adopted (a)** on the standing go-ahead | *Added at DI-S4.* What a plan that can match nothing reads, and what `DROP TABLE`'s RESTRICT does with it. | **`invalid`, for either origin** - the word an administrator's row already reads where it can serve no statement - **and it restricts no drop**: it is in force for no statement, as a disabled plan is, and a rename back puts it in force and RESTRICT with it | (b) a word of its own, and RESTRICT as before until `DROP PLAN` or `ALTER PLAN ... DISABLE` |
 | DI-Q11 **adopted (a)** on the standing go-ahead | A format event. | **one, for DI-Q13 alone**: the statistics and the controller's signals are memory-resident and P1 persists nothing. The bump is the host DA-S3 waits for | (b) P2 admitted too |
 
 ## 5. Stages
@@ -852,3 +855,74 @@ by scanning) and the calls of the opt-in API in twelve test files.
 **The suite**: 1 failed of 4899 at `-j8`, run beside another session's suite - `StrictParkRigTest.StrictCommitsStagedDuringOneSyncShareTheNext`, the timing cell `known-gaps.md` (Testing) names - which passed run again alone; 0 failed of 4897 on the same tree before the review's fixes (2 disabled, 2 skipped), the hook's range at `-j8`, on the second
 commit's build inputs. **`scripts/sim.sh`**: 280 runs, 0 failures, on the tree before the review's fixes, which change no logged write; not run again after them. Overhead not
 measured; measured at the milestone's close.
+
+### DI-S4 - a plan that matches nothing, 2026-11-20
+
+On worktree `di-shape-identity`, over `6bedc13f`. DI-Q5 (a) is the
+operator's; **DI-Q10 adopted (a) as DI-S0 restated it, and DI-Q14 and
+DI-Q15 - written into §4 by this stage, which reached them - adopted (a),
+on the standing go-ahead.**
+
+**Built.** `exec::PlanRowCanMatch` (`exec/plan_catalog.hpp`): false only
+where the row itself establishes that no statement can produce the plan's
+key (DI-R9) - a relation the stored statement names is no longer named
+that, read as the name each reference of its top-level block spells
+against the current name, and namespace where written, of the oid recorded
+at that position; or a column the statement writes by one of its bindings
+is no column of that binding's relation. No resolution, so no namespace,
+which the row does not store. `sys.plans` reads such a row `invalid`,
+**for a captured order as for an administrator's plan** - CX-Q16's
+`INVALID`, for the case that can be established - and `DROP TABLE`'s
+RESTRICT passes it by. Nothing is written at the rename and nothing
+removed: the state is derived at the read and at the drop, and a rename
+back puts the plan in force again.
+
+**Not built, and said** (`known-gaps.md`, "Captured plans (CX)"): a renamed
+column the statement writes unqualified; a captured order that stops
+compiling for any other reason; a statement stored cut short. Each reads
+as it did.
+
+**The review** (`critics-developer`, of the working diff over `6bedc13f`).
+Four findings, a race, two document findings and three simplifications.
+
+1. **An undecided `DROP COLUMN` read as a rename** `[quiet-wrong]` in this
+   stage's sense: the column check asked for a visible column, a dropped
+   one is not, and the schema read is latest state. A drop of another
+   relation of the plan was then let through, and a rollback of the
+   `DROP COLUMN` left the plan in force over a relation that was gone.
+   Applied: a dropped column counts as found - a rename, decided when it
+   is made (`alter.md` AL6), is all this check establishes.
+2. **A stored statement cut inside a name could still parse - as another
+   name** - and read `invalid` with nothing renamed. Applied: the parse is
+   trusted only where it fingerprints to the key's own fetch id, which a
+   whole text does (a literal, a `?` and the `0` read in its place are one
+   marker) and a cut one does not. Pinned by the cell that keeps a plan
+   over a string literal, a number, a written namespace and aliases
+   `enabled`.
+3. **A rename back after the drop's check orphans the plan.** Not fixed:
+   closing it means the drop taking a lock on every other relation of
+   every plan it passed by. Entered in `known-gaps.md`.
+4. The RESTRICT read every row of a name where the newest is the plan.
+   Applied.
+5. The manual said "in force again" where a disabled plan comes back
+   disabled, and "`table.column`" where the check is by binding; a `LIKE`
+   is never read (its pattern must be a string, and a literal is read as
+   `0`), and `invalid` hides `enabled` and `disabled`. Corrected, and in
+   `known-gaps.md`.
+
+Simplifications: the table list is read once per view read and per drop,
+and the oid loop is a `find_if`. **Rejected**: the review's exact rule for
+telling a namespace from a binding by the reference's byte offset - which
+token that offset names for `ns.table` was not read, and the rule in place
+errs only toward not checking. Its answers on what else might need the
+test stand as it gave them: `ALTER PLAN` on such a plan is allowed, a
+mount installs it (a rename back needs it there), and the pinned index's
+and Cabin's RESTRICT still hold, entered as a gap.
+
+**Cells.** `tests/admin_plans_test.cpp`: a rename of a column, then of
+the relation, each read `invalid` and read `enabled` again once renamed
+back, RESTRICT with it; an unqualified column's rename not established; a
+captured order's row.
+
+**The suite**: 0 failed of 4903 (2 disabled, 2 skipped), the hook's range at `-j8`, on this commit's
+build inputs. Overhead not measured; measured at the milestone's close.
