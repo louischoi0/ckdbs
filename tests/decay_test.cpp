@@ -230,6 +230,43 @@ TEST(DecayTest, AnUntouchedScoreIsColderThanEveryDecayedOne) {
     EXPECT_GT(Log2ValueAt(ancient, &clock, kHalfLife), kLog2NegInf);
 }
 
+// `MergeDecay` (DL-S1): two pairs touched apart and merged read as the one
+// pair that took every touch - exactly, at whole half-lives - whichever of
+// the two carries the later stamp; a pair never touched merges as nothing
+// and moves no stamp; a merge saturates as a touch does.
+TEST(DecayTest, MergingTwoPairsReadsAsOnePairThatTookEveryTouch) {
+    sched::ManualClock clock(1);
+    DecayState whole, a, b;
+    for (int i = 0; i < 4; ++i) {
+        Touch(whole, &clock, kHalfLife);
+        Touch(i % 2 == 0 ? a : b, &clock, kHalfLife);
+    }
+    clock.Advance(kHalfLife);
+    Touch(whole, &clock, kHalfLife);
+    Touch(b, &clock, kHalfLife);
+    clock.Advance(2 * kHalfLife);
+
+    DecayState older_first = a;  // `a`'s stamp is the older
+    MergeDecay(older_first, b, kHalfLife);
+    DecayState newer_first = b;
+    MergeDecay(newer_first, a, kHalfLife);
+    EXPECT_EQ(ValueAt(older_first, &clock, kHalfLife), ValueAt(whole, &clock, kHalfLife));
+    EXPECT_EQ(ValueAt(newer_first, &clock, kHalfLife), ValueAt(whole, &clock, kHalfLife));
+    EXPECT_EQ(older_first.last_bump, whole.last_bump);
+
+    DecayState untouched;
+    DecayState kept = whole;
+    MergeDecay(kept, untouched, kHalfLife);
+    EXPECT_EQ(kept.scaled, whole.scaled);
+    EXPECT_EQ(kept.last_bump, whole.last_bump);
+
+    DecayState top;
+    top.scaled = UINT32_MAX;
+    top.last_bump = whole.last_bump;  // the same instant: nothing decays first
+    MergeDecay(top, whole, kHalfLife);
+    EXPECT_EQ(top.scaled, UINT32_MAX) << "a merge wrapped a saturated score";
+}
+
 TEST(DecayTest, TouchAndReadAllocateNothing) {
     sched::ManualClock clock;
     DecayState s;

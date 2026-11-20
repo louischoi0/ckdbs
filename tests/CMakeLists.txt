@@ -144,6 +144,7 @@ add_executable(kds_tests
     index_stats_test.cpp
     space_stats_test.cpp
     decay_test.cpp
+    counter_table_test.cpp
     optimizer_signals_test.cpp
     cabin_optimizer_test.cpp
     cabin_optimizer_replay_test.cpp

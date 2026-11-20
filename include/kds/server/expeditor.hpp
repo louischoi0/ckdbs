@@ -861,10 +861,11 @@ private:
 
     // **The optimizer surface's shared state** (AT-S8, `OptimizerSurface`):
     // the `CABIN_OPTIMIZER` switch every core's `SET` flips and the cadence
-    // reads; the collector's latch, armed above one core; and the view latch
-    // core 0's cadence holds across a tick while any core's
-    // `SHOW CABIN_OPTIMIZER` reads the controller. Order: the view latch is
-    // outer to the collector's. **The tick holds the view latch across I/O**
+    // and every note read; and the view latch core 0's cadence holds across
+    // a tick while any core's `SHOW CABIN_OPTIMIZER` reads the controller
+    // and the collector's folded state. The collector has no latch here: a
+    // note takes its own core's part (`stats/optimizer_signals.hpp`).
+    // **The tick holds the view latch across I/O**
     // - a `CreateCabin` and the whole seeded build's walk - so a
     // `SHOW CABIN_OPTIMIZER` on a peer sleeps that peer's reactor for a
     // build (`known-gaps.md`); a reader never holds it across I/O.
@@ -890,7 +891,6 @@ private:
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;
-    Latch optimizer_signals_latch_{LatchKind::kOptimizer};
     Latch cabin_view_latch_{LatchKind::kOptimizer};
     wal::CheckpointGate checkpoint_gate_;
 

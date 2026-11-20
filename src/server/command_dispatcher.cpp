@@ -944,7 +944,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     sched::SessionWaitStats* const ash_stats =
         (session != nullptr ? session : &autocommit_session_)->WaitStats();
     ash_stats->fingerprint.set(0);
-    ash_stats->pattern_id.set(0);
+    // The pattern id's one reader is the controller's wait signal, through
+    // the sampler: published for it only while its switch is on (`rules.md`
+    // §3a). A statement that began before a switch-on keeps the word an
+    // earlier one left, and a wait of it sampled then is counted to that
+    // shape - a count's difference at the flip (DL-R10).
+    const bool for_collector = CollectorOn();
+    if (for_collector) ash_stats->pattern_id.set(0);
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -981,7 +987,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // rebuilt below (a refused commit, a walk's end) need not carry it.
     const std::uint64_t fetch_id = out->fetch_id;
     ash_stats->fingerprint.set(fetch_id);
-    ash_stats->pattern_id.set(out->pattern_id);
+    if (for_collector) ash_stats->pattern_id.set(out->pattern_id);
 
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
@@ -2144,6 +2150,13 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // applied, beside what the controller decided.
     section("cabin_optimizer");
     os << " cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off");
+    if (optimizer_signals_ != nullptr) {
+        // Notes the collector lost (DL-R2): one that met the tick's copy of
+        // its core's part, and one its part had no room for.
+        const stats::OptimizerSignals::Drops lost = optimizer_signals_->drops();
+        os << " cabin_optimizer_notes_busy=" << lost.busy
+           << " cabin_optimizer_notes_full=" << lost.full;
+    }
     {
         const LatchGuard latched(cabin_optimizer_view_latch_);
         if (cabin_controller_ != nullptr) {
@@ -2227,8 +2240,11 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // that would have recorded was refused". Absent where no store runs.
     section("cabins");
     if (cabins_ != nullptr) {
-        os << " cabins_unbankable_views=" << cabins_->stats().unbankable_views
-           << " cabins_cap_refusals=" << cabins_->stats().cap_refusals;
+        // Every core's words summed as they stand; no latch (DL-S1).
+        const stats::CabinStore::Stats totals = cabins_->stats();
+        os << " cabins_unbankable_views=" << totals.unbankable_views
+           << " cabins_cap_refusals=" << totals.cap_refusals
+           << " cabins_use_dropped=" << cabins_->use_dropped();
     }
 
     // FM10 (docs/inflight/in-progress/workplan-multi-free-map.md): what the allocation map
@@ -10257,9 +10273,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // (cabin-controller.md §II.4's f_i), and it is the one shape
     // invariant 9 keeps Waystone away from. ANALYZE prints the ids whatever
     // was opted - a dispatcher built with no optimizer surface included -
-    // so the operator can name a shape before opting it in.
-    if (fingerprint.has_value() &&
-        (waystone_usable || optimizer_signals_ != nullptr || analyze)) {
+    // so the operator can name a shape before opting it in. **With the
+    // controller switched off nothing is built for it** (`rules.md` §3a).
+    if (fingerprint.has_value() && (waystone_usable || CollectorOn() || analyze)) {
         identity = StatementIdentity{stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
                                      fingerprint->pattern_id};
     }
@@ -10678,7 +10694,10 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
     // Success path only, like its two siblings, and only for a statement
     // with an identity - the fingerprint is the key the cost-benefit model
     // aggregates by, so a statement without one has nowhere to be counted.
-    if (optimizer_signals_ == nullptr || !identity.has_value()) return;
+    // **Not while the controller is switched off** (`rules.md` §3a): an
+    // `ANALYZE` or an opted shape has an identity then, and no candidate is
+    // walked for and no note made.
+    if (!CollectorOn() || !identity.has_value()) return;
 
     // The shape's cabin candidacy (§II.4's Σ_i linkage): a kCabinProbe step
     // on a column Cabin names it outright; otherwise the first kFilterScan's
@@ -10716,8 +10735,8 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
         candidate.rel_oid = filter_step->rel_oid;
         candidate.col_pos = filter_step->access_columns.front();
     }
-    optimizer_signals_->NoteExecution(identity->pattern_id, stats.Total().pages_fetched,
-                                      candidate);
+    optimizer_signals_->NoteExecution(core_id_, identity->pattern_id,
+                                      stats.Total().pages_fetched, candidate);
 }
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {

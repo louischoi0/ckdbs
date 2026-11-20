@@ -48,12 +48,16 @@ enum class LatchKind : std::uint8_t {
     kWalStream,           // WalStream's stream latch
     kWalSyncGate,         // WalStream's sync gate (`sync_mutex_`)
     kAssertionDirectory,  // AssertionEnforcer's directory latch and chain latches
-    kOptimizer,           // the optimizer collector's latch and the Cabin view latch
+    kOptimizer,           // the Cabin controller's view latch
     kSuperblock,          // the superblock latch
     kCabinPartition,      // a CabinStore partition
-    kCabinStats,          // CabinStore's stats latch
     kHandoff,             // a connection-handoff inbox (D19's fallback)
-    kStatsRing,           // a `sys` statistics ring's part (`stats/lock_wait_log.hpp`)
+    kStatsRing,           // a statistics store's part (`docs/rules/rules.md` §3a):
+                          // a record tries it and never waits, so a wait
+                          // counted here is a reader's or a collection task's
+    kPlanTable,           // the captured plans', the administrator's plans' and
+                          // the plan advice's latches: plan tables, not
+                          // statistics (DL-Q18)
     kCount,
 };
 
@@ -63,8 +67,8 @@ inline constexpr std::size_t kLatchKindCount = static_cast<std::size_t>(LatchKin
 inline constexpr std::array<const char*, kLatchKindCount> kLatchKindNames = {
     "other",          "frame_table",   "free_map",      "free_map_flush", "window",
     "lock_partition", "lock_wait_for", "wal_stream",    "wal_sync_gate",  "assertion_dir",
-    "optimizer",      "superblock",    "cabin_partition", "cabin_stats",  "handoff",
-    "stats_ring",
+    "optimizer",      "superblock",    "cabin_partition", "handoff",      "stats_ring",
+    "plan_table",
 };
 static_assert(kLatchKindNames.back() != nullptr, "a LatchKind without a name");
 

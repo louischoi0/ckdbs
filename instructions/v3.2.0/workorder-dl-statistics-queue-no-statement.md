@@ -445,7 +445,10 @@ these are the order's.
   headers that repeat it in the stage that changes each store, and
   `known-gaps.md`'s entries are struck as each path lands, never before.
 - **DL-R10 - a switch is read, never waited for.** What a statement pays
-  for a consumer that is off is one relaxed load of the switch; no
+  for a consumer that is off is a relaxed load of the switch at each place
+  that would otherwise work for it (three for the collector, as built in
+  DL-S1: the statement's head, the identity, the note - "one relaxed load"
+  as this rule was first written, corrected at DL-S1's review); no
   identity, candidate, sample or note is built on its behalf. A switch
   flipped while statements run is safe at any instant: a note taken a
   moment after an off, or missed a moment after an on, is a count's
@@ -603,3 +606,68 @@ view.
 
 No engine code is in this stage. No suite was executed for it: it changes
 no build input. The premise measurement is the next entry.
+
+### DL-S1: the collector and the Cabin store's counters (P1, P2)
+
+On worktree `dl-statistics-queue-no-statement`, on `90162e73`.
+
+**The second rule first.** With `cabin_optimizer` off - the default - a
+statement does nothing for the collector: no identity is built on its
+behalf (`CommandDispatcher::CollectorOn`), no candidate is walked for, no
+execution noted, no pattern id published to the session's words (the
+sampler's wait signal was that word's only reader), and the Cabin store's
+forwards stop at the collector's gate. **Where no tick can run** -
+`cabins = off`, or `cabin_optimizer_snapshot_interval_ms = 0` - no
+collector is built at all (the review's finding: a switch that is on with
+no cadence would have filled the parts for nobody). What was folded before
+a switch-off stays and decays (DL-Q13 (a)).
+
+**Then W4.** The collector is a part a core: two fixed tables allocated at
+the core's first note (1,024 shapes and 256 Cabins live between two
+folds), under a latch a note takes by the try form. The tick's `Fold()`
+copies each part into room reserved at construction, empties it and lets
+it go, then merges in id order with `MergeDecay` (`stats/decay.hpp`, exact
+at whole half-lives). The instance's latch is gone
+(`Expeditor::optimizer_signals_latch_`); the folded state is the tick's,
+under the view latch. A note that met the fold or found its part full is
+counted: `sys.meta`'s `cabin_optimizer_notes_busy`,
+`cabin_optimizer_notes_full` (DL-R2).
+
+**P2.** `stats_latch_` is gone: the store's totals are a block of words a
+core, and a Cabin's `hits` and `misses` a latch-free table a core
+(`stats/counter_table.hpp`, the W1 table DL-S2's stores share), summed
+when read; `sys.meta` gains `cabins_use_dropped`. A write's append to an
+observed set no longer takes an instance latch under its leaf.
+
+**DL-Q18.** `LatchKind::kCabinStats` went with its latch; the plan tables'
+latches take `kPlanTable` (`contention_plan_table_*`), so `stats_ring`
+counts statistics alone.
+
+**Review (`critics-developer`).** No correctness defect found in the step.
+Applied: (1) **the fold evicted one scan a newcomer** - up to cores x 1,024
+x 4,096 score reads in one tick, on core 0's reactor and under the view
+latch; room for a part's newcomers is now made in one pass, a tie going to
+the lower id (which also takes the map's iteration order out of the
+victims); (2) the no-cadence case above; (3) the twin shape and Cabin note
+tables share one claim, one copy and one merge; (4) two tests that did not
+pin what they claimed - the "never waits" cell held nothing across the
+peer's notes, so a blocking `Enter` passed it, and the switched-off cell
+could not tell the dispatcher's gate from the collector's: the first now
+holds core 0's part for as long as it likes (`PartLatchForTest`) and the
+second leaves the collector ungated; (5) "one relaxed load" in DL-R10 was
+loose - three sites ask the switch - and is corrected; (6) the Cabin
+probe table's bound is stated to count dropped Cabins. Rejected: deleting
+`CounterTable::ResetForTest` and inlining the table into the Cabin store
+(DL-S2's three stores use both); a field-list template over the Cabin
+store's totals (the sum stays field by field, nothing saved).
+
+**Found and not fixed: `docs/inflight/bugs/decay-lost-under-frequent-touches.md`.**
+The lazy-decay score does not decay for a pair touched more often than one
+sixteenth of a half-life (37.5 s by default): 60,000 touches a second apart
+read 60,000 points where a rate would read about 866. It predates DL, DL
+makes it no worse, and its fix moves every threshold the controller's
+defaults were measured against: the controller's, not this order's.
+
+**Suite.** 0 failed of 4,911 (2 disabled, 2 skipped) on the committed
+tree. **`tsan`**: 115 cells of the collector, the counter table, the Cabin store, the sampler, the decay score and the controller under gcc 14's thread sanitizer (`build-tsan/`; BS's own `tsan` configuration is clang's, which this host does not have) - 0 reports. The two-core rigs have no cell that drives the collector: DL-S5 adds the suite's. **Overhead not measured;
+measured at the milestone's close.**

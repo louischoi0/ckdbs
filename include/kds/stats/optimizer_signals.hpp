@@ -2,7 +2,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "kds/base/latch.hpp"
@@ -13,7 +16,8 @@
 // read through (docs/spec/cabin-controller.md §II.2/§II.3, workplan
 // PHY01).
 //
-// One collector for the instance (AT-S8), three signals:
+// One collector for the instance (AT-S8), a part a core (DL-S1), three
+// signals:
 //
 //   S1  per-fingerprint execution frequency - a decayed count, touched
 //       once per successful fingerprinted SELECT.
@@ -28,29 +32,58 @@
 //
 // ---- What this must never do ---------------------------------------------
 //
-// Fail a statement. Every recording call returns void and drops on any
-// internal refusal - the same contract every stats collector here honors.
-// The maps are **bounded**: a full fingerprint table evicts its coldest
-// entry (lowest decayed score) to admit a hotter newcomer, which merely
-// restarts that fingerprint's evidence - a performance event, the
-// TrailRecorder-sightings stance. The caps are `[PROPOSED]` and nothing
-// may depend on the numbers, only on the rule: **eviction restarts
-// counting, it never fabricates it.**
+// Fail a statement, **or make one wait** (`docs/rules/rules.md` §3a). Every
+// recording call returns void and drops on any internal refusal - the same
+// contract every stats collector here honors - and takes nothing a
+// statement on another core can hold.
+//
+// ---- Where a note goes: a part a core, folded by the consumer (DL-S1) ------
+//
+// **A note writes its own core's part and nothing else.** A part is two
+// fixed tables - shapes and Cabins - allocated whole at the core's first
+// note and never grown, each entry the decayed pairs of what the core
+// noted since the last fold. The part's latch is taken by the **try** form:
+// the one other taker is the consumer's fold, and a note that meets it is
+// dropped and counted, never waited out. A new key past half a table is
+// dropped and counted the same way; the fold empties the table, so the
+// bound is on the shapes one core runs between two folds.
+//
+// **The consumer folds.** `Fold()` - the controller's tick, through
+// `Snapshot()` - takes each part in core order, copies its entries into
+// memory it reserved beforehand, empties the part and lets it go; then,
+// holding nothing a statement takes, merges the copies into the folded
+// state in id order (`MergeDecay`, `decay.hpp`). The folded maps are
+// **bounded** and the fold is where they evict: a full shape table drops
+// its coldest entry (lowest decayed score) to admit a hotter newcomer,
+// which merely restarts that shape's evidence - a performance event, the
+// TrailRecorder-sightings stance. The caps are `[PROPOSED]` and nothing may
+// depend on the numbers, only on the rule: **eviction restarts counting, it
+// never fabricates it.** Room for a part's newcomers is made in one pass
+// over the map - the coldest go together - so a fold's cost is a scan a
+// part, not a scan a newcomer: the tick runs on a reactor. For the same
+// reason a part the fold finds busy is left to the next fold (DL-Q17): the
+// tick waits for nothing either.
+//
+// **A switched-off consumer collects nothing** (`rules.md` §3a's second
+// rule): every note asks the gate - the controller's own switch, one
+// relaxed load - before anything else, and the dispatcher asks it before it
+// builds an identity or a candidate on the collector's behalf. What was
+// folded before a switch-off stays and decays by the clock (DL-Q13 (a)).
 //
 // ---- The snapshot (PO10's determinism seam) -------------------------------
 //
 // `Snapshot()` is the **only** read the decision core will ever perform:
 // an immutable by-value aggregation, versioned, stamped with the decay
 // epoch (the clock reading every decayed value was computed at), entries
-// sorted by id so identical states produce byte-identical snapshots.
-// Construction is one step under the collector's latch (the concurrency
-// note below). PHY02's `Decide` takes the snapshot and nothing else.
+// sorted by id so identical states produce byte-identical snapshots. It
+// folds first, so the same notes in the same per-core order give the same
+// snapshot (DL-R5). PHY02's `Decide` takes the snapshot and nothing else.
 //
-// Concurrency: **the instance's, latched above one core** (AT-S8,
-// `SetLatch`). Every core's dispatcher notes executions into it and the one
-// Cabin store forwards every core's lookups. Each public method holds the
-// latch for its body; it is innermost, taken holding nothing but the controller view's
-// latch (`OptimizerSurface::view_latch`, outer, across a tick).
+// Concurrency: the notes as above. **The folded state has no latch of its
+// own: it is the consumer's**, touched by `Fold`, `Snapshot`, `QualityOf`
+// and the `tracked_*` counts alone, which the controller's view latch
+// (`OptimizerSurface::view_latch`) serialises - the tick holds it across a
+// tick, a view across its read.
 
 namespace kds::stats {
 
@@ -149,71 +182,147 @@ struct OptimizerSnapshot {
 
 class OptimizerSignals {
 public:
+    // What one core's part holds between two folds, live: half its slots.
+    // `[PROPOSED]`, a backstop as the caps above are.
+    static constexpr std::size_t kNotedShapesPerCore = 1024;
+    static constexpr std::size_t kNotedCabinsPerCore = 256;
+
     // The clock and half-life bind at construction - the one site config
     // threads them through (expeditor.cpp). A null clock degrades every
-    // signal to a raw counter, decay.hpp's stated stance.
-    OptimizerSignals(const sched::Clock* clock, sched::MonoTimeNs half_life_ns) noexcept
-        : clock_(clock), half_life_ns_(half_life_ns) {}
+    // signal to a raw counter, decay.hpp's stated stance. `cores` is the
+    // parts: a note names its core, and one past the last part is dropped.
+    // **The part latches are armed above one core** (G2): at one core the
+    // notes and the fold are one thread's.
+    OptimizerSignals(const sched::Clock* clock, sched::MonoTimeNs half_life_ns,
+                     std::uint32_t cores = 1);
+    ~OptimizerSignals();
+    OptimizerSignals(const OptimizerSignals&) = delete;
+    OptimizerSignals& operator=(const OptimizerSignals&) = delete;
+
+    // The consumer's switch (PO8). Null, the default, collects always: a
+    // collector built with no controller's switch beside it.
+    void set_gate(const std::atomic<bool>* gate) noexcept { gate_ = gate; }
+    // Whether a note would be taken: what a caller asks before it builds
+    // anything on the collector's behalf. One relaxed load (DL-R10).
+    bool collecting() const noexcept {
+        return gate_ == nullptr || gate_->load(std::memory_order_relaxed);
+    }
+
+    // ---- A statement's path: `core`'s part only ----------------------------
 
     // S1 + S2: one successful fingerprinted execution that read
     // `pages_fetched` pages, targeting `candidate` if the shape has cabin
-    // candidacy. Never fails; a full table evicts its coldest fingerprint
-    // to admit this one.
-    void NoteExecution(std::uint64_t pattern_id, std::uint64_t pages_fetched,
-                       CandidateRef candidate = {});
+    // candidacy. Never fails and never waits.
+    void NoteExecution(std::uint32_t core, std::uint64_t pattern_id, std::uint64_t pages_fetched,
+                       CandidateRef candidate = {}) noexcept;
 
-    // S4 (CJ's WE13): one ASH sample of `pattern_id` found WAITING. Counted
-    // only for a shape already tracked (a wait never admits or evicts one) and
-    // only while `gate` is true: the controller's own switch.
-    void NoteWaitSample(std::uint64_t pattern_id) noexcept;
-    void set_wait_gate(const std::atomic<bool>* gate) noexcept { wait_gate_ = gate; }
+    // S4 (CJ's WE13): one ASH sample of `pattern_id` found WAITING. Folded
+    // only for a shape the folded state tracks by the time its part is
+    // folded, or that part noted an execution of since the last fold: a
+    // wait alone never admits a shape.
+    void NoteWaitSample(std::uint32_t core, std::uint64_t pattern_id) noexcept;
 
     // S3, forwarded by CabinStore: a probe against `cabin_id`. `served`
     // false is a coverage miss - the value was not observed.
-    void NoteCabinLookup(std::uint64_t cabin_id, bool served);
+    void NoteCabinLookup(std::uint32_t core, std::uint64_t cabin_id, bool served) noexcept;
 
     // S3: a C6 location hint's verification outcome.
-    void NoteCabinHint(std::uint64_t cabin_id, bool ok);
+    void NoteCabinHint(std::uint32_t core, std::uint64_t cabin_id, bool ok) noexcept;
 
-    // The one read (see the header). A single home-core step.
+    // ---- The consumer: one thread at a time (the header) -------------------
+
+    // Every part's notes merged into the folded state, parts in core order
+    // and entries by id. A part found busy keeps its notes for the next
+    // fold.
+    void Fold();
+
+    // The one read (see the header): folds, then aggregates.
     OptimizerSnapshot Snapshot();
 
-    // A single Cabin's decayed S3 state, for the inspection surface
-    // (workplan PHY06's `SHOW CABIN_OPTIMIZER`). Const and version-silent
-    // where `Snapshot()` is neither: a SHOW must not advance the version
-    // sequence the decision log's digests are named in, or two operator
-    // reads would make two ticks' records look one snapshot apart. An
-    // untracked id answers zeros - indistinguishable from "tracked and
-    // fully decayed", which is the honest reading either way.
+    // A single Cabin's decayed S3 state as last folded, for the inspection
+    // surface (workplan PHY06's `SHOW CABIN_OPTIMIZER`). Const and
+    // version-silent where `Snapshot()` is neither: a SHOW must not advance
+    // the version sequence the decision log's digests are named in, or two
+    // operator reads would make two ticks' records look one snapshot apart
+    // - and it folds nothing, for the same reason. An untracked id answers
+    // zeros - indistinguishable from "tracked and fully decayed", which is
+    // the honest reading either way.
     SnapshotCabin QualityOf(std::uint64_t cabin_id) const;
 
-    std::size_t tracked_fingerprints() const noexcept {
-        LatchGuard hold(latch_);
-        return fingerprints_.size();
-    }
-    std::size_t tracked_cabins() const noexcept {
-        LatchGuard hold(latch_);
-        return cabins_.size();
+    std::size_t tracked_fingerprints() const noexcept { return fingerprints_.size(); }
+    std::size_t tracked_cabins() const noexcept { return cabins_.size(); }
+
+    // A part's latch, for a test that holds it as the fold does; null where
+    // the parts are unarmed or there is no such part.
+    Latch* PartLatchForTest(std::uint32_t core) noexcept {
+        return armed_ && core < parts_.size() ? &parts_[core]->latch : nullptr;
     }
 
-    // The latch every method holds (the header's concurrency note); null,
-    // the default, at one core. `latch` must outlive this.
-    void SetLatch(Latch* latch) noexcept { latch_ = latch; }
+    // Notes lost, over every part (DL-R2): `busy`, a note that met the
+    // fold's copy of its part; `full`, a new key past its part's bound, a
+    // part whose tables could not be allocated, or a core with no part. Any
+    // thread.
+    struct Drops {
+        std::uint64_t busy = 0;
+        std::uint64_t full = 0;
+    };
+    Drops drops() const noexcept;
 
 private:
-    // The entry for `id`, evicting the coldest when the map is full and
-    // `id` is new. O(n) scan on the full-and-new case only - the map is
-    // capped at kMaxTracked*, and the common case is a hash probe.
-    FingerprintSignal* FingerprintFor(std::uint64_t pattern_id);
-    CabinQualitySignal* CabinFor(std::uint64_t cabin_id);
+    // One key's entry in a part: what its core noted since the last fold.
+    template <class Signal>
+    struct Noted {
+        std::uint64_t id = 0;
+        Signal signal;
+        bool used = false;
+    };
+    using ShapeNote = Noted<FingerprintSignal>;
+    using CabinNote = Noted<CabinQualitySignal>;
+    // Twice the live bound, so a probe meets an empty slot.
+    static constexpr std::size_t kShapeSlots = 2 * kNotedShapesPerCore;
+    static constexpr std::size_t kCabinSlots = 2 * kNotedCabinsPerCore;
+
+    struct Part {
+        Latch latch{LatchKind::kStatsRing};
+        // Under `latch`. Allocated whole at the part's first note.
+        std::unique_ptr<ShapeNote[]> shapes;
+        std::unique_ptr<CabinNote[]> cabins;
+        std::size_t shapes_used = 0;
+        std::size_t cabins_used = 0;
+        bool failed = false;  // the allocation failed: every note drops
+        // Any thread reads them; the part's core alone adds.
+        std::atomic<std::uint64_t> busy_drops{0};
+        std::atomic<std::uint64_t> full_drops{0};
+    };
+
+    // `core`'s part with its latch held by `hold`, or null - counted -
+    // where there is no such part, the fold holds it, or its tables cannot
+    // be had.
+    Part* Enter(std::uint32_t core, std::optional<LatchGuard>& hold) noexcept;
+    Latch* Armed(Part& part) const noexcept { return armed_ ? &part.latch : nullptr; }
+    // The part's entry for a key, claimed at its first note since the fold;
+    // null, and one full drop, past the bound.
+    static ShapeNote* ShapeFor(Part& part, std::uint64_t pattern_id) noexcept;
+    static CabinNote* CabinNoteFor(Part& part, std::uint64_t cabin_id) noexcept;
 
     const sched::Clock* clock_;
     sched::MonoTimeNs half_life_ns_;
-    Latch* latch_ = nullptr;
-    const std::atomic<bool>* wait_gate_ = nullptr;
+    const bool armed_;
+    const std::atomic<bool>* gate_ = nullptr;
+    std::vector<std::unique_ptr<Part>> parts_;
+    // The notes of a core with no part, counted nowhere else.
+    std::atomic<std::uint64_t> stray_drops_{0};
+
+    // ---- The consumer's ----------------------------------------------------
     std::uint64_t version_ = 0;
     std::unordered_map<std::uint64_t, FingerprintSignal> fingerprints_;
     std::unordered_map<std::uint64_t, CabinQualitySignal> cabins_;
+    // The fold's copies, reserved at construction so a part's hold allocates
+    // nothing.
+    std::vector<ShapeNote> taken_shapes_;
+    std::vector<CabinNote> taken_cabins_;
+    // The fold's ranking of a full map's entries, kept between folds.
+    std::vector<std::pair<Log2Q16, std::uint64_t>> evict_scratch_;
 };
 
 }  // namespace kds::stats

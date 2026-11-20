@@ -2184,9 +2184,18 @@ public:
     // The cabin optimizer's signal collector (workplan PHY01), a setter
     // for `set_aggregate_limits`'s reason. Null - every existing construction site,
     // and any configuration without the collector - records nothing and
-    // costs one predicate per successful SELECT.
+    // costs one predicate per successful SELECT. **So does a collector
+    // whose consumer is switched off** (`CollectorOn`).
     void set_optimizer_signals(stats::OptimizerSignals* signals) noexcept {
         optimizer_signals_ = signals;
+    }
+    // Whether a statement does anything for the collector: there is one and
+    // the controller's switch is on. **A switched-off consumer collects
+    // nothing** (`docs/rules/rules.md` §3a): with it off no identity, no
+    // candidate and no note is made on the collector's behalf, and what a
+    // statement pays is this one relaxed load (DL-R10).
+    bool CollectorOn() const noexcept {
+        return optimizer_signals_ != nullptr && cabin_optimizer_enabled();
     }
 
     // PO8's switch, boot half (workplan PHY05): the config key seeds it,

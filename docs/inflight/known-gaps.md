@@ -2834,20 +2834,6 @@ reading - DL-S0's census - and priced by
 §1.3 carries the `path:line` of each and the stage that brings it in. An
 entry is struck here when its path lands, never before.
 
-- **Every successful `SELECT` with an identity takes one latch for the
-  instance to note itself to the Cabin controller's collector**
-  (`OptimizerSignals::NoteExecution`), on every core, whether or not
-  `cabin_optimizer` is on - it is off by default, and only the wait sample
-  asks the switch. Under that latch a new fingerprint past 4,096 evicts by
-  a scan of the whole table, and the controller's tick copies and sorts
-  every entry. Breaks clauses (a) and (c), and the second rule: the consumer
-  is off and the statement still builds an identity, walks its chain for a
-  candidate, publishes its pattern id and notes for it.
-- **The Cabin store counts under shared latches**: a probe's hit or miss
-  takes the cabin's partition latch a second time, then the instance's one
-  `stats_latch_`, then the collector's latch above; seven more sites take
-  `stats_latch_` for one add, and **a write's append to an observed set
-  (`NoteWrite`) takes it holding its leaf exclusive**. Breaks (a).
 - **A record into a per-core statistics part waits for a reader's copy of
   that part**, and the latch is a `std::mutex`, so the wait sleeps the
   core's reactor and every session on it: `StatementStats` (whose
@@ -2879,7 +2865,8 @@ entry is struck here when its path lands, never before.
   space table's, the publish latch, the controller's view latch (taken
   before the switch is asked) - so a wait of theirs stops every statement
   on core 0. The ASH sampler, a phase of every core's loop, does the same
-  on its ring's latch and the collector's.
+  on its ring's latch. (The collector's parts are tried by the tick and by
+  the sampler's wait note since DL-S1.)
 - **`SHOW CABIN_OPTIMIZER` and `SHOW META` can stall their core for a
   whole Cabin build**: both take the controller's view latch, which core
   0's tick holds across a Cabin's creation and its seeded build (the entry
@@ -2895,9 +2882,12 @@ scan and a log append; every session on core 0 waits for the walk. Off by
 default (`cabin_optimizer`). Verified at `b0a824db` by reading. Owner:
 `docs/spec/cabin-controller.md`.
 
-What already meets the rule: `RefusalStats`, `TxnStats`, `IndexStats`'
-counts, the wait statistics' totals, the contention instrument and the
-per-core load slots - single-writer words a core, read with no latch. The
+What already meets the rule: the Cabin controller's collector and the
+Cabin store's counters (DL-S1: a part a core tried and never waited for,
+nothing noted while `cabin_optimizer` is off; a core's own words),
+`RefusalStats`, `TxnStats`, `IndexStats`' counts, the wait statistics'
+totals, the contention instrument and the per-core load slots -
+single-writer words a core, read with no latch. The
 wait-free words every core writes (the buffer pool's counts, the plan
 tables' counters) are within the rule and priced in the results file.
 
