@@ -266,3 +266,15 @@ took under them.
 | **Does not settle** | a push, a merge to `main`, a tag or a version; DD-S4, put to the operator at the close |
 | **Recorded at** | this file; the DD order's header and §7; the DD row in `instructions/v3.2.0/index.md` |
 
+## 27. DN opened on the standing go-ahead, after DD; stopped at DN-S1's gate
+
+| | |
+|---|---|
+| **Word** | §26's link: *"link the work that will start later with /go-ahead-achieving-milestone DN"* (given in Korean; recorded in English) - DN opened in the same session once DD closed |
+| **Mark** | **DN is opened**, on worktree `dn-heap-rowid` at `34958393` (`v3.4.18-9-g34958393`, DD's work branch merged onto `origin/main`). **No item below is the operator's own mark**: each is CLA's proposal, adopted by CLA on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone). The operator's own marks stay DN-D1..D7 |
+| **Adopted at DN-S0** | **DN-Q3 `[quiet-wrong]` (a)** (an entry carries the Keystone, checked at the slot) **DN-Q13 `[quiet-wrong]` (c)**, added and revised from (a) on the stage's review (a heap's `int64` PK, its Keystone, is declared first, one declared elsewhere refused at its byte), and **DN-Q14 `[quiet-wrong]` (a)**, added on the review (a declared-PK heap keeps a deleted row's Keystone-index entry until a `PURGE`; a hidden-Keystone heap refuses a named key at or below its issue mark - so no Keystone is bound twice once a slot is reused), each premise read again. **DN-Q1 (a), revised**: reserved by the lexer's keyword table, the mount check dropped since a superblock bump refuses every older volume before its catalog. **DN-Q9 (a), revised**: refused by the superblock version, the message naming DN's format event, never by a relation's name. **DN-Q12 (a)**, added: the amended invariants staged in the order until DN-S2's code holds them. DN-Q0, Q2, Q4..Q8, Q10, Q11 (a) as written |
+| **Found at DN-S0** | DN-R5's "first word reserved against identifiers" is false - eleven words are reserved already; invariant 9 names the btree too, so DN-R9 amends it; no slot-reuse primitive exists; the descent a resolved row costs 0.3-0.6 us - 21-40 % of an index range, 3-7 % of a point read (`bench/v3.4.18/dn-s0-premise-v3.4.18-9-g34958393.md`) |
+| **The stop** | **DN-S1 ends in the operator's mark on the amended invariants** (the order's §5, §8): invariant 4 (under DN-D7's mark), 9 and 11's restatement, with DN-Q13 (c) and DN-Q14 (a), which §8 carries (no mark yet). DN-S2 writes against them and does not start before the mark. Also owed before DN-S2: a driver that removes index entries unasked (DD-S4, with the operator), and DN-Q11's descending named load |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DD's landing |
+| **Recorded at** | this file; the DN order's header, §4, §7 and §8; the DN row in `instructions/v3.2.0/index.md` |
+
