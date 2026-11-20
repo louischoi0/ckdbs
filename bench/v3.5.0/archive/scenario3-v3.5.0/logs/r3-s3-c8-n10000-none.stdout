@@ -1,0 +1,49 @@
+
+ckdbs benchmark - 34 columns, 10000 rows resident, 1 connection
+server 127.0.0.1:15620  table users_r3_s3_c8_n10000_none, books_r3_s3_c8_n10000_none, reservations_r3_s3_c8_n10000_none, loans_r3_s3_c8_n10000_none
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0     836.7    661.9    661.9    670.7   1147.3   1147.3    1147.3     0
+load                     19000         0     528.2    304.2    451.8    512.3    713.4    850.3    4030.3     0
+pk-user                    200         0      68.7     56.9     60.2     61.9     83.4    168.8     444.3     0
+loans-by-user              200         0     397.3    344.1    368.7    382.8    480.3    608.7     671.2     0
+loans-by-book              200         0     404.2    351.9    375.0    392.9    472.2    566.8     576.9     0
+resv-by-user               200         0     191.0    162.3    175.7    183.6    247.0    294.4     312.5     0
+books-by-author            200         0     126.8    102.9    118.2    123.1    156.1    191.7     205.2     0
+books-by-genre             200         0     355.1    291.4    326.0    341.7    466.7    501.2     549.0     0
+loans-by-daterange         200         0    1229.9    461.4   1182.1   1231.3   1402.1   1430.4    1443.0     0
+overdue                    200         0    1004.8    500.7    969.5   1019.7   1151.6   1199.8    1321.7     0
+join-loan-user             200         0     420.2    366.3    388.0    405.4    498.9    609.1     668.8     0
+join-no-literal            200         0     624.6    543.7    572.9    606.9    745.6    863.4     895.6     0
+exists-correlated          200         0     711.7    603.7    665.6    691.7    821.0    961.3    1807.5     0
+count-by-user              200         0     379.2    327.4    355.3    369.9    445.4    506.3     526.7     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  pk-user: WHERE id = ? - Lookup, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode none (after load), cabin off, server indexes on
+  sizes: users=2000, books=2000, reservations=5000, loans=10000
+  ANALYZE (the access kind each shape compiled to):
+      loans-by-user: FilterScan
+      loans-by-book: FilterScan
+      resv-by-user: FilterScan
+      books-by-author: FilterScan
+      books-by-genre: FilterScan
+      loans-by-daterange: Scan
+      overdue: FilterScan
+      join-no-literal: Range, Scan
+      exists-correlated: Range, Scan
+  wrote /home/louis/bench-runs/scenarios-v3.5.0/json/r3-s3-c8-n10000-none.json

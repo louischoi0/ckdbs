@@ -1,0 +1,11 @@
+1795199426 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 23000, revenue = 132076 WHERE id = 514" -> ERR TXN_CONFLICT retryable=1 row id=514 was written by transaction 9524 in 10us
+1795199426 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 1495000, revenue = 10586845 WHERE id = 455" -> ERR TXN_CONFLICT retryable=1 row id=455 was written by transaction 10295 in 11us
+1795199426 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 185000, revenue = 1684673 WHERE id = 537" -> ERR TXN_CONFLICT retryable=1 row id=537 was written by transaction 10424 in 12us
+1795199427 WARN [query] "UPDATE organizations_abs2c1g SET outstanding = 9381310 WHERE id = 401" -> ERR TXN_CONFLICT retryable=1 row id=401 was written by transaction 10594 in 16us
+1795199427 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 595000, revenue = 4871094 WHERE id = 465" -> ERR TXN_CONFLICT retryable=1 row id=465 was written by transaction 10691 in 15us
+1795199427 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 1231000, revenue = 8333083 WHERE id = 593" -> ERR TXN_CONFLICT retryable=1 row id=593 was written by transaction 10762 in 14us
+1795199427 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 1226000, revenue = 7060831 WHERE id = 412" -> ERR TXN_CONFLICT retryable=1 row id=412 was written by transaction 11027 in 14us
+1795199427 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 1337000, revenue = 10986584 WHERE id = 399" -> ERR TXN_CONFLICT retryable=1 row id=399 was written by transaction 11269 in 16us
+1795199427 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 1305000, revenue = 8256349 WHERE id = 479" -> ERR TXN_CONFLICT retryable=1 row id=479 was written by transaction 11414 in 14us
+1795199427 WARN [query] "UPDATE organizations_abs2c1g SET outstanding = 15102818 WHERE id = 367" -> ERR TXN_CONFLICT retryable=1 row id=367 was written by transaction 11547 in 14us
+1795199428 WARN [query] "UPDATE operations_abs2c1g SET booked_cbm = 1982000, revenue = 10922911 WHERE id = 484" -> ERR TXN_CONFLICT retryable=1 row id=484 was written by transaction 12212 in 17us

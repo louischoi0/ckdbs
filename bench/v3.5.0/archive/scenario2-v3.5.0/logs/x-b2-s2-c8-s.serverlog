@@ -1,0 +1,11 @@
+1795198387 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 1561398 WHERE id = 399" -> ERR TXN_CONFLICT retryable=1 row id=399 was written by transaction 57390 in 12us
+1795198387 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 1176000, revenue = 8151141 WHERE id = 411" -> ERR TXN_CONFLICT retryable=1 row id=411 was written by transaction 53406 in 28us
+1795198388 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 14000, revenue = 180386 WHERE id = 400" -> ERR TXN_CONFLICT retryable=1 row id=400 was written by transaction 58072 in 20us
+1795198389 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 411000, revenue = 2179769 WHERE id = 528" -> ERR TXN_CONFLICT retryable=1 row id=528 was written by transaction 54038 in 22us
+1795198389 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 1007000, revenue = 6970195 WHERE id = 405" -> ERR TXN_CONFLICT retryable=1 row id=405 was written by transaction 58322 in 32us
+1795198389 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 1762000, revenue = 14081446 WHERE id = 567" -> ERR TXN_CONFLICT retryable=1 row id=567 was written by transaction 58449 in 31us
+1795198389 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 16397867 WHERE id = 387" -> ERR TXN_CONFLICT retryable=1 row id=387 was written by transaction 58468 in 13us
+1795198390 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 8177745 WHERE id = 428" -> ERR TXN_CONFLICT retryable=1 row id=428 was written by transaction 54616 in 17us
+1795198390 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 2599000, revenue = 18887258 WHERE id = 432" -> ERR TXN_CONFLICT retryable=1 row id=432 was written by transaction 58735 in 18us
+1795198390 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 1767000, revenue = 13408295 WHERE id = 349" -> ERR TXN_CONFLICT retryable=1 row id=349 was written by transaction 54723 in 24us
+1795198390 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 16803920 WHERE id = 554" -> ERR TXN_CONFLICT retryable=1 row id=554 was written by transaction 59034 in 13us
