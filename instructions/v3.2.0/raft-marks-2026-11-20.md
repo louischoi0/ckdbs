@@ -51,3 +51,53 @@ took under them.
 | **Does not settle** | DJ-Q0..Q12 - among them the two keys' names and defaults, what the cap counts (a `C_CANCEL` connection never, DJ-R2 `[quiet-wrong]`), an administrator's reserve, whether a `C_PING` resets the idle clock; whether DJ opens |
 | **Recorded at** | this file; the DJ order's header and §0; the DJ row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 6. CV opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone CV` - the standing word *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*, given for CV |
+| **Mark** | **CV is opened**, on worktree `cv-ordered-index-walk` from `f4138860` (`v3.4.15-1-gf4138860`). **No CV-Q item is the operator's own mark.** Each is **adopted on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone)**, as CLA proposed it: CV-Q0..Q6 each (a), CV-Q3 (a) as revised at CV-S0 (a list-filled prefix is no ordered candidate), and CV-Q7 (a), raised at CV-S0 and written into the order's §4 with its options before it was adopted. The two `[quiet-wrong]` items, CV-Q3 (the index choice's ties) and CV-Q7 (no string order key: IX6 truncates), were adopted after their premises were re-read on the tree at `f4138860` (the order's §7, CV-S0) |
+| **Does not settle** | a push, a merge to `main`, a tag, a version; the options the standing go-ahead did not take (CV-Q0 (b), CV-Q1 (b), CV-Q2 (b), CV-Q3 (b), CV-Q4 (b)/(c), CV-Q5 (b), CV-Q6 (b), CV-Q7 (b)), which stay open to the operator's own mark |
+| **Recorded at** | this file; the order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
+
+## 7. DK written: the btree descent and the immutable low key
+
+| | |
+|---|---|
+| **Word** | *"Is there room to optimize, using the property that a page's `min_key` is immutable, so that a btree descent goes down without holding a latch or a lock? When the page has been split it would have to retry."* and, after CLA's reading of the tree, *"For now, put it as an exploratory milestone and write the work order."* (given in Korean; recorded in English) |
+| **Mark** | **DK is written, not opened**: `instructions/v3.2.0/workorder-dk-descent-low-key.md`, in the main checkout on `main` at `1c7bb774` (`v3.4.15-4-g1c7bb774`), documents only. **Exploratory is the operator's word (DK-Q0)**; the letter and the candidates are CLA's proposals: D1 a write descent's leaf fetched exclusive at once from the parent's `level`, D2 a leaf that moves right instead of restarting, D3 the internal levels read optimistically - which is CW's C3a and is built only under CW (DK-Q1 (a), unmarked); D4, the low key as the only validation, rejected on paper |
+| **Found** | CW (`workorder-cw-optimistic-page-read.md`, written 2026-11-17, not opened) already holds the latch-free internal-node read as its C3a, and excludes B-link moves (CW §6); DK does not restate its protocol. The secondary tree's leaf stores no low key: its bound is the right sibling's first entry, fixed only while no entry is removed (`index_tree.cpp:60-64`), which DD would touch |
+| **Corrected** | In the conversation CLA said a failed internal node could be re-read in place rather than from the root. It is sound, the leaf's check catching any stray left, but it saves a root restart only once D2 is built, since an internal node has no low key or right link to move along (DK-Q6) |
+| **Does not settle** | DK-Q1..Q9; whether DK opens; whether CW opens |
+| **Recorded at** | this file; the DK order's header and §0; the DK row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. v3.4.16 named and tagged
+
+| | |
+|---|---|
+| **Word** | *"tag 3.4.16"* - after CLA's report that CV landed on `main` at `fda024cf` with the hook skipped on the word "push no verify", the full suite 0 failed of 4897 at `7d11ba44`, whose code is the merge's |
+| **Mark** | **The version of record is `v3.4.16`**, the operator's own word: an annotated tag on `main` at `0078e149` (CV's merge `fda024cf` and DK's documents above it). Its message states what is built since `v3.4.15` (CV), that the superblock did not move, the suite and what was not executed, and the gaps that bound it - first the unmeasured many-leaf reverse walk, then the reverse walk's blocking leaf reads, the unseeded one-sided bound and the decline's memory, with v3.4.15's carried gaps |
+| **Does not settle** | anything after `0078e149` but this record |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. The statistics rule recorded, and DL written
+
+| | |
+|---|---|
+| **Word** | *"It seems we have to set the principle that statistics must not, in any case, line up a write or a read (query execution)."* - after CLA's account of DA's page-11 hold (-11.6 % of throughput at `cores = 8`, `bench/v3.4.14/results-da-s0-premise-v3.4.14-30-g673f025d.md`) - and, after CLA's reading of the tree and a five-clause draft, *"For now record it as a rule; in the end strictly, and for now establish this rule through a separate milestone. Write the work order of the milestone that will establish this rule."* (given in Korean; recorded in English) |
+| **Mark** | **The rule is recorded**: `docs/rules/rules.md` §3a, the operator's sentence, binding on every statistics path added or changed from 2026-11-20. **Its end state is strict** - a record waits for no reader of the statistic, not even one copy of its own part - the operator's word, DL-Q1. **DL is written, not opened**: `instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md`, in the main checkout on `main` at `1aaafe1b` (`v3.4.16-1-g1aaafe1b`), documents only; it is not exploratory. What does not meet the rule today is listed in `docs/inflight/known-gaps.md` ("Statistics that can queue a statement"). The letter, the five clauses the rule is read as, the census and the stages are CLA's proposals |
+| **Found** | Read at `1aaafe1b`: every successful `SELECT` with an identity takes the Cabin controller's collector latch, one for the instance, whether or not `cabin_optimizer` is on (`optimizer_signals.cpp:68-81`, `command_dispatcher.cpp:10719`) - page 11's shape with a shorter section, unmeasured, and inside both arms of every `cores = 8` cell DA measured; a Cabin probe's hit takes three shared latches to count itself; the per-core parts wait for a reader's copy under a `std::mutex`, which DF-R2 and DA-R3 allow and the strict form does not |
+| **Differs from what CLA said** | CLA's draft carried a clause "a switched-off consumer collects nothing". It is a cost, not a queue; it is not in the rule and is DL-Q3. The rule gained a clause the draft lacked: a statement's own read of a statistic waits for no writer (clause (d), the plan-statistics publish latch). CLA's census in the conversation was a first reading of `src/stats/`; the order says so and DL-S0 is the census |
+| **Does not settle** | DL-Q0 and DL-Q2..Q10 - among them what counts as a statistic at the edges (Waystone trails, the controller's view), the strict shape a store takes, whether the collector runs while its consumer is off, wait-free words every core writes, whether a gathering task must give way; whether DL opens; the clauses' wording, which a mark amends |
+| **Recorded at** | this file; `docs/rules/rules.md` §3a; `docs/inflight/known-gaps.md`; the DL order's header and §0; the DL row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 10. DL amended: a switched-off consumer collects nothing
+
+| | |
+|---|---|
+| **Word** | *"Add the principle 'a switched-off consumer collects nothing' to that milestone too."* (given in Korean; recorded in English) - after CLA's report that DL was written and that the clause had been left out of the rule as a cost matter and made an open item, DL-Q3 |
+| **Mark** | **The principle is a rule DL establishes**: recorded as the second entry of `docs/rules/rules.md` §3a - where a setting turns off the only consumer of a statistic, a statement's path records nothing for it, and a switch-on starts from no evidence - and **DL-Q3 is marked (a)**, the operator's word. The order is amended in the main checkout on `main` at `1aaafe1b`, before its first commit, documents only: DL-R10, DL-R11, a table of consumers with a switch (§1.2), DL-S1's first half, a test per switch in DL-S5 |
+| **CLA's reading, to be corrected if wrong** | The word says "add to the milestone"; CLA also recorded it in `rules.md`, beside the first rule and not inside it, since a principle a milestone establishes is a rule of the tree. It adds no switch (DL-Q11 (a), unmarked): a store a `sys` view reports keeps BO-Q8's "no switch" |
+| **Found** | Read at `1aaafe1b`: the collector's S1-S3 are the one case that breaks it - with `cabin_optimizer` off, the default, every fingerprinted `SELECT` still builds an identity for the collector, walks its chain for a candidate and notes under the instance's latch (`command_dispatcher.cpp:10261-10265`, `:10683-10719`); S4, the access statistics and ASH already ask their switch |
+| **Does not settle** | DL-Q11 (whether the rule adds switches), DL-Q12 (whether any `join_order` value turns the planner's observations' consumer off), DL-Q13 (evidence already collected at a switch-off); DL-Q0, DL-Q2 and DL-Q4..Q10 as before; whether DL opens |
+| **Recorded at** | this file; `docs/rules/rules.md` §3a; `docs/inflight/known-gaps.md`; the DL order's header, §0, §1.2, §3, §4, §5 and §7; the DL row and this file's row in `instructions/v3.2.0/index.md` |

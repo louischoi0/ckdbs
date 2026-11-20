@@ -581,6 +581,58 @@ StatusOr<PageId> IndexSeekLeaf(storage::PageStore& store, PageId root, const Ind
     return descent.value().path[descent.value().depth];
 }
 
+StatusOr<storage::PageRef> IndexFetchLeaf(storage::PageStore& store, PageId leaf_id,
+                                          const IndexLayout& layout, storage::PageAccess access) {
+    auto bytes = store.Fetch(leaf_id, access);
+    if (!bytes.ok()) return bytes.status();
+    if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kIndexLeaf); !s.ok()) {
+        return s;
+    }
+    if (Status s = IndexLeafView(bytes.value().bytes()).CheckAgainst(layout, leaf_id);
+        !s.ok()) {
+        return s;
+    }
+    return bytes;
+}
+
+StatusOr<storage::PageRef> IndexFetchLeafAtOrBelow(storage::PageStore& store, PageId root,
+                                                   const IndexLayout& layout,
+                                                   std::span<const std::byte> sort_key) {
+    if (sort_key.size() != layout.sort_key_width()) {
+        return Status::InvalidArgument("index seek expects a whole sort key");
+    }
+    // The descent's own leaf, held: no second fetch of it.
+    auto descent = DescendTo(store, root, layout, sort_key, /*leaf_for_write=*/false);
+    if (!descent.ok()) return descent.status();
+    storage::PageRef leaf = std::move(descent.value().leaf);
+    storage::PageChainGuard guard("index leaf chain");
+    for (;;) {
+        if (Status s = guard.Visit(leaf.page_id()); !s.ok()) return s;
+        const IndexLeafView view(leaf.bytes());
+        // Asked under the leaf's hold: a divide of it has to write it. "At
+        // or below a key" and `LeafStillCoversKey`'s "strictly below the
+        // sibling's first entry" are one question of one sibling.
+        auto covers = LeafStillCoversKey(store, view, layout, sort_key);
+        if (!covers.ok()) return covers.status();
+        if (covers.value()) return leaf;
+        // The right neighbour is taken before this leaf is let go: a
+        // forward walk's order.
+        auto next = IndexFetchLeaf(store, view.right_sibling(), layout, storage::PageAccess::kRead);
+        if (!next.ok()) return next.status();
+        leaf = std::move(next.value());
+    }
+}
+
+void PrecedingSortKey(std::span<std::byte> key) {
+    for (std::size_t b = key.size(); b-- > 0;) {
+        if (key[b] != std::byte{0}) {
+            key[b] = static_cast<std::byte>(static_cast<std::uint8_t>(key[b]) - 1);
+            return;
+        }
+        key[b] = std::byte{0xFF};  // borrow
+    }
+}
+
 Status IndexVisitFrom(
     storage::PageStore& store, PageId first_leaf, const IndexLayout& layout,
     storage::PageAccess access,
@@ -593,13 +645,9 @@ Status IndexVisitFrom(
     for (;;) {
         if (Status s = guard.Visit(current); !s.ok()) return s;
 
-        auto bytes = store.Fetch(current, access);
+        auto bytes = IndexFetchLeaf(store, current, layout, access);
         if (!bytes.ok()) return bytes.status();
-        if (Status s = RequireType(bytes.value().bytes(), current, PageType::kIndexLeaf); !s.ok()) {
-            return s;
-        }
         IndexLeafView leaf(bytes.value().bytes());
-        if (Status s = leaf.CheckAgainst(layout, current); !s.ok()) return s;
 
         const std::uint16_t n = leaf.entry_count();
         for (std::uint16_t i = 0; i < n; ++i) {

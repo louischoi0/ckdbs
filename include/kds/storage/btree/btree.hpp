@@ -260,6 +260,27 @@ StatusOr<std::optional<Location>> BtreeHoldTombstone(storage::PageStore& store, 
 // NotFound when the key is absent, and a range's low bound very often is.
 StatusOr<PageId> BtreeSeekLeaf(storage::PageStore& store, PageId root, std::uint64_t id);
 
+// A leaf, fetched and held, with its id.
+struct HeldLeaf {
+    PageId id = kInvalidPageId;
+    storage::PageRef ref;
+};
+
+// The leaf that holds the greatest keys at or below `key`, fetched under
+// `access` and **held** (CV O2, the reverse walk's step).
+//
+// A read descent may land one leaf short of `key`'s, a split having moved
+// the top of the range right after the parent was read, and a walk that
+// goes left would then never see what moved. So the leaf is asked, while it
+// is held, whether its right neighbour's `min_key` is above `key` - a
+// leaf covers `[min_key, right sibling's min_key)`, both ends immutable
+// (invariant 2) - and the walk moves right until it is. Holding a leaf and
+// asking its right neighbour is the order a forward walk takes, so it
+// closes no latch cycle. Every key at or below `key` the tree held before
+// the call is in the leaf returned or to its left.
+StatusOr<HeldLeaf> BtreeFetchLeafAtOrBelow(storage::PageStore& store, PageId root,
+                                           std::uint64_t key, storage::PageAccess access);
+
 // BtreeVisit, starting at a given leaf rather than the leftmost one.
 //
 // `first_leaf` comes from BtreeSeekLeaf. Everything else is identical -

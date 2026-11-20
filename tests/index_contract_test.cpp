@@ -261,6 +261,40 @@ const std::vector<std::string>& Queries() {
         "WHERE a.id BETWEEN 1 AND 4 ORDER BY a.id LIMIT 3",
         "SELECT id FROM b AS o WHERE EXISTS "
         "(SELECT i.id FROM b AS i WHERE i.owner = o.id)",
+
+        // ---- Ordered index walks (CV O1) ------------------------------------
+        //
+        // An `ORDER BY` an index holds after its prefix, under a LIMIT, is
+        // walked in entry order with the sort dropped; under `indexes = off`
+        // the step declines to a walk that sorts into the same order, and
+        // `plain` sorts. The moved key (id 4 to owner 0), the round trip,
+        // the covered column's move (id 5, two entries under one key) and
+        // the deleted row are each where an entry left by an earlier version
+        // must not reach the reply out of place or twice (CV-R2).
+        "SELECT id, owner, qty FROM b WHERE owner = 1 ORDER BY qty LIMIT 4",
+        "SELECT id, qty FROM b WHERE owner = 2 ORDER BY qty LIMIT 3 OFFSET 2",
+        "SELECT id, qty FROM b WHERE owner = 0 ORDER BY qty, id LIMIT 20",
+        "SELECT id, qty FROM b WHERE owner = 0 AND qty BETWEEN 1 AND 7 ORDER BY qty LIMIT 20",
+        "SELECT id, owner, qty FROM b WHERE owner BETWEEN 1 AND 3 ORDER BY owner, qty LIMIT 9",
+        "SELECT id, owner, qty FROM b ORDER BY owner, qty LIMIT 12 OFFSET 3",
+        "SELECT id, owner FROM b ORDER BY owner LIMIT 15",
+        "SELECT id, code FROM b ORDER BY code LIMIT 6",
+        "SELECT id, code FROM b WHERE code BETWEEN 10 AND 200 ORDER BY code LIMIT 5",
+        "SELECT id, qty FROM b WHERE owner = 1 AND sym = 's1' ORDER BY qty LIMIT 3",
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.id = a.qty WHERE a.owner = 1 "
+        "ORDER BY a.qty LIMIT 5",
+        // A string key keeps its sort (CV-Q7 (a)).
+        "SELECT id, sym FROM b ORDER BY sym LIMIT 5",
+        // The reverse walk (CV O3), each order total - the tuple key
+        // written last - because `plain` sorts its ties ascending and an
+        // elided `DESC` returns them descending (CV-Q4 (a)).
+        "SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty DESC, id DESC LIMIT 4",
+        "SELECT id, qty FROM b WHERE owner = 0 ORDER BY qty DESC, id DESC LIMIT 20",
+        "SELECT id, owner, qty FROM b WHERE owner BETWEEN 1 AND 3 "
+        "ORDER BY owner DESC, qty DESC, id DESC LIMIT 9 OFFSET 2",
+        "SELECT id, owner FROM b ORDER BY owner DESC, id DESC LIMIT 15",
+        "SELECT id, code FROM b ORDER BY code DESC LIMIT 6",
+        "SELECT id, code FROM b WHERE code BETWEEN 10 AND 200 ORDER BY code DESC LIMIT 5",
     };
     return kQueries;
 }
@@ -432,6 +466,118 @@ TEST(IndexContractTest, AFilledQuotaStopsResolvingIndexEntries) {
 }
 
 // ---- MVCC: an old snapshot reads through a superseded entry --------------
+
+TEST(IndexContractTest, AnOrderedWalkIsTakenWhereItsIndexHoldsTheOrder) {
+    Instance db(/*indexes=*/true);
+    LoadMaintained(db);
+    for (const std::string sql : {
+             "SELECT id FROM b WHERE owner = 1 ORDER BY qty LIMIT 4",
+             "SELECT id FROM b ORDER BY owner, qty LIMIT 12",
+             "SELECT id FROM b ORDER BY owner LIMIT 12",
+             "SELECT id FROM b ORDER BY code LIMIT 6",
+             "SELECT id FROM b WHERE owner = 1 ORDER BY qty, id LIMIT 4",
+             "SELECT id FROM b WHERE owner = 1 ORDER BY qty DESC LIMIT 4",
+             "SELECT id FROM b ORDER BY code DESC LIMIT 6",
+         }) {
+        const std::string plan = db.Run("ANALYZE " + sql);
+        EXPECT_NE(plan.find("order=index_"), std::string::npos) << sql << ": " << plan;
+        EXPECT_EQ(plan.find("sorted="), std::string::npos) << sql << ": " << plan;
+    }
+    // CV-Q3 (a): `by_owner` is the lower oid and IX9's choice for the
+    // equality alone, and holds no `qty` order; the first statement above
+    // is ordered only because the order moved the step to `by_owner_qty`.
+    for (const std::string sql : {
+             // No LIMIT (CV-Q2 (a)); a string key (CV-Q7 (a)); a key no
+             // index leads with; a prefix no index continues with the key;
+             // mixed directions.
+             "SELECT id FROM b WHERE owner = 1 ORDER BY qty",
+             "SELECT id FROM b ORDER BY sym LIMIT 5",
+             "SELECT id FROM b ORDER BY qty LIMIT 5",
+             "SELECT id FROM b WHERE sym = 's1' ORDER BY owner LIMIT 5",
+             "SELECT id FROM b ORDER BY owner, qty, id DESC LIMIT 5",
+         }) {
+        const std::string plan = db.Run("ANALYZE " + sql);
+        EXPECT_EQ(plan.find("order=index"), std::string::npos) << sql << ": " << plan;
+    }
+}
+
+// **CV-R2: the key check and the seen set**, against an older view and a
+// fresh one. A row moved forward and back in the order column, a round trip
+// back to its first key, a covered column moved under one key, and a delete:
+// each reply is the sorted reply of the same statement without its LIMIT,
+// which keeps the sort (CV-Q2 (a)), under the same view.
+TEST(IndexContractTest, AnOrderedWalkEmitsEachRowWhereItsViewFilesIt) {
+    Instance db(/*indexes=*/true);
+    LoadMaintained(db);
+    const std::vector<std::pair<std::string, std::string>> shapes = {
+        {"SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty", " LIMIT 50"},
+        {"SELECT id, owner, qty FROM b ORDER BY owner, qty", " LIMIT 100"},
+        {"SELECT id, owner FROM b ORDER BY owner", " LIMIT 100"},
+        {"SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty DESC, id DESC", " LIMIT 50"},
+        {"SELECT id, owner FROM b ORDER BY owner DESC, id DESC", " LIMIT 100"},
+    };
+    const auto same = [&](Session* s, const char* when) {
+        for (const auto& [base, limit] : shapes) {
+            const std::string sorted = s != nullptr ? db.Run(*s, base) : db.Run(base);
+            const std::string walked = s != nullptr ? db.Run(*s, base + limit) : db.Run(base + limit);
+            EXPECT_EQ(walked, sorted) << when << ": " << base;
+            EXPECT_NE(db.Run("ANALYZE " + base + limit).find("order=index_"),
+                      std::string::npos)
+                << base;
+        }
+    };
+    Session reader;
+    ASSERT_EQ(db.Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    same(&reader, "before the moves");
+    db.Ok("UPDATE b SET qty = 3 WHERE id = 2");   // forward: 1 -> 3
+    db.Ok("UPDATE b SET qty = 0 WHERE id = 12");  // backward: 3 -> 0
+    db.Ok("UPDATE b SET qty = 2 WHERE id = 17");  // a round trip: 0 -> 2 -> 0
+    db.Ok("UPDATE b SET qty = 0 WHERE id = 17");
+    db.Ok("UPDATE b SET owner = 3 WHERE id = 22");  // the prefix moved
+    db.Ok("UPDATE b SET qty = 5 WHERE id = 27");    // `by_owner`'s covered column
+    db.Ok("DELETE FROM b WHERE id = 32");
+    same(&reader, "an older view");
+    ASSERT_EQ(db.Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+    same(nullptr, "a fresh view");
+}
+
+// A view older than the index: a statement with no conjunct, a scan before
+// CV, now walks the index the backfill built, and must reach every version
+// the view sees through it (IX10a).
+TEST(IndexContractTest, AnOrderedWalkUnderAViewOlderThanItsIndex) {
+    Instance db(/*indexes=*/true);
+    LoadPlain(db);
+    Session reader;
+    ASSERT_EQ(db.Run(reader, "BEGIN ISOLATION LEVEL REPEATABLE READ").substr(0, 5), "BEGIN");
+    const std::string sorted = db.Run(reader, "SELECT id, owner, qty FROM b ORDER BY owner, qty");
+    db.Ok("UPDATE b SET qty = 6 WHERE id = 10");
+    db.Ok("DELETE FROM b WHERE id = 11");
+    ASSERT_EQ(db.Run("CREATE INDEX late ON b (owner, qty)").substr(0, 7), "CREATED");
+    const std::string sql = "SELECT id, owner, qty FROM b ORDER BY owner, qty LIMIT 100";
+    EXPECT_NE(db.Run(reader, "ANALYZE " + sql).find("order=index_asc"), std::string::npos);
+    EXPECT_EQ(db.Run(reader, sql), sorted);
+    ASSERT_EQ(db.Run(reader, "COMMIT").substr(0, 6), "COMMIT");
+}
+
+// The decline keeps the walk's tie order (CV-Q4 (a)): a descending order
+// with ties, which `plain` sorts ascending within each tie and so cannot
+// stand beside it, against `indexes = off`, whose step declines to the
+// walk that sorts into the index's order reversed.
+TEST(IndexContractTest, TheDeclineReturnsAReverseWalksTiesAsTheWalkDoes) {
+    Instance maintained(/*indexes=*/true);
+    Instance ignored(/*indexes=*/false);
+    LoadMaintained(maintained);
+    LoadMaintained(ignored);
+    for (const std::string sql : {
+             "SELECT id, qty FROM b WHERE owner = 1 ORDER BY qty DESC LIMIT 6",
+             "SELECT id, owner FROM b ORDER BY owner DESC LIMIT 25",
+             "SELECT id, owner, qty FROM b ORDER BY owner DESC, qty DESC LIMIT 30 OFFSET 4",
+             "SELECT id, owner FROM b ORDER BY owner LIMIT 25",
+         }) {
+        EXPECT_NE(maintained.Run("ANALYZE " + sql).find("order=index_"), std::string::npos) << sql;
+        EXPECT_EQ(maintained.Run(sql), ignored.Run(sql)) << sql;
+    }
+}
 
 TEST(IndexContractTest, AnOldSnapshotFindsItsVersionThroughTheStaleEntry) {
     // The case removal would break, and the reason §2 calls it *incorrect*
