@@ -548,11 +548,26 @@ written. **Adopted, revised, on the standing go-ahead.**
 - `SessionWaitStats::arg_hash` has no writer, so `sys.ash.arg_hash_valid`
   is never 1.
 
-**Measured**: not at this commit. The stage's four arms are built and
-their run is held at its quiet gate by another session's work on the host;
-the results and what they say of DI-Q3's width land when the host lets
-the run through. DI-S1 was built on the work branch before them (below);
-what the key's width costs is settled by them, or by the close.
+**Measured** `[measured]`, after DI-S1 and DI-S2 were built: the run was
+held 84 minutes at its quiet gate by other sessions' work on the host, and
+that hold is outside the stage's budget (build about 5 minutes, run 6).
+`bench/v3.4.15/results-di-s0-premise-v3.4.15-4-g1c7bb774.md`, at
+`v3.4.15-4-g1c7bb774`: four binaries from one export of `1c7bb774` - A as
+it is, A0 with `Record`'s call compiled out, B1 with the binding in the
+key (the spike before DI-S1's review), B2 with the binding cut to one
+relation - five server lifetimes an arm, a point `SELECT` at `cores` 1 and
+8. **Nothing is resolved.** Server CPU a statement, mean (spread):
+22.39 us (1.93), 22.74 us (0.88), 22.41 us (0.33), 22.68 us (1.08) at
+`cores = 1`; 34.04 us (1.20), 33.62 us (1.05), 34.47 us (0.59),
+33.80 us (0.80) at `cores = 8`. `Record`'s whole share, A - A0, is
+-0.36 us and +0.42 us; B1 - A is +0.02 us and +0.43 us; B1 - B2, the
+width, is -0.27 us and +0.66 us. Every delta is inside its arms' spread
+and the signs disagree between the two cells. So the stage gives no ground
+to narrow the key (DI-Q0 (a)), and none to say the 16-relation binding is
+free: at `cores = 8` B1 was the dearer in five rounds of five, by an amount
+of the order of this host's one-binary floor. **Not measured**: a write, a
+binding of more than one relation, DI-S1's code as landed. DI-Q8's cells
+at the close are what price it.
 
 **The suite**: 0 failed of 4867 (2 disabled, 2 skipped), the hook's range
 at `-j8`, on this commit's build inputs (`1c7bb774` and the two cells).

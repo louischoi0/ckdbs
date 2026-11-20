@@ -1,0 +1,879 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/louis/bench-runs/di-s0/src/build-release
+[  0%] Built target kds_version
+[  0%] Building CXX object CMakeFiles/kds.dir/src/server/core_runtime.cpp.o
+[  1%] Building CXX object CMakeFiles/kds.dir/src/server/tcp_server.cpp.o
+[  1%] Building CXX object CMakeFiles/kds.dir/src/server/expeditor.cpp.o
+[  1%] Building CXX object CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o
+[  1%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/stats/statement_stats.cpp.o
+[  3%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_session.cpp.o
+[  4%] Building CXX object CMakeFiles/kds.dir/src/server/sys_views.cpp.o
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In function ‘kds::server::DispatchOutcome kds::server::{anonymous}::Refused(const kds::Status&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:339:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+  339 | DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), false, 0, status}; }
+      |                                                                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:339:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:339:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::PageId kds::server::CommandDispatcher::BeginMissRerun(kds::server::Session&, kds::server::DispatchOutcome*)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:720:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+  720 |         *out = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:720:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:720:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::sched::Coro kds::server::CommandDispatcher::DispatchAsync(std::string_view, kds::server::Session*, kds::server::DispatchOutcome*)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1116:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1116 |             *out = {ErrorReply(refused), out->should_stop, 0, refused};
+      |                                                                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1116:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1116:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1269 |         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1299:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1299 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DispatchInternal(std::string_view, kds::server::Session*)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1560:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1560 |         DispatchOutcome refused{ErrorReply(s), outcome.should_stop, 0, s};
+      |                                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1560:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1560:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DispatchInner(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1646:43: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1646 |         return {"ERR empty command", false};
+      |                                           ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1646:43: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1646:43: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1659:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1659 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1659:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1659:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1701:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1701 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1701:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1701:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1751:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1751 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1751:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1751:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1754:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1754 |         return {"PONG", false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1754:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1754:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1757:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1757 |         return {"OK bye", true};
+      |                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1757:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1757:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1816:51: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1816 |         return {"ERR unknown CREATE target", false};
+      |                                                   ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1816:51: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1816:51: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1866:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1866 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1866:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1866:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1885:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1885 |             return {"ERR ANALYZE needs a statement to analyze", false};
+      |                                                                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1885:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1885:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1961:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1961 |     return {"ERR unknown command", false};
+      |                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1961:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1961:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2024:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2024 |         return r.ok() ? DispatchOutcome{r.value(), false} : Refused(r.status());
+      |                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2024:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2024:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleBackup(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2036:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2036 |         return {backup_->StatusLine(), false};
+      |                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2036:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2036:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSync()’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2111:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2111 |     return {"OK synced", false};
+      |                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2111:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2111:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/kwp_session.cpp: In function ‘constexpr uint8_t kds::server::{anonymous}::TxnStateOf(const kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/kwp_session.cpp:35:51: warning: call to non-‘constexpr’ function ‘kds::server::Session::State kds::server::Session::state() const’ [-Winvalid-constexpr]
+   35 |     return static_cast<std::uint8_t>(session.state());
+      |                                      ~~~~~~~~~~~~~^~
+In file included from /home/louis/bench-runs/di-s0/src/include/kds/server/command_dispatcher.hpp:58,
+                 from /home/louis/bench-runs/di-s0/src/include/kds/server/kwp_session.hpp:16,
+                 from /home/louis/bench-runs/di-s0/src/src/server/kwp_session.cpp:1:
+/home/louis/bench-runs/di-s0/src/include/kds/server/session.hpp:135:11: note: ‘kds::server::Session::State kds::server::Session::state() const’ declared here
+  135 |     State state() const noexcept { return state_; }
+      |           ^~~~~
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetCabinOptimizer(std::string_view)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2741:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2741 |         return {"ERR SET CABIN_OPTIMIZER takes exactly one value, on or off", false};
+      |                                                                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2741:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2741:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2749:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2749 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2749:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2749:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2752:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2752 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2752:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2752:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetJoinOrder(std::string_view, std::string_view)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2788:80: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2788 |     return {"OK join_order=" + std::string(exec::JoinOrderName(*parsed)), false};
+      |                                                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2788:80: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2788:80: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleDropPlan(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2851:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2851 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2851:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2851:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetAsh(std::string_view, std::string_view)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2887:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2887 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2887:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2887:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2898:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2898 |         return {"OK ash_interval_ms=" + std::to_string(ms), false};
+      |                                                                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2898:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2898:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2928:62: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2928 |             return {"ERR CREATE TABLE requires a name", false};
+      |                                                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2928:62: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:2928:62: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘virtual kds::server::DispatchOutcome kds::server::IndexBuildRun::Tail(const kds::Status&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3381:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3381 |         return {os.str(), false};
+      |                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3381:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3381:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3392:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3392 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3392:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3392:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::DeclarationBuildRunOf<Build>::Publish(const kds::Status&) [with Build = kds::exec::AssertionBuild]’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3508:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3508 |     return {os.str(), false};
+      |                            ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3508:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3508:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::DeclarationBuildRunOf<Build>::Publish(const kds::Status&) [with Build = kds::exec::TransitionBuild]’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3523:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3523 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3523:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3523:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘virtual kds::server::DispatchOutcome kds::server::GatherRun::Tail(const kds::Status&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3604:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3604 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3604:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3604:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+  104 | };
+      | ^
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/sys_views.cpp:104:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3892:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3892 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3892:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3892:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3896:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3896 |         return {std::move(reply), false};
+      |                                        ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3896:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3896:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleIndex(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4004:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4004 |         return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
+      |                                                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4004:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4004:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4173:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4173 |                                            false};
+      |                                                 ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4173:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4173:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4189:36: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4189 |             return {os.str(), false};
+      |                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4189:36: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4189:36: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCabin(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4236:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4236 |         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
+      |                                                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4236:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4236:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunCabinDdl(const kds::parser::CabinStmt&, kds::catalog::Oid)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4290:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4290 |                                            false};
+      |                                                 ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4290:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4290:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4315:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4315 |         return {os.str(), false};
+      |                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4315:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4315:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4350:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4350 |     return {os.str(), false};
+      |                            ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4350:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4350:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAlter(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4360:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4360 |         return {"ERR expected an ALTER TABLE statement", false};
+      |                                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4360:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4360:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4432:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4432 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4432:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4432:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4491:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4491 |     return {os.str(), false};
+      |                            ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4491:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4491:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4722:29: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4722 |         return {reply, false};
+      |                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4722:29: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4722:29: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4773:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4773 |                     false};
+      |                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4773:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4773:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4792:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4792 |         return {"DROPPED COLUMN " + stmt.table_name + "." + stmt.old_column, false};
+      |                                                                                   ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4792:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4792:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4810:65: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4810 |             return {"ERR expected a DROP TABLE statement", false};
+      |                                                                 ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4810:65: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4810:65: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4847:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4847 |                                        false};
+      |                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4847:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4847:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4856:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4856 |                                        false};
+      |                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4856:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4856:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4867:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4867 |                                        false};
+      |                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4867:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4867:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4950:98: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4950 |         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
+      |                                                                                                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4950:98: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4950:98: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleNamespace(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4999:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4999 |         return {"ERR expected a CREATE NAMESPACE or DROP NAMESPACE statement", false};
+      |                                                                                     ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4999:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:4999:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5019:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5019 |                     false};
+      |                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5019:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5019:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5046:96: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5046 |         return {"DROPPED NAMESPACE " + stmt.name + " oid=" + std::to_string(oid.value()), false};
+      |                                                                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5046:96: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5046:96: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAssertion(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5098:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5098 |         return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
+      |                                                                                     ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5098:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5098:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5115:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5115 |         return {os.str(), false};
+      |                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5115:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5115:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleTransition(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5195:87: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5195 |         return {"ERR expected a CREATE TRANSITION or DROP TRANSITION statement", false};
+      |                                                                                       ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5195:87: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5195:87: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5269:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5269 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5269:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5269:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘std::optional<kds::server::DispatchOutcome> kds::server::CommandDispatcher::ColumnRowOf(const kds::parser::ColumnDef&, uint32_t, kds::catalog::SysColumnRow&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6074:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6074 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6074:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6074:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6084:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6084 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6084:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6084:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6111:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6111 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6111:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6111:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6141:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6141 |                     false};
+      |                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6141:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6141:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6153:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6153 |                     false};
+      |                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6153:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6153:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6176:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6176 |                         false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6176:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6176:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6196:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6196 |                         false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6196:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6196:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6217:67: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6217 |             return {"ERR expected a CREATE TABLE statement", false};
+      |                                                                   ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6217:67: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6217:67: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6368:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6368 |                         false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6368:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6368:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6430:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6430 |                         false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6430:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6430:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6479:37: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6479 |         return {created.str(), false};
+      |                                     ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6479:37: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:6479:37: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::SelectRun::Finish(const kds::Status&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7253:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7253 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7253:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7253:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::InsertInner(std::string_view, WriteScope&, const kds::exec::StatementContext&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7294:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7294 |         return {"ERR expected an INSERT statement", false};
+      |                                                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7294:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7294:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In function ‘kds::server::DispatchOutcome kds::server::{anonymous}::WroteRows(std::string, uint64_t, kds::catalog::Oid)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7436:54: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7436 |     DispatchOutcome out{std::move(reply), false, rows};
+      |                                                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7436:54: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7436:54: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7456:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7456 |                                    false};
+      |                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7456:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7456:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7468:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7468 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7468:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7468:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::InsertParsed(const kds::parser::InsertStmt&, WriteScope&, const kds::exec::StatementContext&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7570:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7570 |             return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+      |                                                                                        ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7570:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7570:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7626:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7626 |         return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+      |                                                                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7626:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:7626:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::InsertOnConflict(kds::catalog::Oid, const kds::catalog::TableAccess&, const kds::parser::InsertStmt&, const kds::parser::InsertStmt&, const kds::catalog::TableAccess::IndexRef*, WriteScope&, const kds::exec::StatementContext&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:8123:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8123 |     if (inserted == 0) return {"INSERTED oid=" + std::to_string(oid) + " rows=0", false, 0};
+      |                                                                                           ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:8123:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:8123:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘std::optional<kds::server::DispatchOutcome> kds::server::CommandDispatcher::ExistingRelationReply(kds::catalog::Oid, std::string_view)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:8991:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8991 |     return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
+      |                                                                                   ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:8991:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:8991:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCatalogView(const kds::parser::SelectStmt&, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9390:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9390 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9390:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9390:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9512:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9512 |                     "correlate against", false};
+      |                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9512:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9512:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9532:39: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9532 |                     "supported", false};
+      |                                       ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9532:39: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9532:39: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9654:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9654 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9654:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9654:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunAggregated(kds::server::ResultSink&, kds::server::TextResultSink&, const kds::exec::StepChain&, kds::exec::TrailCollector*, const kds::exec::TrailReplay*, const std::optional<kds::server::StatementIdentity>&, const kds::txn::Snapshot&, kds::exec::ExecStats&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9760:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9760 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9760:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9760:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunAnalyze(const kds::exec::StepChain&, kds::exec::TrailCollector*, const kds::exec::TrailReplay*, const std::optional<kds::server::StatementIdentity>&, const kds::txn::Snapshot&, kds::exec::OutputSort&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9906:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9906 |     DispatchOutcome out{os.str(), false};
+      |                                        ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9906:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9906:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSelect(std::string_view, kds::server::Session&, bool, const kds::txn::Snapshot*, const kds::exec::StatementContext*, bool)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9970:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9970 |         return {"ERR expected a SELECT statement", false};
+      |                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9970:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:9970:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleLockingRead(const kds::parser::SelectStmt&, kds::server::Session&, bool, bool, const kds::exec::StatementContext&, const kds::txn::Snapshot&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10015:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10015 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10015:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10015:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::SelectBody(const std::shared_ptr<kds::server::SelectRun>&, kds::server::Session&, bool, const kds::exec::StatementContext*, std::string_view)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10097:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10097 |                         false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10097:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10097:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10103:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10103 |                         false};
+      |                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10103:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10103:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10123:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10123 |                     false};
+      |                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10123:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10123:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10398:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10398 |         return {"ERR " + described.message(), false, 0, described};
+      |                                                                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10398:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:10398:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘std::optional<kds::server::DispatchOutcome> kds::server::CommandDispatcher::TryQueryLayer(std::string_view, kds::server::Session&, const kds::txn::Snapshot&, const kds::exec::StatementContext*)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:11336:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+11336 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:11336:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:11336:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::UpdateInner(std::string_view, WriteScope&, const kds::txn::Snapshot&, kds::server::WalkCursor, const kds::exec::StatementContext&, std::vector<kds::exec::SubqueryResult>&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:11351:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+11351 |         return {"ERR expected an UPDATE statement", false};
+      |                                                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:11351:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:11351:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::UpdateParsed(kds::parser::UpdateStmt&, WriteScope&, const kds::txn::Snapshot&, kds::server::WalkCursor, const kds::exec::StatementContext&, std::vector<kds::exec::SubqueryResult>&, std::optional<long unsigned int>)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12372:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12372 |                 return {"UPDATED 0", false, 0};
+      |                                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12372:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12372:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12417:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12417 |     if (!any.value()) return {"UPDATED " + std::to_string(updated), false, updated};
+      |                                                                                   ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12417:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12417:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunLockingRead(const kds::parser::SelectStmt&, kds::server::Session&, const kds::exec::StatementContext&, const kds::txn::Snapshot&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12652:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12652 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12652:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12652:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleBegin(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12661:81: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12661 |         return {"ERR this server was built without a transaction manager", false};
+      |                                                                                 ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12661:81: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12661:81: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12667:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12667 |         return {"ERR a transaction is already open; COMMIT or ROLLBACK first", false};
+      |                                                                                     ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12667:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12667:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12692:68: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12692 |                 return {"ERR expected LEVEL after ISOLATION", false};
+      |                                                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12692:68: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12692:68: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12745:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12745 |                     false};
+      |                          ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12745:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12745:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12773:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12773 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12773:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12773:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::BeginReadOnly(kds::txn::IsolationLevel, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12803:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12803 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12803:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12803:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCommit(kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12808:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12808 |         return {"ERR no transaction is open", false};
+      |                                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12808:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12808:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12814:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12814 |         return {"ERR current transaction is aborted; ROLLBACK", false};
+      |                                                                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12814:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12814:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12821:44: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12821 |         return {"COMMIT trx_id=none", false};
+      |                                            ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12821:44: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12821:44: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::CommitLocal(kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12889:61: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12889 |         return {"COMMIT trx_id=" + std::to_string(id), false};
+      |                                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12889:61: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12889:61: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12910:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12910 |     return {"COMMIT trx_id=" + std::to_string(id), false};
+      |                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12910:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12910:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleRollback(kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12915:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12915 |         return {"ERR no transaction is open", false};
+      |                                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12915:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12915:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12922:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12922 |         return {"ROLLBACK trx_id=" + TrxIdText(expired), false};
+      |                                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12922:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12922:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12927:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12927 |         return {"ROLLBACK trx_id=none", false};
+      |                                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12927:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12927:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RollbackLocal(kds::server::Session&, kds::stats::TxnEnd)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12974:59: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12974 |     return {"ROLLBACK trx_id=" + std::to_string(id), false};
+      |                                                           ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12974:59: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:12974:59: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleUse(std::string_view, std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13015:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13015 |     return {"USE namespace=" + std::string(name), false};
+      |                                                        ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13015:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13015:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetIsolation(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13021:64: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13021 |         return {"ERR expected LEVEL after SET ISOLATION", false};
+      |                                                                ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13021:64: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13021:64: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13030:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13030 |         return {"ERR cannot change the isolation level inside a transaction", false};
+      |                                                                                    ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13030:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13030:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13033:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13033 |     return {std::string("SET isolation=") + txn::IsolationLevelName(parsed.value()), false};
+      |                                                                                           ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13033:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13033:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetDurability(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13060:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13060 |         return {"ERR cannot change the durability class inside a transaction", false};
+      |                                                                                     ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13060:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13060:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13063:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13063 |     return {std::string("SET durability=") + wal::DurabilityClassName(parsed.value()), false};
+      |                                                                                             ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13063:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13063:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetPriority(std::string_view, std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13089:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13089 |                 false};
+      |                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13089:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13089:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13092:79: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13092 |     return {"SET priority=" + std::string(PriorityName(parsed.value())), false};
+      |                                                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13092:79: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:13092:79: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleWaystone(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14304:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14304 |     return {reply, false};
+      |                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14304:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14304:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCreatePlan(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14551:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14551 |     return {reply, false};
+      |                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14551:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14551:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAlterPlan(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14678:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14678 |             false};
+      |                  ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14678:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14678:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAdvisePlan(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14820:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14820 |     return {reply, false};
+      |                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14820:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14820:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandlePurge(std::string_view, kds::server::Session&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14834:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14834 |         return {"ERR expected a PURGE statement", false};
+      |                                                        ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14834:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14834:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14897:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14897 |     if (lo >= hi) return {"PURGED 0", false, 0};  // names no key
+      |                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14897:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:14897:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15025:17: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15025 |     return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
+      |            ~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15025:17: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15025:17: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In lambda function:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15210:38: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15210 |         return {reply, false, cleaned};
+      |                                      ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15210:38: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15210:38: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DeleteInner(std::string_view, WriteScope&, const kds::txn::Snapshot&, kds::server::WalkCursor, const kds::exec::StatementContext&)’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15222:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15222 |         return {"ERR expected a DELETE statement", false};
+      |                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15222:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15222:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15460:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15460 |                 return {"DELETED 0", false, 0};
+      |                                              ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15460:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15460:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15488:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15488 |     if (!any.value()) return {"DELETED " + std::to_string(deleted), false, deleted};
+      |                                                                                   ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15488:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:15488:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In instantiation of ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&) [with Body = kds::server::CommandDispatcher::DispatchAndStage(std::string_view, kds::server::Session*)::<lambda(kds::server::Session&)>]’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1189:23:   required from here
+ 1189 |         StageStatement(session, [&](Session& active) { return DispatchInner(line, active); });
+      |         ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1269 |         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1299:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1299 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp: In instantiation of ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&) [with Body = kds::server::BuildRun::Execute(kds::server::BuildRun::Execute(kds::server::DispatchOutcome*)::_ZN3kds6server8BuildRun7ExecuteEPNS0_15DispatchOutcomeE.Frame*)::<lambda(kds::server::Session&)>]’:
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:3161:29:   required from here
+ 3161 |     *out = d_.StageStatement(&session_, [&](Session& active) {
+      |            ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3162 |         d_.StampStatement(active);
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3163 |         // The head took the statement's boundary; a second would re-mint an
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3164 |         // explicit transaction's view mid-statement.
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3165 |         d_.statement_boundary_taken_ = true;
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3166 |         DispatchOutcome reply = FramedTail(active, ran);
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3167 |         // A cancelled statement leaves an open transaction failed
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3168 |         // (`protocol.md` §10), whatever the build's own refusals leave - a
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3169 |         // declaration's own refusals poison nothing (the operator's ruling of
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3170 |         // 2026-10-21).
+      |         ~~~~~~~~~~~~~~~      
+ 3171 |         if (ran.code() == StatusCode::kCancelled) active.Poison();
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3172 |         decided_ = true;
+      |         ~~~~~~~~~~~~~~~~     
+ 3173 |         return reply;
+      |         ~~~~~~~~~~~~~        
+ 3174 |     });
+      |     ~~                       
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1269 |         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                         ^
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1269:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1299:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1299 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+In file included from /usr/include/x86_64-linux-gnu/c++/14/bits/c++allocator.h:33,
+                 from /usr/include/c++/14/bits/allocator.h:46,
+                 from /usr/include/c++/14/deque:63,
+                 from /home/louis/bench-runs/di-s0/src/include/kds/server/kwp_session.hpp:4:
+In member function ‘void std::__new_allocator<_Tp>::deallocate(_Tp*, size_type) [with _Tp = std::byte]’,
+    inlined from ‘constexpr void std::allocator< <template-parameter-1-1> >::deallocate(_Tp*, std::size_t) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/allocator.h:208:35,
+    inlined from ‘static constexpr void std::allocator_traits<std::allocator<_Up> >::deallocate(allocator_type&, pointer, size_type) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/alloc_traits.h:550:23,
+    inlined from ‘constexpr std::vector<_Tp, _Alloc>::_M_realloc_append(_Args&& ...)::_Guard::~_Guard() [with _Args = {std::byte}; _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:616:18,
+    inlined from ‘constexpr void std::vector<_Tp, _Alloc>::_M_realloc_append(_Args&& ...) [with _Args = {std::byte}; _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:688:7,
+    inlined from ‘constexpr std::vector<_Tp, _Alloc>::reference std::vector<_Tp, _Alloc>::emplace_back(_Args&& ...) [with _Args = {std::byte}; _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:123:21,
+    inlined from ‘constexpr void std::vector<_Tp, _Alloc>::push_back(value_type&&) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/stl_vector.h:1301:21,
+    inlined from ‘void kds::server::WireResultSink::Seal()’ at /home/louis/bench-runs/di-s0/src/src/server/kwp_session.cpp:288:28:
+/usr/include/c++/14/bits/new_allocator.h:172:33: warning: ‘void operator delete(void*, std::size_t)’ called on pointer ‘<unknown>’ with nonzero offset [1, 9223372036854775807] [-Wfree-nonheap-object]
+  172 |         _GLIBCXX_OPERATOR_DELETE(_GLIBCXX_SIZED_DEALLOC(__p, __n));
+      |                                 ^
+In member function ‘_Tp* std::__new_allocator<_Tp>::allocate(size_type, const void*) [with _Tp = std::byte]’,
+    inlined from ‘constexpr _Tp* std::allocator< <template-parameter-1-1> >::allocate(std::size_t) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/allocator.h:196:40,
+    inlined from ‘static constexpr _Tp* std::allocator_traits<std::allocator<_Up> >::allocate(allocator_type&, size_type) [with _Tp = std::byte]’ at /usr/include/c++/14/bits/alloc_traits.h:515:28,
+    inlined from ‘constexpr std::_Vector_base<_Tp, _Alloc>::pointer std::_Vector_base<_Tp, _Alloc>::_M_allocate(std::size_t) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/stl_vector.h:380:33,
+    inlined from ‘constexpr void std::vector<_Tp, _Alloc>::reserve(size_type) [with _Tp = std::byte; _Alloc = std::allocator<std::byte>]’ at /usr/include/c++/14/bits/vector.tcc:79:33,
+    inlined from ‘void kds::server::WireResultSink::Seal()’ at /home/louis/bench-runs/di-s0/src/src/server/kwp_session.cpp:287:26:
+/usr/include/c++/14/bits/new_allocator.h:151:55: note: returned from ‘void* operator new(std::size_t)’
+  151 |         return static_cast<_Tp*>(_GLIBCXX_OPERATOR_NEW(__n * sizeof(_Tp)));
+      |                                                       ^
+In file included from /home/louis/bench-runs/di-s0/src/include/kds/exec/assertion_build.hpp:12,
+                 from /home/louis/bench-runs/di-s0/src/include/kds/exec/assertion_check.hpp:15,
+                 from /home/louis/bench-runs/di-s0/src/include/kds/server/command_dispatcher.hpp:23,
+                 from /home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:1:
+In destructor ‘kds::txn::HolderProgress::Scope::~Scope()’,
+    inlined from ‘constexpr void std::_Optional_payload_base<_Tp>::_M_destroy() [with _Tp = kds::txn::HolderProgress::Scope]’ at /usr/include/c++/14/optional:283:35,
+    inlined from ‘constexpr void std::_Optional_payload_base<_Tp>::_M_reset() [with _Tp = kds::txn::HolderProgress::Scope]’ at /usr/include/c++/14/optional:314:14,
+    inlined from ‘constexpr void std::_Optional_payload_base<_Tp>::_M_reset() [with _Tp = kds::txn::HolderProgress::Scope]’ at /usr/include/c++/14/optional:311:7,
+    inlined from ‘constexpr std::_Optional_payload<_Tp, false, _Copy, _Move>::~_Optional_payload() [with _Tp = kds::txn::HolderProgress::Scope; bool _Copy = false; bool _Move = false]’ at /usr/include/c++/14/optional:437:65,
+    inlined from ‘constexpr std::_Optional_base<kds::txn::HolderProgress::Scope, false, false>::~_Optional_base()’ at /usr/include/c++/14/optional:508:12,
+    inlined from ‘constexpr std::optional<kds::txn::HolderProgress::Scope>::~optional()’ at /usr/include/c++/14/optional:703:11,
+    inlined from ‘kds::server::CommandDispatcher::DdlBuildLock::~DdlBuildLock()’ at /home/louis/bench-runs/di-s0/src/src/server/command_dispatcher.cpp:5061:59:
+/home/louis/bench-runs/di-s0/src/include/kds/txn/holder_progress.hpp:73:17: warning: ‘((kds::txn::HolderProgress::Scope*)this)[2].kds::txn::HolderProgress::Scope::slot_’ may be used uninitialized [-Wmaybe-uninitialized]
+   73 |             if (slot_ != nullptr) slot_->holder.store(0, std::memory_order_release);
+      |                 ^~~~~
+In file included from /usr/include/c++/14/bits/hashtable_policy.h:36,
+                 from /usr/include/c++/14/bits/hashtable.h:35,
+                 from /usr/include/c++/14/bits/unordered_map.h:33,
+                 from /usr/include/c++/14/unordered_map:41,
+                 from /usr/include/c++/14/functional:63,
+                 from /home/louis/bench-runs/di-s0/src/include/kds/server/command_dispatcher.hpp:5:
+In function ‘constexpr decltype (__comp((* __first1), (* __first2))) std::lexicographical_compare_three_way(_InputIter1, _InputIter1, _InputIter2, _InputIter2, _Comp) [with _InputIter1 = __gnu_cxx::__normal_iterator<const byte*, vector<byte> >; _InputIter2 = __gnu_cxx::__normal_iterator<const byte*, vector<byte> >; _Comp = __detail::_Synth3way]’,
+    inlined from ‘constexpr std::__detail::__synth3way_t<_Iterator> std::operator<=>(const vector<_Tp, _Alloc>&, const vector<_Tp, _Alloc>&) [with _Tp = byte; _Alloc = allocator<byte>]’ at /usr/include/c++/14/bits/stl_vector.h:2071:52,
+    inlined from ‘constexpr bool std::less<_Tp>::operator()(const _Tp&, const _Tp&) const [with _Tp = std::vector<std::byte>]’ at /usr/include/c++/14/bits/stl_function.h:405:20,
+    inlined from ‘std::pair<std::_Rb_tree_node_base*, std::_Rb_tree_node_base*> std::_Rb_tree<_Key, _Val, _KeyOfValue, _Compare, _Alloc>::_M_get_insert_unique_pos(const key_type&) [with _Key = std::vector<std::byte>; _Val = std::pair<const std::vector<std::byte>, std::vector<long unsigned int> >; _KeyOfValue = std::_Select1st<std::pair<const std::vector<std::byte>, std::vector<long unsigned int> > >; _Compare = std::less<std::vector<std::byte> >; _Alloc = std::allocator<std::pair<const std::vector<std::byte>, std::vector<long unsigned int> > >]’ at /usr/include/c++/14/bits/stl_tree.h:2116:35:
+/usr/include/c++/14/bits/stl_algobase.h:1884:39: warning: ‘int __builtin_memcmp(const void*, const void*, long unsigned int)’ specified bound [9223372036854775808, 18446744073709551615] exceeds maximum object size 9223372036854775807 [-Wstringop-overread]
+ 1884 |                     = __builtin_memcmp(&*__first1, &*__first2, __blen) <=> 0;
+      |                       ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[  4%] Linking CXX static library libkds.a
+[ 98%] Built target kds
+[ 99%] Building CXX object CMakeFiles/kds_server.dir/src/server/main.cpp.o
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server
