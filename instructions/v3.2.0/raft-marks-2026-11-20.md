@@ -218,3 +218,15 @@ took under them.
 | **Mark** | **The version of record is `v3.4.17`**, the operator's own word: an annotated tag on `main` at `fba5529f` (DI's merge, over DH's `799a767d` and the audit's dead-code removals). Its message states what is built since `v3.4.16` (DI, DA-S3, DH, the audit's removals, the statistics rules), the format event (superblock 38: a `v3.4.16` volume does not mount), **that the full suite was not executed on the tagged tree** - last run 0 failed of 4933 at `4459df5c`, before DI's second merge; the tagged tree built and 111 cells passed - and the gaps that bound it: DI's unresolved lean on a write, a dropped relation's statistics rows kept until a restart, the collector left to DL, what a plan out of reach does not establish, DH's stopped close measurement and its two accepted costs, and `v3.4.16`'s carried gaps |
 | **Does not settle** | anything after `fba5529f` but this record; whether the suite is run on the tagged tree |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
+## 22. DD opened on the standing go-ahead, linked with DN
+
+| | |
+|---|---|
+| **Word** | *"5 hours 30 minutes from now, /go-ahead-achieving-milestone DD"*, then *"link the work that will start later with /go-ahead-achieving-milestone DN"*, then the skill invoked with `DD`, its argument naming the link, and *"go ahead"* (the first two given in Korean; recorded in English) |
+| **Mark** | **DD is opened**, on worktree `dd-index-entry-purge` from `054dbc5e` (`v3.4.17-1-g054dbc5e`), and DN is to follow it in the same session on the same go-ahead once DD closes. **No item below is the operator's own mark**: each is CLA's proposal, adopted by CLA on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone) |
+| **Adopted at DD-S0** | **DD-Q0 (a)** as written, its verdict **build** (cells 1 and 5 of `bench/v3.4.17/dd-s0-premise-v3.4.17-1-g054dbc5e.md`). **DD-Q1 `[quiet-wrong]` (b), revised from (a) against the tree**: a delete-marked row whose deleter every reader sees is owed nothing, since a heap and a Transition-governed relation refuse the row `PURGE` (a) waited for. **DD-Q2 `[quiet-wrong]` (a)** and **DD-Q3 `[quiet-wrong]` (a)**, their premises read again and holding. **DD-Q4 (a)**, **DD-Q5 (a)**, **DD-Q6 (a)** spelled `PURGE INDEX <name>` (an index has no namespace qualifier), **DD-Q7 (a)** |
+| **Found at DD-S0** | **DD-R1's premise is false as written**: an `UPDATE` assigning a spilled covered value it already held appends no entry while its cell names a new spill. Fixed in the judge's comparison, not in the write path (the order's §7) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DD-S4, put to the operator at the close |
+| **Recorded at** | this file; the DD order's header and §7; the DD row in `instructions/v3.2.0/index.md` |
+
