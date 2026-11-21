@@ -1,6 +1,10 @@
 # Work order DG - a WAL segment's body: what the zero fill costs the sessions beside it, and what its absence costs a commit, measured before anything is built
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
+Status: **OPENED 2026-11-21 on the operator's standing go-ahead
+(go-ahead-achieving-milestone), on worktree `dg-wal-segment-body` from
+`46ee8a6e` (`raft-marks-2026-11-21.md` §3). DG-Q0..Q10 are adopted (a) as CLA
+proposed, and none is the operator's own mark. Under DG-Q1 (a) and DG-Q2
+(a), the order stops at V0.** Written 2026-11-18. Written on worktree
 `cz-checkpoint-roll-wait` at `860d36f9` (`v3.4.12-72-g860d36f9`) on the operator's word
 of 2026-11-18 (`raft-marks-2026-11-18.md` §42). The worktree is CZ's: the
 order rests on results files that are on that branch and not yet on
@@ -288,7 +292,11 @@ Binding from DG-S1 on, if the order reaches it.
 
 ## 4. Items for the operator (DG-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+(a) is CLA's proposal in each. **Each one is adopted (a) on the operator's
+standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**
+(`raft-marks-2026-11-21.md` §3). None is the operator's own per-item mark.
+DG-Q5 (a) is revised against the tree: C1 is on `main` (CZ-S3), so both arms
+carry it as it was built, with no switch.
 
 | | item | (a) | other |
 |---|---|---|---|
