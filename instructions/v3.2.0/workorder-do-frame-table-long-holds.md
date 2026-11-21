@@ -1,13 +1,16 @@
 # Work order DO - the frame table's long holds: what the instance's one structure latch is held for, shortened where nothing moves, measured before and after
 
-Status: **WRITTEN 2026-11-21, not opened.** Written on `main` at
-`3a07ad49` on the operator's word of 2026-11-21
-(`raft-marks-2026-11-21.md` §8). That DO is an order of its own, cut out of
-CW's C1 rather than written into CW, is CLA's proposal and the operator's
-yes to it. The letter, the candidates, the rules and the stages are CLA's
-proposals; no DO-Q item is marked. No stage is started. Every
-`[source-read]` claim below was read at `3a07ad49`. No suite was run: the
-order changes no build input.
+Status: **OPENED 2026-11-21 on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-11-21.md` §12)**, on the
+worktree `dg-wal-segment-body` (branch `worktree-do-frame-table-long-holds`)
+from `48a3276c` (`v3.5.0-55-g48a3276c`). **DO-Q0..Q8 adopted (a) and DO-Q9
+(a) added and adopted, as CLA proposed, on that go-ahead; none is the
+operator's own per-item mark** (§4). **DO-S0, DO-S1 and DO-S2 built on the work branch** (`47f7016c` to `7116b668`) **and measured at the close** (§7, DO-S4); **DO-S3's proof is written (§5a) and E2 waits for the operator's own mark** (DO-Q3 (a)) - the one thing between DO and its close. Written on `main` at
+`3a07ad49` on the operator's word of 2026-11-21 (`raft-marks-2026-11-21.md`
+§8); that DO is an order of its own, cut out of CW's C1 rather than written
+into CW, is CLA's proposal and the operator's yes to it. Every
+`[source-read]` claim in §1 was read at `3a07ad49` and re-read at
+`48a3276c` by DO-S0.
 
 **Not exploratory, but nothing lands unpaid** (DO-Q0, DO-R5). Most
 candidates here change no behaviour, so each one that pays at DO-S0 lands
@@ -242,26 +245,26 @@ Binding from DO-S1 on.
 - **DO-Q0 - the order's kind.** (a) **not exploratory**: E1, E3 and
   E4a-d land on their own measurement (DO-R5), and only E2 is gated as an
   exploration; (b) exploratory throughout: DO-S0 may close the order with
-  nothing built. CLA proposes (a).
+  nothing built. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q1 - the hold instrument.** (a) the whole-table sites (H1-H5)
   timed in every build - longest hold, and counts over 100 us, 1 ms and
   10 ms - with every structure-latch site timed only in a bench build;
   (b) every site in every build. The per-fetch sites are three to six
   holds a statement, and two clock reads each is a cost on the path being
-  measured. CLA proposes (a).
+  measured. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q2 - E2's chunk.** (a) `kFrameChunk` (1,024 slots), so a chunk is
-  the unit the array already grows by; (b) a setting. CLA proposes (a).
+  the unit the array already grows by; (b) a setting. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q3 - E2's gate.** (a) E2 is built only past DO-S3: E1 measured
   first, the walk alone still over DO-Q6's bar, a written proof under
   DO-R1, and the operator's own mark on the proof; (b) built with E1.
-  CLA proposes (a).
+  CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q4 - E3's size.** (a) `frames_` reserved to `capacity_` at `Open`;
   (b) to the resident-class floor plus 256, growing past it as today.
-  CLA proposes (a).
+  CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q5 - E4d's reach.** (a) `PageRef` carries the `Frame*` for every
   pinned handle, with the eraser assertion (DO-R6); (b) E4d left to CW's
   C1, where the frame descriptor array makes it natural. CLA proposes (a):
-  the premise holds today, and E4d needs no descriptor array.
+  the premise holds today, and E4d needs no descriptor array. **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q6 - the bars.** (a) **for H1-H3**: the longest structure-latch
   hold during a checkpoint, at 64 Ki, 256 Ki and 1 Mi resident frames,
   falls to the bar the operator sets at DO-S0's report. **For E4**: the
@@ -269,15 +272,39 @@ Binding from DO-S1 on.
   host - fall by the candidate's arithmetic, with no regression in
   throughput or p99 beyond the host's floor at `cores = 1, 2, 4`. A
   throughput gain is reported, not required, because the eight-core floor
-  is about 50 %. (b) a throughput gain required. CLA proposes (a).
+  is about 50 %. (b) a throughput gain required. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q7 - the host.** (a) the counts and hold times on the operator's
   host as it is, and throughput as a regression check only; (b) a host
   with eight or more cores and a measured floor below 10 % before DO-S0.
   CLA proposes (a), and records that DO cannot say what E4 is worth in
-  throughput on such a host.
+  throughput on such a host. **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q8 - CW.** (a) DO's results file is entered in CW §1.1 at DO's
   close, and C1 in CW §2 is amended to read "after DO", so that C1 is
-  priced against the tree DO leaves; (b) CW is untouched. CLA proposes (a).
+  priced against the tree DO leaves; (b) CW is untouched. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
+- **DO-Q9 - the bar's value for H1-H3** (raised by DO-S0, which DO-Q6 (a)
+  leaves to the operator at DO-S0's report). (a) **no structure-latch hold
+  at a checkpoint longer than 1 ms at 1 Mi resident frames** - eight times
+  a `point` statement's p99 at `cores = 2` (130 us) and the instrument's
+  middle threshold, so `contention_frame_table_walks_over_1ms` reads it in
+  production; (b) 10 ms, which E1 alone may meet; (c) 100 us. CLA proposes
+  (a): a hold is a stall of every core's fetch, and DO-S0 measured 38 ms at
+  1 Mi frames (`bench/v3.5.0/results-do-s0-census-v3.5.0-55-g48a3276c.md`
+  §1); (b) would leave a fetch on every core waiting tens of statements'
+  time, and (c) is under what a 1 Mi-frame walk can do in one hold on this
+  host even chunked. **Adopted (a) on the operator's standing go-ahead of
+  2026-11-21 (go-ahead-achieving-milestone)**, at DO-S0; not the
+  operator's own mark. It is DO-Q6 (a)'s number, so DO-Q3 (a)'s gate - E2
+  past a proof and the operator's own mark - stands unchanged.
+- **DO-Q10 - does a candidate that improves every cell but alone misses
+  the bar land?** (raised by DO-S1). DO-R5 says a candidate that does not
+  meet DO-Q6's bar is recorded and not landed, and in the same breath that
+  E1, E3 and E4c change no behaviour and are measured anyway. (a) **E1 and
+  E3 land**: they change no output, cut every hold they touch by 60-82 %,
+  and DO-Q3 (a) itself presupposes E1 measured and in the tree before E2 is
+  priced against what is left - the bar for H1-H3 is E1 and E2's together;
+  (b) E1 and E3 held back until E2 meets the bar with them. CLA proposes
+  (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21
+  (go-ahead-achieving-milestone)**, at DO-S1; not the operator's own mark.
 
 ## 5. Stages
 
@@ -310,6 +337,110 @@ Binding from DO-S1 on.
 - **DO-S4 - the close.** One results file. CW §1.1 and §2 amended
   (DO-Q8). `known-gaps.md` updated with what was not built.
 
+## 5a. DO-S3: E2's proof under DO-R1 (CLA, for the operator's mark)
+
+`[design]`, written at DO-S3 on the worktree `dg-wal-segment-body` at
+`b8759946`, read against `src/wal/checkpointer.cpp` (`Start`, the paced
+publish), `wal/analysis.hpp` (`RedoStartFrom`) and
+`src/server/superblock_checkpoint_anchor.cpp` (the fold). **Nothing of E2
+is built**; DO-Q3 (a) builds it only on the operator's own mark on this
+proof.
+
+**What E2 is, exactly.** H1 (`DirtyPagesWithRecLsn`) and H2
+(`DirtyPageIds`) walk the slot array a chunk (`kFrameChunk`, 1,024 slots,
+DO-Q2 (a)) per hold of the structure latch, taking each resident slot's
+frame - its page id, `dirty`, `rec_lsn` - under that chunk's hold, and
+releasing the latch between chunks with nothing held across the gap. The
+checkpoint's task does not suspend in the walk (no `co_await` between the
+first chunk and `CHECKPOINT_BEGIN`'s append), so CZ-R3 stands. The result
+is sorted by page id and **deduplicated, keeping each page's lowest
+recLSN** (a page evicted clean from a chunk not yet walked and faulted
+back into a slot already walked cannot appear twice, but one evicted from
+a walked chunk and re-faulted into a later one can; the minimum is the
+conservative entry).
+
+**What redo needs of the table.** The anchor's redo start `R` is the
+minimum, over every core's last contribution to the fold, of
+`RedoStartFrom(begin_lsn, table)` - the table's lowest non-zero recLSN,
+floored at the run's `begin_lsn`. Recovery is correct iff **every record
+with LSN below `R` is in the image of its page that the device holds when
+the anchor lands**. Call a record *exposed* if it is below this run's own
+`RedoStartFrom` and its page's device image lacks it when the anchor lands.
+
+**Claim.** E2 exposes no record the whole-table snapshot of today does not
+already expose to the same two covers; and the covers hold for it.
+
+**Proof.** Take a record `r` on page `P` with `lsn(r) < RedoStartFrom(begin_lsn, table)`.
+Since the result is floored at `begin_lsn`, `lsn(r) < begin_lsn`: `r` was
+appended before `CHECKPOINT_BEGIN`. Let `v` be the instant P's slot was
+visited (its chunk's hold), if P was resident then.
+
+1. *P resident and dirty at `v`, with `rec_lsn(P) != 0` and
+   `rec_lsn(P) <= lsn(r)`.* Then the table holds an entry `<= lsn(r)`, so
+   `RedoStartFrom <= lsn(r)`: contradiction. Not exposed.
+2. *P resident and dirty at `v` with `rec_lsn(P) > lsn(r)`, or `0`.* A
+   frame's `rec_lsn` is the minimum stamp since its last clean
+   (`StampPageLsn`, `WriteBack`), so `r` is either already on the device
+   (written by a copy before the clean that started this dirty span) or
+   not yet stamped at `v` - appended, or stamped, after `v`. The first is
+   not exposed. The second is case 4.
+3. *P not resident, or resident and clean, at `v`.* Every record stamped
+   on P before its last clean is on the device. A record `r` not on the
+   device was therefore stamped after `v`. Case 4.
+4. *`r` stamped on P after `v` and appended before `CHECKPOINT_BEGIN`.*
+   This is exactly the window the whole-table snapshot already has
+   between its one hold and the append (`checkpointer.cpp`'s comment at
+   the redo start, CZ-S0's census), widened from "after the snapshot's
+   hold" to "after P's chunk's hold". Two covers, both unchanged by E2:
+   - **The publish.** The run's anchor is encoded only after H2's walk,
+     which starts after `CHECKPOINT_END` and so after `CHECKPOINT_BEGIN`.
+     `r` was stamped before `BEGIN` (the stamp precedes the append's
+     return on the appending core's reactor, which does not yield between
+     an append and its stamp - the premise the code already names), so P
+     was dirty with `r` before H2's walk began. At P's visit in H2 - under
+     any chunking - P is either still dirty, and the publish writes it
+     before the anchor's page, or was cleaned by a writeback copy that
+     carried `r`. Either way `r` is on the device when the anchor lands.
+     Chunking H2 changes nothing here: every chunk of it is after `BEGIN`.
+   - **The fold**, for the anchor of a *later* run that does not re-walk
+     P: the appending core `C`'s own contribution stays at its last run's
+     redo start, which is `<=` that run's `begin_lsn`, which precedes `r`
+     unless `C`'s last run began after `r` - in which case `C`'s run walked
+     P with `r` stamped (case 1) or found it on the device. The
+     checkpointing core itself appends nothing inside its own walk, since
+     its task does not suspend there, so `C` is never the core whose
+     contribution this run replaces in the window.
+5. *Duplicates.* Deduplication by minimum recLSN keeps case 1's
+   inequality for every entry, and `RedoStartFrom` takes a minimum, so a
+   duplicate can only lower `R`.
+
+So the only records E2 adds to the window are of case 4's kind, which the
+publish covers within the run and the fold across runs, exactly as for
+today's window. **Where the premise would fail**: a core that yields
+between an append and its stamp (already named in the code as the
+premise of both covers), and a checkpoint task that suspends inside the
+walk (E2 must not add one: `Start` calls the two snapshots and the
+append as plain functions today, and E2 keeps the chunk loop inside
+`DirtyPagesWithRecLsn`, a non-coroutine, so no suspension point can enter
+it without changing its signature).
+
+**The crash cells DO-R1 asks for** (built with E2, not before):
+`DirtyTableChunkedWalkTest` with a test seam after a chunk's hold
+(`SetAfterDirtyTableChunkForTest`): (i) a page in an already-walked
+chunk dirtied, logged and stamped from a second core below `begin_lsn`,
+then a crash before the anchor lands - recovery from the previous anchor
+replays it; (ii) the same, crash after the anchor lands - the publish
+wrote it, and the page reads back whole; (iii) a page evicted from an
+unwalked chunk and re-faulted into a walked one, dirtied - one entry, the
+lower recLSN; (iv) the same cells at `cores = 1`, where the store is
+unarmed and E2 is the one-hold walk it is today (DO-R2).
+
+**What it buys** (DO-S1's numbers): the hold falls from the whole walk,
+15 ms (H1) and 9 ms (H2) at 1 Mi frames, to one chunk's, about
+`15 ms / 1,024` - some 15 us plus a chunk's frame lookups - well under
+DO-Q9 (a)'s 1 ms. Its cost: one `frames_.find` per resident slot, the
+slot array naming a page and not a frame; DO-S3's build would measure it.
+
 ## 6. What DO does not do
 
 It partitions no latch and makes no pin atomic. It reads no page without
@@ -326,3 +457,227 @@ On `main` at `3a07ad49`, documents only. Nothing is built or measured. No
 review run and no suite executed: no build input changed. Two claims CLA
 made in conversation are corrected in §0: `EvictColdFrames` is not a
 production path, and the usage bump already reads before it writes.
+
+### Opened 2026-11-21, on the standing go-ahead
+
+On the operator's `/go-ahead-achieving-milestone DO`
+(`raft-marks-2026-11-21.md` §12), from `48a3276c`. The session's own
+worktree `dg-wal-segment-body` (DG's, closed) carries the new branch
+`worktree-do-frame-table-long-holds` from `origin/main`: the session is
+pinned to that worktree, so no worktree named for DO could be created, and
+DG's branch and its unpushed record `e98163d2` are untouched. DO-Q0..Q8
+adopted (a) as CLA proposed; none is the operator's own mark.
+
+### DO-S0 - census and price, done 2026-11-21
+
+`bench/v3.5.0/results-do-s0-census-v3.5.0-55-g48a3276c.md`. The
+instrument (DO-Q1 (a)): `frame_table_walks`, `frame_table_walk_us`,
+`frame_table_walks_over_{100us,1ms,10ms}` and
+`frame_table_walk_longest_us` in `sys.meta`'s contention section, timed at
+every whole-table hold of an armed store (H1-H6) and at an insert that
+rehashes (H3); a bench build, `-DKDS_LATCH_HOLD_CENSUS=ON`, counting and
+timing every hold of every latch kind; and `bench/frame_table_hold_bench.cpp`.
+
+- **H1 and H2 are long and the sort is inside them**: at 64 Ki, 256 Ki and
+  1 Mi resident dirty frames H1 holds 1.7, 7.0 and 37.6 ms (p50) and H2
+  1.3, 5.6 and 30.1 ms; H3's longest rehash is 0.8, 3.4 and 12.1 ms. A
+  fetch on another core waits the hold out whole (47 ms at 1 Mi).
+- **A read hit is three holds, exactly**; a `point` statement 12.0, an
+  `insert1` 24.6 and an `UPDATE` by tuple key about 25, at `cores = 2`.
+- **H6, a sixth whole-table walk §1.2 did not list**: `Flush`'s
+  collection, under `Sync` (the synchronous checkpoint's publish, a
+  shutdown's, a backup's). Timed with the rest; no candidate changes it.
+- Both premises (E4b's, E4d's) re-read at `48a3276c` and hold (results
+  §3).
+- **DO-Q9 added** (the bar's value, which DO-Q6 (a) left to DO-S0's
+  report) and adopted (a), 1 ms at 1 Mi frames, on the standing go-ahead.
+- Cut against the 20-minute budget, and said so in the results file: the
+  hold times are the microbenchmark's, not an engine run's; `cores = 1, 4`
+  not run for the counts; `sched_hold_*_longest` not read.
+- **Reviewed by `critics-developer`**: no correctness bug. Applied: the
+  guard and the timer merged into one `WalkHold` (the declaration-order
+  hazard gone), the rehash predicate in `double` as libstdc++'s
+  `_M_need_rehash` (`WouldRehash`, exact above 2^24 frames), the census
+  build's record moved after the release with one clock read on the
+  contended path, and the benchmark's fill reading two snapshots an insert
+  in place of four. Noted in the results file: threads with no core write
+  slot 0. Not taken: merging `WalkTimer` with `StallTimer` (the records
+  differ, as the review itself says).
+
+### DO-S1 - E1 and E3, done 2026-11-21
+
+`bench/v3.5.0/results-do-s1-e1-e3-v3.5.0-56-g47f7016c.md`, interleaved
+A/B against DO-S0's `47f7016c`. E1: H1's and H2's vector reserved before
+the hold (from `configured_capacity_`, which never moves after `Open`; §2
+and DO-Q4 (a) said `capacity_`, which does) and sorted after it; `Flush`'s
+collection (H6) is `DirtyPageIds()`. E3: `frames_` reserved at `Open`, an
+insert asserting it does not rehash (DO-R6).
+
+- **Every hold cut**: H1 1,658 to 497 us, 7,415 to 1,876 us and 38,675 to
+  15,372 us at 64 Ki, 256 Ki and 1 Mi frames; H2 1,269 to 231 us, 5,631 to
+  1,173 us and 29,580 to 8,740 us; H3's rehashes, up to 12.5 ms, gone.
+- **DO-Q9 (a)'s bar not met** from 256 Ki frames: the walk itself is left,
+  15 ms and 9 ms at 1 Mi. DO-S3 is reached (DO-Q3 (a)).
+- **DO-Q10 added and adopted (a)**: E1 and E3 land though alone they miss
+  the bar.
+- Tried and not taken: the output vector written through before the hold
+  (H1 -30 %, H2 +25 %, a whole-capacity write a checkpoint).
+- **Reviewed by `critics-developer`**: no bug; E1's output and instant
+  confirmed identical (DO-R1), `configured_capacity_` confirmed written
+  once and an upper bound. Applied: `Flush` through `DirtyPageIds()`; the
+  H3 timer replaced by the assertion; four comments that had become false
+  (`WouldRehash`'s, the manual's list of walks, `capacity_`'s "set once",
+  and the work order's `capacity_`, recorded here). Recorded, not changed:
+  the per-call reserve is address space, an `mmap` above 32 MiB, outside
+  the hold.
+- **Suite**: 0 failed of 5094 on E1 and E3 before the review's cuts; the
+  cuts are covered by DO-S2's first run. Overhead not measured; measured
+  at the milestone's close.
+
+### DO-S2 - E4a (H39), done 2026-11-21
+
+The write fetch's image debt taken in the hold the exclusive grant already
+takes for its dirty mark (`AcquirePageLatch`'s `owed`), armed only; the
+unarmed fetch still asks `LogOwedImage` (DO-R2). `CreatePinned`'s separate
+clear folded into the same hold. **A write hit is four structure-latch
+holds in place of five, exactly** (`build-census`'s count phase of
+`bench/frame_table_hold_bench.cpp`, 100,000 write hits on one thread with
+images on: 5.000 at `b8759946`, 4.000 here); a read hit stays three.
+
+- **Reviewed by `critics-developer`**: no bug; the bit read at the same
+  point of the protocol (after the exclusive grant, under the structure
+  latch), the debt never taken on a pin that is then lost, `drop_always`
+  the old clear exactly, the unarmed path unchanged. Applied: the test gap
+  it found - `FetchImageTest` never ran armed, so the new path had no
+  direct cell; it is now parameterised over unarmed and armed (14 cells,
+  all pass) - an assertion that a write fetch is exclusive, and a comment
+  in the past tense. Not taken: an enum for `owed`/`drop_always` (it would
+  save nothing, the pointer still has to travel), a helper for the "owed
+  and images on" test (two sites), and deleting `LogOwedImage` by taking
+  the debt from the unarmed `PinFrame`'s frame (H39's own suggestion, but
+  it changes the unarmed path, which DO-R2 keeps untouched).
+- **Suite**: 0 failed of 5094 on E4a before the review's additions;
+  `FetchImageTest`'s 14 cells and the eviction and frame-table suites pass
+  on the commit. The full suite runs again at E4b. Overhead not measured;
+  measured at the milestone's close.
+
+### DO-S2 - E4b, done 2026-11-21
+
+The armed hit asks no `IsAllocated`, so no nested free-map hold: one
+`frames_.find` serves the resident test and `HitLocked` (the hit's touch,
+factored out of `Resolve`, which the unarmed path still runs whole,
+DO-R2); `assert(IsAllocated(...))` in its place (DO-R6). The audit's G56
+(`docs/pending/whole-engine-audit-second-run-twelve-slices.md`), noted
+there as taken. **Measured against `a97bd952`**, on 64 Ki frames, one
+thread: structure-latch hold time a read hit **212 to 121 ns** (`build-census`,
+1,000,000 hits; a write hit 241 to 152 ns), holds unchanged at 3 and 4; and
+one reader's fetch rate **3.44 to 3.71 million a second (+7.9 %)**, p50
+0.24 to 0.22 us, three interleaved rounds in `build-release` at load
+5.4-7.1 (another session's). **The number carries one of E4c's lookups**:
+bypassing `Resolve` drops its `find`, so a hit is two lookups here, and
+E4c removes the third.
+
+- **Reviewed by `critics-developer`**: no bug; every path that clears a
+  free-map bit re-read at `a97bd952` (four in the store, one offline) and
+  the premise holds for every caller that fetches only ids it holds; the
+  debug assertion's order is the declared one. Applied: the comment at the
+  assertion now says the one exposure - a stale fetch of a claimed id
+  given back unpublished, a defect class `InsertFrame`'s create refusal
+  already guards, would now be served in a release build where it used to
+  answer `NotFound`; four comments and docs that gave the hit's
+  `IsAllocated` as the second latch's reason reworded (`FetchAndPin`,
+  `FreePage`, the header, `page.md` §5, `rules.md` §3), the order
+  unchanged (DO-R3); `HitLocked`'s comment. Not changed: the unlatched
+  `*Unpinned` accessors' `Resolve` (tests only, a race of its own already).
+- **Suite**: 0 failed of 5101 on the code before the review's comment
+  changes. Overhead not measured; measured at the milestone's close.
+
+### DO-S2 - E4c, done 2026-11-21
+
+One hash lookup a hit: the iterator found for the resident test also
+serves the touch and the pin (`PinFrameAndRelease`, the pin tail on a
+frame the caller holds under the hold), and the fault arm pins the frame
+its own lookup finds. **Measured against `5da99054`** on 64 Ki frames, one
+thread: hold time a read hit 122.5 to 121.4 ns (`build-census`) and one
+reader 3.73 to 3.83 million fetches a second (+2.5 %, three interleaved
+rounds, `build-release`) - most of the lookup saving was already E4b's
+(its `Resolve` lookup); no regression, so it lands as the no-behaviour
+change DO-R5 measures anyway.
+
+- **Reviewed by `critics-developer`**: no bug; the latch held from the
+  `find` to the pin on every hit, the dropped `nullopt` arm unreachable,
+  the three branches (hit, wait, fault) the old ones exactly. Applied:
+  `PinResidentAndRelease`, left with one caller, inlined into the fault arm
+  and deleted with its `std::optional` (its AM-S2-P F-1 note moved beside
+  the fault's pin); the `loading_.empty()` guard dropped - libstdc++ 14's
+  `find` already returns at once on an empty set, so it saved nothing; a
+  doubled comment. Its header comment, which said the tail had two
+  callers, rewritten.
+- **Suite**: 0 failed of 5101 before the review's cuts; after them the
+  store's suites (151 cells, `KDS_TEST_PAGE_LATCH=1`) pass, and the full
+  suite runs again at E4d. Overhead not measured; measured at the
+  milestone's close.
+
+### DO-S2 - E4d, done 2026-11-21
+
+`PageRef` carries the frame its pin landed on (an opaque `void*`, DO-Q5
+(a)): `FetchPinned` and `CreatePinned` hand it back through an out
+parameter the caller nulls, and the handle's release calls
+`UnpinFrameAt`, which releases the page latch and uncounts the pin in one
+structure-latch hold with no lookup. `UnpinFrame`'s armed tail is
+`UnpinFrameAt`, so the release order has one definition. An unlatched pin,
+the scan ring and the writeback still release by id. `ReleaseFrameLocked`
+asserts that no eraser takes a pinned frame (DO-R6). **A read hit is two
+structure-latch holds in place of three, and a write hit three in place
+of four, exactly**; against `9e8c5a81` on 64 Ki frames, one thread: hold
+time a read hit 121.7 to 80.7 ns (`build-census`) and one reader 3.84 to
+4.14 million fetches a second (**+8.0 %**, three interleaved rounds,
+`build-release`, load 5.4-7.1, another session's).
+
+- **Reviewed by `critics-developer`**: no bug; every token is the frame
+  the pin was counted on (both fetch arms, the create, its refetch
+  fallback, the claims path), the three erasers all refuse a pin, moved
+  and released handles clear the token, no other store overrides the
+  changed virtuals. Applied: the release order's two copies collapsed into
+  `UnpinFrameAt`; the out parameter written on success only, which drops
+  the one new test on the unarmed fetch path (DO-R2); two comments.
+  Recorded, not changed: `PageRef` grows from 24 to 32 bytes for every
+  store, the cost DO-Q5 (a) carries; the unarmed release gains one null
+  test in `PageRef::Release`; the scan ring's and the writeback's unpins
+  and `PageRef::MarkDirty` still look the frame up by id (outside E4d).
+- **Suite**: 0 failed of 5101 on E4d before the review's cuts; after them
+  the store's 231 cells pass under `KDS_TEST_PAGE_LATCH=1`, and the full
+  suite runs again on the merged tree at the close. Overhead not measured
+  here; measured at the milestone's close.
+
+### DO-S4 - the close measured, 2026-11-21; DO not closed: DO-S3 waits for the operator
+
+`bench/v3.5.0/results-do-close-v3.5.0-61-g7116b668.md`, run by `ck-tester`:
+interleaved A/B, A `48a3276c` (`v3.5.0-55-g48a3276c`, the commit DO opened
+from) against B `7116b668` (`v3.5.0-61-g7116b668`), `tools/ba_census.py`,
+`point`, `insert1` and `pkmix` at `cores = 1, 2, 4`, `relaxed`, three
+runs an arm a cell, 54 runs; release copies, `/dev/nvme0n1p1`; another
+session's workload on the host throughout (its load recorded per run).
+
+- **DO-Q6 (a)'s E4 clause is met in all nine cells**: no throughput or p99
+  regression beyond the host's spread; `pkmix` at `cores = 2` +5.4 % and
+  `insert1` at `cores = 4` +2.2 % with the ranges disjoint; `insert1` at
+  `cores = 2` -5.3 %, inside A's own three-run spread and unresolved;
+  `cores = 1` level (+0.2 to +0.9 %, DO-R2).
+- **The frame table's wait a statement fell 26-46 % in every row above
+  one core**, the arms' ranges disjoint. Three readers on one store (the
+  microbenchmark, added by CLA): +27 % fetches a second, p99 -13 %.
+- **H1-H3**: DO-Q9 (a)'s bar is not met by what is built (H1 15 ms, H2
+  9 ms at 1 Mi frames); E2 is what would meet it.
+- **DO-Q8 (a) done**: the results entered in CW §1.1 and C1 amended to
+  read "after DO" (`workorder-cw-optimistic-page-read.md`).
+- **Documents moved**: `page.md` §3 (the handle's frame), §8 (the dirty
+  table's hold), §12 (two holds a read hit, three a write hit); `CLAUDE.md`'s
+  buffer-pool row; `known-gaps.md` "The frame table's structure latch
+  (DO)"; `client-manual.md` (the `contention_frame_table_walk*` fields).
+  No SQL surface changed, so the manual is untouched.
+- **Synced**: `origin/main` has not moved since `48a3276c`; the merge is
+  a no-op.
+- **What holds DO**: E2 (§5a). If the operator marks the proof, E2 is
+  built with its crash cells and measured like E1, and DO closes; if not,
+  DO closes as it stands, with H1 and H2 over the bar in `known-gaps.md`.

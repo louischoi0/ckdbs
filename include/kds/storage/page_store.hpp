@@ -139,8 +139,9 @@ public:
 private:
     friend class PageStore;
     friend class PageClaims;
-    PageRef(PageStore* store, PageId page_id, std::span<std::byte, kPageSize> bytes) noexcept
-        : store_(store), page_id_(page_id), data_(bytes.data()) {}
+    PageRef(PageStore* store, PageId page_id, std::span<std::byte, kPageSize> bytes,
+            void* frame) noexcept
+        : store_(store), page_id_(page_id), data_(bytes.data()), frame_(frame) {}
 
     PageStore* store_ = nullptr;
     PageId page_id_ = kInvalidPageId;
@@ -148,6 +149,11 @@ private:
     // extent has no empty state - and a moved-from or released handle
     // needs one.
     std::byte* data_ = nullptr;
+    // **The store's own record of the pinned frame** (DO's E4d), opaque
+    // here: what `FetchPinned` or `CreatePinned` handed back, valid while
+    // this handle's pin stands. Null for a store that hands none back, whose
+    // release is by page id.
+    void* frame_ = nullptr;
 };
 
 // The mode a pinned accessor takes its frame in (AM-S1, the page latch).
@@ -263,9 +269,14 @@ public:
     // `for_read` picks which raw fetch runs: the two differ only in dirty
     // marking, and an override needs to know which it is servicing. `heat` says how the fetch counts toward the frame's usage
     // (`FetchHeat`); a store with no reclaim has no counter to bump.
+    //
+    // `frame`, which the caller nulls, receives on success the store's
+    // record of the pinned frame, for the handle to give back at its
+    // release (`UnpinFrameAt`); the default hands back none.
     virtual StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
                                                                  bool for_read,
-                                                                 FetchHeat /*heat*/) {
+                                                                 FetchHeat /*heat*/,
+                                                                 void** /*frame*/) {
         auto bytes = for_read ? GetForReadUnpinned(page_id) : GetUnpinned(page_id);
         if (!bytes.ok()) return bytes.status();
         PinFrame(page_id, mode);
@@ -277,10 +288,11 @@ public:
     StatusOr<PageRef> Get(PageId page_id) {
         // A statistics record takes no page hold (`statistics_scope.hpp`).
         AssertNoStatisticsRecord("a page fetch");
+        void* frame = nullptr;
         auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false,
-                                 FetchHeat::kWarm);
+                                 FetchHeat::kWarm, &frame);
         if (!bytes.ok()) return bytes.status();
-        return PageRef(this, page_id, bytes.value());
+        return PageRef(this, page_id, bytes.value(), frame);
     }
 
     // The accessor a page walk's `PageAccess` names, so a visitor does not
@@ -290,12 +302,14 @@ public:
     StatusOr<PageRef> Fetch(PageId page_id, PageAccess access) {
         if (access == PageAccess::kWrite) return Get(page_id);
         AssertNoStatisticsRecord("a page fetch");
+        void* frame = nullptr;
         auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
                                  access == PageAccess::kScan         ? FetchHeat::kScan
                                  : access == PageAccess::kScanNoWait ? FetchHeat::kScanNoWait
-                                                                     : FetchHeat::kWarm);
+                                                                     : FetchHeat::kWarm,
+                                 &frame);
         if (!bytes.ok()) return bytes.status();
-        return PageRef(this, page_id, bytes.value());
+        return PageRef(this, page_id, bytes.value(), frame);
     }
 
     // Get() for a caller that will not write through the page. The bytes
@@ -314,8 +328,9 @@ public:
     // that may also take an id whose stored page fails its checksum.
     enum class CreateKind : std::uint8_t { kAt, kNew, kNewHeaderless, kClaimed, kOverTorn };
 
+    // `frame` as `FetchPinned`'s.
     virtual StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
-        CreateKind which, PageId page_id) {
+        CreateKind which, PageId page_id, void** /*frame*/) {
         if (which == CreateKind::kAt || which == CreateKind::kClaimed ||
             which == CreateKind::kOverTorn) {
             auto bytes = CreateNamedUnpinned(which, page_id);
@@ -333,9 +348,10 @@ public:
     // pinned. Fails with AlreadyExists if that id is already in use.
     StatusOr<PageRef> CreateAt(PageId page_id) {
         AssertNoStatisticsRecord("a page creation");
-        auto made = CreatePinned(CreateKind::kAt, page_id);
+        void* frame = nullptr;
+        auto made = CreatePinned(CreateKind::kAt, page_id, &frame);
         if (!made.ok()) return made.status();
-        return PageRef(this, made.value().first, made.value().second);
+        return PageRef(this, made.value().first, made.value().second, frame);
     }
 
     // CreateAt() for redo's heal (wal.md §10): it also takes an id whose
@@ -343,19 +359,21 @@ public:
     // Only a whole-page record may ask, since it replaces every byte.
     StatusOr<PageRef> CreateOverTorn(PageId page_id) {
         AssertNoStatisticsRecord("a page creation");
-        auto made = CreatePinned(CreateKind::kOverTorn, page_id);
+        void* frame = nullptr;
+        auto made = CreatePinned(CreateKind::kOverTorn, page_id, &frame);
         if (!made.ok()) return made.status();
-        return PageRef(this, made.value().first, made.value().second);
+        return PageRef(this, made.value().first, made.value().second, frame);
     }
 
     // Creates a brand-new page at an id the store chooses, zero-
     // initialized and pinned. Fails with OutOfSpace when out of ids.
     StatusOr<std::pair<PageId, PageRef>> CreateNew() {
         AssertNoStatisticsRecord("a page creation");
-        auto made = CreatePinned(CreateKind::kNew, kInvalidPageId);
+        void* frame = nullptr;
+        auto made = CreatePinned(CreateKind::kNew, kInvalidPageId, &frame);
         if (!made.ok()) return made.status();
         return std::pair<PageId, PageRef>(
-            made.value().first, PageRef(this, made.value().first, made.value().second));
+            made.value().first, PageRef(this, made.value().first, made.value().second, frame));
     }
 
     // Faults `page_id` in and pins it with no latch (`UnlatchedPin`);
@@ -363,8 +381,9 @@ public:
     StatusOr<UnlatchedPin> PinUnlatched(PageId page_id) {
         if (page_id == kInvalidPageId) return UnlatchedPin();
         AssertNoStatisticsRecord("a page fetch");
+        void* frame = nullptr;  // an unlatched pin is released by id
         auto bytes = FetchPinned(page_id, PinMode::kUnlatched, /*for_read=*/true,
-                                 FetchHeat::kWarm);
+                                 FetchHeat::kWarm, &frame);
         if (!bytes.ok()) return bytes.status();
         return UnlatchedPin(this, page_id);
     }
@@ -387,10 +406,11 @@ public:
     // CreateNewHeaderlessUnpinned() for who needs that and why.
     StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
         AssertNoStatisticsRecord("a page creation");
-        auto made = CreatePinned(CreateKind::kNewHeaderless, kInvalidPageId);
+        void* frame = nullptr;
+        auto made = CreatePinned(CreateKind::kNewHeaderless, kInvalidPageId, &frame);
         if (!made.ok()) return made.status();
         return std::pair<PageId, PageRef>(
-            made.value().first, PageRef(this, made.value().first, made.value().second));
+            made.value().first, PageRef(this, made.value().first, made.value().second, frame));
     }
 
     // ---- The frame hooks: what a pooled store overrides ---------------
@@ -405,6 +425,12 @@ public:
         (void)mode;
     }
     virtual void UnpinFrame(PageId page_id) noexcept { (void)page_id; }
+    // A handle's release with the frame record its fetch handed back
+    // (`PageRef` calls `UnpinFrame` when it was handed none).
+    virtual void UnpinFrameAt(PageId page_id, void* frame) noexcept {
+        (void)frame;
+        UnpinFrame(page_id);
+    }
     // A `kUnlatched` pin's release: the pin alone, there being no latch.
     virtual void UnpinUnlatchedFrame(PageId page_id) noexcept { (void)page_id; }
     virtual void MarkFrameDirty(PageId page_id) noexcept { (void)page_id; }
@@ -841,9 +867,10 @@ inline StatusOr<std::pair<PageId, PageRef>> PageClaims::CreateNew() {
     }
     AssertNoStatisticsRecord("a page creation");
     const PageId id = ids_[next_++];
-    auto made = store_->CreatePinned(PageStore::CreateKind::kClaimed, id);
+    void* frame = nullptr;
+    auto made = store_->CreatePinned(PageStore::CreateKind::kClaimed, id, &frame);
     if (!made.ok()) return made.status();
-    return std::pair<PageId, PageRef>(id, PageRef(store_, id, made.value().second));
+    return std::pair<PageId, PageRef>(id, PageRef(store_, id, made.value().second, frame));
 }
 
 inline PageRef& PageRef::operator=(PageRef&& other) noexcept {
@@ -852,16 +879,22 @@ inline PageRef& PageRef::operator=(PageRef&& other) noexcept {
         store_ = other.store_;
         page_id_ = other.page_id_;
         data_ = other.data_;
+        frame_ = other.frame_;
         other.store_ = nullptr;
         other.page_id_ = kInvalidPageId;
         other.data_ = nullptr;
+        other.frame_ = nullptr;
     }
     return *this;
 }
 
 inline void PageRef::Release() noexcept {
     if (store_ != nullptr) {
-        store_->UnpinFrame(page_id_);
+        if (frame_ != nullptr) {
+            store_->UnpinFrameAt(page_id_, std::exchange(frame_, nullptr));
+        } else {
+            store_->UnpinFrame(page_id_);
+        }
         store_ = nullptr;
         data_ = nullptr;
     }

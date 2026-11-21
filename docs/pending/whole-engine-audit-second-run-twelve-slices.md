@@ -989,6 +989,11 @@ Symbols: `MarkRestoreOwed`, `MarkRestoreOwedOn`, `ForgetUnwrittenPages`, `DataFi
 
 #### G56. Every armed page hit re-proves allocation under the instance-wide free-map latch
 
+**Taken by DO's E4b** (`instructions/v3.2.0/workorder-do-frame-table-long-holds.md`
+§7, 2026-11-21, on the operator's standing go-ahead): the armed hit asks no
+bit, the unarmed `Resolve` is unchanged (DO-R2), and `page.md` and
+`rules.md` are reworded. The entry below is the audit's as it stood.
+
 `src/storage/device_page_store.cpp:1044` - finder's severity **low**, finder's confidence **medium**, slice `storage-pool`
 
 Symbols: `DevicePageStore::Resolve`, `DevicePageStore::FetchAndPin`, `DevicePageStore::IsAllocated`, `DevicePageStore::FreePage`

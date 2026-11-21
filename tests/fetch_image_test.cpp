@@ -49,7 +49,10 @@ private:
     wal::Lsn next_ = 4096;  // a real record LSN is never 0
 };
 
-class FetchImageTest : public ::testing::Test {
+// Each cell runs unarmed (`cores = 1`, where `LogOwedImage` looks the debt
+// up) and armed (above one core, where the exclusive grant's own hold takes
+// it: DO's E4a).
+class FetchImageTest : public ::testing::TestWithParam<bool> {
 protected:
     void SetUp() override {
         device_ = std::move(MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0).value());
@@ -64,6 +67,7 @@ protected:
         auto store = DevicePageStore::Open(*device_, FrameCapacity{4096}, /*first_new_page_id=*/16);
         ASSERT_TRUE(store.ok()) << store.status().message();
         store_ = std::move(store.value());
+        store_->SetLatchArmed(GetParam());
         store_->SetWalGate(&gate_);
         store_->EnableFetchImages(true);
     }
@@ -90,7 +94,7 @@ protected:
     std::unique_ptr<DevicePageStore> store_;
 };
 
-TEST_F(FetchImageTest, AFaultedPageIsImagedAtItsFirstWriteFetchAndStampedWithIt) {
+TEST_P(FetchImageTest, AFaultedPageIsImagedAtItsFirstWriteFetchAndStampedWithIt) {
     const PageId id = MakePage(PageType::kHeap);
     ASSERT_TRUE(gate_.images.empty()) << "a created page owes no image";
     Reopen();
@@ -114,7 +118,7 @@ TEST_F(FetchImageTest, AFaultedPageIsImagedAtItsFirstWriteFetchAndStampedWithIt)
     EXPECT_EQ(store_->pool_counters().fetch_image_bytes, ImageGate::kRecordBytes);
 }
 
-TEST_F(FetchImageTest, EveryWritebackCopyOwesTheNextImage) {
+TEST_P(FetchImageTest, EveryWritebackCopyOwesTheNextImage) {
     const PageId id = MakePage(PageType::kBtreeLeaf);
     ASSERT_TRUE(store_->Sync().ok());  // the create's first copy
     { ASSERT_TRUE(store_->Get(id).ok()); }
@@ -127,7 +131,7 @@ TEST_F(FetchImageTest, EveryWritebackCopyOwesTheNextImage) {
     EXPECT_EQ(gate_.images.size(), 2u) << "a copy did not set the debt again";
 }
 
-TEST_F(FetchImageTest, AReadFetchAndANestedWriteFetchLogNothing) {
+TEST_P(FetchImageTest, AReadFetchAndANestedWriteFetchLogNothing) {
     const PageId id = MakePage(PageType::kHeap);
     Reopen();
     { ASSERT_TRUE(store_->GetForRead(id).ok()); }
@@ -141,7 +145,7 @@ TEST_F(FetchImageTest, AReadFetchAndANestedWriteFetchLogNothing) {
     EXPECT_EQ(gate_.images.size(), 1u) << "the nested fetch paid a debt the outer one paid";
 }
 
-TEST_F(FetchImageTest, ClassesNoRecordDescribesAreNeverImaged) {
+TEST_P(FetchImageTest, ClassesNoRecordDescribesAreNeverImaged) {
     const PageId waystone = MakePage(PageType::kWaystone);
     const PageId unformatted = [&] {
         auto created = store_->CreateNew();
@@ -169,7 +173,7 @@ TEST_F(FetchImageTest, ClassesNoRecordDescribesAreNeverImaged) {
     EXPECT_EQ(gate_.images.size(), 1u);
 }
 
-TEST_F(FetchImageTest, ImagesOffLogNothingAndTheDebtWaitsForThemToComeOn) {
+TEST_P(FetchImageTest, ImagesOffLogNothingAndTheDebtWaitsForThemToComeOn) {
     const PageId id = MakePage(PageType::kHeap);
     Reopen();
     store_->EnableFetchImages(false);  // as a mount runs
@@ -180,7 +184,7 @@ TEST_F(FetchImageTest, ImagesOffLogNothingAndTheDebtWaitsForThemToComeOn) {
     EXPECT_EQ(gate_.images.size(), 1u) << "the fault-in's debt was lost while images were off";
 }
 
-TEST_F(FetchImageTest, ARefusedImageFailsTheFetchAndStaysOwed) {
+TEST_P(FetchImageTest, ARefusedImageFailsTheFetchAndStaysOwed) {
     const PageId id = MakePage(PageType::kHeap);
     Reopen();
     gate_.refuse = true;
@@ -193,7 +197,7 @@ TEST_F(FetchImageTest, ARefusedImageFailsTheFetchAndStaysOwed) {
     EXPECT_EQ(gate_.images.size(), 1u);
 }
 
-TEST_F(FetchImageTest, TheRegistryRefusesWhenFull) {
+TEST_P(FetchImageTest, TheRegistryRefusesWhenFull) {
     for (std::uint64_t oid = 1000; oid < 1000 + 32; ++oid) {
         ASSERT_TRUE(store_->AddUnloggedOwner(oid).ok());
     }
@@ -202,6 +206,11 @@ TEST_F(FetchImageTest, TheRegistryRefusesWhenFull) {
     store_->RemoveUnloggedOwner(1000);
     EXPECT_TRUE(store_->AddUnloggedOwner(5000).ok());
 }
+
+INSTANTIATE_TEST_SUITE_P(ArmedAndNot, FetchImageTest, ::testing::Bool(),
+                         [](const ::testing::TestParamInfo<bool>& info) {
+                             return info.param ? "Armed" : "Unarmed";
+                         });
 
 }  // namespace
 }  // namespace kds::storage

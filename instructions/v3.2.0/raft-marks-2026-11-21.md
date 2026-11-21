@@ -109,3 +109,22 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Does not settle** | a tag or a version; the gaps in `known-gaps.md`'s DN section |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
 
+
+## 12. DO opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"/go-ahead-achieving-milestone DO"*: the operator named DO |
+| **Mark** | **DO is opened** on the session's worktree `dg-wal-segment-body`, on a new branch `worktree-do-frame-table-long-holds` from `48a3276c` (`v3.5.0-55-g48a3276c`); DG's branch and its unpushed record `e98163d2` are untouched. DO-Q0..Q8 are adopted (a) as CLA proposed, and DO-Q9 (the bar's value, 1 ms at 1 Mi resident frames) is added at DO-S0 and adopted (a), **on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**; none is the operator's own per-item mark. DO-Q3 (a) keeps E2 behind a written proof and the operator's own mark on it. **DO-Q10** (E1 and E3 land though alone they miss the bar) added at DO-S1 and adopted (a) on the same go-ahead. DO-S0 to DO-S2 built on the work branch (`47f7016c` to `7116b668`); **DO-S3's proof is written (the order's §5a) and E2 waits for the operator's own mark**, which this go-ahead does not reach |
+| **Does not settle** | E2 (DO-S3's mark is the operator's); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DO order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
+
+## 13. DO's built stages landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given at DO's stop, after the report that DO-S0 to DO-S2 were built and the close measured, with DO-S3's proof waiting for the operator's mark |
+| **Mark** | **DO-S0 to DO-S2 and the close's record land on `main`**: the work branch `worktree-do-frame-table-long-holds` (worktree `dg-wal-segment-body`, `47f7016c` to `e3348475` and this record), merged `--no-ff` over `origin/main` `48a3276c`, which had not moved, and pushed with `--no-verify`. The full suite ran 0 failed of 5101 at `7116b668`, and nothing after it changed a build input (`e3348475` and this record are documents and bench only), so the hook was not run again. The close: `bench/v3.5.0/results-do-close-v3.5.0-61-g7116b668.md` |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | DO-S3: E2 still waits for the operator's own mark on the order's §5a, so DO is not closed; a tag or a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |

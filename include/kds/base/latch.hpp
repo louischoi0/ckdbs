@@ -73,19 +73,57 @@ public:
         // before the try, so the abort does not depend on the latch being
         // held at that instant.
         AssertNoStatisticsRecord("a blocking latch acquisition");
-        if (mutex_.try_lock()) return 0;
+        if (mutex_.try_lock()) {
+            NoteHeld();
+            return 0;
+        }
         const auto start = std::chrono::steady_clock::now();
         mutex_.lock();
-        const std::uint64_t ns = NsSince(start);
+        const auto acquired = std::chrono::steady_clock::now();
+        NoteHeld(acquired);
+        const std::uint64_t ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(acquired - start).count());
         Contention::LatchWait(kind_, ns);
         return ns;
     }
-    bool try_lock() noexcept { return mutex_.try_lock(); }
-    void unlock() noexcept { mutex_.unlock(); }
+    bool try_lock() noexcept {
+        if (!mutex_.try_lock()) return false;
+        NoteHeld();
+        return true;
+    }
+    void unlock() noexcept {
+#ifdef KDS_LATCH_HOLD_CENSUS
+        // Read under the hold, recorded after it: the record's own cost is
+        // no other core's wait, and no member is read once the owner may
+        // destroy the latch.
+        const LatchKind kind = kind_;
+        const std::uint64_t held = NsSince(held_since_);
+        mutex_.unlock();
+        Contention::LatchHold(kind, held);
+#else
+        mutex_.unlock();
+#endif
+    }
 
 private:
+    // **The census build times every hold** (DO-Q1 (a), the bench half):
+    // the start is written by the holder alone, under the mutex, and read
+    // back by the same holder at its release. Compiled out otherwise.
+    void NoteHeld(std::chrono::steady_clock::time_point at = {}) noexcept {
+#ifdef KDS_LATCH_HOLD_CENSUS
+        held_since_ = at == std::chrono::steady_clock::time_point{}
+                          ? std::chrono::steady_clock::now()
+                          : at;
+#else
+        (void)at;
+#endif
+    }
+
     std::mutex mutex_;
     LatchKind kind_ = LatchKind::kOther;
+#ifdef KDS_LATCH_HOLD_CENSUS
+    std::chrono::steady_clock::time_point held_since_{};
+#endif
 };
 
 #ifndef NDEBUG

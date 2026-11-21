@@ -391,6 +391,17 @@ one `contention_refused_<site>` per site a stale descent is refused
 `btree_lookup`, `index_descend`, `index_parent`, `index_secure`), and
 `contention_descent_hops`, the moves right along a leaf chain a descent
 took in place of starting over from the root (DK's D2).
+`contention_frame_table_walks` counts the holds of the frame table's latch
+that walk every resident frame - a checkpoint's two dirty tables (a
+flush collects through the second), a full pool's refusal message and two
+census readers; the table is sized once, so no insert rehashes it - with
+`contention_frame_table_walk_us`, their total, `contention_frame_table_walk_longest_us`,
+the longest, and `contention_frame_table_walks_over_100us`, `_over_1ms` and
+`_over_10ms`; above one core only, since no latch is held at one (DO-Q1).
+A server built with `-DKDS_LATCH_HOLD_CENSUS=ON`, a bench build, also
+prints per latch kind `contention_<kind>_holds`, `contention_<kind>_hold_ns`
+and `contention_<kind>_hold_longest_us`: every acquisition, uncontended
+ones included, and how long it was held.
 Since BA-S14 a clustered-tree refusal is re-run inside the engine rather
 answered, for a statement that wrote nothing before it, and
 `contention_structural_reruns` counts the re-runs. A `SELECT` discarded and run again for a page whose read left its reactor (`page.md` §12) is counted apart, as `contention_miss_reruns`, and is never answered as a refusal. Every

@@ -2855,6 +2855,16 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     for (std::size_t i = 0; i < kLongestCount; ++i) {
         os << " contention_" << kLongestNames[i] << "=" << contention.longest_ns[i] / 1000;
     }
+#ifdef KDS_LATCH_HOLD_CENSUS
+    // The census build's holds (DO-Q1 (a)): every acquisition, uncontended
+    // ones included, and how long each kind was held.
+    for (std::size_t i = 0; i < kLatchKindCount; ++i) {
+        os << " contention_" << kLatchKindNames[i] << "_holds=" << contention.holds[i]
+           << " contention_" << kLatchKindNames[i] << "_hold_ns=" << contention.hold_ns[i]
+           << " contention_" << kLatchKindNames[i]
+           << "_hold_longest_us=" << contention.hold_longest_ns[i] / 1000;
+    }
+#endif
     sections.back().second = os.str();
     return sections;
 }

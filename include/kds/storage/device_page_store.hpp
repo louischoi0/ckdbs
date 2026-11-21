@@ -1322,8 +1322,11 @@ private:
     // handle through the base interface, so no caller can unpin someone
     // else's frame by hand.
     // AM-S2: the fetch-and-pin pair, held together (`page_store.hpp`).
+    // Armed, `frame` receives the `Frame*` the pin landed on, for the
+    // handle's release (`UnpinFrameAt`, DO's E4d); unarmed it is left null.
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                         bool for_read, FetchHeat heat) override;
+                                                         bool for_read, FetchHeat heat,
+                                                         void** frame) override;
 
     // `FetchPinned`'s whole body, plus the answer only the scan ring needs:
     // **did this call take the branch that loads?** The ring rotates a slot
@@ -1331,19 +1334,28 @@ private:
     // be stale. `faulted` may be null (`FetchPinned` passes null).
     // **Meaningful only on the ok arm**: an error on a later turn of the
     // loop leaves it true. It also says true when another core loaded the
-    // page while this call was outside the latch.
+    // page while this call was outside the latch. `owed`, when given, is
+    // `AcquirePageLatch`'s: set when an armed exclusive grant took the
+    // frame's image debt (DO's E4a). `pinned`, when given, receives the
+    // frame an armed fetch pinned (null unarmed).
     StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
                                                           bool for_read, FetchHeat heat,
-                                                          bool* faulted);
+                                                          bool* faulted, bool* owed = nullptr,
+                                                          Frame** pinned = nullptr);
 
     // The create half of the same pair. See the definition for why its
     // window is narrower than `Get`'s and why it can still close.
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
-        CreateKind which, PageId page_id) override;
+        CreateKind which, PageId page_id, void** frame) override;
 
     void PinFrame(PageId page_id, PinMode mode) noexcept override;
     void UnpinUnlatchedFrame(PageId page_id) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
+    // **A handle's release on the frame it pinned** (DO's E4d): no lookup,
+    // and one structure-latch hold in place of `UnpinFrame`'s two. Sound
+    // because no eraser removes a pinned frame (`ReleaseFrameLocked`
+    // asserts it) and a table node keeps its address across a rehash.
+    void UnpinFrameAt(PageId page_id, void* frame) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
 
     // The two halves of taking a pin, split because `FetchPinned`'s armed
@@ -1355,7 +1367,17 @@ private:
     // **outside** it - the order that keeps neither latch held across the
     // other (PinFrame's comment says why).
     void CountPin(Frame& frame) noexcept;
-    void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept;
+    // `Resolve`'s hit, on a frame the caller found under the structure
+    // latch: the hit count, the dirty mark, the usage bump, the span. Shared with the
+    // armed fetch's hit, which asks no `IsAllocated` (DO's E4b).
+    std::span<std::byte, kPageSize> HitLocked(Frame& frame, bool mark_dirty,
+                                              FetchHeat heat) noexcept;
+    // An armed exclusive grant given `owed` also takes the frame's image
+    // debt in the hold it already takes for the dirty mark, setting
+    // `*owed` (DO's E4a): only while images are on, or whatever the switch
+    // says with `drop_always` (a create, which drops it).
+    void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode, bool* owed = nullptr,
+                          bool drop_always = false) noexcept;
     // `CountPin`'s mirror, under the structure latch, for a pin that holds
     // no page latch (a writeback that met a held frame and skipped it).
     void UncountPin(Frame& frame) noexcept;
@@ -1363,20 +1385,14 @@ private:
     // `AcquirePageLatch` keeps. Always true on an unarmed store.
     bool TryAcquirePageLatchShared(PageId page_id, Frame& frame) noexcept;
 
-    // **The pin tail, with `hold` held on entry** (AM-S2), shared by
-    // `FetchPinned`'s hit and miss arms: find, pin, take the span, release
-    // the structure latch, wait for the page latch.
-    //
-    // `nullopt` means the frame is gone, **with `hold` still held**; both
-    // callers round the loop and re-test. On the value arm `hold` is
-    // released before the page latch is waited for.
-    //
-    // **It does not re-apply the dirty mark** (AM-S2-P F-1): a frame
-    // evicted and re-faulted clean between the caller's load and this pin
-    // would drop a `Get`'s write, and what makes that unreachable is the
-    // loading set: every fault publishes its id there first.
-    std::optional<std::span<std::byte, kPageSize>> PinResidentAndRelease(
-        PageId page_id, PinMode mode, std::unique_lock<Latch>& hold) noexcept;
+    // **The pin tail, with `hold` held on entry** (AM-S2), on a frame the
+    // caller found under it - the armed hit's and the fault's: count the
+    // pin, take the span, release the structure latch, wait for the page
+    // latch.
+    std::span<std::byte, kPageSize> PinFrameAndRelease(PageId page_id, Frame& frame,
+                                                       PinMode mode,
+                                                       std::unique_lock<Latch>& hold,
+                                                       bool* owed, Frame** pinned) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }
@@ -1640,12 +1656,13 @@ private:
 
     // ---- The free map's latch, and the order (AM-S3) ---------------------
     //
-    // **A second latch because the two are nested**: `FetchPinned`'s hit
-    // path holds the frame table across `Resolve`, which asks `IsAllocated`
-    // (and on a miss `FaultIn` asks `IsHeaderless`) - free-map reads that would
-    // re-acquire a non-recursive latch (`base/latch.hpp`) if the map shared
-    // `frames_latch_`. The sweep and the other callers of
-    // `IsPinnedClassFrame` nest it the same way.
+    // **A second latch because the two are nested**: `FreePage`, the
+    // named-id claim and the free-list pop decide under the frame table and
+    // then the map, and the sweep and the other callers of
+    // `IsPinnedClassFrame` ask the map under the frame table - free-map
+    // reads that would re-acquire a non-recursive latch (`base/latch.hpp`)
+    // if the map shared `frames_latch_`. (The armed hit asks no bit since
+    // DO's E4b; a debug build still asserts it there, under both.)
     //
     // **The declared order is `frames_latch_` then `map_latch_`, never the
     // reverse** (`docs/rules/rules.md` §3): the allocation paths end their
@@ -1737,7 +1754,7 @@ private:
     // advancing modulo the slots that exist. One step is one slot, O(1);
     // the sort that re-found an id-valued hand per sweep is gone with it.
     std::size_t clock_hand_ = 0;
-    std::size_t capacity_ = 0;  // set once, at Open
+    std::size_t capacity_ = 0;  // set at Open; lowered by MG05, raised by ApplyMountFloor
     // What `Open` was asked for, before the debug override lowered it.
     std::size_t configured_capacity_ = 0;
     // Frames promised to open no-refuse windows and not yet spent, under
@@ -1779,7 +1796,8 @@ private:
     // list nor the table.
     std::vector<std::uint32_t> free_slots_;
     // The page table: each resident page's frame. Every structural change -
-    // publish, unmap - is under the structure latch.
+    // publish, unmap - is under the structure latch. Reserved to the
+    // configured capacity at `Open` (DO's E3), so an insert never rehashes.
     std::unordered_map<PageId, Frame> frames_;
 
 public:
@@ -1823,6 +1841,8 @@ private:
     // The write fetch's image (the public section). The registry: 0 an
     // empty slot, an owner oid as itself, a page id with `kUnloggedPageTag`.
     Status LogOwedImage(PageId page_id, std::span<const std::byte, kPageSize> bytes);
+    // `LogOwedImage` past its test: the debt is taken, and this logs it.
+    Status LogTakenImage(PageId page_id, std::span<const std::byte, kPageSize> bytes);
     Status AddUnlogged(std::uint64_t word);
     void RemoveUnlogged(std::uint64_t word) noexcept;
     bool IsUnlogged(std::uint64_t word) const noexcept;

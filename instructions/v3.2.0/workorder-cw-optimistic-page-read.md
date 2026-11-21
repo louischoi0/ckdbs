@@ -67,6 +67,7 @@ no undo is applied to a page, and visibility stays the row's
 | the same | `insert1` | `0.26-0.28` page-latch waits a statement, frame-table wait `0.45-0.51 us` |
 | BA-S4 census, `v2.7.0-725-gc390a624` | the whole census | `98,466,594` page-latch spin turns, attributed to no page and no item |
 | multicore re-measurement, `v3.2.0-64-g9b7d53d7` (the pending entry) | `point`, `insert1` | `cores = 4` is `21-28 %` under `cores = 2`; p95 and p99 are 2-4 times `cores = 2`'s; the `contention_*` deltas were kept per run and never analysed |
+| DO, `v3.5.0-55-g48a3276c` to `v3.5.0-61-g7116b668` (`bench/v3.5.0/results-do-s0-census-v3.5.0-55-g48a3276c.md`, `results-do-s1-e1-e3-v3.5.0-56-g47f7016c.md`, `results-do-close-v3.5.0-61-g7116b668.md`; entered here by DO-Q8 (a)) | read and write hits, one store; `point`, `insert1`, `pkmix` at `cores = 2` | structure-latch holds counted exactly: a read hit 3 to 2, a write hit 5 to 3; a `point` statement 12 holds before DO; the hold a read hit 212 to 81 ns on one thread, one reader about +19 % fetches a second over E4b-E4d (+7.9, +2.5 and +8.0 % a stage); with three readers on one store 87 % of fetches waited and throughput fell to 38 % of one reader's, before DO; the checkpoint's walk 38.7 to 15.4 ms (H1) at 1 Mi frames, the rest of it E2's |
 
 **What this says:** a read *waits* on these latches for about half a
 percent of a statement. The BP/BQ number is 619 commits old and predates
@@ -147,7 +148,9 @@ Priced by CW-S0 and CW-S1; none is chosen here.
 
 - **C0 - nothing.** The verdict if the words cost nothing a statement
   can feel.
-- **C1 - the pin and the lookup made cheap, the latch kept.** The
+- **C1 - the pin and the lookup made cheap, the latch kept** - **after
+  DO** (DO-Q8 (a)): priced against the tree DO leaves, whose hit is already
+  one lookup and two holds, with no free-map hold. The
   structure latch partitioned by page id, or the hit path's lookup and
   pin taken off it (an atomic pin count on the frame, the table read
   under a partition). No optimism: readers still take the page latch
