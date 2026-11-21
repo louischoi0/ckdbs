@@ -132,6 +132,16 @@ enum class Tally : std::uint8_t {
     // right along the leaf chain in place of a restart from the root,
     // counted once per hop, on the failed-coverage path only.
     kDescentHops,
+    // DO-Q1 (a) (`workorder-do-frame-table-long-holds.md`): a hold of the
+    // frame table's structure latch that walks every resident frame - the
+    // checkpoint's two dirty tables, `Flush`'s collection, the refusal
+    // census and the census readers - counted, summed, and counted again
+    // past each of three lengths. Armed stores only; two clock reads a walk.
+    kFrameTableWalks,
+    kFrameTableWalkNs,
+    kFrameTableWalksOver100us,
+    kFrameTableWalksOver1ms,
+    kFrameTableWalksOver10ms,
     kCount,
 };
 
@@ -150,7 +160,9 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "fence_walks",            "wal_drain_latch_wait_us",
     "wal_roll_blocked_waits", "wal_roll_blocked_wait_us",
     "visibility_window_lookups", "miss_reruns",
-    "descent_hops",
+    "descent_hops",           "frame_table_walks",      "frame_table_walk_us",
+    "frame_table_walks_over_100us", "frame_table_walks_over_1ms",
+    "frame_table_walks_over_10ms",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 
@@ -165,6 +177,7 @@ constexpr bool IsNsTally(Tally t) noexcept {
 enum class Longest : std::uint8_t {
     kCarveNs,
     kCheckpointNs,
+    kFrameTableWalkNs,  // the longest of `Tally::kFrameTableWalks`' holds
     kCount,
 };
 
@@ -173,6 +186,7 @@ inline constexpr std::size_t kLongestCount = static_cast<std::size_t>(Longest::k
 inline constexpr std::array<const char*, kLongestCount> kLongestNames = {
     "carve_longest_us",
     "checkpoint_longest_us",
+    "frame_table_walk_longest_us",
 };
 static_assert(kLongestNames.back() != nullptr, "a Longest without a name");
 
@@ -191,6 +205,14 @@ struct alignas(64) ContentionSlot {
     std::array<std::atomic<std::uint64_t>, kLatchKindCount> wait_ns{};
     std::array<std::atomic<std::uint64_t>, kTallyCount> tallies{};
     std::array<std::atomic<std::uint64_t>, kLongestCount> longest_ns{};
+#ifdef KDS_LATCH_HOLD_CENSUS
+    // DO-Q1 (a)'s bench half: every acquisition of every latch kind, and
+    // how long it was held, in a build configured with
+    // `-DKDS_LATCH_HOLD_CENSUS=ON` only (`latch.hpp`).
+    std::array<std::atomic<std::uint64_t>, kLatchKindCount> holds{};
+    std::array<std::atomic<std::uint64_t>, kLatchKindCount> hold_ns{};
+    std::array<std::atomic<std::uint64_t>, kLatchKindCount> hold_longest_ns{};
+#endif
 };
 // `kMaxCores` (superblock.hpp): no instance has more cores than that.
 inline constexpr std::uint32_t kContentionSlots = 64;
@@ -204,6 +226,11 @@ public:
         std::array<std::uint64_t, kLatchKindCount> wait_ns{};
         std::array<std::uint64_t, kTallyCount> tallies{};
         std::array<std::uint64_t, kLongestCount> longest_ns{};
+#ifdef KDS_LATCH_HOLD_CENSUS
+        std::array<std::uint64_t, kLatchKindCount> holds{};
+        std::array<std::uint64_t, kLatchKindCount> hold_ns{};
+        std::array<std::uint64_t, kLatchKindCount> hold_longest_ns{};
+#endif
 
         std::uint64_t waits_of(LatchKind k) const noexcept {
             return waits[static_cast<std::size_t>(k)];
@@ -237,10 +264,29 @@ public:
     }
 
     static void Max(Longest l, std::uint64_t ns) noexcept {
-        auto& cell = Mine().longest_ns[static_cast<std::size_t>(l)];
-        std::uint64_t seen = cell.load(std::memory_order_relaxed);
-        while (seen < ns && !cell.compare_exchange_weak(seen, ns, std::memory_order_relaxed)) {
-        }
+        RaiseTo(Mine().longest_ns[static_cast<std::size_t>(l)], ns);
+    }
+
+#ifdef KDS_LATCH_HOLD_CENSUS
+    // One hold of a `kind` latch, `ns` long (the census build's `Latch`).
+    static void LatchHold(LatchKind kind, std::uint64_t ns) noexcept {
+        Slot& s = Mine();
+        const auto i = static_cast<std::size_t>(kind);
+        s.holds[i].fetch_add(1, std::memory_order_relaxed);
+        s.hold_ns[i].fetch_add(ns, std::memory_order_relaxed);
+        RaiseTo(s.hold_longest_ns[i], ns);
+    }
+#endif
+
+    // One whole-table walk of the frame table that held its latch `ns`
+    // (DO-Q1 (a)).
+    static void FrameTableWalk(std::uint64_t ns) noexcept {
+        Add(Tally::kFrameTableWalks);
+        Add(Tally::kFrameTableWalkNs, ns);
+        if (ns > 100'000) Add(Tally::kFrameTableWalksOver100us);
+        if (ns > 1'000'000) Add(Tally::kFrameTableWalksOver1ms);
+        if (ns > 10'000'000) Add(Tally::kFrameTableWalksOver10ms);
+        Max(Longest::kFrameTableWalkNs, ns);
     }
 
     static Snapshot Read() noexcept {
@@ -257,12 +303,25 @@ public:
                 const std::uint64_t v = s.longest_ns[i].load(std::memory_order_relaxed);
                 if (v > out.longest_ns[i]) out.longest_ns[i] = v;
             }
+#ifdef KDS_LATCH_HOLD_CENSUS
+            for (std::size_t i = 0; i < kLatchKindCount; ++i) {
+                out.holds[i] += s.holds[i].load(std::memory_order_relaxed);
+                out.hold_ns[i] += s.hold_ns[i].load(std::memory_order_relaxed);
+                const std::uint64_t v = s.hold_longest_ns[i].load(std::memory_order_relaxed);
+                if (v > out.hold_longest_ns[i]) out.hold_longest_ns[i] = v;
+            }
+#endif
         }
         return out;
     }
 
 private:
     using Slot = detail::ContentionSlot;
+    static void RaiseTo(std::atomic<std::uint64_t>& cell, std::uint64_t ns) noexcept {
+        std::uint64_t seen = cell.load(std::memory_order_relaxed);
+        while (seen < ns && !cell.compare_exchange_weak(seen, ns, std::memory_order_relaxed)) {
+        }
+    }
     static Slot& Mine() noexcept {
         return detail::g_contention[CurrentCore() % detail::kContentionSlots];
     }

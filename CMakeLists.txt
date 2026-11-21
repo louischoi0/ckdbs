@@ -242,6 +242,15 @@ else()
         "KDS_WITH_TLS=OFF: the TLS channel and its tests are excluded; `tls = on` will be refused at startup")
 endif()
 
+# DO-Q1 (a) (`instructions/v3.2.0/workorder-do-frame-table-long-holds.md`):
+# a bench build that counts and times every hold of every `Latch`
+# (`base/latch.hpp`), printed in `sys.meta`'s contention section. Off by
+# default: two clock reads a hold are a cost on the path being measured.
+option(KDS_LATCH_HOLD_CENSUS "Count and time every latch hold (a bench build)" OFF)
+if(KDS_LATCH_HOLD_CENSUS)
+    target_compile_definitions(kds PUBLIC KDS_LATCH_HOLD_CENSUS=1)
+endif()
+
 add_executable(kds_server src/server/main.cpp)
 target_link_libraries(kds_server PRIVATE kds)
 
@@ -259,6 +268,8 @@ if(KDS_BUILD_BENCH)
     target_link_libraries(kds_pool_sweep_bench PRIVATE kds)
     add_executable(kds_compile_split_bench bench/compile_split_bench.cpp)
     target_link_libraries(kds_compile_split_bench PRIVATE kds)
+    add_executable(kds_frame_table_hold_bench bench/frame_table_hold_bench.cpp)
+    target_link_libraries(kds_frame_table_hold_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the

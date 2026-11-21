@@ -109,3 +109,12 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Does not settle** | a tag or a version; the gaps in `known-gaps.md`'s DN section |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
 
+
+## 12. DO opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"/go-ahead-achieving-milestone DO"*: the operator named DO |
+| **Mark** | **DO is opened** on the session's worktree `dg-wal-segment-body`, on a new branch `worktree-do-frame-table-long-holds` from `48a3276c` (`v3.5.0-55-g48a3276c`); DG's branch and its unpushed record `e98163d2` are untouched. DO-Q0..Q8 are adopted (a) as CLA proposed, and DO-Q9 (the bar's value, 1 ms at 1 Mi resident frames) is added at DO-S0 and adopted (a), **on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**; none is the operator's own per-item mark. DO-Q3 (a) keeps E2 behind a written proof and the operator's own mark on it |
+| **Does not settle** | E2 (DO-S3's mark is the operator's); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DO order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |

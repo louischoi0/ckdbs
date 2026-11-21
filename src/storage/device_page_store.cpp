@@ -79,6 +79,46 @@ private:
     PageId page_id_;
 };
 
+// **DO-Q1 (a): a hold of the structure latch proportional to the pool**,
+// timed into `Contention::FrameTableWalk`. `WalkTimer` times a span inside a
+// hold its caller already took (an insert that rehashes); `WalkHold` takes
+// the hold itself and times all of it, its destructor's record running
+// before its guard member releases. Unarmed (a null latch) times nothing.
+class WalkTimer {
+public:
+    explicit WalkTimer(bool armed) noexcept : armed_(armed) {
+        if (armed_) start_ = std::chrono::steady_clock::now();
+    }
+    ~WalkTimer() {
+        if (armed_) Contention::FrameTableWalk(NsSince(start_));
+    }
+    WalkTimer(const WalkTimer&) = delete;
+    WalkTimer& operator=(const WalkTimer&) = delete;
+
+private:
+    bool armed_;
+    std::chrono::steady_clock::time_point start_{};
+};
+
+class WalkHold {
+public:
+    explicit WalkHold(Latch* latch) noexcept : guard_(latch), timer_(latch != nullptr) {}
+
+private:
+    LatchGuard guard_;  // declared first: destroyed after the timer records
+    WalkTimer timer_;
+};
+
+// Whether inserting one more element rehashes `map`: libstdc++'s
+// `_M_need_rehash`, `size + 1 > floor(buckets * max_load_factor)` in
+// `double`, exact for a map that is never reserved or shrunk. The empty
+// map's first insert rehashes zero nodes and reads "no" here.
+template <typename Map>
+bool WouldRehash(const Map& map) noexcept {
+    return static_cast<double>(map.size() + 1) >
+           static_cast<double>(map.bucket_count()) * static_cast<double>(map.max_load_factor());
+}
+
 }  // namespace
 
 DevicePageStore::DevicePageStore(PageDevice& device, PageId first_new_page_id) noexcept
@@ -787,7 +827,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::InsertFrame(
     // Mapped first: an `emplace` that throws leaves the slot untouched and
     // the guard still holding it, which gives it back.
     const std::uint32_t index = reserved.slot_;
-    Frame* const slot = &frames_.try_emplace(page_id).first->second;
+    Frame* slot = nullptr;
+    {
+        // H3: an insert past the load factor rehashes every node here.
+        const WalkTimer rehash(latch_armed_ && WouldRehash(frames_));
+        slot = &frames_.try_emplace(page_id).first->second;
+    }
     reserved.slot_ = kNoSlot;
     SlotOwner(index) = page_id;
     slot->bytes = &SlotPage(index);
@@ -900,7 +945,7 @@ StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
         std::size_t dirty = 0;
         std::size_t resident = 0;
         {
-            LatchGuard structure(structure_latch());
+            const WalkHold structure(structure_latch());
             resident = frames_.size();
             for (const auto& [id, frame] : frames_) {
                 pinned += frame.pins != 0;
@@ -1042,7 +1087,7 @@ Status DevicePageStore::ApplyMountFloor() {
 }
 
 std::size_t DevicePageStore::resident_class_frames() const {
-    LatchGuard structure(structure_latch());
+    const WalkHold structure(structure_latch());
     // Every id below the resident limit, faulted yet or not - the system
     // pages fault lazily, and each stays once it does - and the pinned
     // pages above it that are resident now (Bound Cabin pages).
@@ -2344,7 +2389,7 @@ Status DevicePageStore::Flush() {
     // turns dirty after the collection is the next flush's.
     std::vector<PageId> dirty;
     {
-        LatchGuard structure(structure_latch());
+        const WalkHold structure(structure_latch());
         dirty.reserve(frames_.size());
         for (const auto& [page_id, frame] : frames_) {
             if (frame.dirty) dirty.push_back(page_id);
@@ -2389,7 +2434,7 @@ Status DevicePageStore::Sync() {
 std::vector<PageId> DevicePageStore::DirtyPageIds() const {
     // The whole body under the hold: it is a collection and touches no
     // device, so there is nothing to hoist out (AM-S2 step 3f).
-    LatchGuard structure(structure_latch());
+    const WalkHold structure(structure_latch());
     std::vector<PageId> dirty;
     dirty.reserve(frames_.size());
     for (const auto& [page_id, frame] : frames_) {
@@ -2401,7 +2446,7 @@ std::vector<PageId> DevicePageStore::DirtyPageIds() const {
 
 std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn() const {
     // As `DirtyPageIds`, and for the same reason.
-    LatchGuard structure(structure_latch());
+    const WalkHold structure(structure_latch());
     std::vector<std::pair<PageId, wal::Lsn>> dirty;
     dirty.reserve(frames_.size());
     for (const auto& [page_id, frame] : frames_) {
@@ -3163,7 +3208,7 @@ void DevicePageStore::SetResidentLimit(PageId first_evictable_page_id) noexcept 
 std::size_t DevicePageStore::pinned_frames() const {
     // Under the hold (BE-S2): a walk of a table another core may be
     // publishing into.
-    LatchGuard structure(structure_latch());
+    const WalkHold structure(structure_latch());
     std::size_t pinned = 0;
     for (const auto& [id, frame] : frames_) {
         if (frame.pins != 0) ++pinned;

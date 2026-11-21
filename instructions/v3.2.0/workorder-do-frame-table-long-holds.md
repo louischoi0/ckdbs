@@ -1,13 +1,16 @@
 # Work order DO - the frame table's long holds: what the instance's one structure latch is held for, shortened where nothing moves, measured before and after
 
-Status: **WRITTEN 2026-11-21, not opened.** Written on `main` at
-`3a07ad49` on the operator's word of 2026-11-21
-(`raft-marks-2026-11-21.md` §8). That DO is an order of its own, cut out of
-CW's C1 rather than written into CW, is CLA's proposal and the operator's
-yes to it. The letter, the candidates, the rules and the stages are CLA's
-proposals; no DO-Q item is marked. No stage is started. Every
-`[source-read]` claim below was read at `3a07ad49`. No suite was run: the
-order changes no build input.
+Status: **OPENED 2026-11-21 on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-11-21.md` §12)**, on the
+worktree `dg-wal-segment-body` (branch `worktree-do-frame-table-long-holds`)
+from `48a3276c` (`v3.5.0-55-g48a3276c`). **DO-Q0..Q8 adopted (a) and DO-Q9
+(a) added and adopted, as CLA proposed, on that go-ahead; none is the
+operator's own per-item mark** (§4). DO-S0 done (§7). Written on `main` at
+`3a07ad49` on the operator's word of 2026-11-21 (`raft-marks-2026-11-21.md`
+§8); that DO is an order of its own, cut out of CW's C1 rather than written
+into CW, is CLA's proposal and the operator's yes to it. Every
+`[source-read]` claim in §1 was read at `3a07ad49` and re-read at
+`48a3276c` by DO-S0.
 
 **Not exploratory, but nothing lands unpaid** (DO-Q0, DO-R5). Most
 candidates here change no behaviour, so each one that pays at DO-S0 lands
@@ -242,26 +245,26 @@ Binding from DO-S1 on.
 - **DO-Q0 - the order's kind.** (a) **not exploratory**: E1, E3 and
   E4a-d land on their own measurement (DO-R5), and only E2 is gated as an
   exploration; (b) exploratory throughout: DO-S0 may close the order with
-  nothing built. CLA proposes (a).
+  nothing built. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q1 - the hold instrument.** (a) the whole-table sites (H1-H5)
   timed in every build - longest hold, and counts over 100 us, 1 ms and
   10 ms - with every structure-latch site timed only in a bench build;
   (b) every site in every build. The per-fetch sites are three to six
   holds a statement, and two clock reads each is a cost on the path being
-  measured. CLA proposes (a).
+  measured. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q2 - E2's chunk.** (a) `kFrameChunk` (1,024 slots), so a chunk is
-  the unit the array already grows by; (b) a setting. CLA proposes (a).
+  the unit the array already grows by; (b) a setting. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q3 - E2's gate.** (a) E2 is built only past DO-S3: E1 measured
   first, the walk alone still over DO-Q6's bar, a written proof under
   DO-R1, and the operator's own mark on the proof; (b) built with E1.
-  CLA proposes (a).
+  CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q4 - E3's size.** (a) `frames_` reserved to `capacity_` at `Open`;
   (b) to the resident-class floor plus 256, growing past it as today.
-  CLA proposes (a).
+  CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q5 - E4d's reach.** (a) `PageRef` carries the `Frame*` for every
   pinned handle, with the eraser assertion (DO-R6); (b) E4d left to CW's
   C1, where the frame descriptor array makes it natural. CLA proposes (a):
-  the premise holds today, and E4d needs no descriptor array.
+  the premise holds today, and E4d needs no descriptor array. **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q6 - the bars.** (a) **for H1-H3**: the longest structure-latch
   hold during a checkpoint, at 64 Ki, 256 Ki and 1 Mi resident frames,
   falls to the bar the operator sets at DO-S0's report. **For E4**: the
@@ -269,15 +272,29 @@ Binding from DO-S1 on.
   host - fall by the candidate's arithmetic, with no regression in
   throughput or p99 beyond the host's floor at `cores = 1, 2, 4`. A
   throughput gain is reported, not required, because the eight-core floor
-  is about 50 %. (b) a throughput gain required. CLA proposes (a).
+  is about 50 %. (b) a throughput gain required. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q7 - the host.** (a) the counts and hold times on the operator's
   host as it is, and throughput as a regression check only; (b) a host
   with eight or more cores and a measured floor below 10 % before DO-S0.
   CLA proposes (a), and records that DO cannot say what E4 is worth in
-  throughput on such a host.
+  throughput on such a host. **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
 - **DO-Q8 - CW.** (a) DO's results file is entered in CW §1.1 at DO's
   close, and C1 in CW §2 is amended to read "after DO", so that C1 is
-  priced against the tree DO leaves; (b) CW is untouched. CLA proposes (a).
+  priced against the tree DO leaves; (b) CW is untouched. CLA proposes (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, at DO's opening; not the operator's own mark.
+- **DO-Q9 - the bar's value for H1-H3** (raised by DO-S0, which DO-Q6 (a)
+  leaves to the operator at DO-S0's report). (a) **no structure-latch hold
+  at a checkpoint longer than 1 ms at 1 Mi resident frames** - eight times
+  a `point` statement's p99 at `cores = 2` (130 us) and the instrument's
+  middle threshold, so `contention_frame_table_walks_over_1ms` reads it in
+  production; (b) 10 ms, which E1 alone may meet; (c) 100 us. CLA proposes
+  (a): a hold is a stall of every core's fetch, and DO-S0 measured 38 ms at
+  1 Mi frames (`bench/v3.5.0/results-do-s0-census-v3.5.0-55-g48a3276c.md`
+  §1); (b) would leave a fetch on every core waiting tens of statements'
+  time, and (c) is under what a 1 Mi-frame walk can do in one hold on this
+  host even chunked. **Adopted (a) on the operator's standing go-ahead of
+  2026-11-21 (go-ahead-achieving-milestone)**, at DO-S0; not the
+  operator's own mark. It is DO-Q6 (a)'s number, so DO-Q3 (a)'s gate - E2
+  past a proof and the operator's own mark - stands unchanged.
 
 ## 5. Stages
 
@@ -326,3 +343,49 @@ On `main` at `3a07ad49`, documents only. Nothing is built or measured. No
 review run and no suite executed: no build input changed. Two claims CLA
 made in conversation are corrected in §0: `EvictColdFrames` is not a
 production path, and the usage bump already reads before it writes.
+
+### Opened 2026-11-21, on the standing go-ahead
+
+On the operator's `/go-ahead-achieving-milestone DO`
+(`raft-marks-2026-11-21.md` §12), from `48a3276c`. The session's own
+worktree `dg-wal-segment-body` (DG's, closed) carries the new branch
+`worktree-do-frame-table-long-holds` from `origin/main`: the session is
+pinned to that worktree, so no worktree named for DO could be created, and
+DG's branch and its unpushed record `e98163d2` are untouched. DO-Q0..Q8
+adopted (a) as CLA proposed; none is the operator's own mark.
+
+### DO-S0 - census and price, done 2026-11-21
+
+`bench/v3.5.0/results-do-s0-census-v3.5.0-55-g48a3276c.md`. The
+instrument (DO-Q1 (a)): `frame_table_walks`, `frame_table_walk_us`,
+`frame_table_walks_over_{100us,1ms,10ms}` and
+`frame_table_walk_longest_us` in `sys.meta`'s contention section, timed at
+every whole-table hold of an armed store (H1-H6) and at an insert that
+rehashes (H3); a bench build, `-DKDS_LATCH_HOLD_CENSUS=ON`, counting and
+timing every hold of every latch kind; and `bench/frame_table_hold_bench.cpp`.
+
+- **H1 and H2 are long and the sort is inside them**: at 64 Ki, 256 Ki and
+  1 Mi resident dirty frames H1 holds 1.7, 7.0 and 37.6 ms (p50) and H2
+  1.3, 5.6 and 30.1 ms; H3's longest rehash is 0.8, 3.4 and 12.1 ms. A
+  fetch on another core waits the hold out whole (47 ms at 1 Mi).
+- **A read hit is three holds, exactly**; a `point` statement 12.0, an
+  `insert1` 24.6 and an `UPDATE` by tuple key about 25, at `cores = 2`.
+- **H6, a sixth whole-table walk §1.2 did not list**: `Flush`'s
+  collection, under `Sync` (the synchronous checkpoint's publish, a
+  shutdown's, a backup's). Timed with the rest; no candidate changes it.
+- Both premises (E4b's, E4d's) re-read at `48a3276c` and hold (results
+  §3).
+- **DO-Q9 added** (the bar's value, which DO-Q6 (a) left to DO-S0's
+  report) and adopted (a), 1 ms at 1 Mi frames, on the standing go-ahead.
+- Cut against the 20-minute budget, and said so in the results file: the
+  hold times are the microbenchmark's, not an engine run's; `cores = 1, 4`
+  not run for the counts; `sched_hold_*_longest` not read.
+- **Reviewed by `critics-developer`**: no correctness bug. Applied: the
+  guard and the timer merged into one `WalkHold` (the declaration-order
+  hazard gone), the rehash predicate in `double` as libstdc++'s
+  `_M_need_rehash` (`WouldRehash`, exact above 2^24 frames), the census
+  build's record moved after the release with one clock read on the
+  contended path, and the benchmark's fill reading two snapshots an insert
+  in place of four. Noted in the results file: threads with no core write
+  slot 0. Not taken: merging `WalkTimer` with `StallTimer` (the records
+  differ, as the review itself says).
