@@ -1,12 +1,13 @@
 # Work order DL - statistics queue no statement, and a switched-off consumer collects nothing: the two rules established over every recording path, every statistics read a statement makes and every collection task, and checked
 
-Status: **CLOSED 2026-11-20 on the work branch, not landed** (§7, DL-S6):
+Status: **CLOSED 2026-11-20; landed on `main` 2026-11-21 on the operator's
+word, push no verify, not tagged** (`raft-marks-2026-11-21.md` §1; §7, DL-S6):
 every stage built, the close measured
 (`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`: no cell
 regressed, the eviction cliff gone, the reader storm's tail and DL-Q4's two
 words not resolved on a contended host and left in `known-gaps.md`).
 **OPENED 2026-11-20 on the operator's standing go-ahead
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §26)**, on
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §27)**, on
 worktree `dl-statistics-queue-no-statement` from `b0a824db`
 (`v3.4.16-2-gb0a824db`). **No DL-Q item but DL-Q1 and DL-Q3 is the
 operator's own mark**: every other one is CLA's proposal, adopted on that
@@ -469,7 +470,7 @@ these are the order's.
 
 (a) is CLA's proposal in each. **DL-Q1 and DL-Q3 are the operator's own marks; every
 other mark is CLA's proposal adopted on the operator's standing go-ahead of 2026-11-20
-(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §26), never the operator's
+(go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §27), never the operator's
 per-item mark.** None is tagged `[quiet-wrong]`. The options not taken stay open to the
 operator's own mark.
 
@@ -567,7 +568,7 @@ test are added. Documents only.
 ### Opened 2026-11-20, and DL-S0: the census
 
 Opened on the operator's standing go-ahead (go-ahead-achieving-milestone,
-`raft-marks-2026-11-20.md` §26) on worktree
+`raft-marks-2026-11-20.md` §27) on worktree
 `dl-statistics-queue-no-statement` from `b0a824db` (`v3.4.16-2-gb0a824db`).
 The marks are §4's column: DL-Q1 and DL-Q3 the operator's own, every other
 adopted as CLA proposed it on that standing word.
@@ -956,7 +957,7 @@ releases, merges in key order and makes room in one pass). DI's
 gate. `StatementStats` takes DI's binding in its key on DL's tried record.
 The three documents: the `known-gaps.md` section DL-S5 removed stays
 removed (main had amended it for DI-S2); the index keeps main's DK, DM and
-DN rows; DL's opening record moved from §11 to §22 (and to §26 at the second sync, below) of
+DN rows; DL's opening record moved from §11 to §22 (to §26 at the second sync and §27 at the third, below) of
 `raft-marks-2026-11-20.md`, main having taken §11..§21.
 
 **Review (`critics-developer`) of the resolution.** One defect, made by the
@@ -1060,7 +1061,7 @@ Four files conflicted: `statement_stats.cpp` takes audit H's rule (a
 compiled call with no plan source clears the shape's source) on DL's
 shared-note row; `known-gaps.md` keeps DJ's new section and not the DL one
 DL-S5 removed; DJ took §22..§25 of `raft-marks-2026-11-20.md`, so DL's
-record is §26 and this order and the index cite it there. Main's other
+record was §26 (§27 since the third sync) and this order and the index cite it there. Main's other
 changes to stores DL rebuilt are compatible (`wait_state.cpp`'s clock
 read, `plan_stats.cpp`'s merge no longer evicting a key its own step
 merged).
@@ -1074,3 +1075,15 @@ and at most one signal. **The other is `main`'s**:
 `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` failed 3 of 200
 on `07f4552a`'s own binary and 0 of 200 on DL's, interleaved in blocks of
 20 - a best-effort kick skipped against a 2 s bound, in `known-gaps.md`.
+
+### The third sync and the landing: `origin/main` merged (`v3.5.0`'s scenarios)
+
+`origin/main` moved to `01a7609b` (the `v3.5.0` record and scenarios 1 to
+4 at the tag: `bench/`, `CLAUDE.md`, the index and `raft-marks-2026-11-20.md`
+only, no build input). Two files conflicted, both records: `v3.5.0` took
+§26 of `raft-marks-2026-11-20.md`, so DL's record is §27 and this order and
+the index cite it there. The suite of the second sync (0 failed of 5,039
+at `40e23f65`) stands for the merged tree, whose build inputs are
+`40e23f65`'s. **Landed 2026-11-21** on the operator's "go ahead" at the
+push gate (`raft-marks-2026-11-21.md` §1): merged `--no-ff` to `main` and
+pushed with `--no-verify`. Not tagged; no version named.

@@ -254,7 +254,17 @@ took under them.
 | **Mark** | **`v3.4.18`**, an annotated tag on `main` at `56d57f16`: DJ's connection cap, idle-session timeout, `RESET SESSION`, slot wait and bounded reply, with what bounds them in its message. The tagged tree ran 0 failed of 4,997; `tsan` and `bs-nightly` not run |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; the order's header; its index row |
 
-## 26. DL opened on the standing go-ahead
+## 26. v3.5.0 named and tagged, the tag kept local; scenarios 1 to 4 run at it
+
+| | |
+|---|---|
+| **Word** | *"Sync to the remote main, tag 3.5.0, and at 3 a.m. KST run scenarios 1, 2, 3 and 4, leave the results in the documents and push at once with no verify. Do the sync not now but when the schedule triggers."* and, a few minutes later, *"Do not push the tag in the scheduled job. Tag it as v3.5.0. And make it 3 a.m. KST."* (given in Korean at 06:52 UTC; recorded in English). The order was first given as "tag 3.6.0" at 1 a.m. KST and replaced by the second word before it ran |
+| **Mark** | **The version is `v3.5.0`, the operator's own word**: an annotated tag taken by the scheduled run at 2026-11-20 18:00 UTC on `main` at `07f4552a`, the `origin/main` of that moment (local `main` fast-forwarded from `b0a824db`, 49 commits). The minor version moves from `v3.4.18`; the number is the operator's, not inferred. Its message states what is built since `v3.4.16` (DI, DH, the second audit's dead code, the v3.4.* audit's contained fixes, DJ), superblock 38, the suite (0 failed of 4,997 at `d2338bd7`, whose build inputs are the tagged tree's; not executed on the tagged commit itself; `tsan`, `bs-nightly` and the full `sim.sh` corpus not executed) and the gaps that bound it. **The tag is local and not pushed**, the operator's own word. Scenarios 1 to 4 measured at the tag: `bench/v3.5.0/summary-scenarios-v3.5.0.md` |
+| **Skipped on that word** | the pre-push hook and the full suite for the push of the results (documents and bench only, no build input); pushing the tag |
+| **Does not settle** | when `v3.5.0` (and `v3.4.18`, also unpushed) is pushed; anything after `07f4552a` but this record |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; `bench/v3.5.0/`; this file's row in `instructions/v3.2.0/index.md` |
+
+## 27. DL opened on the standing go-ahead
 
 | | |
 |---|---|
