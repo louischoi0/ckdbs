@@ -462,8 +462,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   taker still waits a roll out - a commit, a drain, `EnsureDurable` and a
   foreground statement on a page latch a roll's appender holds - and the
   roll's own length is unchanged (hold median about 250 ms in CZ's close
-  cell, `bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`). The zero prewrite's cost is DG's,
-  unopened. Owner: `docs/spec/wal.md` §6.
+  cell, `bench/v3.4.12/results-cz-close-v3.4.12-113-g74861601.md`).
+  **The zero prewrite stalls commits under a log that rolls** (DG-S0,
+  measured on worktree `dg-wal-segment-body` at `e9952d64` with a
+  measurement spike, `bench/v3.5.0/results-dg-s0-premise-v3.5.0-36-ge9952d64.md`,
+  ext4):
+  - A body built ahead is 64 MiB of zero writes (35-50 ms) and an `fsync`
+    of 287-503 ms.
+  - Beside a 24 MB/s log, a one-row commit's p95 is about 171 ms at
+    `group` and 174 ms at `strict`, against a p50 of under 1 ms. 79 % of
+    its samples of 10 ms or more at `group` (76 % at `strict`) are due
+    inside that `fsync`.
+  - Without the fill, the commit's median rises 76-94 % instead.
+  - Which body to build is DG's, opened and stopped at its V0. Owner:
+    `docs/spec/wal.md` §6.
 
 ## Multi-core state
 

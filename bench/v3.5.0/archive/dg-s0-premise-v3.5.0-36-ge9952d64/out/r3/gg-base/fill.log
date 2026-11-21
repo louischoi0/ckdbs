@@ -1,0 +1,15 @@
+fill seg_temp=wal-0-0.log.tmp ahead=0 start_ns=697919830437621 end_ns=697920147164700 reserve_us=13 write_us=27716 fsync_us=288917 fallocated=1 filled=1
+ask seg=1 at_ns=697933350146051
+fill seg_temp=wal-0-1.log.tmp ahead=1 start_ns=697933350403971 end_ns=697933679629993 reserve_us=32 write_us=41498 fsync_us=287692 fallocated=1 filled=1
+ask seg=2 at_ns=697936015174874
+fill seg_temp=wal-0-2.log.tmp ahead=1 start_ns=697936015250442 end_ns=697936338697017 reserve_us=24 write_us=35522 fsync_us=287897 fallocated=1 filled=1
+ask seg=3 at_ns=697938637691954
+fill seg_temp=wal-0-3.log.tmp ahead=1 start_ns=697938638037826 end_ns=697938962509602 reserve_us=33 write_us=36912 fsync_us=287523 fallocated=1 filled=1
+ask seg=4 at_ns=697941280278567
+fill seg_temp=wal-0-4.log.tmp ahead=1 start_ns=697941280637819 end_ns=697941609871705 reserve_us=30 write_us=41843 fsync_us=287358 fallocated=1 filled=1
+ask seg=5 at_ns=697943917825945
+fill seg_temp=wal-0-5.log.tmp ahead=1 start_ns=697943918306711 end_ns=697944241902625 reserve_us=25 write_us=36820 fsync_us=286746 fallocated=1 filled=1
+removed seg=0 at_ns=697945081889715
+removed seg=1 at_ns=697945090051956
+removed seg=2 at_ns=697945098145264
+removed seg=3 at_ns=697945106251091

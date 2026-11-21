@@ -1,0 +1,61 @@
+fill seg_temp=wal-0-0.log.tmp ahead=0 start_ns=697189814361109 end_ns=697189816330774 reserve_us=15 write_us=469 fsync_us=1431 fallocated=1 filled=0
+ask seg=1 at_ns=697196363367450
+fill seg_temp=wal-0-1.log.tmp ahead=1 start_ns=697196366090365 end_ns=697196367566787 reserve_us=20 write_us=483 fsync_us=971 fallocated=1 filled=0
+ask seg=2 at_ns=697196869622401
+fill seg_temp=wal-0-2.log.tmp ahead=1 start_ns=697196869696000 end_ns=697196870748260 reserve_us=19 write_us=106 fsync_us=924 fallocated=1 filled=0
+ask seg=3 at_ns=697197397528296
+fill seg_temp=wal-0-3.log.tmp ahead=1 start_ns=697197398512758 end_ns=697197400057079 reserve_us=20 write_us=89 fsync_us=1432 fallocated=1 filled=0
+ask seg=4 at_ns=697197950677877
+fill seg_temp=wal-0-4.log.tmp ahead=1 start_ns=697197951035988 end_ns=697197952351606 reserve_us=21 write_us=92 fsync_us=1201 fallocated=1 filled=0
+ask seg=5 at_ns=697198492759100
+fill seg_temp=wal-0-5.log.tmp ahead=1 start_ns=697198493087382 end_ns=697198494107625 reserve_us=19 write_us=86 fsync_us=912 fallocated=1 filled=0
+ask seg=6 at_ns=697199036285269
+fill seg_temp=wal-0-6.log.tmp ahead=1 start_ns=697199036737703 end_ns=697199037757354 reserve_us=20 write_us=83 fsync_us=914 fallocated=1 filled=0
+ask seg=7 at_ns=697199593634002
+fill seg_temp=wal-0-7.log.tmp ahead=1 start_ns=697199593714087 end_ns=697199594759252 reserve_us=23 write_us=81 fsync_us=938 fallocated=1 filled=0
+ask seg=8 at_ns=697200438053358
+fill seg_temp=wal-0-8.log.tmp ahead=1 start_ns=697200438124270 end_ns=697200462287656 reserve_us=20 write_us=84 fsync_us=24055 fallocated=1 filled=0
+ask seg=9 at_ns=697201058403589
+fill seg_temp=wal-0-9.log.tmp ahead=1 start_ns=697201058692222 end_ns=697201059903575 reserve_us=21 write_us=89 fsync_us=1098 fallocated=1 filled=0
+ask seg=10 at_ns=697201608379174
+fill seg_temp=wal-0-10.log.tmp ahead=1 start_ns=697201608458049 end_ns=697201609738728 reserve_us=22 write_us=91 fsync_us=1164 fallocated=1 filled=0
+ask seg=11 at_ns=697202175041763
+fill seg_temp=wal-0-11.log.tmp ahead=1 start_ns=697202175543382 end_ns=697202176637695 reserve_us=23 write_us=94 fsync_us=974 fallocated=1 filled=0
+ask seg=12 at_ns=697202734168932
+fill seg_temp=wal-0-12.log.tmp ahead=1 start_ns=697202734243704 end_ns=697202735405264 reserve_us=20 write_us=81 fsync_us=1057 fallocated=1 filled=0
+ask seg=13 at_ns=697203301957657
+fill seg_temp=wal-0-13.log.tmp ahead=1 start_ns=697203302027733 end_ns=697203302862501 reserve_us=19 write_us=75 fsync_us=738 fallocated=1 filled=0
+ask seg=14 at_ns=697203870739894
+fill seg_temp=wal-0-14.log.tmp ahead=1 start_ns=697203870814890 end_ns=697203871920827 reserve_us=18 write_us=74 fsync_us=1010 fallocated=1 filled=0
+ask seg=15 at_ns=697204441906291
+fill seg_temp=wal-0-15.log.tmp ahead=1 start_ns=697204441973694 end_ns=697204443050835 reserve_us=19 write_us=72 fsync_us=982 fallocated=1 filled=0
+ask seg=16 at_ns=697205243742095
+fill seg_temp=wal-0-16.log.tmp ahead=1 start_ns=697205243819035 end_ns=697205248571121 reserve_us=23 write_us=74 fsync_us=4652 fallocated=1 filled=0
+ask seg=17 at_ns=697206053986187
+fill seg_temp=wal-0-17.log.tmp ahead=1 start_ns=697206054541345 end_ns=697206056022014 reserve_us=19 write_us=83 fsync_us=1375 fallocated=1 filled=0
+ask seg=18 at_ns=697206625006192
+fill seg_temp=wal-0-18.log.tmp ahead=1 start_ns=697206625083820 end_ns=697206626333335 reserve_us=23 write_us=81 fsync_us=1143 fallocated=1 filled=0
+ask seg=19 at_ns=697207200587560
+fill seg_temp=wal-0-19.log.tmp ahead=1 start_ns=697207200664884 end_ns=697207201772891 reserve_us=19 write_us=72 fsync_us=1013 fallocated=1 filled=0
+ask seg=20 at_ns=697207776363101
+fill seg_temp=wal-0-20.log.tmp ahead=1 start_ns=697207776443557 end_ns=697207777482456 reserve_us=23 write_us=81 fsync_us=932 fallocated=1 filled=0
+removed seg=0 at_ns=697208646339155
+removed seg=1 at_ns=697208655197539
+removed seg=2 at_ns=697208664019871
+removed seg=3 at_ns=697208672659670
+removed seg=4 at_ns=697208681796458
+removed seg=5 at_ns=697208690753041
+removed seg=6 at_ns=697208699464834
+removed seg=7 at_ns=697208708201316
+removed seg=8 at_ns=697208716773582
+removed seg=9 at_ns=697208725123806
+removed seg=10 at_ns=697208733610051
+removed seg=11 at_ns=697208741576605
+removed seg=12 at_ns=697208750369141
+removed seg=13 at_ns=697208758360430
+removed seg=14 at_ns=697208766493880
+removed seg=15 at_ns=697208774673440
+removed seg=16 at_ns=697208782551520
+removed seg=17 at_ns=697208790314991
+removed seg=18 at_ns=697208798004392
+removed seg=19 at_ns=697208805931157

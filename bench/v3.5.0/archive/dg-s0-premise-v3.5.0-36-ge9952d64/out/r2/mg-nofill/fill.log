@@ -1,0 +1,13 @@
+fill seg_temp=wal-0-0.log.tmp ahead=0 start_ns=697344244769724 end_ns=697344246731713 reserve_us=14 write_us=512 fsync_us=1376 fallocated=1 filled=0
+ask seg=1 at_ns=697352839817200
+fill seg_temp=wal-0-1.log.tmp ahead=1 start_ns=697352840299649 end_ns=697352841257619 reserve_us=23 write_us=493 fsync_us=438 fallocated=1 filled=0
+ask seg=2 at_ns=697355777601732
+fill seg_temp=wal-0-2.log.tmp ahead=1 start_ns=697355777831759 end_ns=697355778896467 reserve_us=30 write_us=127 fsync_us=904 fallocated=1 filled=0
+ask seg=3 at_ns=697358828207161
+fill seg_temp=wal-0-3.log.tmp ahead=1 start_ns=697358828684932 end_ns=697358829553405 reserve_us=24 write_us=90 fsync_us=751 fallocated=1 filled=0
+ask seg=4 at_ns=697361903250779
+fill seg_temp=wal-0-4.log.tmp ahead=1 start_ns=697361903453890 end_ns=697361904464537 reserve_us=22 write_us=71 fsync_us=914 fallocated=1 filled=0
+removed seg=0 at_ns=697364318048883
+removed seg=1 at_ns=697364326749827
+removed seg=2 at_ns=697364335383805
+removed seg=3 at_ns=697364343942403

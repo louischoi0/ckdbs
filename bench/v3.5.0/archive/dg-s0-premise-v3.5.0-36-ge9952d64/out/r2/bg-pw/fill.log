@@ -1,0 +1,46 @@
+pool built=32 cold=0 at_ns=697088803251207
+pooled seg_temp=wal-0-0.log.tmp start_ns=697088803891884 end_ns=697088803927910 left=31
+ask seg=1 at_ns=697095539771518
+pooled seg_temp=wal-0-1.log.tmp start_ns=697095542459598 end_ns=697095542491414 left=30
+ask seg=2 at_ns=697096253317394
+pooled seg_temp=wal-0-2.log.tmp start_ns=697096253361740 end_ns=697096253389690 left=29
+ask seg=3 at_ns=697096997950571
+pooled seg_temp=wal-0-3.log.tmp start_ns=697096997992291 end_ns=697096998024066 left=28
+ask seg=4 at_ns=697097767973334
+pooled seg_temp=wal-0-4.log.tmp start_ns=697097768034082 end_ns=697097768075989 left=27
+ask seg=5 at_ns=697098548324486
+pooled seg_temp=wal-0-5.log.tmp start_ns=697098548367031 end_ns=697098548397589 left=26
+ask seg=6 at_ns=697099560184926
+pooled seg_temp=wal-0-6.log.tmp start_ns=697099560229617 end_ns=697099560260976 left=25
+ask seg=7 at_ns=697100338657382
+pooled seg_temp=wal-0-7.log.tmp start_ns=697100338697544 end_ns=697100338725794 left=24
+ask seg=8 at_ns=697101125470200
+pooled seg_temp=wal-0-8.log.tmp start_ns=697101125510647 end_ns=697101125535603 left=23
+ask seg=9 at_ns=697101922609864
+pooled seg_temp=wal-0-9.log.tmp start_ns=697101922654044 end_ns=697101922685606 left=22
+ask seg=10 at_ns=697102724584960
+pooled seg_temp=wal-0-10.log.tmp start_ns=697102724629944 end_ns=697102724661907 left=21
+ask seg=11 at_ns=697103536466647
+pooled seg_temp=wal-0-11.log.tmp start_ns=697103536511761 end_ns=697103536541839 left=20
+ask seg=12 at_ns=697104713951238
+pooled seg_temp=wal-0-12.log.tmp start_ns=697104713992693 end_ns=697104714025588 left=19
+ask seg=13 at_ns=697105550945292
+pooled seg_temp=wal-0-13.log.tmp start_ns=697105550987885 end_ns=697105551018623 left=18
+ask seg=14 at_ns=697106389267923
+pooled seg_temp=wal-0-14.log.tmp start_ns=697106389311234 end_ns=697106389346604 left=17
+ask seg=15 at_ns=697107238445552
+pooled seg_temp=wal-0-15.log.tmp start_ns=697107238484653 end_ns=697107238511811 left=16
+removed seg=0 at_ns=697107682289553
+removed seg=1 at_ns=697107688988118
+removed seg=2 at_ns=697107695684941
+removed seg=3 at_ns=697107702542764
+removed seg=4 at_ns=697107709478925
+removed seg=5 at_ns=697107716305635
+removed seg=6 at_ns=697107723046064
+removed seg=7 at_ns=697107730029980
+removed seg=8 at_ns=697107737067176
+removed seg=9 at_ns=697107744113658
+removed seg=10 at_ns=697107751492543
+removed seg=11 at_ns=697107758719471
+removed seg=12 at_ns=697107766024729
+removed seg=13 at_ns=697107772934607
