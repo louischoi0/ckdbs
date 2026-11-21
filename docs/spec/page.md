@@ -113,6 +113,8 @@ Owns "which page_ids exist / are free" inside the disk-backed store, behind the 
 
 ## 5a. The var-heap page class
 
+`kHeapData` (`page_type = 15`, since superblock 39): a heap relation's data page (`docs/spec/heap-and-tuple.md` §3.1b) - the slotted heap body, logged, imaged and checksummed as a btree leaf is, its owner the relation's oid. It alone takes a slot release (`kSlotFlagFree`, SLOT_FREE) and a reuse; it only appends a slot, so no slot index - a rowid - shifts.
+
 `kVarHeap` (`page_type = 10`, `include/kds/storage/varheap.hpp`): the out-of-line store for values too long for a tuple's fixed-width tagged cell (`docs/spec/heap-and-tuple.md` §3.4).
 
 - **Headered, checksummed, logged** — an ordinary authoritative page class, with a `page_lsn` and a `VARHEAP_APPEND` record (`wal.md` §5.2). Waystone pages and the trail directory are *advisory*, and those rules must not be pattern-matched onto this one: losing a var-heap value loses a committed value, not a hint.

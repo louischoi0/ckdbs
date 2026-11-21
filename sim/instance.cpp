@@ -208,6 +208,9 @@ void SimInstance::Recycle(wal::Lsn durable_redo_start) {
 }
 
 Status SimInstance::ReclaimStep() {
+    // The heap slot release too, as core 0's tick steps it beside the
+    // reclaim (DN-R2): its frees and reuses run under the harness's crashes.
+    if (auto owed = dispatcher_->StepHeapRelease(16); !owed.ok()) return owed.status();
     if (!reclaimer_.has_value() || reclaim_counters_.pending.load() == 0) return Status::OK();
     return reclaimer_->Step(Pinned(anchor_->durable_redo_start()));
 }

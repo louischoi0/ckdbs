@@ -2064,7 +2064,7 @@ private:
     StatusOr<bool> ResolveOrdered(const std::vector<Step>& steps, std::size_t index,
                                   const Step& step, const catalog::TableAccess& access,
                                   std::span<const std::byte> key, std::uint64_t tuple_key,
-                                  std::uint64_t rowid = 0) {
+                                  std::uint64_t rowid) {
         StepStats& step_stats = stats_.For(step.step_id);
         NoteFetch();
         ++step_stats.pages_fetched;
@@ -2108,7 +2108,8 @@ private:
         }
         for (const OrderedRecord& record : collected) {
             if (stopped_) break;
-            auto matched = ResolveOrdered(steps, index, step, access, record.first, record.second);
+            auto matched = ResolveOrdered(steps, index, step, access, record.first, record.second,
+                                          /*rowid=*/0);
             if (!matched.ok()) co_return matched.status();
         }
         co_return Status::OK();

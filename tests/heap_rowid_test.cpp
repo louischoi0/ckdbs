@@ -355,12 +355,10 @@ TEST_F(HeapRowidTest, ATombstoneTheReleaseHadToDeferIsReleasedLater) {
     EXPECT_EQ(Rows("SELECT COUNT(*) FROM h").rows.at(0).at(0), "200");
 }
 
-// **A rolled-back insert queues nothing.** Only a `DELETE` and an insert's
-// take-back note a relation for the release (`HeapSpace::NoteDead`); a
-// transaction's rollback, a statement's rollback inside a transaction and a
-// crash loser's undo at mount retire heap slots and queue nothing, so those
-// slots wait for some later delete on the relation. Disabled until the
-// rollback queues its heap relations (proposed, outside `exec/heap_release`).
+// **A rolled-back insert alone queues its relation**: a rollback's
+// compensation retiring a heap slot reports it (`TransactionManager`'s
+// heap-retire observer, `HeapSpace::NoteDead`), so its slots are released
+// with no later delete on the relation; a mount queues every heap.
 TEST_F(HeapRowidTest, ARolledBackInsertAloneQueuesItsRelation) {
     Ok("CREATE TABLE p (id int64 PRIMARY KEY, v int64) HEAP", "CREATED");
     for (int i = 1; i <= 50; ++i) {

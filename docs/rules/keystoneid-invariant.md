@@ -44,8 +44,10 @@ Decisions fixed here:
   inserts); nothing may rely on ids being
   contiguous. **Issued keys are a sequence in issue order**: the cursor
   never goes backward. **Named keys carry no order**: the leaf places one wherever it sorts
-  (BD-R7), and every user relation is a btree, a heap under its hidden key
-  included (`heap-and-tuple.md` §3.1b). A leaf's slot order is its key
+  (BD-R7), and every user relation finds a row by its Keystone through one
+  authoritative structure - a btree relation's tree, a heap's Keystone index
+  (its single `int64` primary key's, where that is the Keystone) - so a miss
+  there is the row's absence (K3, DN; `heap-and-tuple.md` §3.1b). A leaf's slot order is its key
   order by placement, and no relation records an exception (`kUnordered`
   is deleted, BB-R10). An issued id is unique among issued ids by the mark
   and against named keys by the placement's duplicate check. Monotonicity is a **per-relation,

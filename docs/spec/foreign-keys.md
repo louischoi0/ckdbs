@@ -22,6 +22,10 @@ Decisions:
   named it, and no
   reader that could see such a child is left (`heap-and-tuple.md` §4.1c).
   A reference outside a declared foreign key points at the new row.
+  A heap is a parent only where its Keystone is a declared single `int64`
+  primary key; a heap with another key, or none, is refused as a parent by
+  name (DN-Q5). A heap parent's row is found through its Keystone index
+  (`exec::LocateRow`), and every check above holds over it unchanged.
 - **F2 — Actions: RESTRICT / NO ACTION only.** The grammar is
   `REFERENCES <parent>` with no action clause; CASCADE and SET NULL are
   not accepted.

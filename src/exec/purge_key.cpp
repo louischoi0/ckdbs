@@ -14,12 +14,16 @@ namespace kds::exec {
 
 namespace {
 
-// A heap's tombstone (DN-Q6 (a)): the row the Keystone index names for
-// `id`, held exclusive, still delete-marked by `deleter`; none otherwise.
-StatusOr<std::optional<btree::Location>> HoldHeapTombstone(storage::PageStore& store,
-                                                           const catalog::TableAccess& access,
-                                                           std::uint64_t id,
-                                                           std::uint64_t deleter) {
+// **A write lookup and the verify, under the hold the retire will use**:
+// the row keyed `id` - a btree's descent, a heap's Keystone index and rowid
+// (DN-Q6 (a)) - held exclusive, and handed back only if it is still the
+// tombstone `deleter` stamped; none otherwise (PU12's skip). The hold orders
+// the purge against a named `INSERT` of `id`: its duplicate check reads the
+// slot under the same page latch, so it meets either the tombstone
+// (refused) or a keyless slot (placed), never a half-retired one.
+StatusOr<std::optional<btree::Location>> HoldTombstone(storage::PageStore& store,
+                                                       const catalog::TableAccess& access,
+                                                       std::uint64_t id, std::uint64_t deleter) {
     auto at = LocateRow(store, access, id, storage::PageAccess::kWrite);
     if (!at.ok()) {
         if (at.status().code() == StatusCode::kNotFound) {
@@ -28,7 +32,8 @@ StatusOr<std::optional<btree::Location>> HoldHeapTombstone(storage::PageStore& s
         return at.status();
     }
     auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
-    if (!tuple.ok() || !tuple.value().deleted || tuple.value().trx_id != deleter) {
+    if (!tuple.ok()) return tuple.status();
+    if (!tuple.value().deleted || tuple.value().trx_id != deleter) {
         return std::optional<btree::Location>{};
     }
     return std::optional<btree::Location>{std::move(at.value())};
@@ -39,9 +44,7 @@ StatusOr<std::optional<btree::Location>> HoldHeapTombstone(storage::PageStore& s
 StatusOr<PurgeOutcome> PurgeKey(storage::PageStore& store, wal::WalManager* wal,
                                 const catalog::TableAccess& access, std::uint64_t id,
                                 std::uint64_t deleter_trx_id) {
-    auto held = access.heap()
-                    ? HoldHeapTombstone(store, access, id, deleter_trx_id)
-                    : btree::BtreeHoldTombstone(store, access.desc_page_id, id, deleter_trx_id);
+    auto held = HoldTombstone(store, access, id, deleter_trx_id);
     if (!held.ok()) return held.status();
     if (!held.value().has_value()) return PurgeOutcome::kSkipped;
     btree::Location& tomb = *held.value();

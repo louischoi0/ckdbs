@@ -641,3 +641,109 @@ the operator moves it. DN-S2, DN-S3 and DN-S4 run on the standing go-ahead
 of 2026-11-21 (go-ahead-achieving-milestone), on worktree
 `dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, from `3a07ad49`.
 
+### DN-S2 - the heap, 2026-11-21
+
+On worktree `dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, from
+`b7262f9b` (`v3.5.0-41-gb7262f9b`), on the operator's standing go-ahead of
+2026-11-21 (go-ahead-achieving-milestone). Three steps, each reviewed by
+`critics-developer` and gated by the full suite.
+
+- **S2a, `e0c34e20`: the page.** `PageType::kHeapData` (15, DN-Q15), a free
+  slot (`kSlotFlagFree`) released by `PageView::FreeSlot` and taken again by
+  `ReuseSlot`, SLOT_FREE (36), the rowid codec (`storage/heap/rowid.hpp`),
+  superblock 39. **Review**: redo replayed a HEAP_OVERWRITE onto a free slot
+  as a reuse - refused `Corruption` now; DN-R10 checked again at redo; a
+  data page's slots never shift (`InsertTupleAt` mid-directory and
+  `UnInsertTuple` but the last refused there); `ReuseSlot` bounds-checked;
+  one tuple writer (`WriteNewTuple`), one slot-record logger. Rejected: none.
+- **S2b, `9a69c21d`: the heap.** `ClusteredType::kHeap`, `CREATE TABLE ...
+  HEAP` with its head page (`min_key` 1, DN-Q16) and Keystone index
+  (DN-Q2 (a), named per DN-Q22), every index entry carrying the rowid
+  (`IndexLayout::rowid_width`) and resolved at it with the Keystone check
+  (DN-R3), `exec::LocateRow` for every key access, placement by space with a
+  growth logged as a split (DN-Q17), the btree's walk reading a heap's chain
+  while every descent refuses a data page, the compiler giving a heap no
+  tuple key range, no `ORDER BY <tuple key>` elision and a build prefix by
+  place, `PRIMARY KEY` (DN-Q21), `keyidentity` (DN-Q19), DN-Q14 (a)'s mark
+  (DN-Q20). **Review**: an online `CREATE INDEX` over a heap was refused, and
+  past that its A2 bound (a chain ordered by `min_key`) would have left older
+  rows unindexed - fixed (the high water over the whole chain, a page past it
+  skipped, not ending the walk); `DROP TABLE` of a heap leaked its data
+  pages; `GATHER STATISTICS` and `sys.relation_stats` read no data page; a
+  refusal named `$tuple_key`. Adopted from its proposals: a rowid naming
+  another relation's page is a miss, not `Corruption` (a crash can leave an
+  entry whose growth redo never created, and `Corruption` would refuse every
+  judge that could remove it); a rowid on page 0 refused (`PutIndexRowid`);
+  `TableAccess::heap()`; `HeapSpace::Forget`. Not applied: folding
+  `WalkHeapPages`' cursor epilogue into `WalkBtreeLeaves`' (two shapes of
+  resume), dropping `IndexRef::rowid` (it keeps `IndexLayoutOf` free of the
+  access). The design questions it raised are `known-gaps.md`'s DN section.
+- **S2c, `7ae0f800` and `bc8c9d97`: the slot release, unasked** (DD-S4 under
+  the operator's `$!b`, DN-Q18): `exec::HeapSlotRelease`, stepped by
+  `CommandDispatcher::StepHeapRelease` from core 0's `system` tick, queued by
+  `HeapSpace::NoteDead`. **Review**: **`7ae0f800` did not compile** - a
+  rename onto `SysTableRow` - and the suite CLA reported for it had run an
+  older binary, CLA's build filter having missed GCC's `error:` lines; the
+  build and the suite were re-run at `bc8c9d97`. **A stale catalog memo let
+  the release free slots an index built afterwards still named** (DN-R2,
+  `[quiet-wrong]`) - each step revalidates the catalog now; an online build's
+  index can append behind the verify, so a job meeting one frees nothing and
+  re-queues; a tombstone the job deferred was never asked again; the free
+  was unbounded (DD-R10). Adopted from its proposals: a rollback's
+  compensation queues the relation (`TransactionManager`'s heap-retire
+  observer), so does every mount, and the queue is taken in arrival order.
+  The PURGE INDEX judge groups a leaf's entries by `(tuple key, rowid)`.
+
+**Gate**: the full suite 0 failed of 5090 at `bc8c9d97`; `scripts/sim.sh`
+280 runs, 0 failures, at `7ae0f800` before heaps were drawn and at
+`bc8c9d97` with them (DN-S3). Overhead not measured; measured at the
+milestone's close. **Adopted on the standing go-ahead**, none the
+operator's own mark: DN-Q15 to DN-Q23 (§4), DN-Q20 `[quiet-wrong]` among
+them - "at or below its issue mark" read as below `next_id`, which the
+marked cost, an ascending load, requires. **Moved into the owning documents
+with the code** (DN-Q12 (a)): §8's text into `heap-and-tuple.md` §3.1b,
+§4.1c and §8 and `CLAUDE.md`'s invariants 4 and 11, IX1, F1 and K3 - with
+one sentence §8 did not stage, invariant 11's "no relation refuses a named
+key for being below the mark", which DN-Q14 (a) makes false and which now
+names the hidden-Keystone heap.
+
+### DN-S3 - the consumers, 2026-11-21
+
+On worktree `dn-dd-s4-into-dn-s2`, on the same standing go-ahead. §1.3's
+paths under DN-Q2, Q5, Q6 and Q10:
+
+- **DN-Q2 (a)**: every path that finds a row by its Keystone - a point
+  read or write, `FOR UPDATE`, `RETURNING`, a foreign key's checks, an
+  insert's uniqueness, `ON CONFLICT`'s arbiter, `PURGE`'s tombstone,
+  `CleanDroppedCells`, the unique check, the backfill's re-read, the Cabin
+  and Waystone fallbacks - goes through `exec::LocateRow`, the Keystone
+  index on a heap (DN-S2). An index step and the ordered index walk resolve
+  at the entry's rowid first (`ResolveIndexedRow`).
+- **DN-Q5 (a)**: a declared-Keystone heap is a foreign key parent; a hidden
+  Keystone's is refused `Unsupported` as before.
+- **DN-Q6 (a)**: `PURGE` by Keystone on a declared-Keystone heap - the window
+  walked in page order, every key judged, the tombstone held through the
+  Keystone index (`exec::PurgeKey`'s one `HoldTombstone`, which replaced
+  `btree::BtreeHoldTombstone`), the purged slots queued for the release.
+- **DN-Q10 (a)**: no change was needed - a Cabin's and a Waystone's location
+  hint is a `(page, slot)`, which on a heap is the rowid and never moves,
+  verified against the Keystone at the slot (`VerifyTupleAt`), and the
+  fallback is `LocateRow`.
+- **The simulator draws heaps** (a declared-Keystone heap per table and as
+  the foreign key parent, by its own stream) and steps the slot release
+  beside the reclaim, so a slot freed and reused runs under its crashes.
+
+**Review** (of `bc8c9d97`): no correctness defect; four regression cells
+added (a window purged whatever the page order, a purged key named again
+across the release, a heap parent under the foreign key's rules, a
+Cabin-served reverse check over a heap child). Adopted: the two tombstone
+holds merged; the simulator steps the release and draws the parent as a
+heap; a stale comment, a long line, an include's order, an implicit
+default. **Rejected**: an owner token on the heap-retire observer - two
+dispatchers over one manager are a test fixture's shape, not production's,
+and no cell trips it; `PURGE` served by the Keystone index's window - a
+performance change, stated in `known-gaps.md`.
+
+**Gate**: the full suite 0 failed of 5094; `scripts/sim.sh` 280 runs, 0
+failures, heaps drawn and the release stepped. Overhead not measured;
+measured at the milestone's close.

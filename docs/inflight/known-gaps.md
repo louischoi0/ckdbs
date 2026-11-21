@@ -3308,15 +3308,57 @@ the thirteen fixes leave, each `[source-read]` unless marked.
   `LookupIndexByName`, and the `NotFound`-shaped form is kept for the cells
   that open an index by its name (about 25 call sites in 9 test files).
 
+## The heap as data pages (DN)
+
+Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
+
+- **A Keystone range is a full scan.** `WHERE keyidentity > 2` (or a range on
+  a declared Keystone) is answered by the walk with the range in the
+  residual; the Keystone index is not chosen for it, so a heap's key range
+  costs the relation, where `heap-and-tuple.md` §3.1b's index range walk
+  would cost the range.
+- **A heap has no sampled planner prior.** `plan_stats`' descent-sampled
+  prior reads no data page, so a heap is priced at constant fill and a join
+  block holding one is not captured under `join_order = fixed`; `GATHER
+  STATISTICS` counts a heap exactly and its published object is used.
+- **The query layer refuses `keyidentity`.** A statement the native path
+  declines (a set operation, a derived table, an outer join) answers
+  `unknown column 'keyidentity'`: the layer's walk emits no hidden column.
+  A refusal, never a wrong answer; `ON CONFLICT (keyidentity)` on a
+  hidden-Keystone heap is refused too.
+- **Partly filled pages are abandoned at each restart.** The placement hints
+  are memory only (DN-Q23): after a restart a core fills from the head and
+  up to `cores` partly filled pages wait for a release to find their free
+  slots, never their free space.
+- **The release is slow and walks whole.** 16 pages or leaves a 50 ms tick:
+  each job walks the relation and every index, so a large heap frees its
+  slots long after a delete; its candidate set is uncapped; a slot pinned by
+  a leaf's first entry (DD-Q3 (a)) is collected, purged and verified again by
+  every job, forever (DM's U2b would lift it).
+- **`PURGE` on a heap walks the whole heap**, even for one key: the Keystone
+  index holds the window in key order, which a judge over it would cost the
+  window alone.
+- **A placement hint declined for its `min_key` is fetched again per
+  insert.** On a declared-Keystone heap with low named keys, `HeapInsert`
+  fetches every free-slot hint exclusive and puts it back, O(hints) an
+  insert.
+- **`PURGE`'s `[quiet-wrong]` horizon premise is load-bearing on every heap
+  `DELETE`**: the release retires a hidden-Keystone heap's tombstone once
+  `ResolvedForEveryReader` passes its deleter, unasked and on any core's
+  rows - every view that can see a superseded row must stay registered with
+  the horizon (`heap-and-tuple.md` §4.1c).
+- **A take-back's unlogged index entry can name a freed slot after a
+  crash** (predates DN, E5): DN-R3's Keystone check at the slot makes it a
+  miss.
+
 ## Index entry purge (DD)
 
 Verified on worktree `dd-index-entry-purge` (DD-S2, 2026-11-20).
 
-- **Nothing drives it**: `PURGE INDEX` runs when an administrator runs it
-  (DD-Q4 (a)). Under DN's heap a slot is freed only by entry removal, so
-  DN needs a driver that runs unasked; by the operator's mark of 2026-11-21
-  (DD-S4 option (b), `raft-marks-2026-11-21.md` §6) it is DN-S2's, built
-  with DN's record of which slots no index names. Not built at `dcab41e5`.
+- **Nothing drives it on a btree**: there `PURGE INDEX` runs when an
+  administrator runs it (DD-Q4 (a)). A heap's indexes are purged unasked by
+  its slot release (DD-S4 option (b), `raft-marks-2026-11-21.md` §6; built
+  in DN-S2, verified at `bc8c9d97`, `heap-and-tuple.md` §3.1b).
 - **A purge of a row `PURGE`'s window is about eight times dearer an
   entry** (DD's close, `bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`:
   about 20 us against 2.4 us): the judge's lookup of a purged key lands

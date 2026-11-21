@@ -611,8 +611,11 @@ Op Workload::ConstrainedDdl() {
         case 0:
             op.kind = Op::Kind::kCreateTable;
             op.table = kFkParent;
+            // A declared-Keystone heap is a parent as a btree is (DN-Q5 (a)).
             op.sql = std::string("CREATE TABLE ") + kFkParent +
-                     " (id int64, v int64, name varchar) SPARE 1";
+                     (storage_rng_.Below(2) == 1
+                          ? " (id int64 PRIMARY KEY, v int64, name varchar) SPARE 1 HEAP"
+                          : " (id int64, v int64, name varchar) SPARE 1");
             return op;
         case 2:
             op.kind = Op::Kind::kCreateTable;

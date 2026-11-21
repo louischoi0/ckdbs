@@ -142,9 +142,9 @@ Grammar (verified):
 
 ```
 CREATE TABLE [<namespace>.]<name>
-                    ( <col> <type> [NULL | NOT NULL] [REFERENCES <parent>]
+                    ( <col> <type> [NULL | NOT NULL] [PRIMARY KEY] [REFERENCES <parent>]
                      [CABIN | CABIN AUTO | NO CABIN]
-                     [, ...] ) [HEAP | BTREE] [EXPLICIT] [SPARE <n>];
+                     [, ...] [, PRIMARY KEY (<col>, ...)] ) [HEAP | BTREE] [EXPLICIT] [SPARE <n>];
 ```
 
 - **Column names are unique ignoring case.** `(id int64, a int64, A int64)`
@@ -170,20 +170,36 @@ CREATE TABLE [<namespace>.]<name>
 - **The storage clause defaults to `BTREE`**: a clustered B+ tree on the
   tuple key, which is the relation's first column and must be an integer
   type.
-- **`HEAP` declares a relation with no tuple key column.** Every column you
-  write is an ordinary one — the first may be any type, nullable and
-  updatable — and the engine adds a hidden tuple key in front of them,
-  issued per row in insertion order. The relation is still a B+ tree
-  underneath, ordered by that key, so a scan without `ORDER BY` reads rows in
-  insertion order (not a promise). No statement can name the hidden key:
-  `SELECT *`, `RETURNING *`, `DESCRIBE` and `sys.columns` show only your
-  columns; a positional `INSERT` supplies exactly your columns, and every
-  row's key is issued. Only the KWP load stream carries it, as field 0 — a
-  NULL there takes an issued key, a value names one. A `HEAP` relation may
-  carry secondary indexes, Cabins, assertions and Transitions and be an FK
-  child; it cannot be an FK parent and cannot be `PURGE`d (both name tuple
-  keys). `sys.tables.clustered_type` reads `HEAP`, `BTREE`, or `CHAIN` for
-  a system relation.
+- **`HEAP` declares a relation stored as data pages in no key order**, each
+  row at a fixed place for its life, and every key access goes through an
+  index that names that place. A full scan reads the pages, in no promised
+  order - write `ORDER BY` for one. Its key, the **Keystone**, is one of two:
+  - **`id int64 PRIMARY KEY` declared first** (a column's suffix, or
+    `PRIMARY KEY (id)` in the list): that column is the key, visible, named
+    by an `INSERT` or issued when omitted, unique, never updated. An `int64`
+    primary key declared anywhere but first is refused at its byte.
+  - **anything else** - no primary key, or one of several columns or of
+    another type: the engine adds a hidden `int64` key in front of your
+    columns, issued per row. `SELECT *`, `RETURNING *`, `DESCRIBE` and
+    `sys.columns` show only your columns, and a positional `INSERT` supplies
+    exactly them. A primary key you declared is then a unique index beside
+    it. A key named into such a heap - the KWP load's field 0, or an
+    `INSERT` naming `keyidentity` - must be above every key the heap has
+    placed, so a deleted key is never named again: a load names its keys
+    ascending.
+
+  **`keyidentity` reads any relation's key by name** - the hidden one
+  included - in a select list, a `WHERE`, an `ORDER BY`, `RETURNING` and an
+  `INSERT` column list; it is reserved and names no table, column, index,
+  namespace or alias. A deleted row's space is reused once no index names
+  it, by a background release. A `HEAP` relation may carry secondary
+  indexes, Cabins, assertions and Transitions and be an FK child. A heap
+  whose key is `id int64 PRIMARY KEY` is also an FK parent and is `PURGE`d by
+  that key; one with a hidden key is neither. `PRIMARY KEY` is a heap's
+  alone: on a `BTREE` the first column is the key and the keyword is refused.
+  `sys.tables.clustered_type` reads `HEAP`, `BTREE`, or `CHAIN` for a system
+  relation. **A volume made before superblock 39 does not mount** here: its
+  heaps were stored another way.
 - **There is no key mode.** Every relation takes a caller-named tuple key
   or issues one when `INSERT` omits it, so nothing about keys is declared
   here. `EXPLICIT` is still accepted and **does nothing** — it states what is
@@ -297,9 +313,10 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
 - No parent column is written **and none may be**: the parent side is always
   the referenced relation's Keystone id. `REFERENCES accounts(id)` is refused
   (`Unsupported`) — it would spell out the only thing it could mean.
-- A `HEAP` parent is refused at declaration (`Unsupported`): the child's
-  column holds the parent's tuple key, and a heap's is hidden, so no child
-  value could name a parent row. A `HEAP` child is fine.
+- A `HEAP` parent with a hidden key is refused at declaration (`Unsupported`):
+  the child's column holds the parent's tuple key, and that one is hidden.
+  A `HEAP` whose key is `id int64 PRIMARY KEY` is a parent as a `BTREE` is.
+  A `HEAP` child is fine.
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
   first one. Violations answer `ERR FK_VIOLATION retryable=0 ...`.
