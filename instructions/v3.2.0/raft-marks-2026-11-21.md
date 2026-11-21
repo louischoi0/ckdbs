@@ -84,7 +84,7 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | | |
 |---|---|
 | **Word** | *"Push it."* (given in Korean; recorded in English), in reply to CLA's report that ended by asking whether to push `d4fc645e` |
-| **Mark** | **§8's order lands on `main`**: `d4fc645e` (the DO order, its index row and §8) and this record, on `origin/main` `3a07ad49`, pushed. Documents only, so no suite was run for it and none was run by the hook |
+| **Mark** | **§8's order lands on `main`**: `0c24d15a` (the DO order, its index row and §8; `d4fc645e` in the session's read-only clone, applied here by `git am`, which gave it a new hash) and this record, on `origin/main` `3a07ad49`, pushed. Documents only, so no suite was run for it and none was run by the hook |
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | DO-Q0..Q8; whether DO opens; a tag or a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
