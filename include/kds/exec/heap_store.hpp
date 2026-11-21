@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -68,7 +69,10 @@ private:
     };
     mutable std::mutex mu_;
     std::unordered_map<std::uint64_t, Relation> relations_;
-    std::set<std::uint64_t> dead_;
+    // Queued once (`dead_set_`), taken in arrival order (`dead_`), so a
+    // relation re-queued every tick does not starve the others.
+    std::set<std::uint64_t> dead_set_;
+    std::deque<std::uint64_t> dead_;
 };
 
 // The heap's Keystone index (`kIndexFlagKeystone`), or nullptr on any other

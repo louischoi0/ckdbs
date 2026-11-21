@@ -47,7 +47,20 @@ bool IsDataPageOf(std::span<const std::byte, kPageSize> page, catalog::Oid oid) 
 
 Status HeapSlotRelease::Step(HeapReleaseContext& cx, std::uint32_t budget) {
     if (done()) return Status::OK();
+    // **The memo made current under the step's `IX`** (catalog.md CT2), as
+    // a DDL makes it under its `X`: a step is stepped from a `system` tick,
+    // which is no statement boundary, so the memo is otherwise as old as the
+    // core's last statement - missing an index another core built since,
+    // which would then be neither purged nor verified, its entries left
+    // naming a freed slot (DN-R2), or naming a dropped index whose pages a
+    // reclaim has handed on. Nothing here holds a `TableAccess` yet, and the
+    // `IX` fences every DDL that changes the relation's indexes from here to
+    // the step's end.
+    cx.catalog.Revalidate();
     auto access = cx.catalog.InitTableAccess(rel_oid_);
+    if (!access.ok() && access.status().code() != StatusCode::kNotFound) {
+        return access.status();  // asked again whole; its slots stay retired
+    }
     if (!access.ok() || !access.value()->heap()) {
         // Dropped, or never a heap: nothing to release, and its hints name
         // pages a reclaim frees.
@@ -56,14 +69,20 @@ Status HeapSlotRelease::Step(HeapReleaseContext& cx, std::uint32_t budget) {
         return Status::OK();
     }
     const catalog::TableAccess& ta = *access.value();
+    Status stepped = Status::OK();
     switch (phase_) {
-        case Phase::kCollect: return Collect(cx, ta, budget);
-        case Phase::kPurge: return Purge(cx, ta, budget);
-        case Phase::kVerify: return Verify(cx, ta, budget);
-        case Phase::kFree: return Free(cx, ta);
-        case Phase::kDone: return Status::OK();
+        case Phase::kCollect: stepped = Collect(cx, ta, budget); break;
+        case Phase::kPurge: stepped = Purge(cx, ta, budget); break;
+        case Phase::kVerify: stepped = Verify(cx, ta, budget); break;
+        case Phase::kFree: stepped = Free(cx, ta, budget); break;
+        case Phase::kDone: break;
     }
-    return Status::OK();
+    // A job that left a slot owed for a reason that passes - a deleter in
+    // flight or still seen by a reader, an index still building - queues
+    // its relation again, or nothing would: the delete that queued it has
+    // already been taken.
+    if (stepped.ok() && done() && deferred_) cx.space.NoteDead(rel_oid_);
+    return stepped;
 }
 
 Status HeapSlotRelease::Collect(HeapReleaseContext& cx, const catalog::TableAccess& access,
@@ -109,8 +128,9 @@ Status HeapSlotRelease::Collect(HeapReleaseContext& cx, const catalog::TableAcce
                 auto tuple = page.ReadTuple(i);
                 if (!tuple.ok() || !tuple.value().deleted) continue;
                 const std::uint64_t deleter = tuple.value().trx_id;
-                if (cx.txns == nullptr || cx.txns->IsInFlight(deleter) ||
-                    !cx.txns->ResolvedForEveryReader(deleter)) {
+                if (cx.txns == nullptr) continue;
+                if (cx.txns->IsInFlight(deleter) || !cx.txns->ResolvedForEveryReader(deleter)) {
+                    deferred_ = true;
                     continue;
                 }
                 tombstones.push_back(Tombstone{i, deleter});
@@ -206,6 +226,18 @@ Status HeapSlotRelease::Verify(HeapReleaseContext& cx, const catalog::TableAcces
         index_oid_ = 0;
         return Status::OK();
     }
+    // **An index still building is no proof** (CI): its backfill copies a
+    // page's rows, then appends their entries, holding nothing between - so
+    // a row copied before the collect retired its slot gets its entry after
+    // this walk has passed. Nothing is freed while one builds; the job is
+    // asked again, and once the build is published every entry it copied is
+    // in the tree this walk reads.
+    if (ix->building) {
+        deferred_ = true;
+        candidates_.clear();
+        phase_ = Phase::kDone;
+        return Status::OK();
+    }
     const index::IndexLayout layout = IndexLayoutOf(*ix);
     for (std::uint32_t walked = 0; leaf_ != kInvalidPageId && walked < budget; ++walked) {
         auto page = index::IndexFetchLeaf(cx.store, leaf_, layout, storage::PageAccess::kRead);
@@ -228,25 +260,40 @@ Status HeapSlotRelease::Verify(HeapReleaseContext& cx, const catalog::TableAcces
     return Status::OK();
 }
 
-Status HeapSlotRelease::Free(HeapReleaseContext& cx, const catalog::TableAccess& access) {
-    for (std::uint64_t rowid : candidates_) {
-        const heap::Rowid at = heap::DecodeRowid(rowid);
-        auto ref = cx.store.Get(at.page_id);
-        if (!ref.ok()) return ref.status();
-        if (!IsDataPageOf(ref.value().bytes(), access.oid)) continue;
-        heap::PageView page(ref.value().bytes());
-        auto info = page.DebugSlotInfo(at.slot);
-        if (!info.ok() || !info.value().dead || (info.value().flags & heap::kSlotFlagFree) != 0) {
-            continue;
+// A page at a time, `budget` pages a step (DD-R10: the step's `IX` is
+// bounded): a rowid sorts by its page first, so a page's candidates are
+// adjacent and freed under one hold.
+Status HeapSlotRelease::Free(HeapReleaseContext& cx, const catalog::TableAccess& access,
+                             std::uint32_t budget) {
+    for (std::uint32_t pages = 0; !candidates_.empty() && pages < budget; ++pages) {
+        const PageId page_id = heap::DecodeRowid(*candidates_.begin()).page_id;
+        const auto end = candidates_.lower_bound(heap::EncodeRowid(heap::Rowid{page_id + 1, 0}));
+        std::vector<heap::Rowid> freed;
+        {
+            auto ref = cx.store.Get(page_id);
+            if (!ref.ok()) return ref.status();
+            if (IsDataPageOf(ref.value().bytes(), access.oid)) {
+                heap::PageView page(ref.value().bytes());
+                for (auto it = candidates_.begin(); it != end; ++it) {
+                    const std::uint16_t slot = heap::DecodeRowid(*it).slot;
+                    auto info = page.DebugSlotInfo(slot);
+                    if (!info.ok() || !info.value().dead ||
+                        (info.value().flags & heap::kSlotFlagFree) != 0) {
+                        continue;
+                    }
+                    if (Status s = page.FreeSlot(slot); !s.ok()) return s;
+                    if (Status s = LogSlotFree(cx.wal, cx.store, page_id, slot); !s.ok()) {
+                        return s;
+                    }
+                    freed.push_back(heap::Rowid{page_id, slot});
+                }
+            }
         }
-        if (Status s = page.FreeSlot(at.slot); !s.ok()) return s;
-        if (Status s = LogSlotFree(cx.wal, cx.store, at.page_id, at.slot); !s.ok()) return s;
-        ref.value().Release();
-        cx.space.AddFree(access.oid, at);
-        ++counts_.freed;
+        candidates_.erase(candidates_.begin(), end);
+        for (const heap::Rowid& r : freed) cx.space.AddFree(access.oid, r);
+        counts_.freed += freed.size();
     }
-    candidates_.clear();
-    phase_ = Phase::kDone;
+    if (candidates_.empty()) phase_ = Phase::kDone;
     return Status::OK();
 }
 

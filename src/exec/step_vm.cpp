@@ -1689,7 +1689,9 @@ private:
             // report work not done - the exact number the quota exists to
             // save, and the one ANALYZE prices covering with.
             ++step_stats.index_rows_resolved;
-            auto found = ResolveIndexedRow(access, tuple_key, rowids);
+            const auto named = rowids.find(tuple_key);
+            auto found =
+                ResolveIndexedRow(access, tuple_key, named != rowids.end() ? named->second : 0);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
                     // Dangling: the tuple key names no row now - a skip, never an
@@ -1723,11 +1725,11 @@ private:
     // does not - an entry left by a key a `PURGE` freed and an insert
     // placed again names the old slot, and the key's row is elsewhere. On
     // a btree, the descent.
-    StatusOr<btree::Location> ResolveIndexedRow(
-        const catalog::TableAccess& access, std::uint64_t tuple_key,
-        const std::unordered_map<std::uint64_t, std::uint64_t>& rowids) {
-        if (auto it = rowids.find(tuple_key); it != rowids.end()) {
-            auto row = FetchHeapRow(store_, access, it->second, tuple_key);
+    // `rowid` 0: none named (a btree, or an entry without one).
+    StatusOr<btree::Location> ResolveIndexedRow(const catalog::TableAccess& access,
+                                                std::uint64_t tuple_key, std::uint64_t rowid) {
+        if (rowid != 0) {
+            auto row = FetchHeapRow(store_, access, rowid, tuple_key);
             if (row.ok() || row.status().code() != StatusCode::kNotFound) return row;
         }
         return exec::LocateRow(store_, access, tuple_key);
@@ -2044,8 +2046,11 @@ private:
             const std::uint64_t tuple_key =
                 index::GetIndexTupleKey(e.subspan(ix.key_width, index::kIndexTupleKeyWidth));
             if (emitted.contains(tuple_key)) continue;
+            // A heap's entry carries its row's rowid (DN, IX1).
+            const std::uint64_t rowid =
+                ix.rowid ? index::GetIndexRowid(IndexLayoutOf(ix), e) : 0;
             auto matched = ResolveOrdered(steps, index, step, access, e.first(ix.key_width),
-                                          tuple_key);
+                                          tuple_key, rowid);
             if (!matched.ok()) return matched.status();
             if (matched.value()) emitted.insert(tuple_key);
         }
@@ -2058,12 +2063,13 @@ private:
     // skip (IX1's dangling entry), as in `RunIndexStep`.
     StatusOr<bool> ResolveOrdered(const std::vector<Step>& steps, std::size_t index,
                                   const Step& step, const catalog::TableAccess& access,
-                                  std::span<const std::byte> key, std::uint64_t tuple_key) {
+                                  std::span<const std::byte> key, std::uint64_t tuple_key,
+                                  std::uint64_t rowid = 0) {
         StepStats& step_stats = stats_.For(step.step_id);
         NoteFetch();
         ++step_stats.pages_fetched;
         ++step_stats.index_rows_resolved;
-        auto found = exec::LocateRow(store_, access, tuple_key);
+        auto found = ResolveIndexedRow(access, tuple_key, rowid);
         if (!found.ok()) {
             if (found.status().code() == StatusCode::kNotFound) return false;
             return found.status();

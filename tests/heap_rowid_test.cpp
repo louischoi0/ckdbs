@@ -7,6 +7,7 @@
 
 #include "kds/catalog/well_known.hpp"
 #include "kds/storage/btree/btree.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "sim/instance.hpp"
 #include "view_text.hpp"
 
@@ -82,7 +83,7 @@ TEST_F(HeapRowidTest, ASingleInt64PrimaryKeyDeclaredFirstIsTheKeystone) {
               (std::vector<std::vector<std::string>>{{"70"}}));
     EXPECT_EQ(Rows("SELECT keyidentity FROM p WHERE v = 30").rows,
               (std::vector<std::vector<std::string>>{{"3"}}));
-    Refused("INSERT INTO p VALUES (7, 71)", "already bound");
+    Refused("INSERT INTO p VALUES (7, 71)", "duplicate tuple key");
     Refused("UPDATE p SET id = 8 WHERE id = 7", "");
 }
 
@@ -154,7 +155,7 @@ TEST_F(HeapRowidTest, ADeletedKeyIsNeverBoundAgain) {
     Ok("CREATE TABLE p (id int64 PRIMARY KEY, v int64) HEAP", "CREATED");
     Ok("INSERT INTO p VALUES (5, 1)", "INSERTED");
     Ok("DELETE FROM p WHERE id = 5", "DELETED");
-    Refused("INSERT INTO p VALUES (5, 2)", "already bound");
+    Refused("INSERT INTO p VALUES (5, 2)", "duplicate tuple key");
     EXPECT_TRUE(Rows("SELECT v FROM p").rows.empty());
 }
 
@@ -286,10 +287,96 @@ TEST_F(HeapRowidTest, ADeclaredKeystonesTombstoneWaitsAndARolledBackSlotIsFreed)
     EXPECT_EQ(counts.retired, 0u) << "a declared Keystone's tombstone is kept";
     EXPECT_EQ(counts.freed + counts.named, 20u) << "the rolled-back inserts' slots";
     EXPECT_GE(counts.freed, 18u);
-    Refused("INSERT INTO p VALUES (3, 3)", "already bound");
+    Refused("INSERT INTO p VALUES (3, 3)", "duplicate tuple key");
     Ok("INSERT INTO p VALUES (110, 1)", "INSERTED");
     EXPECT_EQ(Rows("SELECT v FROM p WHERE id = 110").rows,
               (std::vector<std::vector<std::string>>{{"1"}}));
+}
+
+// **A tombstone the release could not yet retire is asked again.** The
+// delete queues its relation while its deleter is still in flight, and an
+// older reader holds the horizon past it; a job that ran then found every
+// tombstone owed and ended, and nothing queued the relation again, so the
+// rows' slots stayed taken for good - here an explicit transaction's
+// delete and a reader's view. A job that defers one queues its relation
+// again.
+TEST_F(HeapRowidTest, ATombstoneTheReleaseHadToDeferIsReleasedLater) {
+    Ok("CREATE TABLE h (a int64, b int64) HEAP", "CREATED");
+    for (int i = 0; i < 300; ++i) {
+        Ok("INSERT INTO h VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")",
+           "INSERTED");
+    }
+    // Delete-marked slots no job has retired yet.
+    const auto tombstones = [&]() {
+        auto oid = db_->catalog().ResolveRelation("", "h", catalog::kNamespacePublic);
+        EXPECT_TRUE(oid.ok());
+        auto access = db_->catalog().InitTableAccess(oid.value());
+        EXPECT_TRUE(access.ok());
+        int marked = 0;
+        for (PageId at = access.value()->desc_page_id; at != kInvalidPageId;) {
+            auto ref = db_->store().GetForRead(at);
+            EXPECT_TRUE(ref.ok());
+            if (!ref.ok()) return -1;
+            heap::PageView page(ref.value().bytes());
+            for (std::uint16_t i = 0; i < page.slot_count(); ++i) {
+                auto tuple = page.ReadTuple(i);
+                if (tuple.ok() && tuple.value().deleted) ++marked;
+            }
+            at = page.next_page_id();
+        }
+        return marked;
+    };
+    const auto steps = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            auto owed = db_->dispatcher().StepHeapRelease(16);
+            ASSERT_TRUE(owed.ok()) << owed.status().message();
+        }
+    };
+    // In flight: the deleter is not yet resolved when the job runs.
+    Ok("BEGIN", "BEGIN");
+    Ok("DELETE FROM h WHERE a >= 50 AND a < 100", "DELETED");
+    steps(50);
+    Ok("COMMIT", "COMMIT");
+    ReleaseAll(*db_);
+    EXPECT_EQ(tombstones(), 0) << "a delete committed after the job ran is never retired";
+
+    // An older reader's view: the horizon holds the deleter.
+    Session reader;
+    ASSERT_EQ(db_->dispatcher().Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader).response.rfind("BEGIN", 0),
+              0u);
+    const std::string before = db_->dispatcher().Dispatch("SELECT COUNT(*) FROM h", &reader).response;
+    Ok("DELETE FROM h WHERE a >= 150 AND a < 200", "DELETED");
+    steps(50);
+    EXPECT_EQ(tombstones(), 50) << "retired under a reader that sees them";
+    EXPECT_EQ(db_->dispatcher().Dispatch("SELECT COUNT(*) FROM h", &reader).response, before);
+    ASSERT_EQ(db_->dispatcher().Dispatch("COMMIT", &reader).response.rfind("COMMIT", 0), 0u);
+    ReleaseAll(*db_);
+    EXPECT_EQ(tombstones(), 0) << "a tombstone a reader held is never retired once it ends";
+    EXPECT_EQ(Rows("SELECT COUNT(*) FROM h").rows.at(0).at(0), "200");
+}
+
+// **A rolled-back insert queues nothing.** Only a `DELETE` and an insert's
+// take-back note a relation for the release (`HeapSpace::NoteDead`); a
+// transaction's rollback, a statement's rollback inside a transaction and a
+// crash loser's undo at mount retire heap slots and queue nothing, so those
+// slots wait for some later delete on the relation. Disabled until the
+// rollback queues its heap relations (proposed, outside `exec/heap_release`).
+TEST_F(HeapRowidTest, ARolledBackInsertAloneQueuesItsRelation) {
+    Ok("CREATE TABLE p (id int64 PRIMARY KEY, v int64) HEAP", "CREATED");
+    for (int i = 1; i <= 50; ++i) {
+        Ok("INSERT INTO p VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")",
+           "INSERTED");
+    }
+    Ok("BEGIN", "BEGIN");
+    for (int i = 100; i < 120; ++i) {
+        Ok("INSERT INTO p VALUES (" + std::to_string(i) + ", 0)", "INSERTED");
+    }
+    Ok("ROLLBACK", "ROLLBACK");
+    auto owed = db_->dispatcher().StepHeapRelease(16);
+    ASSERT_TRUE(owed.ok()) << owed.status().message();
+    EXPECT_TRUE(owed.value()) << "the rollback queued nothing";
+    const exec::HeapReleaseCounts counts = ReleaseAll(*db_);
+    EXPECT_EQ(counts.freed + counts.named, 20u);
 }
 
 TEST(HeapRowidCrashTest, AReleasedAndReusedSlotReplays) {

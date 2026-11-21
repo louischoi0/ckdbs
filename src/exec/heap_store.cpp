@@ -48,21 +48,22 @@ void HeapSpace::AddFree(std::uint64_t oid, heap::Rowid rowid) {
 
 void HeapSpace::NoteDead(std::uint64_t oid) {
     std::lock_guard<std::mutex> lock(mu_);
-    dead_.insert(oid);
+    if (dead_set_.insert(oid).second) dead_.push_back(oid);
 }
 
 std::optional<std::uint64_t> HeapSpace::TakeDead() {
     std::lock_guard<std::mutex> lock(mu_);
     if (dead_.empty()) return std::nullopt;
-    const std::uint64_t oid = *dead_.begin();
-    dead_.erase(dead_.begin());
+    const std::uint64_t oid = dead_.front();
+    dead_.pop_front();
+    dead_set_.erase(oid);
     return oid;
 }
 
 void HeapSpace::Forget(std::uint64_t oid) {
     std::lock_guard<std::mutex> lock(mu_);
     relations_.erase(oid);
-    dead_.erase(oid);
+    if (dead_set_.erase(oid) != 0) dead_.erase(std::find(dead_.begin(), dead_.end(), oid));
 }
 
 // ---- Reads ----------------------------------------------------------------

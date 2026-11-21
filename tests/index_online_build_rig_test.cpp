@@ -24,8 +24,12 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/exec/index_maintain.hpp"
 #include "kds/sched/coro.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/heap/rowid.hpp"
+#include "kds/storage/index/index_page.hpp"
+#include "kds/storage/index/index_tree.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "view_text.hpp"
@@ -399,6 +403,90 @@ TEST(IndexOnlineBuildRigTest, AWriterAskingTheRelationXDuringTheDrainIsTheDeadlo
     EXPECT_EQ(build.out.response.rfind("CREATED INDEX", 0), 0u) << build.out.response;
     rig->Stop();
     EXPECT_EQ(Entries(d1, "tix"), "8");
+}
+
+// ---- The heap slot release across cores (DN-R2) ----------------------------
+
+// The entries of every index of `oid` - as `catalog` names them now - that
+// name a slot flagged free: DN-R2 says there are none.
+int EntriesNamingAFreeSlot(storage::PageStore& store, catalog::Catalog& catalog,
+                           catalog::Oid oid) {
+    auto access = catalog.InitTableAccess(oid);
+    EXPECT_TRUE(access.ok());
+    if (!access.ok()) return -1;
+    int named = 0;
+    for (const catalog::TableAccess::IndexRef& ix : access.value()->indexes) {
+        const index::IndexLayout layout = exec::IndexLayoutOf(ix);
+        std::vector<std::byte> low(layout.sort_key_width(), std::byte{0});
+        auto leaf = index::IndexSeekLeaf(store, ix.root_page_id, layout, low);
+        EXPECT_TRUE(leaf.ok());
+        if (!leaf.ok()) return -1;
+        for (PageId at = leaf.value(); at != kInvalidPageId;) {
+            std::vector<std::uint64_t> rowids;
+            {
+                auto page = index::IndexFetchLeaf(store, at, layout, storage::PageAccess::kRead);
+                EXPECT_TRUE(page.ok());
+                if (!page.ok()) return -1;
+                const index::IndexLeafView view(page.value().bytes());
+                for (std::uint16_t i = 0; i < view.entry_count(); ++i) {
+                    rowids.push_back(index::GetIndexRowid(layout, view.Entry(i).value()));
+                }
+                at = view.right_sibling();
+            }
+            for (std::uint64_t rowid : rowids) {
+                const heap::Rowid r = heap::DecodeRowid(rowid);
+                auto data = store.GetForRead(r.page_id);
+                EXPECT_TRUE(data.ok());
+                if (!data.ok()) return -1;
+                auto info = heap::PageView(data.value().bytes()).DebugSlotInfo(r.slot);
+                if (info.ok() && (info.value().flags & heap::kSlotFlagFree) != 0) ++named;
+            }
+        }
+    }
+    return named;
+}
+
+// **Core 0's release reads the relation's indexes as core 0's memo last saw
+// them.** The release is stepped from core 0's `system` tick, which is no
+// statement boundary, so nothing revalidated its catalog (catalog.md CT2,
+// CT3): an index another core built since - here an `X` build on core 1,
+// committed and released before the release's first step - was neither
+// purged nor verified, and the slot was freed with that index's entry still
+// naming it (DN-R2). The memo is made current under the step's `IX`.
+TEST(HeapRowidReleaseRigTest, AnIndexAnotherCoreBuiltIsVerifiedBeforeASlotIsFreed) {
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE h (a int64, b int64) HEAP").response.rfind("CREATED", 0),
+              0u);
+    for (int i = 0; i < 40; ++i) {
+        const std::string sql =
+            "INSERT INTO h VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")";
+        ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
+    }
+    auto oid = rig->core(0).catalog().FindTableOidByName(catalog::kNamespacePublic, "h");
+    ASSERT_TRUE(oid.ok());
+    // Core 0's memo now holds h with its Keystone index alone.
+    ASSERT_TRUE(rig->core(0).catalog().InitTableAccess(oid.value()).ok());
+
+    // Core 1: an index, then a delete whose rows' entries are no leaf's first.
+    ASSERT_EQ(d1.Dispatch("CREATE INDEX hb ON h (b)").response.rfind("CREATED", 0), 0u);
+    ASSERT_EQ(d1.Dispatch("DELETE FROM h WHERE a >= 10 AND a < 20").response.rfind("DELETED", 0),
+              0u);
+    // The instance's one queue in production; the rig's cores keep their own.
+    d0.heap_space().NoteDead(oid.value());
+    bool owed = true;
+    for (int i = 0; i < 10000 && owed; ++i) {
+        auto stepped = d0.StepHeapRelease(16);
+        ASSERT_TRUE(stepped.ok()) << stepped.status().message();
+        owed = stepped.value();
+    }
+    ASSERT_FALSE(owed);
+    ASSERT_GT(d0.last_heap_release().freed, 0u);
+    EXPECT_EQ(EntriesNamingAFreeSlot(rig->store(), rig->core(1).catalog(), oid.value()), 0)
+        << "a slot was freed while an index core 0's memo did not hold named it";
 }
 
 }  // namespace

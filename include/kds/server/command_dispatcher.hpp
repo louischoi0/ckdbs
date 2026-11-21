@@ -603,6 +603,7 @@ public:
                 return exec::LoadExprCabins(catalog, page_store, access);
             });
         ArmAssertionRecordBudget();
+        WatchHeapRollbacks();
     }
 
     // Parses and executes one line. Never fails outward: a malformed or
@@ -2100,7 +2101,20 @@ public:
     // **The instance's heap placement hints** (DN, `exec::HeapSpace`): every
     // core's dispatcher is handed the one the instance owns; one never handed
     // any keeps its own, which is what a single-dispatcher test runs on.
-    void SetHeapSpace(exec::HeapSpace* space) noexcept { heap_space_ = space; }
+    void SetHeapSpace(exec::HeapSpace* space) {
+        heap_space_ = space;
+        WatchHeapRollbacks();
+    }
+    // The manager's report of a rolled-back heap insert goes to this
+    // dispatcher's heap space (DN-R2); withdrawn when it goes.
+    void WatchHeapRollbacks() {
+        if (txn_ == nullptr) return;
+        exec::HeapSpace* space = &heap_space();
+        txn_->SetHeapRetireObserver([space](std::uint32_t oid) { space->NoteDead(oid); });
+    }
+    ~CommandDispatcher() {
+        if (txn_ != nullptr) txn_->SetHeapRetireObserver({});
+    }
 
     // **One step of the heap slot release, unasked** (DN-R2; DD-S4's driver,
     // ruled into DN-S2): the relation a delete or a taken-back insert queued

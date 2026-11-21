@@ -26,14 +26,11 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
             "the parent relation is a heap: its tuple key is hidden, so no child value could "
             "name a parent row - reference a relation with a declared tuple key");
     }
-    if (parent.clustered_type == ClusteredType::kHeap) {
-        // DN-Q5 (a): a heap whose Keystone is its declared `int64` primary
-        // key is a parent - DN-S3's, not yet built.
-        return Status::NotImplemented(
-            "the parent relation is a heap; a foreign key to a heap's declared Keystone is not "
-            "built");
-    }
-    if (parent.clustered_type != ClusteredType::kBtree) {
+    // DN-Q5 (a): a heap whose Keystone is its declared `int64` primary key
+    // is a parent as a btree is - F1's Keystone, found through the Keystone
+    // index (`exec::LocateRow`); a hidden Keystone's heap is refused above.
+    if (parent.clustered_type != ClusteredType::kBtree &&
+        parent.clustered_type != ClusteredType::kHeap) {
         // A system relation's catalog chain has no descent to check against.
         return Status::InvalidArgument("the parent relation is a system relation");
     }

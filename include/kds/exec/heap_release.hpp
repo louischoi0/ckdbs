@@ -40,16 +40,23 @@ class WalManager;
 //   3. **Verify** (every index, read only): each entry's rowid is struck
 //      from the candidates. An index's entries move only rightward, never
 //      leftward, so a left-to-right walk sees every entry that existed when
-//      it began; and no entry naming a candidate is written after the
-//      collect, since a retired slot is written by no one. What survives -
-//      a leaf's first entry (DD-Q3 (a)), a row whose unit the purge was
-//      refused - keeps its candidate unfreed.
+//      it began; and no statement writes an entry naming a candidate after
+//      the collect, since a retired slot is written by no one. **An online
+//      build's backfill does** - it copies a page, then appends, holding
+//      nothing between - so an index still building ends the job unfreed,
+//      queued again. What survives - a leaf's first entry (DD-Q3 (a)), a
+//      row whose unit the purge was refused - keeps its candidate unfreed.
 //   4. **Free**: every remaining candidate, still retired and not free under
-//      its page's exclusive hold, is freed and logged (SLOT_FREE).
+//      its page's exclusive hold, is freed and logged (SLOT_FREE), a page
+//      at a time.
 //
 // Each step takes the relation's `IX` as a read holder, never waiting, as
-// `PURGE INDEX`'s slices do; a step refused it does nothing. The job holds
-// no page and no lock between steps, and a relation dropped under it ends it.
+// `PURGE INDEX`'s slices do; a step refused it does nothing. Under it the
+// step makes the catalog memo current, so it reads the relation's indexes as
+// they stand. The job holds no page and no lock between steps, and a
+// relation dropped under it ends it. A job that left a slot owed for a
+// reason that passes - a deleter in flight or still seen by a reader, an
+// index building - queues its relation again when it ends.
 namespace kds::exec {
 
 struct HeapReleaseCounts {
@@ -91,7 +98,8 @@ private:
                  std::uint32_t budget);
     Status Verify(HeapReleaseContext& cx, const catalog::TableAccess& access,
                   std::uint32_t budget);
-    Status Free(HeapReleaseContext& cx, const catalog::TableAccess& access);
+    Status Free(HeapReleaseContext& cx, const catalog::TableAccess& access,
+                std::uint32_t budget);
 
     catalog::Oid rel_oid_;
     Phase phase_ = Phase::kCollect;
@@ -105,6 +113,9 @@ private:
     std::uint64_t done_oid_ = 0;
     std::vector<std::byte> resume_;
     PageId leaf_ = kInvalidPageId;
+    // A slot left owed for a reason that passes: the job queues its
+    // relation again when it ends.
+    bool deferred_ = false;
     HeapReleaseCounts counts_;
 };
 

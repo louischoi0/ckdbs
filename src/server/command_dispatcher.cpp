@@ -8831,10 +8831,13 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             return btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
                                       /*trx_id=*/WriterId(scope), ta.oid, ta.anchor_page_id);
         }
+        // The btree's wording, one refusal for one fact (BD-R5).
         auto present = exec::LocateRow(page_store_, ta, row_id);
         if (present.ok()) {
-            return Status::AlreadyExists("tuple key " + std::to_string(row_id) +
-                                         " is already bound in this heap");
+            auto tuple =
+                heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
+            return btree::DuplicateKey(row_id, present.value().page_id, present.value().slot,
+                                       tuple.ok() && tuple.value().deleted);
         }
         if (present.status().code() != StatusCode::kNotFound) return present.status();
         auto at = exec::HeapInsert(page_store_, ta, heap_space(), core_id_, row_id, encoded,
@@ -15599,12 +15602,8 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
                                           at_name));
     }
     // DN-Q6 (a): a heap whose Keystone is its declared primary key is purged
-    // by Keystone - DN-S3's, not yet built.
-    if (ta.heap()) {
-        return Refused(Status::NotImplemented("'" + stmt.table_name +
-                                              "' is a heap; PURGE by its Keystone is not built" +
-                                              at_name));
-    }
+    // by Keystone, its tombstone found through the Keystone index
+    // (`exec::PurgeKey`); the hidden Keystone's heap is refused above.
     // BV-Q4 (a): a freed key could be inserted again in an initial state,
     // restarting a row's history under its old identity - the one way past
     // the induction a Transition's path property rests on (CN-4 §2, §9.1).
@@ -15696,7 +15695,12 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
         page_store_, ta, lo,
         [&](std::uint64_t tuple_key,
             const heap::PageView::Tuple& tuple) -> StatusOr<storage::VisitControl> {
-            if (tuple_key >= hi) return storage::VisitControl::kStop;
+            // A heap's walk is in no key order (DN): a key past the window
+            // ends nothing there.
+            if (tuple_key >= hi) {
+                return ta.heap() ? storage::VisitControl::kContinue
+                                 : storage::VisitControl::kStop;
+            }
             const std::uint64_t trx = tuple.trx_id;
             const bool in_flight = txn_ != nullptr && txn_->IsInFlight(trx);
             if (tuple.deleted) {
@@ -15754,6 +15758,9 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     // purged - each is whole - and says so (PU6, BH-Q5).
     std::uint64_t purged = 0;
     Status keyed = Status::OK();
+    // In key order on a heap too, whose walk found them in page order.
+    std::sort(targets.begin(), targets.end(),
+              [](const Target& a, const Target& b) { return a.tuple_key < b.tuple_key; });
     {
         const storage::DrainOnPressure drain(page_store_);  // the keys, not the decide
         for (const Target& t : targets) {
@@ -15765,6 +15772,8 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
             if (one.value() == exec::PurgeOutcome::kPurged) ++purged;
         }
     }
+    // A heap's purged slots are released once no index names them (DN-R2).
+    if (purged > 0 && ta.heap()) heap_space().NoteDead(ta.oid);
     // `sys.relation_stats`' count (BO-S6), whatever the decide does: a
     // purged key is no transaction's (PU6).
     stats::RelationStats::Record(core_id_, ta.oid, stats::RelationWrite::kPurge, purged);

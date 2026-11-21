@@ -12,6 +12,7 @@
 #include "kds/base/contention.hpp"
 #include "kds/stats/txn_stats.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/page_header.hpp"
 #include "kds/storage/keystone.hpp"
 #include "kds/txn/row_compensation.hpp"
 #include "kds/txn/varheap_release.hpp"  // a rolled-back spill is released, not retired
@@ -511,8 +512,14 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
     // `BackupRestoreTest.ARolledBackDropSurvivesAReplayOverPagesFromBeforeIt`.
 
     switch (entry.action) {
-        case TrailAction::kInsert:
-            return CompensateInsert(store_, wal_, trx_id, page_id, page, slot);
+        case TrailAction::kInsert: {
+            Status s = CompensateInsert(store_, wal_, trx_id, page_id, page, slot);
+            if (s.ok() && heap_retired_ &&
+                storage::RawPageType(bytes.value().bytes()) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+                heap_retired_(entry.rel_oid);
+            }
+            return s;
+        }
         case TrailAction::kOverwrite:
             return CompensateOverwrite(store_, wal_, trx_id, page_id, page, slot, entry.image,
                                        entry.prior_trx_id, entry.prior_undo_ptr);

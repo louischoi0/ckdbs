@@ -378,7 +378,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
         if (!root.ok()) return root.status();
         const catalog::TableAccess* access = nullptr;
         if (row.value().clustered_type == catalog::ClusteredType::kBtree ||
-            row.value().heap()) {
+            row.value().clustered_type == catalog::ClusteredType::kHeap) {
             auto opened = catalog_.InitTableAccess(object.oid);
             if (!opened.ok()) return opened.status();
             access = opened.value();
@@ -824,7 +824,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         parser::AstValue leaves = Null();
         // A heap (DN) is one level of data pages, which the leaf walk counts.
         if (row.value().clustered_type == catalog::ClusteredType::kBtree ||
-            row.value().heap()) {
+            row.value().clustered_type == catalog::ClusteredType::kHeap) {
             auto root = CurrentRootOf(row.value());
             if (!root.ok()) return root.status();
             if (auto h = btree::BtreeHeight(page_store_, root.value()); h.ok()) {

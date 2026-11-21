@@ -1395,6 +1395,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         !s.ok()) {
         return s;
     }
+    // **Every heap is queued for its slot release once** (DN-R2): the queue
+    // and the free-slot hints are memory only, so the slots a crash loser's
+    // undo retired, and those the last run freed, are found again by a
+    // release - core 0's system tick drives it after the listener opens.
+    if (auto tables = expeditor->database_->catalog.ListTables(); tables.ok()) {
+        for (const catalog::SysObjectRow& object : tables.value()) {
+            auto access = expeditor->database_->catalog.InitTableAccess(object.oid);
+            if (access.ok() && access.value()->heap()) {
+                expeditor->heap_space_.NoteDead(object.oid);
+            }
+        }
+    }
     // Reclaim within the run (BF-R9): every core publishes its statement
     // epoch, and a committed drop is queued from whichever core committed it.
     expeditor->statement_epochs_.emplace(expeditor->config_.cores);

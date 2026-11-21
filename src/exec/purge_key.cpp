@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "kds/exec/catalog_spills.hpp"
+#include "kds/exec/heap_store.hpp"
 #include "kds/exec/wal_row_log.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -11,10 +12,36 @@
 
 namespace kds::exec {
 
+namespace {
+
+// A heap's tombstone (DN-Q6 (a)): the row the Keystone index names for
+// `id`, held exclusive, still delete-marked by `deleter`; none otherwise.
+StatusOr<std::optional<btree::Location>> HoldHeapTombstone(storage::PageStore& store,
+                                                           const catalog::TableAccess& access,
+                                                           std::uint64_t id,
+                                                           std::uint64_t deleter) {
+    auto at = LocateRow(store, access, id, storage::PageAccess::kWrite);
+    if (!at.ok()) {
+        if (at.status().code() == StatusCode::kNotFound) {
+            return std::optional<btree::Location>{};
+        }
+        return at.status();
+    }
+    auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
+    if (!tuple.ok() || !tuple.value().deleted || tuple.value().trx_id != deleter) {
+        return std::optional<btree::Location>{};
+    }
+    return std::optional<btree::Location>{std::move(at.value())};
+}
+
+}  // namespace
+
 StatusOr<PurgeOutcome> PurgeKey(storage::PageStore& store, wal::WalManager* wal,
                                 const catalog::TableAccess& access, std::uint64_t id,
                                 std::uint64_t deleter_trx_id) {
-    auto held = btree::BtreeHoldTombstone(store, access.desc_page_id, id, deleter_trx_id);
+    auto held = access.heap()
+                    ? HoldHeapTombstone(store, access, id, deleter_trx_id)
+                    : btree::BtreeHoldTombstone(store, access.desc_page_id, id, deleter_trx_id);
     if (!held.ok()) return held.status();
     if (!held.value().has_value()) return PurgeOutcome::kSkipped;
     btree::Location& tomb = *held.value();

@@ -78,18 +78,20 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       key_list_rng_(rng_.Fork("key_list")),
       write_list_rng_(rng_.Fork("write_list")),
       write_conjunct_rng_(rng_.Fork("write_conjunct")),
-      lock_rng_(rng_.Fork("lock")) {
+      lock_rng_(rng_.Fork("lock")),
+      storage_rng_(rng_.Fork("storage")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
     }
     // 1-3 tables, decided up front so the table set is stable however many
-    // ops are drawn. All btree: a heap's tuple key is hidden (BZ-R1), and the
-    // oracle reconciles by tuple key; the heap's surface is
-    // `heap_hidden_key_test.cpp`'s, its storage this btree's.
+    // ops are drawn. A btree or a heap whose `id` is its declared Keystone
+    // (DN-D5): the oracle reconciles by tuple key, which both carry; a
+    // hidden-Keystone heap's surface is `heap_hidden_key_test.cpp`'s.
     const std::size_t count = 1 + rng_.Below(3);
     for (std::size_t i = 0; i < count; ++i) {
         tables_.push_back(Table{"t" + std::to_string(i), 0});
+        tables_.back().heap = storage_rng_.Below(2) == 1;
     }
 }
 
@@ -419,7 +421,10 @@ Op Workload::Next() {
         op.kind = Op::Kind::kCreateTable;
         op.table = table.name;
         // One slot, for the column cycle (`AlterColumn`).
-        op.sql = "CREATE TABLE " + table.name + " (id int64, v int64, name varchar) SPARE 1";
+        op.sql = table.heap ? "CREATE TABLE " + table.name +
+                                  " (id int64 PRIMARY KEY, v int64, name varchar) SPARE 1 HEAP"
+                            : "CREATE TABLE " + table.name +
+                                  " (id int64, v int64, name varchar) SPARE 1";
         return op;
     }
     if (shapes_ && constrained_ddl_ < 4 && !in_txn_) return ConstrainedDdl();
