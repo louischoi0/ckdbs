@@ -283,4 +283,17 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
                                   const txn::ReadView* view, std::uint64_t trx_id,
                                   catalog::CatalogRowChange* change);
 
+// **The judge of an index entry purge** (DD, `instructions/v3.2.0/
+// workorder-dd-index-entry-purge.md` DD-R1): the entries `ix` owes the row
+// `tuple_key` now, sorted and distinct - exactly what `CREATE INDEX`'s
+// backfill would append for it, by the same walk (`IndexStagedRow`) given a
+// sink that collects, so the two cannot disagree about what is kept. A row
+// with no slot is owed nothing, and so is a delete-marked row whose deleter
+// is resolved for every reader (DD-Q1 (b)). The tree is not touched and no
+// lock is taken: the caller holds the row's tuple unit (DD-R3).
+StatusOr<std::vector<std::vector<std::byte>>> OwedIndexEntries(
+    storage::PageStore& store, catalog::Catalog& catalog, const catalog::TableAccess& access,
+    const txn::TransactionManager* txns, catalog::TableAccess::IndexRef ix,
+    std::uint64_t tuple_key);
+
 }  // namespace kds::exec

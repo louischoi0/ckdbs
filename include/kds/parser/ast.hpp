@@ -1060,6 +1060,9 @@ struct PurgeStmt {
     std::uint32_t where_byte_offset = 0;
     std::vector<Condition> where;  // never empty for a key PURGE: the parser refuses a bare one
     bool dropped_columns = false;
+    // `PURGE INDEX <name>` (DD-Q6 (a)): `table_name` then names the index,
+    // `table_byte_offset` its byte, and `where` is empty.
+    bool index = false;
 };
 
 // `ALTER TABLE <t> RENAME TO <new>`, `ALTER TABLE <t> RENAME COLUMN <old>

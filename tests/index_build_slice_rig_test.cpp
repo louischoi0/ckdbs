@@ -170,6 +170,37 @@ TEST_F(IndexBuildSliceRigTest, AWriterOnTheBuildsCoreRunsInsideTheBuildAndItsRow
         << "the writer's row is missing from the finished index";
 }
 
+TEST_F(IndexBuildSliceRigTest, AWriterOnAPurgesCoreRunsInsideThePurgeAndItsRowIsFound) {
+    // DD-S3's remedy: `PURGE INDEX` yields between slices and holds nothing
+    // across a yield, so a writer of the indexed relation on the same core
+    // is answered inside it - its close measured a writer held for the
+    // whole statement when it did not - and a purge changes no result.
+    ASSERT_EQ(d().Dispatch("CREATE INDEX tix ON t (v) COVERING (name)").response.rfind("CREATED", 0),
+              0u);
+    ASSERT_EQ(d().Dispatch("UPDATE t SET v = v + 100000 WHERE id >= 1").response.rfind("ERR", 0),
+              std::string::npos);
+    ASSERT_EQ(Entries("tix"), std::to_string(2 * kRows));
+    const std::string before = d().Dispatch("SELECT id FROM t WHERE v = 100777").response;
+    Script purge{&build_, {"PURGE INDEX tix"}};
+    Script writer{&other_, {"UPDATE t SET v = 5 WHERE id = 3"}};
+    std::atomic<bool> purge_running_at_write{false};
+    std::atomic<bool> purge_done_after_write{false};
+    writer.before = [&] { purge_running_at_write.store(purge.done.load() == 0); };
+    writer.after = [&] { purge_done_after_write.store(purge.done.load() == 1); };
+    RunBoth(purge, writer);
+
+    ASSERT_TRUE(purge_running_at_write.load()) << "the writer ran after the purge: nothing yielded";
+    ASSERT_EQ(purge.outs[0].response.rfind("PURGED INDEX name=tix", 0), 0u)
+        << purge.outs[0].response;
+    ASSERT_EQ(writer.outs[0].response.rfind("UPDATED", 0), 0u) << writer.outs[0].response;
+    EXPECT_FALSE(purge_done_after_write.load()) << "the writer waited for the purge";
+    EXPECT_EQ(purge.outs[0].response.find("attempts=1 "), std::string::npos)
+        << "the purge ran in one slice: " << purge.outs[0].response;
+    EXPECT_EQ(d().Dispatch("SELECT id FROM t WHERE v = 100777").response, before);
+    EXPECT_NE(d().Dispatch("SELECT id FROM t WHERE v = 5").response.find("3"), std::string::npos)
+        << "the writer's row is missing from the purged index";
+}
+
 TEST_F(IndexBuildSliceRigTest, ASchemaWordMoveDuringASuspensionFreesNoMemoTheBuildHolds) {
     StatementEpochs& epochs = epochs_;
     d().SetStatementEpochs(&epochs);

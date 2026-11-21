@@ -50,8 +50,10 @@
 // different covered bytes, which is information, not noise.
 //
 // A **byte-identical** entry is not information, and `IndexInsert` reports
-// it rather than storing it twice (`already_present`). Nothing reclaims an
-// index entry, so a duplicate is permanent; and a probe that resolved one
+// it rather than storing it twice (`already_present`): a writer whose new
+// version needs that entry then relies on the one already there, which is
+// why an index entry purge removes a row's entries only under the row's
+// tuple unit (DD-Q2, `exec/index_purge.hpp`); and a probe that resolved one
 // tuple key twice would emit its row twice. The check is complete: an entry
 // is its own sort key (index_page.hpp), so the leaf the descent lands on is
 // the one place it can be - and since no two entries are equal, no two share
@@ -71,13 +73,13 @@
 // index_tree.cpp's `DescendTo` carries the argument; `IndexSeekLeaf` needs
 // no such check, and says why.
 //
-// **The check rests on a premise this file states because nothing enforces
-// it: no index entry is ever removed.** An index leaf has no immutable
-// `min_key`, so a leaf's upper bound is read off its right sibling's first
-// entry, which equals the separator the sibling's divide copied up only
-// while entries are never taken out. A change that removes index entries
-// (a purge, a `DELETE` that reclaims them) must revisit
-// `LeafStillCoversKey` in the same change.
+// **The check rests on a premise: no leaf's first entry is ever removed.**
+// An index leaf has no immutable `min_key`, so a leaf's upper bound is read
+// off its right sibling's first entry, which equals the separator the
+// sibling's divide copied up only while that entry stays. The index entry
+// purge (DD, `IndexRemoveEntries`) removes others and refuses the first
+// (`IndexLeafView::RemoveEntry`, DD-Q3 (a)); a change that would take a
+// first entry out must give the leaf its bound another way (DM's U2b).
 //
 // **The walk back up is checked too** (AT-S16): a divide finds, asks and
 // holds every parent it writes before it writes anything, re-descending
@@ -206,13 +208,27 @@ StatusOr<storage::PageRef> IndexFetchLeaf(storage::PageStore& store, PageId leaf
 // descent lands at or left of `sort_key`'s leaf (`IndexSeekLeaf`), so
 // the leaf is asked, while it is held, whether its right sibling's first
 // entry is above `sort_key` - a leaf covers `[its separator, the right
-// sibling's first entry)`, which holds while no entry is removed (above) -
+// sibling's first entry)`, which holds while no first entry is removed (above) -
 // and the walk moves right until it is. Holding a leaf and asking its right
 // neighbour is a forward walk's order. Every entry at or below `sort_key`
 // the tree held before the call is in the leaf returned or to its left.
 StatusOr<storage::PageRef> IndexFetchLeafAtOrBelow(storage::PageStore& store, PageId root,
                                                    const IndexLayout& layout,
                                                    std::span<const std::byte> sort_key);
+
+// Takes `entries` - whole entries, ascending - out of the tree where each
+// still stands (DD, an index entry purge), and answers how many went. Each
+// leaf is reached by a write descent and held exclusive while every entry
+// it still covers is removed, then `log_leaf` is called under that hold
+// with the leaf as rewritten (DD-R6), once per leaf that changed. **A
+// leaf's first entry is never removed** (`IndexLeafView::RemoveEntry`), so
+// no leaf is emptied and no separator changes (DD-R4); an entry that is
+// absent, or first, is passed over. Holds one leaf, and its right sibling
+// for the span of a coverage check, and nothing else (DD-R5).
+StatusOr<std::uint64_t> IndexRemoveEntries(
+    storage::PageStore& store, PageId root, const IndexLayout& layout,
+    std::span<const std::vector<std::byte>> entries,
+    const std::function<Status(storage::PageRef&)>& log_leaf);
 
 // `key` made, in place, the greatest sort key of its width below it - the
 // reverse walk's next bound below a leaf's first entry. `key` must not be

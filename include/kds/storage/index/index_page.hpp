@@ -299,6 +299,16 @@ public:
     // the leaf is full and InvalidArgument on a width mismatch.
     StatusOr<std::uint16_t> InsertEntry(std::span<const std::byte> entry);
 
+    // Takes out the entry at `idx` and closes the array over it (DD, an
+    // index entry purge). **The first entry is refused** (`InvalidArgument`,
+    // DD-Q3 (a)): it is the separator a divide copied up, and the left
+    // neighbour's coverage check reads its bound off it
+    // (`index_tree.cpp`'s `LeafStillCoversKey`), so no leaf ever gives up
+    // its lowest entry and none is ever emptied. `OutOfRange` past
+    // `entry_count()`. The vacated tail slot is zeroed, so a page image is
+    // a function of the entries alone.
+    Status RemoveEntry(std::uint16_t idx);
+
     // Moves the upper half of this leaf's entries into `into`, which must be
     // freshly created with the same widths and empty. The sibling links are
     // **not** touched: the caller publishes them after the entry is in, so a

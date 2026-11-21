@@ -50,13 +50,12 @@ struct Descent {
 //
 // **Unlike the clustered tree there is no `min_key` to ask**, so the upper
 // end is read off the right sibling's first entry. That is the separator
-// its divide copied up, and it stays the sibling's first entry **only
-// because nothing removes an index entry today** (index_tree.hpp): an
-// insert routed to the sibling sorts at or above it, and the sibling's own
-// divide keeps its lower half. The day an entry can be removed, the
-// sibling's first entry can rise above the separator, and this test would
-// then send a key the sibling does not cover back to the sibling - revisit
-// it then, with the removal. **And it assumes every linked sibling has its
+// its divide copied up, and it stays the sibling's first entry **because
+// no leaf's first entry is ever removed** (index_tree.hpp; the purge
+// refuses position 0, DD-Q3 (a)): an insert routed to the sibling sorts at
+// or above it, and the sibling's own divide keeps its lower half. Were a
+// first entry removed, it could rise above the separator, and this test
+// would send a key the sibling does not cover back to the left leaf. **And it assumes every linked sibling has its
 // separator in a parent**, which a divide gives because its separator is
 // above every one the parent holds below it (index_page.hpp: no two entries
 // share a sort key).
@@ -80,8 +79,8 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
     if (Status s = sibling.CheckAgainst(layout, right); !s.ok()) return s;
     auto low = sibling.Entry(0);
     if (!low.ok()) {
-        // A divide leaves both halves non-empty and nothing removes an
-        // entry, so a right sibling with none is not a state the tree makes.
+        // A divide leaves both halves non-empty and no leaf's first entry is
+        // removed, so a right sibling with none is not a state the tree makes.
         return Status::Corruption("index leaf " + std::to_string(right) +
                                   " is a right sibling holding no entries");
     }
@@ -621,6 +620,68 @@ StatusOr<storage::PageRef> IndexFetchLeafAtOrBelow(storage::PageStore& store, Pa
         if (!next.ok()) return next.status();
         leaf = std::move(next.value());
     }
+}
+
+StatusOr<std::uint64_t> IndexRemoveEntries(
+    storage::PageStore& store, PageId root, const IndexLayout& layout,
+    std::span<const std::vector<std::byte>> entries,
+    const std::function<Status(storage::PageRef&)>& log_leaf) {
+    // Every width asked before anything is removed: a refusal below a removal
+    // would leave a leaf changed and unlogged (DD-R6).
+    for (const std::vector<std::byte>& entry : entries) {
+        if (entry.size() != layout.leaf_entry_width()) {
+            return Status::InvalidArgument("an index removal names a whole entry");
+        }
+    }
+    std::uint64_t removed = 0;
+    std::size_t i = 0;
+    while (i < entries.size()) {
+        // The write descent's own leaf, held exclusive and asked whether it
+        // still covers the entry: a divide since the caller copied it moved
+        // it right, never left, and this is the leaf it is in if anywhere.
+        auto descent = DescendTo(store, root, layout, entries[i], /*leaf_for_write=*/true);
+        if (!descent.ok()) return descent.status();
+        storage::PageRef& leaf = descent.value().leaf;
+        IndexLeafView view(leaf.bytes());
+        std::uint64_t here = 0;
+        // A refusal after a removal still logs what this hold changed
+        // before it is returned (DD-R6).
+        Status stop = Status::OK();
+        // Every following entry the same held leaf still covers is taken
+        // under the same hold and logged in the same image. The entries
+        // ascend, so each is above one this leaf covers; only its upper
+        // bound is asked.
+        for (;;) {
+            const std::vector<std::byte>& entry = entries[i];
+            const std::uint16_t at = view.LowerBound(entry);
+            if (at > 0 && at < view.entry_count()) {
+                auto stored = view.Entry(at);
+                if (!stored.ok()) {
+                    stop = stored.status();
+                    break;
+                }
+                if (std::memcmp(stored.value().data(), entry.data(), entry.size()) == 0) {
+                    if (stop = view.RemoveEntry(at); !stop.ok()) break;
+                    ++here;
+                }
+            }
+            // Position 0 is kept by rule (DD-Q3 (a)); an entry not found
+            // was never here or is gone already.
+            if (++i == entries.size()) break;
+            auto covers = LeafStillCoversKey(store, view, layout, entries[i]);
+            if (!covers.ok()) {
+                stop = covers.status();
+                break;
+            }
+            if (!covers.value()) break;
+        }
+        if (here > 0) {
+            if (Status s = log_leaf(leaf); !s.ok()) return s;
+            removed += here;
+        }
+        if (!stop.ok()) return stop;
+    }
+    return removed;
 }
 
 void PrecedingSortKey(std::span<std::byte> key) {

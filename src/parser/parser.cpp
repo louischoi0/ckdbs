@@ -3536,6 +3536,22 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
     // the relation's tuple key column; the grammar is `DELETE`'s, so the parse
     // gives every byte a refusal there needs.
     PurgeStmt stmt;
+    // DD: `PURGE INDEX <name>` - an index's dead entries, no window. An
+    // index is named by a bare identifier, as `REINDEX INDEX` names one.
+    if (IEquals(lexer_.Peek().text, "INDEX")) {
+        lexer_.Next();
+        stmt.index = true;
+        stmt.table_byte_offset = lexer_.Peek().byte_offset;
+        auto name = ParseIdent();
+        if (!name.ok()) return name.status();
+        stmt.table_name = std::move(name.value());
+        ConsumeOptionalSemicolon();
+        if (lexer_.Peek().type != TokenType::kEof) {
+            return Status::InvalidArgument("PURGE INDEX takes an index name and nothing after it" +
+                                           At(lexer_.Peek().byte_offset));
+        }
+        return stmt;
+    }
     if (lexer_.Peek().type == TokenType::kIdent && IEquals(lexer_.Peek().text, "DROPPED")) {
         lexer_.Next();
         if (Status s = ExpectKeyword("COLUMNS"); !s.ok()) return s;
