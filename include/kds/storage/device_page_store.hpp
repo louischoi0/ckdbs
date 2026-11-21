@@ -1375,20 +1375,14 @@ private:
     // `AcquirePageLatch` keeps. Always true on an unarmed store.
     bool TryAcquirePageLatchShared(PageId page_id, Frame& frame) noexcept;
 
-    // **The pin tail, with `hold` held on entry** (AM-S2), shared by
-    // `FetchPinned`'s hit and miss arms: find, pin, take the span, release
-    // the structure latch, wait for the page latch.
-    //
-    // `nullopt` means the frame is gone, **with `hold` still held**; both
-    // callers round the loop and re-test. On the value arm `hold` is
-    // released before the page latch is waited for.
-    //
-    // **It does not re-apply the dirty mark** (AM-S2-P F-1): a frame
-    // evicted and re-faulted clean between the caller's load and this pin
-    // would drop a `Get`'s write, and what makes that unreachable is the
-    // loading set: every fault publishes its id there first.
-    std::optional<std::span<std::byte, kPageSize>> PinResidentAndRelease(
-        PageId page_id, PinMode mode, std::unique_lock<Latch>& hold, bool* owed) noexcept;
+    // **The pin tail, with `hold` held on entry** (AM-S2), on a frame the
+    // caller found under it - the armed hit's and the fault's: count the
+    // pin, take the span, release the structure latch, wait for the page
+    // latch.
+    std::span<std::byte, kPageSize> PinFrameAndRelease(PageId page_id, Frame& frame,
+                                                       PinMode mode,
+                                                       std::unique_lock<Latch>& hold,
+                                                       bool* owed) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }

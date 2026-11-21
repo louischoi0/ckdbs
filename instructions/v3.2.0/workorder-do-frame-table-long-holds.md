@@ -591,3 +591,29 @@ E4c removes the third.
   `*Unpinned` accessors' `Resolve` (tests only, a race of its own already).
 - **Suite**: 0 failed of 5101 on the code before the review's comment
   changes. Overhead not measured; measured at the milestone's close.
+
+### DO-S2 - E4c, done 2026-11-21
+
+One hash lookup a hit: the iterator found for the resident test also
+serves the touch and the pin (`PinFrameAndRelease`, the pin tail on a
+frame the caller holds under the hold), and the fault arm pins the frame
+its own lookup finds. **Measured against `5da99054`** on 64 Ki frames, one
+thread: hold time a read hit 122.5 to 121.4 ns (`build-census`) and one
+reader 3.73 to 3.83 million fetches a second (+2.5 %, three interleaved
+rounds, `build-release`) - most of the lookup saving was already E4b's
+(its `Resolve` lookup); no regression, so it lands as the no-behaviour
+change DO-R5 measures anyway.
+
+- **Reviewed by `critics-developer`**: no bug; the latch held from the
+  `find` to the pin on every hit, the dropped `nullopt` arm unreachable,
+  the three branches (hit, wait, fault) the old ones exactly. Applied:
+  `PinResidentAndRelease`, left with one caller, inlined into the fault arm
+  and deleted with its `std::optional` (its AM-S2-P F-1 note moved beside
+  the fault's pin); the `loading_.empty()` guard dropped - libstdc++ 14's
+  `find` already returns at once on an empty set, so it saved nothing; a
+  doubled comment. Its header comment, which said the tail had two
+  callers, rewritten.
+- **Suite**: 0 failed of 5101 before the review's cuts; after them the
+  store's suites (151 cells, `KDS_TEST_PAGE_LATCH=1`) pass, and the full
+  suite runs again at E4d. Overhead not measured; measured at the
+  milestone's close.

@@ -2719,7 +2719,8 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // own accounting.
         const auto found = frames_.find(page_id);
         const bool resident = found != frames_.end();
-        if (resident && loading_.find(page_id) == loading_.end()) {
+        const bool in_flight = loading_.count(page_id) != 0;
+        if (resident && !in_flight) {
             // On a hit nothing touches the device: the dirty mark and the
             // usage bump, on the frame just found. **No `IsAllocated`, so
             // no nested free-map hold** (DO's E4b): a resident frame's bit
@@ -2733,15 +2734,12 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             // defence that class has). Asserted (DO-R6).
             assert(IsAllocated(page_id) && "a resident frame whose free-map bit is clear");
             HitLocked(found->second, /*mark_dirty=*/!for_read, heat);
-            // The `nullopt` arm is unreachable as the code stands - the latch
-            // is held continuously from the `resident` test, and the only
-            // eraser the raw fetch can reach runs on its miss branch - and is
-            // kept as defence. The span the tail returns is the same frame's.
-            auto pinned = PinResidentAndRelease(page_id, mode, hold, owed);
-            if (!pinned.has_value()) continue;
-            return *pinned;
+            // **One lookup a hit** (DO's E4c): the latch is held
+            // continuously from the `find`, so the frame found is the one
+            // the pin lands on.
+            return PinFrameAndRelease(page_id, found->second, mode, hold, owed);
         }
-        if (loading_.find(page_id) != loading_.end()) {
+        if (in_flight) {
             // **A fetch that may be refused does not wait here either**
             // (DE-Q9): the other core's read may be a blocking one, and
             // waiting it out on this thread is the wait the refusal is for.
@@ -2786,7 +2784,11 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // and leave an armed fault at usage 2 where the unarmed path leaves
         // 1. The frame can still be gone - it is unpinned between
         // `InsertFrame` and the guard re-taking the latch - and that case
-        // rounds the loop.
+        // rounds the loop. **It does not re-apply the dirty mark** (AM-S2-P
+        // F-1): a frame evicted and re-faulted clean between the load and
+        // this pin would drop a `Get`'s write, and what makes that
+        // unreachable is the loading set: every fault publishes its id there
+        // first.
         //
         // **This branch *is* the fault**, the ring's answer (AM-R8). One
         // inexactness, in the safe direction: if another core loaded the
@@ -2795,19 +2797,15 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // abandons rather than drops it (or cold from a `kScan` fault, and
         // dropping it is harmless).
         if (faulted != nullptr) *faulted = true;
-        auto pinned = PinResidentAndRelease(page_id, mode, hold, owed);
-        if (!pinned.has_value()) continue;
-        return *pinned;
+        const auto loaded = frames_.find(page_id);
+        if (loaded == frames_.end()) continue;  // `hold` is held again: re-test
+        return PinFrameAndRelease(page_id, loaded->second, mode, hold, owed);
     }
 }
 
-std::optional<std::span<std::byte, kPageSize>> DevicePageStore::PinResidentAndRelease(
-    PageId page_id, PinMode mode, std::unique_lock<Latch>& hold, bool* owed) noexcept {
-    auto found = frames_.find(page_id);
-    // Gone under us. `hold` is untouched, so the caller rounds its loop with
-    // the latch it already had.
-    if (found == frames_.end()) return std::nullopt;
-    Frame& frame = found->second;
+std::span<std::byte, kPageSize> DevicePageStore::PinFrameAndRelease(
+    PageId page_id, Frame& frame, PinMode mode, std::unique_lock<Latch>& hold,
+    bool* owed) noexcept {
     // The same accounting `PinFrame` does, **including its two debug
     // checks** (the MG04 ceiling and AM-S1's never-upgrade census).
     CountPin(frame);
