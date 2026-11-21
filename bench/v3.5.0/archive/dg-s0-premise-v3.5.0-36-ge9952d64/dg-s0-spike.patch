@@ -1,0 +1,298 @@
+diff --git a/include/kds/wal/file_log_device.hpp b/include/kds/wal/file_log_device.hpp
+index 242b00af..3d325421 100644
+--- a/include/kds/wal/file_log_device.hpp
++++ b/include/kds/wal/file_log_device.hpp
+@@ -7,6 +7,7 @@
+ #include <limits>
+ #include <memory>
+ #include <mutex>
++#include <optional>
+ #include <string>
+ #include <thread>
+ #include <vector>
+@@ -209,7 +210,11 @@ private:
+     // A segment body under the temporary name `temp`: the leftover removed,
+     // the reservation, the zeroing and their fsync. The header is the
+     // creation's (`CreateSegment`).
+-    StatusOr<FileDescriptor> BuildBody(const std::string& temp);
++    StatusOr<FileDescriptor> BuildBody(const std::string& temp, bool ahead);
++    // DG-S0 measurement spike only (file_log_device.cpp, `KDS_DG_SPIKE`).
++    std::optional<FileDescriptor> DgTakePooled(const std::string& temp);
++    void DgBuildPool();
++    std::vector<std::string> dg_pool_;
+     void RunPreparer();
+     std::mutex request_mutex_;
+     std::condition_variable request_cv_;
+diff --git a/src/wal/file_log_device.cpp b/src/wal/file_log_device.cpp
+index d2595e9f..55b48413 100644
+--- a/src/wal/file_log_device.cpp
++++ b/src/wal/file_log_device.cpp
+@@ -10,6 +10,7 @@
+ #include <cerrno>
+ #include <chrono>
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
+ #include <filesystem>
+ #include <map>
+@@ -51,6 +52,57 @@ constexpr const char* kNameSuffix = ".log";
+ // A segment under construction (`CreateSegment`): not a name `Open` adopts.
+ constexpr const char* kTempSuffix = ".tmp";
+ 
++// ---- DG-S0 measurement spike: never landed --------------------------------
++// `KDS_DG_SPIKE`, a comma list: `nofill` (P1: no zero fill where
++// posix_fallocate reserved; the fsync kept), `pool=N` (M2: N bodies built,
++// filled and synced at Open, before any window, each later body taken from
++// them by a rename), `cold` (M2: the pool's pages dropped from the page
++// cache), `pace=US` (M3/P2: a body built ahead is filled 1 MiB at a time,
++// each piece written back by sync_file_range and followed by a US-microsecond
++// sleep). `KDS_DG_FILL_LOG` names a file each body's timings are appended to
++// (M4), on every arm; its stamps are CLOCK_MONOTONIC ns, the driver's clock.
++struct DgSpike {
++    bool nofill = false;
++    bool cold = false;
++    int pool = 0;
++    long pace_us = 0;
++    int log_fd = -1;
++};
++const DgSpike& Dg() {
++    static const DgSpike cfg = [] {
++        DgSpike c;
++        if (const char* v = std::getenv("KDS_DG_SPIKE")) {
++            std::string all(v);
++            std::size_t at = 0;
++            while (at <= all.size()) {
++                const std::size_t end = std::min(all.find(',', at), all.size());
++                const std::string tok = all.substr(at, end - at);
++                if (tok == "nofill") c.nofill = true;
++                if (tok == "cold") c.cold = true;
++                if (tok.rfind("pool=", 0) == 0) c.pool = std::atoi(tok.c_str() + 5);
++                if (tok.rfind("pace=", 0) == 0) c.pace_us = std::atol(tok.c_str() + 5);
++                at = end + 1;
++            }
++        }
++        if (const char* f = std::getenv("KDS_DG_FILL_LOG")) {
++            c.log_fd = ::open(f, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
++        }
++        return c;
++    }();
++    return cfg;
++}
++std::uint64_t DgMono() {
++    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                          std::chrono::steady_clock::now().time_since_epoch())
++                                          .count());
++}
++void DgLine(const std::string& line) {
++    if (Dg().log_fd < 0) return;
++    const std::string l = line + "\n";
++    (void)!::write(Dg().log_fd, l.data(), l.size());
++}
++// ---------------------------------------------------------------------------
++
+ std::string NamePrefix(std::uint32_t core_id) {
+     return "wal-" + std::to_string(core_id) + "-";
+ }
+@@ -94,9 +146,13 @@ std::optional<std::uint64_t> ParseSegmentNo(const std::string& name, const std::
+ // Full-size reservation, or a sized sparse file where the filesystem cannot
+ // preallocate - the prewrite that follows then allocates the blocks for real,
+ // which restores the no-ENOSPC-at-append promise by another route.
+-Status Reserve(int fd, std::uint64_t size, const std::string& path) {
++Status Reserve(int fd, std::uint64_t size, const std::string& path, bool* fallocated) {
++    *fallocated = false;
+     const int rc = ::posix_fallocate(fd, 0, static_cast<::off_t>(size));
+-    if (rc == 0) return Status::OK();
++    if (rc == 0) {
++        *fallocated = true;
++        return Status::OK();
++    }
+     if (!FallocateUnsupported(rc)) {
+         return ErrnoStatus("FileLogDevice: posix_fallocate on " + path, rc);
+     }
+@@ -132,12 +188,14 @@ Status WriteHeaderAndSync(int fd, std::span<const std::byte> header) {
+ // transaction inside the very fsync a commit is waiting on (roughly
+ // doubling a flush on xfs). Paying it here, once per segment and off every
+ // commit path, is what PostgreSQL's wal_init_zero does.
+-Status Prewrite(int fd, std::uint64_t size) {
++Status Prewrite(int fd, std::uint64_t size, bool skip_fill, long pace_us,
++                std::uint64_t* write_ns, std::uint64_t* sync_ns) {
++    const std::uint64_t w0 = DgMono();
+     // 1 MiB per write: large enough that a 64 MiB segment is 64 syscalls,
+     // small enough not to be a resident buffer anyone notices.
+     static constexpr std::size_t kChunk = std::size_t{1} << 20;
+     const std::vector<std::byte> zeros(kChunk, std::byte{0});
+-    std::uint64_t at = 0;
++    std::uint64_t at = skip_fill ? size : 0;
+     while (at < size) {
+         const std::size_t want =
+             static_cast<std::size_t>(std::min<std::uint64_t>(kChunk, size - at));
+@@ -148,8 +206,16 @@ Status Prewrite(int fd, std::uint64_t size) {
+             }
+             return ErrnoStatus("FileLogDevice: prewrite at offset " + std::to_string(at), errno);
+         }
++        if (pace_us > 0) {
++            (void)::sync_file_range(fd, static_cast<::off_t>(at), n,
++                                    SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE |
++                                        SYNC_FILE_RANGE_WAIT_AFTER);
++            ::usleep(static_cast<useconds_t>(pace_us));
++        }
+         at += static_cast<std::uint64_t>(n);
+     }
++    *write_ns = DgMono() - w0;
++    const std::uint64_t s0 = DgMono();
+     // fsync, not fdatasync: this is the one sync that must also persist the
+     // file's metadata (its size, its now-written extents), so that every
+     // later commit-path sync has only data to flush.
+@@ -159,6 +225,7 @@ Status Prewrite(int fd, std::uint64_t size) {
+         }
+         return ErrnoStatus("FileLogDevice: fsync after prewrite", errno);
+     }
++    *sync_ns = DgMono() - s0;
+     return Status::OK();
+ }
+ 
+@@ -330,10 +397,12 @@ StatusOr<std::unique_ptr<FileLogDevice>> FileLogDevice::OpenImpl(const std::stri
+     if (!read_only && !device->segments_.empty()) {
+         if (Status s = device->SyncDirectory(); !s.ok()) return s;
+     }
++    if (!read_only && Dg().pool > 0) device->DgBuildPool();
+     return device;
+ }
+ 
+ void FileLogDevice::PrepareSegment(std::uint64_t segment_no) {
++    DgLine("ask seg=" + std::to_string(segment_no) + " at_ns=" + std::to_string(DgMono()));
+     std::lock_guard<std::mutex> guard(request_mutex_);
+     if (stopping_) return;
+     requested_no_ = segment_no;
+@@ -365,10 +434,11 @@ void FileLogDevice::RunPreparer() {
+     }
+ }
+ 
+-StatusOr<FileDescriptor> FileLogDevice::BuildBody(const std::string& temp) {
++StatusOr<FileDescriptor> FileLogDevice::BuildBody(const std::string& temp, bool ahead) {
+     if (::unlink(temp.c_str()) != 0 && errno != ENOENT) {
+         return ErrnoStatus("FileLogDevice: remove leftover " + temp, errno);
+     }
++    if (auto pooled = DgTakePooled(temp)) return std::move(*pooled);
+     auto fd = OpenSegmentFile(temp, /*create_exclusive=*/true);
+     if (!fd.ok()) return fd.status();
+     const auto abandon = [&temp](Status s) {
+@@ -379,11 +449,65 @@ StatusOr<FileDescriptor> FileLogDevice::BuildBody(const std::string& temp) {
+     // Full-size reservation up front: an append issued after its record was
+     // already accepted into the ring must not be able to fail for space
+     // (file_log_device.hpp).
+-    if (Status s = Reserve(fd.value().get(), segment_size_, temp); !s.ok()) return abandon(s);
+-    if (Status s = Prewrite(fd.value().get(), segment_size_); !s.ok()) return abandon(s);
++    const std::uint64_t t0 = DgMono();
++    bool fallocated = false;
++    if (Status s = Reserve(fd.value().get(), segment_size_, temp, &fallocated); !s.ok()) {
++        return abandon(s);
++    }
++    const std::uint64_t reserve_ns = DgMono() - t0;
++    std::uint64_t write_ns = 0;
++    std::uint64_t sync_ns = 0;
++    const bool skip = Dg().nofill && fallocated;
++    if (Status s = Prewrite(fd.value().get(), segment_size_, skip, ahead ? Dg().pace_us : 0,
++                           &write_ns, &sync_ns);
++        !s.ok()) {
++        return abandon(s);
++    }
++    DgLine("fill seg_temp=" + std::filesystem::path(temp).filename().string() +
++           " ahead=" + std::to_string(ahead ? 1 : 0) + " start_ns=" + std::to_string(t0) +
++           " end_ns=" + std::to_string(DgMono()) + " reserve_us=" +
++           std::to_string(reserve_ns / 1000) + " write_us=" + std::to_string(write_ns / 1000) +
++           " fsync_us=" + std::to_string(sync_ns / 1000) + " fallocated=" +
++           std::to_string(fallocated ? 1 : 0) + " filled=" + std::to_string(skip ? 0 : 1));
+     return fd;
+ }
+ 
++// M2: a body taken from the pool Open built, renamed to `temp`; nothing
++// when the pool is spent.
++std::optional<FileDescriptor> FileLogDevice::DgTakePooled(const std::string& temp) {
++    if (dg_pool_.empty()) return std::nullopt;
++    const std::string from = dg_pool_.back();
++    dg_pool_.pop_back();
++    const std::uint64_t t0 = DgMono();
++    if (::rename(from.c_str(), temp.c_str()) != 0) return std::nullopt;
++    auto fd = OpenSegmentFile(temp, /*create_exclusive=*/false);
++    if (!fd.ok()) return std::nullopt;
++    DgLine("pooled seg_temp=" + std::filesystem::path(temp).filename().string() +
++           " start_ns=" + std::to_string(t0) + " end_ns=" + std::to_string(DgMono()) +
++           " left=" + std::to_string(dg_pool_.size()));
++    return std::move(fd.value());
++}
++
++void FileLogDevice::DgBuildPool() {
++    for (int i = 0; i < Dg().pool; ++i) {
++        const std::string path = dir_ + "/dg-pool-" + std::to_string(i);
++        (void)::unlink(path.c_str());
++        auto fd = OpenSegmentFile(path, /*create_exclusive=*/true);
++        if (!fd.ok()) break;
++        bool fallocated = false;
++        std::uint64_t w = 0;
++        std::uint64_t y = 0;
++        if (!Reserve(fd.value().get(), segment_size_, path, &fallocated).ok()) break;
++        if (!Prewrite(fd.value().get(), segment_size_, false, 0, &w, &y).ok()) break;
++        if (Dg().cold) {
++            (void)::posix_fadvise(fd.value().get(), 0, 0, POSIX_FADV_DONTNEED);
++        }
++        dg_pool_.push_back(path);
++    }
++    DgLine("pool built=" + std::to_string(dg_pool_.size()) + " cold=" +
++           std::to_string(Dg().cold ? 1 : 0) + " at_ns=" + std::to_string(DgMono()));
++}
++
+ void FileLogDevice::BuildAhead(std::uint64_t segment_no) {
+     std::lock_guard<std::mutex> guard(prepare_mutex_);
+     std::uint64_t end = 0;
+@@ -396,7 +520,7 @@ void FileLogDevice::BuildAhead(std::uint64_t segment_no) {
+     }
+     if (segment_no != end || prepared_no_ == segment_no) return;
+     // A failed build is dropped: the creation then builds the body itself.
+-    auto fd = BuildBody(SegmentPath(segment_no) + kTempSuffix);
++    auto fd = BuildBody(SegmentPath(segment_no) + kTempSuffix, /*ahead=*/true);
+     if (!fd.ok()) return;
+     prepared_fd_ = std::move(fd.value());
+     prepared_no_ = segment_no;
+@@ -456,7 +580,7 @@ Status FileLogDevice::CreateSegmentTimed(std::uint64_t segment_no,
+         out.body = out.body_wait_ns > 0 ? BodyOutcome::kWaited : BodyOutcome::kHit;
+     } else {
+         const auto body_start = std::chrono::steady_clock::now();
+-        fd = BuildBody(temp);
++        fd = BuildBody(temp, /*ahead=*/false);
+         out.body_ns = NsSince(body_start);
+         out.body = BodyOutcome::kInline;
+         if (!fd.ok()) return fd.status();
+@@ -689,6 +813,7 @@ Status FileLogDevice::ReclaimDetached() {
+             continue;
+         }
+         unlinked.push_back(segment_no);
++        DgLine("removed seg=" + std::to_string(segment_no) + " at_ns=" + std::to_string(DgMono()));
+     }
+     // One directory sync for the batch: until it returns, a crash may bring
+     // back any of these names, which the next `Open` skips (BC-R3).
+diff --git a/src/wal/stream.cpp b/src/wal/stream.cpp
+index 4e542d71..ee3f4313 100644
+--- a/src/wal/stream.cpp
++++ b/src/wal/stream.cpp
+@@ -6,6 +6,7 @@
+ #include <cstring>
+ #include <memory>
+ #include <optional>
++#include <cstdlib>
+ #include <string>
+ #include <thread>
+ #include <utility>
+@@ -497,7 +498,11 @@ StatusOr<Lsn> WalStream::AppendLocked(const RecordSpec& spec, std::span<const st
+     // ready before it is needed, and rather than at once, so a log that
+     // never fills a segment never builds a second one.
+     const std::uint64_t next = SegmentOf(lsn) + 1;
+-    if (prepare_asked_ != next && OffsetOf(lsn) > segment_size_ / 2) {
++    static const bool dg_early = [] {
++        const char* v = std::getenv("KDS_DG_SPIKE");
++        return v != nullptr && std::string(v).find("pace=") != std::string::npos;
++    }();
++    if (prepare_asked_ != next && OffsetOf(lsn) > (dg_early ? 0 : segment_size_ / 2)) {
+         device_->PrepareSegment(next);
+         prepare_asked_ = next;
+     }

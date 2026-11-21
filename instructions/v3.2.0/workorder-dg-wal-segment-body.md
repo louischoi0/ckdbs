@@ -377,3 +377,176 @@ the source, before the commit.
   - the driver, the host and the budget's cut are items; the title, §0
     and §6 were cut.
 - **Rejected:** none.
+
+### Opened 2026-11-21
+
+DG was opened on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-11-21.md` §3), on worktree
+`dg-wal-segment-body` from `46ee8a6e`. DG-Q0..Q10 are adopted (a) and none
+is the operator's own mark.
+
+DG-Q5 (a) was revised against the tree. CZ's C1 is on `main` (CZ-S3), so
+DG-S0's build carries it as built and has no switch for it.
+
+Under DG-Q1 (a) and DG-Q2 (a), the order stops at V0.
+
+### DG-S0 - premise and census (2026-11-21)
+
+**The driver (DG-Q8).** `--insert-rate` landed in `tools/bl_mixed.py` at
+`e9952d64`.
+- Reviewed by `critics-developer`: no bug.
+- Applied: `insert_rate` is recorded only where the arm has an inserter,
+  and the interval is computed once.
+- Rejected: putting the rate in the run tag. `--batch` already leaves the
+  tag, and DG-S0 writes each cell to a directory of its own.
+
+**The measurement.**
+`bench/v3.5.0/results-dg-s0-premise-v3.5.0-36-ge9952d64.md`, on a spike
+that is not landed (`archive/dg-s0-premise-v3.5.0-36-ge9952d64/dg-s0-spike.patch`; the source
+was reverted after the build). There are 54 cells, 18 shapes × 3 runs, on
+ext4.
+
+**Over budget.** The run took 23.9 minutes against the standing 20, and
+28.2 from the build's start to the last cell's end. The cut was DG-Q7 (a)'s, made
+before the run, and is stated in the results file's §0.
+
+Its §1 is V0's table. In short:
+- **P0 (the fill as it is).**
+  - Under a log that rolls at 24 MB/s, a one-row commit's p95 is 171 ms
+    at `group` and 174 ms at `strict`, against a p50 of 976 µs and
+    936 µs.
+  - 79 % of the writers' samples of 10 ms or more at `group` (76 % at
+    `strict`, 68 % with 16 writers) are due inside a fill's `fsync`, which M4 times at 287-503 ms. The write before it takes
+    35-50 ms.
+  - At `relaxed` every roll is held, at 263 ms p50.
+  - CZ-S1b's commit cells never reached a fill, and so never saw this.
+- **P1 (no fill).**
+  - A commit's p50 rises to 1.9 ms at `group` (+94 %) and 1.6 ms at
+    `strict` (+76 %), and a 128-row commit's to 2.6 ms (+66 %). The p95
+    is 2.6-2.9 ms.
+  - The held inserter fell behind its rate (3,584 of 4,000 statements;
+    P0's 3,886, M2's 4,000).
+  - The bulk writer gains 18 % at `group` and 49 % at `relaxed`, and the
+    roll's hold falls to 5.5 ms.
+- **M2 (written extents, no fill in the window; the ceiling of P3, P4
+  and P5)** is the best arm at the commit (p25 to p99.9) and the bulk
+  rate, not at every tail: P1 beats it at the bulk writer's p99.9 and
+  max, at the roll's longest hold at `relaxed` (6.5 ms against 390 ms)
+  and at the commit's max at `strict`.
+  - A commit: 872 µs p50, 1.2 ms p95.
+  - The bulk writer: +36 % at `group` and +53 % at `relaxed`. Cold, it is
+    7-9 % below warm.
+- **P2 (the fill paced, 1 MiB per 8 ms).**
+  - At `group` the bulk writer gains 27 %.
+  - At `relaxed` every roll waited for its body under the latch: 302 ms
+    p50, 691 ms at its longest.
+  - P2 was not run in M1 (the cut).
+- **The tail without the fill (DG-Q6).** Every roll of 80 ms or more and
+  every inserter statement of 100 ms or more that no fill overlaps lies
+  inside a cadence checkpoint run, on core 0, 1 or 2: 8 rolls and 39
+  statements in all, against runs covering 5-31 % of a window. The
+  coincidence is measured; reading it as the log's sync tied to the
+  filesystem's other syncs is inferred, and not settled.
+- **P3's supply.** No segment was removed inside any window.
+- **P5.** It is not in this host's headers (6.12), nor in the tree.
+
+**The census** was read on `2c2ed8dd`, source `46ee8a6e`, delegated to a
+reading agent and spot-checked at `restore.cpp:507` and `falloc.h`.
+- **The tail's readers.**
+  - The reader's rule: a header of zeroes is a clean end; an undecodable
+    header, or an LSN not its position, is torn (`record.cpp:189-216`;
+    the CRC covers the LSN, `:126-127`, `:145-146`).
+  - The scanner: a PAD ends the segment, and a short tail is a seal only
+    where a later segment exists (`log_scanner.cpp:147-152`, `:175-185`,
+    `:196-198`).
+  - The mount's scrub (`stream.cpp:220-270`) and the short-tail seal
+    (`:379`, `:395-398`).
+  - The torn-tail report, which is a report only (`analysis.cpp:189`,
+    `mount_recovery.cpp:40`, `:82`).
+  - A backup's end check, which ignores `stopped_early`
+    (`restore.cpp:270-287`).
+  - A restore's refusal of an undecodable archived tail, as Corruption
+    (`restore.cpp:500-514`).
+  - A backup's copy, `archive_dir` and a restore's copy all go through
+    `CopyFileDurably`, a plain read, write and fsync
+    (`backup_manifest.cpp:155-192`). Nothing in the tree uses
+    `copy_file_range`, reflink or hole seeking.
+  - An `archive_command` may make a sparse copy. That costs the archive's
+    own space only: its check reads the bytes, and a restore copies them
+    back densely.
+- **Per candidate.**
+  - **P1 and P5** keep every reader's bytes.
+  - **P2 and P4** keep them only while no zero write lands after a body
+    is adopted.
+    - Today `prepare_mutex_` makes that so: the build ahead and the
+      creation both hold it, and a build declines any number that is not
+      the device's end (`file_log_device.cpp:388-403`, `:422-427`,
+      `:453-456`).
+    - A paced fill that lets go between pieces needs an exclusion of its
+      own. On the `ftruncate` path, a body adopted part-filled has holes
+      (DG-R1).
+  - **P3 breaks.** Every mount's live tail reads as torn and is scrubbed,
+    up to 64 MiB. A last archived segment sealed with a short tail is
+    refused by a restore with a target.
+- **Corrections to §1.2 and §2.**
+  - The torn refusal is `restore.cpp:500-514`, not `:516-529`. It
+    touches a short-tail or unsealed last segment, not every clean end: a
+    PAD seal, and a short tail in a non-last segment, are unaffected.
+  - The short-tail seal is at `stream.cpp:379`/`:395-398`, and the ask at
+    `:494-503`.
+  - **P3's invariant** is a *strictly lower-numbered* body. A
+    point-in-time restore removes the segments past its cut
+    (`restore.cpp:108-113`), and their numbers are created again, so
+    "same lineage" is neither needed nor enough.
+  - The read before a partial write is not P3's alone: a filled body that
+    has left the page cache has it too.
+  - `wal.md` §4.1's text makes a format event of a change of payload or
+    size only. P3 is one by DG-R4 and §4.2.
+- **Texts that become false under P1**, besides the five §5 names (at the
+  same lines at `46ee8a6e`): `file_log_device.hpp:129-132`, `:203-205`;
+  `file_log_device.cpp:429-437`; `wal.md`'s "reserves, zeroes and fsyncs";
+  `known-gaps.md`'s roll entry.
+
+**Reviews.**
+- The spike, by `critics-developer` before the tables were read: no arm
+  invalid. Its three reading checks are applied in the results file.
+- **The results file, by `critics-developer` against the raw data.** All
+  three scripts were re-run and reproduce byte for byte. The corrections
+  it made in the documents:
+  - "M2 beats both in every cell" was an overclaim. M2 is best at the
+    commit and at the bulk rate, but P1 beats it at the bulk writer's
+    p99.9 and max at `group`, at the roll's longest hold at `relaxed`,
+    and at the walker's p99 at `relaxed`.
+  - **The checkpoint runs.**
+    - They are on cores 0-2, not core 0 alone.
+    - Their parks are mostly on the log (`log_park_us` 426-657 ms,
+      `data_park_us` 30-88 ms), so which way the stall runs is not
+      established.
+    - They cover 5-31 % of a window, so the residual tail's link to them
+      is a measured coincidence with an inferred cause.
+  - The writer attribution is 79 % at `group`, 76 % at `strict` and 68 %
+    with 16 writers, summed over 3 runs. Six samples at `strict` are due
+    inside a checkpoint run. In P1's 16-writer cell, the commit tail is
+    the checkpoint's (327 of 344 samples).
+  - P2's explanation at `relaxed`. A segment fills in 0.5-0.6 s after the
+    previous roll, so every roll waits 153-630 ms for its body.
+  - P1's held inserter. P0 fell short too, and P1's commits were measured
+    beside 8-23 % less inserter load.
+  - Inferences now labelled as such, and several ranges corrected.
+  - The budget: 28.2 minutes from the build's start.
+  - V0's table now carries the 128-row commit's p95: P0 2.0 ms, P1
+    3.7 ms, M2 1.9 ms. At that size P0 beats P1.
+- **Flagged and applied by CLA:**
+  - the archive renamed with its describe suffix;
+  - `__pycache__` removed;
+  - the thesis's "stalls commits" narrowed to one-row commits, since the
+    128-row p95 shows no stall.
+- **Flagged and left:**
+  - The "longest run of long statements" DG-Q1 (a) names is not
+    computed; long ms/s stands in for it, and the file says so.
+  - The §2-§4 tables carry their units in the heading only.
+  - `bg-pw`'s 285 ms roll, with 9 ms at the gate, is unexplained, and so
+    is the cold arm's low walker count.
+
+**Ends at V0, the operator's reading of the results file's §1 (DG-Q1 (a)).**
+DG-S1 waits for the candidate the operator names (DG-Q2 (a)).

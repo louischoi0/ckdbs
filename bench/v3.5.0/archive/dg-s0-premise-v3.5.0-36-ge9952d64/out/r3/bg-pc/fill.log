@@ -1,0 +1,43 @@
+pool built=32 cold=1 at_ns=697600837525020
+pooled seg_temp=wal-0-0.log.tmp start_ns=697600838185726 end_ns=697600838227147 left=31
+ask seg=1 at_ns=697607986391011
+pooled seg_temp=wal-0-1.log.tmp start_ns=697607987980188 end_ns=697607988029339 left=30
+ask seg=2 at_ns=697608749439199
+pooled seg_temp=wal-0-2.log.tmp start_ns=697608749479934 end_ns=697608749510119 left=29
+ask seg=3 at_ns=697609569254392
+pooled seg_temp=wal-0-3.log.tmp start_ns=697609569294136 end_ns=697609569324334 left=28
+ask seg=4 at_ns=697610396809317
+pooled seg_temp=wal-0-4.log.tmp start_ns=697610396848893 end_ns=697610396880733 left=27
+ask seg=5 at_ns=697611234829575
+pooled seg_temp=wal-0-5.log.tmp start_ns=697611234883401 end_ns=697611234914088 left=26
+ask seg=6 at_ns=697612275946469
+pooled seg_temp=wal-0-6.log.tmp start_ns=697612275986457 end_ns=697612276026665 left=25
+ask seg=7 at_ns=697613122088021
+pooled seg_temp=wal-0-7.log.tmp start_ns=697613122130029 end_ns=697613122157432 left=24
+ask seg=8 at_ns=697613980550486
+pooled seg_temp=wal-0-8.log.tmp start_ns=697613980591698 end_ns=697613980624299 left=23
+ask seg=9 at_ns=697614853200855
+pooled seg_temp=wal-0-9.log.tmp start_ns=697614853241949 end_ns=697614853270040 left=22
+ask seg=10 at_ns=697615730737881
+pooled seg_temp=wal-0-10.log.tmp start_ns=697615730780234 end_ns=697615730809542 left=21
+ask seg=11 at_ns=697616928439085
+pooled seg_temp=wal-0-11.log.tmp start_ns=697616928483147 end_ns=697616928516854 left=20
+ask seg=12 at_ns=697617817820876
+pooled seg_temp=wal-0-12.log.tmp start_ns=697617817861565 end_ns=697617817888637 left=19
+ask seg=13 at_ns=697618725489308
+pooled seg_temp=wal-0-13.log.tmp start_ns=697618725534693 end_ns=697618725567136 left=18
+ask seg=14 at_ns=697619638585959
+pooled seg_temp=wal-0-14.log.tmp start_ns=697619638629977 end_ns=697619638657717 left=17
+removed seg=0 at_ns=697620111610119
+removed seg=1 at_ns=697620120114169
+removed seg=2 at_ns=697620128503980
+removed seg=3 at_ns=697620136884153
+removed seg=4 at_ns=697620145489478
+removed seg=5 at_ns=697620153755638
+removed seg=6 at_ns=697620162100177
+removed seg=7 at_ns=697620170442089
+removed seg=8 at_ns=697620178453420
+removed seg=9 at_ns=697620186418488
+removed seg=10 at_ns=697620194356657
+removed seg=11 at_ns=697620202037374
+removed seg=12 at_ns=697620209784330

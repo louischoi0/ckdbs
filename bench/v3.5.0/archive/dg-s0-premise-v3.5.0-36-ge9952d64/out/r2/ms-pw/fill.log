@@ -1,0 +1,16 @@
+pool built=12 cold=0 at_ns=697435053466264
+pooled seg_temp=wal-0-0.log.tmp start_ns=697435054157362 end_ns=697435054188287 left=11
+ask seg=1 at_ns=697443459404734
+pooled seg_temp=wal-0-1.log.tmp start_ns=697443459867029 end_ns=697443459895524 left=10
+ask seg=2 at_ns=697446219736614
+pooled seg_temp=wal-0-2.log.tmp start_ns=697446219781006 end_ns=697446219807209 left=9
+ask seg=3 at_ns=697448992249472
+pooled seg_temp=wal-0-3.log.tmp start_ns=697448992291503 end_ns=697448992327672 left=8
+ask seg=4 at_ns=697451752167949
+pooled seg_temp=wal-0-4.log.tmp start_ns=697451752210269 end_ns=697451752241438 left=7
+ask seg=5 at_ns=697454484732038
+pooled seg_temp=wal-0-5.log.tmp start_ns=697454484772811 end_ns=697454484800545 left=6
+removed seg=0 at_ns=697454948095025
+removed seg=1 at_ns=697454956184599
+removed seg=2 at_ns=697454964149741
+removed seg=3 at_ns=697454972652111

@@ -1,0 +1,33 @@
+fill seg_temp=wal-0-0.log.tmp ahead=0 start_ns=697520915209544 end_ns=697521229835926 reserve_us=15 write_us=27529 fsync_us=287007 fallocated=1 filled=1
+ask seg=1 at_ns=697527958090735
+fill seg_temp=wal-0-1.log.tmp ahead=1 start_ns=697527959183404 end_ns=697528306699081 reserve_us=21 write_us=53464 fsync_us=294028 fallocated=1 filled=1
+ask seg=2 at_ns=697528981572444
+fill seg_temp=wal-0-2.log.tmp ahead=1 start_ns=697528981652852 end_ns=697529326971020 reserve_us=20 write_us=51845 fsync_us=293450 fallocated=1 filled=1
+ask seg=3 at_ns=697530035065975
+fill seg_temp=wal-0-3.log.tmp ahead=1 start_ns=697530035128912 end_ns=697530382787068 reserve_us=18 write_us=53804 fsync_us=293833 fallocated=1 filled=1
+ask seg=4 at_ns=697531107108712
+fill seg_temp=wal-0-4.log.tmp ahead=1 start_ns=697531107177713 end_ns=697531449595916 reserve_us=21 write_us=52860 fsync_us=289534 fallocated=1 filled=1
+ask seg=5 at_ns=697532452428162
+fill seg_temp=wal-0-5.log.tmp ahead=1 start_ns=697532454469191 end_ns=697532799173056 reserve_us=21 write_us=50863 fsync_us=293817 fallocated=1 filled=1
+ask seg=6 at_ns=697533525253776
+fill seg_temp=wal-0-6.log.tmp ahead=1 start_ns=697533525325909 end_ns=697533870994275 reserve_us=21 write_us=49902 fsync_us=295742 fallocated=1 filled=1
+ask seg=7 at_ns=697534601226569
+fill seg_temp=wal-0-7.log.tmp ahead=1 start_ns=697534601296815 end_ns=697534947115120 reserve_us=23 write_us=53140 fsync_us=292653 fallocated=1 filled=1
+ask seg=8 at_ns=697535695074668
+fill seg_temp=wal-0-8.log.tmp ahead=1 start_ns=697535695149319 end_ns=697536040206494 reserve_us=21 write_us=48517 fsync_us=296515 fallocated=1 filled=1
+ask seg=9 at_ns=697537027580285
+fill seg_temp=wal-0-9.log.tmp ahead=1 start_ns=697537027654370 end_ns=697537372104131 reserve_us=18 write_us=48150 fsync_us=296277 fallocated=1 filled=1
+ask seg=10 at_ns=697538137509934
+fill seg_temp=wal-0-10.log.tmp ahead=1 start_ns=697538137596996 end_ns=697538492094741 reserve_us=23 write_us=48669 fsync_us=305802 fallocated=1 filled=1
+ask seg=11 at_ns=697539265481510
+fill seg_temp=wal-0-11.log.tmp ahead=1 start_ns=697539265560351 end_ns=697539607273490 reserve_us=20 write_us=48769 fsync_us=292921 fallocated=1 filled=1
+removed seg=0 at_ns=697540017699152
+removed seg=1 at_ns=697540025899140
+removed seg=2 at_ns=697540034177531
+removed seg=3 at_ns=697540042385844
+removed seg=4 at_ns=697540050764294
+removed seg=5 at_ns=697540058855598
+removed seg=6 at_ns=697540067069954
+removed seg=7 at_ns=697540075213150
+removed seg=8 at_ns=697540082976435
+removed seg=9 at_ns=697540090649703
