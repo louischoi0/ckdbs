@@ -3313,9 +3313,10 @@ the thirteen fixes leave, each `[source-read]` unless marked.
 Verified on worktree `dd-index-entry-purge` (DD-S2, 2026-11-20).
 
 - **Nothing drives it**: `PURGE INDEX` runs when an administrator runs it
-  (DD-Q4 (a)); DD-S4, a background driver, is put to the operator. Under
-  DN's heap a slot is freed only by entry removal, so DN needs a driver
-  that runs unasked.
+  (DD-Q4 (a)). Under DN's heap a slot is freed only by entry removal, so
+  DN needs a driver that runs unasked; by the operator's mark of 2026-11-21
+  (DD-S4 option (b), `raft-marks-2026-11-21.md` §6) it is DN-S2's, built
+  with DN's record of which slots no index names. Not built at `dcab41e5`.
 - **A purge of a row `PURGE`'s window is about eight times dearer an
   entry** (DD's close, `bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`:
   about 20 us against 2.4 us): the judge's lookup of a purged key lands

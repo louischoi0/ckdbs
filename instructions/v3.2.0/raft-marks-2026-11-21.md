@@ -44,3 +44,17 @@ The operator's words of 2026-11-21, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | V0, V1, the candidate (DG-Q2), a tag or a version |
 | **Recorded at** | this file |
+
+## 6. DD-S4 ruled (b): the driver is DN-S2's; DN taken up on the standing go-ahead
+
+Numbered §6 because §5 is held by DG's close record on the work branch
+`worktree-dg-wal-segment-body` (`e98163d2`), not landed.
+
+| | |
+|---|---|
+| **Word** | *"$!b /go-ahead-achieving-milestone"*, given after CLA's report on DD put three options for DD-S4 and proposed (b) (given in Korean; recorded in English) |
+| **Mark** | **DD-S4 is option (b), the operator's own mark**: the driver that removes index entries unasked is not built as DD-S4. It is designed and built inside DN-S2, after the operator's mark at DN-S1's gate, together with DN's record that no entry of **any** index of a relation names a slot (DN-R2; DD's §0a item 5). The ground: DD's `PURGE INDEX` purges one index, while slot reuse on a DN heap needs a fact about every index of the relation, so a driver built per index now would be rebuilt at DN-S2. **DD stays closed**, its DD-S4 moved to DN-S2; for a btree relation, entry removal stays an administrator's `PURGE INDEX` (DD-Q4 (a)) |
+| **Which milestone** | The word names no milestone; the mark puts the driver's work in DN, so the milestone is **DN** (the skill's §1, item 2), on worktree `dn-dd-s4-into-dn-s2` from `dcab41e5` (`v3.5.0-39-gdcab41e5`) |
+| **The stop** | **DN stops at DN-S1's gate at once.** That gate is the operator's mark on the amended hard invariants (the DN order's §8: invariant 4 under DN-D7, 9, 11's restatement, with DN-Q13 (c) and DN-Q14 (a), both `[quiet-wrong]`). A hard invariant is amended only under a recorded mark of the operator's (DN-S1's log), which the standing go-ahead is not (the skill's §5). **Still owed before DN-S2, apart from the mark**: DN-Q11's descending named load, measured |
+| **Does not settle** | DN-S1's gate; DN-Q13, DN-Q14; the driver's design (DN-S2's); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DD order's header, §5 and §7; the DN order's header, §5 and §7; their rows and this file's row in `instructions/v3.2.0/index.md`; `docs/inflight/known-gaps.md` (Index entry purge) |
