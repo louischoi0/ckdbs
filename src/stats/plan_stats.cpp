@@ -1,5 +1,7 @@
 #include "kds/stats/plan_stats.hpp"
 
+#include <new>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -330,9 +332,17 @@ PlanStats::PlanStats(std::uint32_t cores) {
 }
 
 void PlanStats::Fold(std::uint32_t core, const PlanObservation& observation) noexcept {
+    const StatisticsRecordScope recording("a planned run's observation");
     if (core >= parts_.size()) return;
     Part& part = *parts_[core];
-    const LatchGuard hold(&part.latch);
+    // Tried, never waited for (`rules.md` §3a (b)): the one other taker is
+    // the steward's copy, and an observation that meets it is the count's
+    // loss - the planner's statistics are advisory.
+    const LatchGuard hold(&part.latch, std::try_to_lock);
+    if (!hold.owns()) {
+        part_busy_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     // Open addressing over a fixed table: no allocation on this path. A new
     // key past half the table is dropped and counted, so probes stay short;
     // the steward empties the table every step.
@@ -359,9 +369,16 @@ void PlanStats::Fold(std::uint32_t core, const PlanObservation& observation) noe
 }
 
 void PlanStats::WantPriors(std::uint32_t core, std::span<const catalog::Oid> oids) noexcept {
+    const StatisticsRecordScope recording("a planned run's wanted priors");
     if (core >= parts_.size() || oids.empty()) return;
     Part& part = *parts_[core];
-    const LatchGuard hold(&part.latch);
+    // Tried: a want that meets the steward's copy is asked again by the
+    // next planned run that meets the relation without a prior.
+    const LatchGuard hold(&part.latch, std::try_to_lock);
+    if (!hold.owns()) {
+        part_busy_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     for (const catalog::Oid oid : oids) {
         const auto end = part.wanted.begin() + static_cast<std::ptrdiff_t>(part.nwanted);
         if (std::find(part.wanted.begin(), end, oid) != end) continue;
@@ -380,28 +397,39 @@ bool PlanStats::Reband(std::int16_t& band, bool& banded, double v) noexcept {
 }
 
 void PlanStats::Merge(std::uint64_t now_ns) {
-    // Every part's entries are copied out under its latch, and the latch is
-    // let go before anything here touches `master_` - a core's statement end
-    // waits for a copy, never for a fold.
+    // Every part's entries are copied out under its latch - into room made
+    // before the hold, so the hold is a copy and nothing else - and the
+    // latch is let go before anything here touches `master_` or `wanted_`.
+    // A core's statement end meets the copy or nothing, and never waits
+    // for it; nor does this step wait for a statement's fold (DL-Q17): a
+    // part found busy keeps its entries for the next step.
     std::unordered_map<PlanKey, PartEntry, PlanKeyHash> merged;
+    std::vector<PartEntry> taken;
+    taken.reserve(kKeysPerPart / 2);  // a part holds at most half its slots
     for (const std::unique_ptr<Part>& part_ptr : parts_) {
         Part& part = *part_ptr;
-        std::vector<PartEntry> taken;
+        taken.clear();
+        std::array<catalog::Oid, kWantedPerPart> wanted{};
+        std::size_t nwanted = 0;
         {
-            const LatchGuard hold(&part.latch);
-            taken.reserve(part.used);
-            for (PartEntry& entry : part.entries) {
-                if (!entry.used) continue;
-                taken.push_back(entry);
-                entry.used = false;
-            }
-            part.used = 0;
-            for (std::size_t i = 0; i < part.nwanted; ++i) {
-                if (std::find(wanted_.begin(), wanted_.end(), part.wanted[i]) == wanted_.end()) {
-                    wanted_.push_back(part.wanted[i]);
+            const LatchGuard hold(&part.latch, std::try_to_lock);
+            if (!hold.owns()) continue;
+            if (part.used != 0) {
+                for (PartEntry& entry : part.entries) {
+                    if (!entry.used) continue;
+                    taken.push_back(entry);
+                    entry.used = false;
                 }
+                part.used = 0;
             }
+            wanted = part.wanted;
+            nwanted = part.nwanted;
             part.nwanted = 0;
+        }
+        for (std::size_t i = 0; i < nwanted; ++i) {
+            if (std::find(wanted_.begin(), wanted_.end(), wanted[i]) == wanted_.end()) {
+                wanted_.push_back(wanted[i]);
+            }
         }
         // Summed across the cores first, so a posterior moves by one step
         // however many cores ran its statement.
@@ -473,8 +501,12 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
         // Dropped or unreadable: its prior is gone; posteriors naming it are
         // unreachable, since oids are never reissued.
         if (priors_.erase(oid) != 0) dirty_ = true;
-        const LatchGuard hold(&space_latch_);
-        delete_marked_.erase(oid);
+        // Tried (DL-Q17). An entry a view's read kept this step from erasing
+        // stays for the process's life - the prior is gone, so nothing
+        // seeds the oid again - and no view shows it: the relation is gone.
+        if (const LatchGuard hold(&space_latch_, std::try_to_lock); hold.owns()) {
+            delete_marked_.erase(oid);
+        }
         return Status::OK();
     }
     const std::size_t before = budget;
@@ -493,8 +525,11 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
     // After the prior's own entry, so every relation here has one there and
     // the erase above finds both.
     if (marked.has_value()) {
-        const LatchGuard hold(&space_latch_);
-        delete_marked_[oid] = static_cast<std::uint64_t>(std::llround(*marked));
+        // Tried (DL-Q17): this step runs on a reactor. A sample that meets
+        // a view's read is left for the relation's next seed.
+        if (const LatchGuard hold(&space_latch_, std::try_to_lock); hold.owns()) {
+            delete_marked_[oid] = static_cast<std::uint64_t>(std::llround(*marked));
+        }
     }
     prior.seeded_ns = now_ns;
     prior.carried = false;
@@ -502,40 +537,133 @@ Status PlanStats::Seed(catalog::Catalog& catalog, storage::PageStore& store, cat
     return Status::OK();
 }
 
-void PlanStats::Install(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-                        std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {
-    // Under the latch, whole: the steward and an operator's statement on
-    // another core both install, and each reads the other's half here.
-    const LatchGuard hold(&publish_latch_);
-    InstallLocked(std::move(priors), std::move(posteriors));
+bool PlanStats::Install(std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
+                        std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors,
+                        bool wait) {
+    // Under the installers' latch, whole: the steward and an operator's
+    // statement on another core both install, and each reads the other's
+    // half here. The steward tries it (DL-Q17).
+    const LatchGuard installing =
+        wait ? LatchGuard(&install_latch_) : LatchGuard(&install_latch_, std::try_to_lock);
+    if (!installing.owns()) return false;
+    std::vector<std::pair<catalog::Oid, std::int16_t>> bands;
+    if (!ManagedBands(wait, &bands)) return false;
+    return InstallLocked(std::move(priors), std::move(posteriors), std::move(bands), wait);
 }
 
-void PlanStats::InstallLocked(
+bool PlanStats::ManagedBands(bool wait,
+                             std::vector<std::pair<catalog::Oid, std::int16_t>>* bands) const {
+    if (!wait) return managed_.TryPublishedBands(bands);
+    *bands = managed_.PublishedBands();
+    return true;
+}
+
+bool PlanStats::InstallLocked(
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
-    std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {
+    std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors,
+    std::vector<std::pair<catalog::Oid, std::int16_t>> bands, bool wait) {
+    // **Built with no latch a compile can meet** (`rules.md` §3a (d)): the
+    // sorts and the copies are done here, and the publish latch is held
+    // for the pointer alone.
     const std::uint64_t next = generation_.load(std::memory_order_relaxed) + 1;
-    current_ = std::make_shared<const PlanStatsSnapshot>(
-        next, std::move(priors), std::move(posteriors), managed_.PublishedBands());
+    std::shared_ptr<const PlanStatsSnapshot> snapshot = std::make_shared<const PlanStatsSnapshot>(
+        next, std::move(priors), std::move(posteriors), std::move(bands));
+    {
+        const LatchGuard hold = wait ? LatchGuard(&publish_latch_)
+                                     : LatchGuard(&publish_latch_, std::try_to_lock);
+        if (!hold.owns()) return false;
+        current_.swap(snapshot);
+    }
+    // `snapshot` is the one replaced: let go here, outside the latch.
     generation_.store(next, std::memory_order_release);
+    return true;
 }
 
-void PlanStats::RepublishManaged() {
-    const LatchGuard hold(&publish_latch_);
+bool PlanStats::RepublishManaged(bool wait) {
+    // `wait`: an operator's statistics statement, which may wait for
+    // another install (DL-Q16). Not `wait`: a relation's drop or the
+    // steward, which wait for nothing. `current_` is read under the
+    // installers' latch - only an installer writes it.
+    const LatchGuard installing =
+        wait ? LatchGuard(&install_latch_) : LatchGuard(&install_latch_, std::try_to_lock);
+    if (!installing.owns()) return false;
+    std::vector<std::pair<catalog::Oid, std::int16_t>> bands;
+    if (!ManagedBands(wait, &bands)) return false;
     // **Only when a band moved** (CY-Q31 (a)): a new generation re-keys every
     // core's order memo (§6a), so a re-gather that lands in its band - most
     // of them, by PS5's hysteresis - costs no core a compile.
-    if (current_ != nullptr && current_->managed_ == managed_.PublishedBands()) return;
+    if (current_ != nullptr && current_->managed_ == bands) return true;
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors;
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors;
     if (current_ != nullptr) {
         priors = current_->priors_;
         posteriors = current_->posteriors_;
     }
-    InstallLocked(std::move(priors), std::move(posteriors));
+    if (!InstallLocked(std::move(priors), std::move(posteriors), std::move(bands), wait)) {
+        return false;
+    }
     publishes_.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 
-void PlanStats::Publish() {
+void PlanStats::ForgetRelation(catalog::Oid oid) noexcept {
+    // **A relation's drop waits for no statistics statement and no install**
+    // (`rules.md` §3a; DL-Q19): each latch is tried, and what is busy is
+    // left to the steward's next step - the oid queued, the republish owed.
+    // The drop's own answer does not depend on either: an oid is never
+    // issued again, so an object that outlives its relation by a step
+    // prices nothing.
+    const std::optional<bool> published = managed_.TryForget(oid);
+    if (!published.has_value()) {
+        OwedForget* owed = new (std::nothrow) OwedForget{oid, nullptr};
+        if (owed == nullptr) {
+            // No memory for the queue: the one case that waits, for the
+            // store's latch.
+            if (managed_.Forget(oid)) republish_owed_.store(true, std::memory_order_relaxed);
+            return;
+        }
+        owed->next = owed_forgets_.load(std::memory_order_relaxed);
+        while (!owed_forgets_.compare_exchange_weak(owed->next, owed, std::memory_order_release,
+                                                    std::memory_order_relaxed)) {
+        }
+        return;
+    }
+    if (*published && !RepublishManaged(/*wait=*/false)) {
+        republish_owed_.store(true, std::memory_order_relaxed);
+    }
+}
+
+void PlanStats::ApplyOwedForgets() {
+    // The steward's: every drop's forget that met a held latch. One that
+    // meets it again goes back on the queue for the next step.
+    OwedForget* owed = owed_forgets_.exchange(nullptr, std::memory_order_acquire);
+    while (owed != nullptr) {
+        OwedForget* next = owed->next;
+        const std::optional<bool> published = managed_.TryForget(owed->oid);
+        if (published.has_value()) {
+            if (*published) republish_owed_.store(true, std::memory_order_relaxed);
+            delete owed;
+        } else {
+            owed->next = owed_forgets_.load(std::memory_order_relaxed);
+            while (!owed_forgets_.compare_exchange_weak(owed->next, owed,
+                                                        std::memory_order_release,
+                                                        std::memory_order_relaxed)) {
+            }
+        }
+        owed = next;
+    }
+}
+
+PlanStats::~PlanStats() {
+    OwedForget* owed = owed_forgets_.exchange(nullptr, std::memory_order_acquire);
+    while (owed != nullptr) {
+        OwedForget* next = owed->next;
+        delete owed;
+        owed = next;
+    }
+}
+
+void PlanStats::Publish(bool wait_for_install) {
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors = ExportPriors();
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors;
     posteriors.reserve(master_.size());
@@ -546,7 +674,9 @@ void PlanStats::Publish() {
         p.declines = master.declines;
         posteriors.emplace_back(key, p);
     }
-    Install(std::move(priors), std::move(posteriors));
+    // The steward's step tries (`wait_for_install` false): a publish that
+    // meets another installer or a pin's copy stays dirty for the next step.
+    if (!Install(std::move(priors), std::move(posteriors), wait_for_install)) return;
     publishes_.fetch_add(1, std::memory_order_relaxed);
     dirty_ = false;
 }
@@ -554,6 +684,7 @@ void PlanStats::Publish() {
 Status PlanStats::StewardStep(catalog::Catalog& catalog, storage::PageStore& store,
                               std::uint64_t now_ns) {
     const std::uint64_t started = MonotonicNs();
+    ApplyOwedForgets();
     Merge(now_ns);
 
     std::size_t budget = kSeedPageBudget;
@@ -578,7 +709,9 @@ Status PlanStats::StewardStep(catalog::Catalog& catalog, storage::PageStore& sto
         seeded = Seed(catalog, store, it->first, now_ns, budget);
     }
 
-    if (dirty_) Publish();
+    // A relation's drop that could not republish where it ran is owed here.
+    if (republish_owed_.exchange(false, std::memory_order_relaxed)) dirty_ = true;
+    if (dirty_) Publish(/*wait_for_install=*/false);
     // One writer, the steward: a plain compare and store.
     const std::uint64_t took = MonotonicNs() - started;
     if (took > steward_ns_max_.load(std::memory_order_relaxed)) {
@@ -601,6 +734,13 @@ std::shared_ptr<const PlanStatsSnapshot> PlanStats::Current() const {
     return current_;
 }
 
+bool PlanStats::TryCurrent(std::shared_ptr<const PlanStatsSnapshot>* out) const {
+    const LatchGuard hold(&publish_latch_, std::try_to_lock);
+    if (!hold.owns()) return false;
+    *out = current_;
+    return true;
+}
+
 void PlanStats::SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>> bands) {
     if (bands.empty()) return;
     for (const auto& [oid, band] : bands) {
@@ -609,7 +749,7 @@ void PlanStats::SeedPriors(std::span<const std::pair<catalog::Oid, std::int16_t>
         prior.banded = true;
         prior.carried = true;
     }
-    Publish();
+    Publish(/*wait_for_install=*/true);  // a mount: no reactor runs yet
 }
 
 std::vector<std::pair<catalog::Oid, std::int16_t>> PlanStats::ExportPriors() const {
@@ -727,12 +867,13 @@ void PlanStats::LoadStatistics(std::span<const catalog::SysStatisticsRow> rows) 
 void PlanStats::PublishForTest(
     std::vector<std::pair<catalog::Oid, std::int16_t>> priors,
     std::vector<std::pair<PlanKey, PlanStatsSnapshot::Posterior>> posteriors) {
-    Install(std::move(priors), std::move(posteriors));
+    (void)Install(std::move(priors), std::move(posteriors), /*wait=*/true);
 }
 
 PlanStats::Counters PlanStats::counters() const noexcept {
     Counters c;
     c.part_drops = part_drops_.load(std::memory_order_relaxed);
+    c.part_busy = part_busy_.load(std::memory_order_relaxed);
     c.seeds = seeds_.load(std::memory_order_relaxed);
     c.seed_pages = seed_pages_.load(std::memory_order_relaxed);
     c.publishes = publishes_.load(std::memory_order_relaxed);
@@ -743,11 +884,19 @@ PlanStats::Counters PlanStats::counters() const noexcept {
 // ---- A core's source -------------------------------------------------------
 
 std::shared_ptr<const PlanStatsSnapshot> PlanStatsSource::Pin() {
+    const StatisticsRecordScope recording("a compile's pin of the planner's snapshot");
     if (stats_ == nullptr) return nullptr;
     const std::uint64_t generation = stats_->generation();
     if (generation != cached_generation_) {
-        cached_ = stats_->Current();
-        cached_generation_ = cached_ != nullptr ? cached_->generation() : generation;
+        // **Tried, never waited for**: the latch is held for a pointer, by
+        // an install's swap or another core's pin. A pin that meets one
+        // prices from the snapshot it has - the statistics are advisory -
+        // and asks again at the next pin, the generation still unmatched.
+        std::shared_ptr<const PlanStatsSnapshot> now;
+        if (stats_->TryCurrent(&now)) {
+            cached_ = std::move(now);
+            cached_generation_ = cached_ != nullptr ? cached_->generation() : generation;
+        }
     }
     return cached_;
 }

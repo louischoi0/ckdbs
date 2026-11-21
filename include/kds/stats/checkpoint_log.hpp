@@ -53,6 +53,9 @@ public:
     static std::vector<CheckpointRecord> Snapshot() { return ring().Snapshot(); }
     static Ring::Totals Read() noexcept { return ring().Read(); }
     static void ResetForTest() noexcept { ring().Reset(); }
+    static Latch* PartLatchForTest(std::uint32_t core) noexcept {
+        return ring().PartLatchForTest(core);
+    }
 
 private:
     static Ring& ring() noexcept;

@@ -11,12 +11,12 @@ LeafStats::Parts& LeafStats::parts() noexcept {
 
 void LeafStats::CountDivision(catalog::Oid owner_oid) noexcept {
     if (owner_oid == 0) return;
-    parts().With(CurrentCore(), owner_oid, [](LeafActivity& a) { ++a.divisions; });
+    parts().With(CurrentCore(), owner_oid, [](LeafActivity& a) { a.divisions.add(1); });
 }
 
 void LeafStats::CountCompaction(catalog::Oid owner_oid) noexcept {
     if (owner_oid == 0) return;
-    parts().With(CurrentCore(), owner_oid, [](LeafActivity& a) { ++a.compactions; });
+    parts().With(CurrentCore(), owner_oid, [](LeafActivity& a) { a.compactions.add(1); });
 }
 
 std::unordered_map<catalog::Oid, LeafActivity> LeafStats::Snapshot() {

@@ -973,7 +973,13 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     sched::SessionWaitStats* const ash_stats =
         (session != nullptr ? session : &autocommit_session_)->WaitStats();
     ash_stats->fingerprint.set(0);
-    ash_stats->pattern_id.set(0);
+    // The pattern id's one reader is the controller's wait signal, through
+    // the sampler: published for it only while its switch is on (`rules.md`
+    // §3a). A statement that began before a switch-on keeps the word an
+    // earlier one left, and a wait of it sampled then is counted to that
+    // shape - a count's difference at the flip (DL-R10).
+    const bool for_collector = CollectorOn();
+    if (for_collector) ash_stats->pattern_id.set(0);
     // Every statement runs on the core its session is on (AT-S9). What
     // suspends here is a statement's own wait - a lock, a blocking writer,
     // the group commit - never a stage on another core.
@@ -1013,7 +1019,7 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // fetch id above would otherwise be recorded beside no binding.
     const stats::StatementBinding first_binding = out->binding;
     ash_stats->fingerprint.set(fetch_id);
-    ash_stats->pattern_id.set(out->pattern_id);
+    if (for_collector) ash_stats->pattern_id.set(out->pattern_id);
 
     // ---- R6-5: D5's bounded wait on an undecided row --------------------
     //
@@ -1516,6 +1522,9 @@ void CommandDispatcher::RecordStatement(std::string_view line, const DispatchOut
     // An autocommit statement's view ended with it (`sys.session_state`'s
     // `view_age_us`); a transaction's is its own.
     (session != nullptr ? session : &autocommit_session_)->EndStatementView();
+    // From here to the return this is the statement's record of itself: it
+    // takes no latch but by a try and fetches no page (`rules.md` §3a).
+    const StatisticsRecordScope recording("a statement's record");
     const sched::MonoTimeNs now_ns = NowNs();
     const bool refused = !out.status.ok() || out.response.rfind("ERR", 0) == 0;
     const std::int64_t now_us = exec::StatementContextNow().now_us;
@@ -2227,20 +2236,28 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // **The Cabin controller's own numbers** (PHY06), which `SHOW
     // CABIN_OPTIMIZER`'s header printed; its managed entries are
     // `sys.cabin_optimizer`'s rows. The switch is always printed; the rest
-    // only where an instance runs a controller, under the view latch the
-    // entries are read under (AT-S8). The executor's counters are what it
-    // applied, beside what the controller decided.
+    // only where an instance runs a controller, from the copy its tick
+    // published (DL-S3). The executor's counters are what it applied,
+    // beside what the controller decided.
     section("cabin_optimizer");
     os << " cabin_optimizer=" << (cabin_optimizer_enabled() ? "on" : "off");
-    {
-        const LatchGuard latched(cabin_optimizer_view_latch_);
-        if (cabin_controller_ != nullptr) {
-            os << " cabin_optimizer_managed=" << cabin_controller_->managed_count()
-               << " cabin_optimizer_pages_committed=" << cabin_controller_->pages_committed()
-               << " cabin_optimizer_page_budget=" << cabin_controller_->config().page_budget;
+    if (optimizer_signals_ != nullptr) {
+        // Notes the collector lost (DL-R2): one that met the tick's copy of
+        // its core's part, and one its part had no room for.
+        const stats::OptimizerSignals::Drops lost = optimizer_signals_->drops();
+        os << " cabin_optimizer_notes_busy=" << lost.busy
+           << " cabin_optimizer_notes_full=" << lost.full;
+    }
+    // The controller's fields are the copy its tick published (DL-S3): a
+    // `SHOW META` waits for no tick, and so for no Cabin's build.
+    if (const auto view = ControllerView(); view != nullptr) {
+        if (view->has_controller) {
+            os << " cabin_optimizer_managed=" << view->managed
+               << " cabin_optimizer_pages_committed=" << view->pages_committed
+               << " cabin_optimizer_page_budget=" << view->page_budget;
         }
-        if (cabin_executor_ != nullptr) {
-            const exec::CabinOptimizerExecutor::Counters& c = cabin_executor_->counters();
+        if (view->has_executor) {
+            const exec::CabinOptimizerExecutor::Counters& c = view->counters;
             os << " cabin_optimizer_ticks=" << c.ticks << " cabin_optimizer_creates=" << c.creates
                << " cabin_optimizer_extends=" << c.extends << " cabin_optimizer_heals=" << c.heals
                << " cabin_optimizer_drops=" << c.drops
@@ -2271,7 +2288,8 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         os << " plan_stats_generation=" << (snapshot != nullptr ? snapshot->generation() : 0)
            << " plan_stats_relations=" << (snapshot != nullptr ? snapshot->relations() : 0)
            << " plan_stats_posteriors=" << (snapshot != nullptr ? snapshot->posteriors() : 0)
-           << " plan_stats_part_drops=" << c.part_drops << " plan_stats_seeds=" << c.seeds
+           << " plan_stats_part_drops=" << c.part_drops
+           << " plan_stats_part_busy=" << c.part_busy << " plan_stats_seeds=" << c.seeds
            << " plan_stats_seed_pages=" << c.seed_pages
            << " plan_stats_publishes=" << c.publishes
            << " plan_stats_steward_us_max=" << c.steward_ns_max / 1000;
@@ -2315,8 +2333,11 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     // that would have recorded was refused". Absent where no store runs.
     section("cabins");
     if (cabins_ != nullptr) {
-        os << " cabins_unbankable_views=" << cabins_->stats().unbankable_views
-           << " cabins_cap_refusals=" << cabins_->stats().cap_refusals;
+        // Every core's words summed as they stand; no latch (DL-S1).
+        const stats::CabinStore::Stats totals = cabins_->stats();
+        os << " cabins_unbankable_views=" << totals.unbankable_views
+           << " cabins_cap_refusals=" << totals.cap_refusals
+           << " cabins_use_dropped=" << cabins_->use_dropped();
     }
 
     // FM10 (docs/inflight/in-progress/workplan-multi-free-map.md): what the allocation map
@@ -2756,19 +2777,23 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
     if (archiver_ != nullptr) archiver_->AppendMeta(os);
     // **`sys.lock_waits`' store** (BO-S3): the instance's, summed over every
     // core's part, as the contention block below is. `overwritten` is the
-    // rows a full ring gave up for newer ones and `dropped` the rows no ring
-    // could take - what the view no longer holds, and why.
+    // rows a full ring gave up for newer ones, `dropped` the rows no ring
+    // could take and `busy` the rows that met a reader's copy of their part
+    // (DL-R2) - what the view no longer holds, and why.
     section("lock_waits");
     {
         const stats::LockWaitLog::Totals waits = stats::LockWaitLog::Read();
         os << " lock_waits_recorded=" << waits.recorded
            << " lock_waits_overwritten=" << waits.overwritten
-           << " lock_waits_dropped=" << waits.dropped;
+           << " lock_waits_dropped=" << waits.dropped << " lock_waits_busy=" << waits.busy;
     }
     // **`sys.statement_stats`' store** (BO-S5), the instance's: new shapes
     // a full part could not take, which the view therefore never shows.
     section("statement_stats");
-    os << " statement_stats_dropped=" << stats::StatementStats::Dropped();
+    // `_busy`: records that met a reader's copy of their part (DL-R2), apart
+    // from `_dropped`, the new shapes a full part could not take.
+    os << " statement_stats_dropped=" << stats::StatementStats::Dropped()
+       << " statement_stats_busy=" << stats::StatementStats::Busy();
     // **`sys.relation_stats`' activity store** (BO-S6), the instance's: new
     // relations a full part could not take, whose counts the view lacks.
     section("relation_stats");
@@ -2793,7 +2818,22 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
         const stats::CheckpointLog::Ring::Totals runs = stats::CheckpointLog::Read();
         os << " checkpoints_recorded=" << runs.recorded
            << " checkpoints_overwritten=" << runs.overwritten
-           << " checkpoints_dropped=" << runs.dropped;
+           << " checkpoints_dropped=" << runs.dropped << " checkpoints_busy=" << runs.busy;
+    }
+    // **`sys.ash`' rings**, every core's summed: samples written, samples no
+    // ring could be allocated for, and samples that met a reader's copy of
+    // their ring and were not taken (DL-R2).
+    section("ash");
+    {
+        std::uint64_t recorded = 0, dropped = 0, busy = 0;
+        for (std::uint32_t core = 0; core < sched::kWaitCores; ++core) {
+            const auto ring = sched::AshRingOfCore(core);
+            if (ring == nullptr) continue;
+            recorded += ring->recorded();
+            dropped += ring->dropped();
+            busy += ring->busy();
+        }
+        os << " ash_recorded=" << recorded << " ash_dropped=" << dropped << " ash_busy=" << busy;
     }
     // **BA's census block** (BA-R0, BA-S2; `base/contention.hpp`): the
     // instance's, summed over every core when read - unlike the WAL block
@@ -3957,7 +3997,9 @@ void CommandDispatcher::EndOptInsNaming(catalog::Oid oid) {
 
 void CommandDispatcher::ForgetRelationStatistics(catalog::Oid oid) {
     if (plan_stats_ == nullptr) return;
-    if (plan_stats_->managed().Forget(oid)) plan_stats_->RepublishManaged();
+    // A DDL's forget, not a statistics statement: it waits for neither the
+    // store's latch nor an install (`rules.md` §3a; DL-Q19).
+    plan_stats_->ForgetRelation(oid);
 }
 
 DispatchOutcome CommandDispatcher::HandleStatistics(std::string_view line, Session& session) {
@@ -5591,6 +5633,7 @@ txn::ReadView CommandDispatcher::CheckView(const WriteScope& scope) {
 
 void CommandDispatcher::RecordFkAccess(exec::AccessKind kind, catalog::Oid rel_oid,
                                        std::uint64_t column_mask) {
+    const StatisticsRecordScope recording("a foreign key check's access shape");
     // FK-M4. The checks are not steps (fk_check.hpp says why), so the shape
     // they touch is recorded by hand where a step would have been counted by
     // being one. Same relation and the same call every other access goes
@@ -10586,9 +10629,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // (cabin-controller.md §II.4's f_i), and it is the one shape
     // invariant 9 keeps Waystone away from. ANALYZE prints the ids whatever
     // was opted - a dispatcher built with no optimizer surface included -
-    // so the operator can name a shape before opting it in.
-    if (fingerprint.has_value() &&
-        (waystone_usable || optimizer_signals_ != nullptr || analyze)) {
+    // so the operator can name a shape before opting it in. **With the
+    // controller switched off nothing is built for it** (`rules.md` §3a).
+    if (fingerprint.has_value() && (waystone_usable || CollectorOn() || analyze)) {
         identity = StatementIdentity{stats::InstanceKey{fingerprint->fetch_id, fingerprint->arg_hash},
                                      fingerprint->pattern_id, opted != nullptr ? opted->oid : 0};
     }
@@ -10754,6 +10797,7 @@ void CommandDispatcher::RecordExecution(const std::optional<StatementIdentity>& 
 
 void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
                                        const exec::ExecStats& stats) {
+    const StatisticsRecordScope recording("sys.indexes' usage");
     // Every step an index served, sub-chains and hoisted ones included - a
     // step's id is global to the statement, and so is `stats`. A chain with
     // no index step, which is most, pays the walk and nothing else; one that
@@ -10782,6 +10826,7 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
                                         const exec::ExecStats& stats) {
+    const StatisticsRecordScope recording("a planned run's statistics");
     if (plan_stats_ == nullptr || chain.planned_relations.empty()) return;
 
     // A relation the snapshot has no prior for is wanted by the steward -
@@ -10826,6 +10871,7 @@ void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
 }
 
 void CommandDispatcher::RecordAccessShapes(const exec::StepChain& chain) {
+    const StatisticsRecordScope recording("a statement's access shapes");
     // Unconditional on a successful SELECT, and independent of Waystone:
     // this is access statistics (docs/spec/heap-and-tuple.md §7),
     // not a trail, and it is collected whether or not anything is recording
@@ -11004,10 +11050,14 @@ void CommandDispatcher::RecordTrail(const std::optional<StatementIdentity>& iden
 void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIdentity>& identity,
                                                const exec::StepChain& chain,
                                                const exec::ExecStats& stats) {
+    const StatisticsRecordScope recording("a statement's note to the Cabin controller");
     // Success path only, like its two siblings, and only for a statement
     // with an identity - the fingerprint is the key the cost-benefit model
     // aggregates by, so a statement without one has nowhere to be counted.
-    if (optimizer_signals_ == nullptr || !identity.has_value()) return;
+    // **Not while the controller is switched off** (`rules.md` §3a): an
+    // `ANALYZE` or an opted shape has an identity then, and no candidate is
+    // walked for and no note made.
+    if (!CollectorOn() || !identity.has_value()) return;
 
     // The shape's cabin candidacy (§II.4's Σ_i linkage): a kCabinProbe step
     // on a column Cabin names it outright; otherwise the first kFilterScan's
@@ -11045,8 +11095,8 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
         candidate.rel_oid = filter_step->rel_oid;
         candidate.col_pos = filter_step->access_columns.front();
     }
-    optimizer_signals_->NoteExecution(identity->pattern_id, stats.Total().pages_fetched,
-                                      candidate);
+    optimizer_signals_->NoteExecution(core_id_, identity->pattern_id,
+                                      stats.Total().pages_fetched, candidate);
 }
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {

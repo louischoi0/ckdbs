@@ -1,8 +1,9 @@
 #include "kds/sched/wait_state.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
-#include <mutex>
+#include <new>
 
 namespace kds::sched {
 
@@ -24,36 +25,141 @@ CoreWaitTotals& TotalsOf(CoreWaitContext& c) noexcept {
 
 constexpr std::size_t Index(stats::WaitEvent e) noexcept { return static_cast<std::size_t>(e); }
 
-std::mutex g_sessions_mu;
-std::vector<SessionWaitStats*> g_sessions;
-std::uint64_t g_next_session_id = 0;
+// ---- The session registry: slots, no latch (the header's note) -------------
+//
+// Chunks of `kSlotsPerChunk` slots, published into a fixed directory by a
+// compare-exchange and never freed, so a slot's address holds for the
+// process's life and a reader may walk the directory while sessions come
+// and go. `g_slots_made` is how many slots the bump has ever handed out; a
+// given-back slot goes on a free list threaded through the slots, a Treiber
+// stack whose head carries a tag in its high half, so a head that was
+// popped and pushed again between a pop's load and its exchange is not
+// mistaken for the same head.
+constexpr std::uint32_t kSlotsPerChunk = 64;
+constexpr std::uint32_t kSessionChunks = kMaxRegisteredSessions / kSlotsPerChunk;
+constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
+
+struct SessionSlot {
+    SessionWaitStats stats;
+    std::atomic<std::uint32_t> next_free{kNoSlot};
+};
+struct SessionChunk {
+    SessionSlot slots[kSlotsPerChunk];
+};
+
+std::atomic<SessionChunk*> g_session_chunks[kSessionChunks];
+std::atomic<std::uint32_t> g_slots_made{0};
+std::atomic<std::uint64_t> g_free_head{kNoSlot};  // tag:32 | index:32
+std::atomic<std::uint64_t> g_next_session_id{0};
+
+SessionSlot* SlotAt(std::uint32_t index) noexcept {
+    SessionChunk* chunk =
+        g_session_chunks[index / kSlotsPerChunk].load(std::memory_order_acquire);
+    return chunk == nullptr ? nullptr : &chunk->slots[index % kSlotsPerChunk];
+}
+
+// A slot nobody holds: off the free list, else the next unused one, its
+// chunk made if this is the chunk's first slot. `kNoSlot` where the registry
+// is full or the chunk cannot be allocated.
+std::uint32_t TakeSlot() noexcept {
+    std::uint64_t head = g_free_head.load(std::memory_order_acquire);
+    while (static_cast<std::uint32_t>(head) != kNoSlot) {
+        const std::uint32_t index = static_cast<std::uint32_t>(head);
+        // The slot is in a published chunk: it was handed out once.
+        const std::uint32_t next = SlotAt(index)->next_free.load(std::memory_order_relaxed);
+        const std::uint64_t popped = ((head >> 32) + 1) << 32 | next;
+        if (g_free_head.compare_exchange_weak(head, popped, std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
+            return index;
+        }
+    }
+    std::uint32_t index = g_slots_made.load(std::memory_order_relaxed);
+    do {
+        if (index >= kMaxRegisteredSessions) return kNoSlot;
+    } while (!g_slots_made.compare_exchange_weak(index, index + 1, std::memory_order_relaxed));
+    std::atomic<SessionChunk*>& entry = g_session_chunks[index / kSlotsPerChunk];
+    if (entry.load(std::memory_order_acquire) == nullptr) {
+        // The one allocation, a chunk's first session.
+        SessionChunk* fresh = new (std::nothrow) SessionChunk();
+        SessionChunk* expected = nullptr;
+        if (fresh != nullptr &&
+            !entry.compare_exchange_strong(expected, fresh, std::memory_order_acq_rel,
+                                           std::memory_order_acquire)) {
+            delete fresh;  // another session's creation published the chunk first
+        }
+        // No chunk: the index is spent and its slot is never listed.
+        if (entry.load(std::memory_order_acquire) == nullptr) return kNoSlot;
+    }
+    return index;
+}
+
+void GiveSlot(std::uint32_t index) noexcept {
+    SessionSlot* slot = SlotAt(index);
+    // Zeroed first: a reader copying the words sees the id change and
+    // leaves the row out.
+    slot->stats.session_id.set(0);
+    std::uint64_t head = g_free_head.load(std::memory_order_acquire);
+    for (;;) {
+        slot->next_free.store(static_cast<std::uint32_t>(head), std::memory_order_relaxed);
+        const std::uint64_t pushed = ((head >> 32) + 1) << 32 | index;
+        if (g_free_head.compare_exchange_weak(head, pushed, std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
+            return;
+        }
+    }
+}
+
+// A session's words as its first statement finds them.
+void StartSession(SessionWaitStats& stats) noexcept {
+    // Between statements a session is idle on its client, from now.
+    stats.current_state.set(static_cast<std::uint64_t>(TaskState::kIdle));
+    stats.current_event.set(static_cast<std::uint64_t>(stats::WaitEvent::kIdleClient));
+    stats.current_since_ns.set(WaitNow());
+    // Last: the id is what lists the slot. The fence orders every word above
+    // before it (paired with the reader's fence after its first read).
+    std::atomic_thread_fence(std::memory_order_release);
+    stats.session_id.set(g_next_session_id.fetch_add(1, std::memory_order_relaxed) + 1);
+}
 
 }  // namespace
 
 std::shared_ptr<SessionWaitStats> MakeSessionWaitStats() {
-    auto* stats = new SessionWaitStats();
-    std::shared_ptr<SessionWaitStats> owner(stats, [](SessionWaitStats* gone) {
-        {
-            std::lock_guard<std::mutex> guard(g_sessions_mu);
-            std::erase(g_sessions, gone);
-        }
-        delete gone;
-    });
-    std::lock_guard<std::mutex> guard(g_sessions_mu);
-    stats->session_id = ++g_next_session_id;
-    // Between statements a session is idle on its client, from now.
-    stats->current_state.set(static_cast<std::uint64_t>(TaskState::kIdle));
-    stats->current_event.set(static_cast<std::uint64_t>(stats::WaitEvent::kIdleClient));
-    stats->current_since_ns.set(WaitNow());
-    g_sessions.push_back(stats);
+    const std::uint32_t index = TakeSlot();
+    if (index == kNoSlot) {
+        // Kept and not listed (the header's note).
+        auto unlisted = std::make_shared<SessionWaitStats>();
+        StartSession(*unlisted);
+        return unlisted;
+    }
+    SessionWaitStats* stats = &SlotAt(index)->stats;
+    // The slot's last session left its words; they are cleared here, while
+    // the id still reads 0 and no reader lists the slot. The fence orders the
+    // give-back's zeroed id before these words: a reader mid-copy of the last
+    // session that sees one of them sees the id moved on its second read.
+    std::atomic_thread_fence(std::memory_order_release);
+    *stats = SessionWaitStats{};
+    // Should the owner's control block not be had, the deleter runs and the
+    // slot goes back.
+    std::shared_ptr<SessionWaitStats> owner(
+        stats, [index](SessionWaitStats*) noexcept { GiveSlot(index); });
+    StartSession(*stats);
     return owner;
 }
 
 std::vector<SessionWaitStats> SnapshotSessionWaits() {
-    std::lock_guard<std::mutex> guard(g_sessions_mu);
     std::vector<SessionWaitStats> out;
-    out.reserve(g_sessions.size());
-    for (const SessionWaitStats* s : g_sessions) out.push_back(*s);
+    const std::uint32_t made = g_slots_made.load(std::memory_order_relaxed);
+    for (std::uint32_t index = 0; index < made; ++index) {
+        const SessionSlot* slot = SlotAt(index);
+        if (slot == nullptr) continue;
+        const std::uint64_t id = slot->stats.session_id.get();
+        if (id == 0) continue;
+        std::atomic_thread_fence(std::memory_order_acquire);  // `StartSession`'s pair
+        out.push_back(slot->stats);
+        // The slot changed hands under the copy: the row is two sessions'.
+        std::atomic_thread_fence(std::memory_order_acquire);  // the take's pair
+        if (slot->stats.session_id.get() != id) out.pop_back();
+    }
     return out;
 }
 

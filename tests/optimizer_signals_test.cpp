@@ -19,7 +19,9 @@
 // workplan PHY01). Three claims carry the acceptance: decayed accumulation
 // is exact where the decay contract says it is, a snapshot is an immutable
 // versioned value, and the counters are correct under a scripted workload
-// end to end - dispatcher in, snapshot out.
+// end to end - dispatcher in, snapshot out. Since DL-S1 two more
+// (`docs/rules/rules.md` §3a): a note takes its own core's part and waits
+// for nothing, and a switched-off controller collects nothing.
 
 namespace kds::server {
 namespace {
@@ -30,7 +32,7 @@ TEST(OptimizerSignalsTest, ExecutionSignalKeepsADecayedMeanPair) {
     sched::ManualClock clock;
     stats::OptimizerSignals signals(&clock, kHalfLife);
 
-    for (int i = 0; i < 4; ++i) signals.NoteExecution(/*pattern_id=*/7, /*pages=*/10);
+    for (int i = 0; i < 4; ++i) signals.NoteExecution(/*core=*/0, /*pattern_id=*/7, /*pages=*/10);
     clock.Advance(kHalfLife);
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
@@ -48,10 +50,10 @@ TEST(OptimizerSignalsTest, SnapshotIsVersionedStampedSortedAndImmutable) {
     sched::ManualClock clock(1000);
     stats::OptimizerSignals signals(&clock, kHalfLife);
 
-    signals.NoteExecution(9, 1);
-    signals.NoteExecution(3, 1);
-    signals.NoteCabinLookup(5, /*served=*/true);
-    signals.NoteCabinLookup(2, /*served=*/false);
+    signals.NoteExecution(/*core=*/0, 9, 1);
+    signals.NoteExecution(/*core=*/0, 3, 1);
+    signals.NoteCabinLookup(/*core=*/0, 5, /*served=*/true);
+    signals.NoteCabinLookup(/*core=*/0, 2, /*served=*/false);
 
     const stats::OptimizerSnapshot first = signals.Snapshot();
     EXPECT_EQ(first.version, 1u);
@@ -63,7 +65,7 @@ TEST(OptimizerSignalsTest, SnapshotIsVersionedStampedSortedAndImmutable) {
 
     // A snapshot is a value: later touches move the collector, never the
     // snapshot already taken.
-    signals.NoteExecution(9, 50);
+    signals.NoteExecution(/*core=*/0, 9, 50);
     clock.Advance(17);
     const stats::OptimizerSnapshot second = signals.Snapshot();
     EXPECT_EQ(second.version, 2u);
@@ -75,11 +77,11 @@ TEST(OptimizerSignalsTest, SnapshotIsVersionedStampedSortedAndImmutable) {
 TEST(OptimizerSignalsTest, CabinSignalsFoldLookupsFailuresAndCoverage) {
     stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
 
-    signals.NoteCabinLookup(11, /*served=*/true);
-    signals.NoteCabinLookup(11, /*served=*/true);
-    signals.NoteCabinLookup(11, /*served=*/false);  // coverage miss
-    signals.NoteCabinHint(11, /*ok=*/true);          // a success moves nothing
-    signals.NoteCabinHint(11, /*ok=*/false);
+    signals.NoteCabinLookup(/*core=*/0, 11, /*served=*/true);
+    signals.NoteCabinLookup(/*core=*/0, 11, /*served=*/true);
+    signals.NoteCabinLookup(/*core=*/0, 11, /*served=*/false);  // coverage miss
+    signals.NoteCabinHint(/*core=*/0, 11, /*ok=*/true);          // a success moves nothing
+    signals.NoteCabinHint(/*core=*/0, 11, /*ok=*/false);
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     ASSERT_EQ(snap.cabins.size(), 1u);
@@ -92,16 +94,22 @@ TEST(OptimizerSignalsTest, TheFingerprintTableEvictsItsColdestAtTheCap) {
     sched::ManualClock clock;
     stats::OptimizerSignals signals(&clock, kHalfLife);
 
-    // Fill to the cap; make fingerprint 0 the unambiguously coldest.
+    // Fill to the cap; make fingerprint 0 the unambiguously coldest. Folded
+    // as a tick would, a part's worth at a time: a part holds what one core
+    // noted since the last fold, and the fold is where the table evicts.
     for (std::uint64_t id = 0; id < stats::kMaxTrackedFingerprints; ++id) {
-        signals.NoteExecution(id, 1);
-        if (id != 0) signals.NoteExecution(id, 1);
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id != 0) signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 511) signals.Fold();
     }
+    signals.Fold();
     ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+    ASSERT_EQ(signals.drops().full, 0u);
 
     // A newcomer evicts the coldest rather than being refused: the table
     // stays at the cap and the new fingerprint is tracked.
-    signals.NoteExecution(999'999, 1);
+    signals.NoteExecution(/*core=*/0, 999'999, 1);
+    signals.Fold();
     EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
@@ -128,11 +136,13 @@ TEST(OptimizerSignalsTest, EvictionPicksTheColdestAmongEntriesTheLinearScoreFlat
 
     // One ancient entry, then the rest merely stale - every one of them
     // far enough past the linear floor to read zero.
-    signals.NoteExecution(/*pattern_id=*/1, /*pages_fetched=*/1);
+    signals.NoteExecution(/*core=*/0, /*pattern_id=*/1, /*pages_fetched=*/1);
     clock.Advance(60 * kHalfLife);
     for (std::uint64_t id = 2; id <= stats::kMaxTrackedFingerprints; ++id) {
-        signals.NoteExecution(id, 1);
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();
     }
+    signals.Fold();
     clock.Advance(25 * kHalfLife);
     ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
 
@@ -143,7 +153,7 @@ TEST(OptimizerSignalsTest, EvictionPicksTheColdestAmongEntriesTheLinearScoreFlat
             << "the tie this test is about would not arise";
     }
 
-    signals.NoteExecution(/*pattern_id=*/999'999, 1);
+    signals.NoteExecution(/*core=*/0, /*pattern_id=*/999'999, 1);
 
     const stats::OptimizerSnapshot after = signals.Snapshot();
     bool ancient_survived = false;
@@ -158,7 +168,10 @@ TEST(OptimizerSignalsTest, EvictionPicksTheColdestAmongEntriesTheLinearScoreFlat
 
 class Instance {
 public:
-    Instance() : signals_(/*clock=*/nullptr, kHalfLife) {
+    // One switch, the dispatcher's and the collector's, as an instance wires
+    // it; on unless a test asks for the shipped default.
+    explicit Instance(bool optimizer_on = true, bool gate_collector = true)
+        : signals_(/*clock=*/nullptr, kHalfLife), on_(optimizer_on) {
         auto boot = bootstrap::BootstrapDatabase(store_, 1000);
         EXPECT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
@@ -168,17 +181,23 @@ public:
                             /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
                             exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/true, &*cabins_);
-        dispatcher_->set_optimizer_signals(&signals_);
+        if (gate_collector) signals_.set_gate(&on_);
+        OptimizerSurface surface;
+        surface.signals = &signals_;
+        surface.cabin_optimizer_on = &on_;
+        dispatcher_->set_optimizer_surface(surface);
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
     stats::OptimizerSignals& signals() { return signals_; }
+    stats::CabinStore& cabins() { return *cabins_; }
     catalog::Catalog& catalog() { return boot_->catalog; }
     storage::InMemoryPageStore& store() { return store_; }
 
 private:
     storage::InMemoryPageStore store_{kFirstUserPageId};
     stats::OptimizerSignals signals_;
+    std::atomic<bool> on_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<stats::CabinStore> cabins_;
     std::optional<CommandDispatcher> dispatcher_;
@@ -269,7 +288,7 @@ TEST(OptimizerSignalsTest, TwoSelectListsOverOneFetchAreTwoFingerprints) {
 // ---- PHY05: the runtime switch --------------------------------------------
 
 TEST(OptimizerSignalsTest, SetCabinOptimizerTogglesAndShowMetaReports) {
-    Instance db;
+    Instance db(/*optimizer_on=*/false);
     EXPECT_EQ(testing_view::MetaField(db.Run("SHOW META"), "cabin_optimizer"), "off");
 
     EXPECT_EQ(db.Run("SET CABIN_OPTIMIZER ON"), "OK cabin_optimizer=on");
@@ -319,43 +338,258 @@ TEST(OptimizerSignalsTest, AnOptimizerOwnedCabinRowSurvivesARestartWithItsTag) {
 }
 
 
-// AT-S8: the collector is the instance's - every core's dispatcher notes
-// executions into it and the one Cabin store forwards every core's lookups,
-// which since AT-S7 was a data race on two unsynchronised maps. Held here the
-// way another core's note holds it; a lookup on a second thread must not land
-// until it is released. **Mutation**: drop the guard in `NoteCabinLookup` and
-// the lookup lands under the hold.
-TEST(OptimizerSignalsTest, ANoteWaitsForTheCollectorsLatch) {
-    sched::ManualClock clock;
-    stats::OptimizerSignals signals(&clock, /*half_life_ns=*/1'000'000'000);
-    Latch latch;
-    signals.SetLatch(&latch);
+// ---- DL-S1: the two rules (`docs/rules/rules.md` §3a) ------------------------
 
-    std::optional<LatchGuard> held(std::in_place, &latch);
-    std::atomic<bool> noted{false};
-    std::thread peer([&] {
-        signals.NoteCabinLookup(/*cabin_id=*/7, /*served=*/true);
-        noted.store(true);
-    });
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(noted.load()) << "a lookup landed under another holder's latch";
-    held.reset();
-    peer.join();
-    EXPECT_EQ(signals.tracked_cabins(), 1u);
+// **A switched-off consumer collects nothing.** The shipped default: the same
+// scripted workload, the controller off. No shape and no Cabin reaches the
+// collector, no note was even tried (nothing dropped), and turning the
+// controller on starts it from no evidence - the next statement is the
+// first it has seen. The Cabin store's own counts, which `SHOW CABINS`
+// reads and no switch turns off, are taken all the same.
+TEST(OptimizerSignalsTest, ASwitchedOffControllerCollectsNothing) {
+    Instance db(/*optimizer_on=*/false);
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("CREATE CABIN ON b(sym)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO b VALUES ('aaa', 1)").substr(0, 8), "INSERTED");
+    const std::string scan = "SELECT * FROM b";
+    const std::string probe = "SELECT * FROM b WHERE sym = 'aaa'";
+    for (int i = 0; i < 3; ++i) {
+        db.Run(scan);
+        db.Run(probe);
+    }
+
+    stats::OptimizerSnapshot snap = db.signals().Snapshot();
+    EXPECT_TRUE(snap.fingerprints.empty()) << "a shape was noted for a controller that is off";
+    EXPECT_TRUE(snap.cabins.empty()) << "a Cabin probe was forwarded to a controller that is off";
+    EXPECT_EQ(db.signals().drops().busy + db.signals().drops().full, 0u);
+    EXPECT_EQ(testing_view::MetaField(db.Run("SHOW META"), "cabin_optimizer_notes_full"), "0");
+    const stats::CabinStore::Stats counted = db.cabins().stats();
+    EXPECT_EQ(counted.hits + counted.misses, 3u) << "the store's own probe counts have no switch";
+
+    // On: from no evidence. One run of each is one execution of each.
+    ASSERT_EQ(db.Run("SET CABIN_OPTIMIZER ON"), "OK cabin_optimizer=on");
+    db.Run(scan);
+    db.Run(probe);
+    snap = db.signals().Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 2u);
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) {
+        EXPECT_EQ(fp.frequency_q8, 1 * stats::kDecayScoreScale) << "evidence from the off period";
+    }
+    ASSERT_EQ(snap.cabins.size(), 1u);
+    EXPECT_EQ(snap.cabins[0].lookups_q8, 1 * stats::kDecayScoreScale);
+
+    // Off again: what was folded stays (DL-Q13 (a)) and nothing is added.
+    ASSERT_EQ(db.Run("SET CABIN_OPTIMIZER OFF"), "OK cabin_optimizer=off");
+    db.Run(scan);
+    db.Run(probe);
+    snap = db.signals().Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 2u);
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) {
+        EXPECT_EQ(fp.frequency_q8, 1 * stats::kDecayScoreScale);
+    }
 }
+
+// The dispatcher's own gate, told apart from the collector's: the collector
+// is left ungated here - it would take any note it was handed - and the
+// dispatcher's switch is off. No statement hands it one: no identity is
+// built and no execution noted on its behalf. The Cabin store's forward is
+// the collector's to gate, and with no gate it lands - which is what shows
+// the workload ran.
+TEST(OptimizerSignalsTest, TheDispatcherBuildsNothingForASwitchedOffController) {
+    Instance db(/*optimizer_on=*/false, /*gate_collector=*/false);
+    ASSERT_EQ(db.Run("CREATE TABLE b (id int64, sym varchar, qty int64) BTREE").substr(0, 7),
+              "CREATED");
+    ASSERT_EQ(db.Run("CREATE CABIN ON b(sym)").substr(0, 7), "CREATED");
+    ASSERT_EQ(db.Run("INSERT INTO b VALUES ('aaa', 1)").substr(0, 8), "INSERTED");
+    for (int i = 0; i < 3; ++i) {
+        db.Run("SELECT * FROM b");
+        db.Run("SELECT * FROM b WHERE sym = 'aaa'");
+    }
+    const stats::OptimizerSnapshot snap = db.signals().Snapshot();
+    EXPECT_TRUE(snap.fingerprints.empty())
+        << "the dispatcher noted an execution for a controller that is off";
+    ASSERT_EQ(snap.cabins.size(), 1u);
+    EXPECT_EQ(snap.cabins[0].lookups_q8, 3 * stats::kDecayScoreScale);
+}
+
+// **A note waits for nothing.** The collector is the instance's and a part a
+// core: a note takes its own core's part by a try, and the one other taker
+// is the tick's fold. Core 0's part is held here the way the fold holds it,
+// for as long as the test likes: a note of core 0's on a second thread
+// returns under the hold, dropped and counted, and a note into core 1's
+// part lands as if nothing were held. **Mutation**: make `Enter` wait (the
+// blocking `LatchGuard`) and the peer does not return under the hold.
+TEST(OptimizerSignalsTest, ANoteNeverWaitsForAHeldPartAndIsCountedWhereItIsLost) {
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife, /*cores=*/2);
+    Latch* part0 = signals.PartLatchForTest(0);
+    ASSERT_NE(part0, nullptr);
+
+    std::atomic<bool> returned{false};
+    std::optional<LatchGuard> held(std::in_place, part0);
+    std::thread peer([&] {
+        signals.NoteExecution(/*core=*/0, /*pattern_id=*/7, /*pages=*/1);
+        signals.NoteCabinLookup(/*core=*/0, /*cabin_id=*/3, /*served=*/true);
+        signals.NoteWaitSample(/*core=*/0, /*pattern_id=*/7);
+        signals.NoteCabinHint(/*core=*/0, /*cabin_id=*/3, /*ok=*/false);
+        signals.NoteExecution(/*core=*/1, /*pattern_id=*/9, /*pages=*/1);
+        returned.store(true);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!returned.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool under_the_hold = returned.load();
+    held.reset();  // let a peer that did wait finish, so the join returns
+    peer.join();
+    ASSERT_TRUE(under_the_hold) << "a note waited for its part's latch";
+
+    EXPECT_EQ(signals.drops().busy, 4u) << "each note that met the hold is counted";
+    EXPECT_EQ(signals.drops().full, 0u);
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.fingerprints.size(), 1u) << "core 1's note was not touched by core 0's hold";
+    EXPECT_EQ(snap.fingerprints[0].pattern_id, 9u);
+    EXPECT_TRUE(snap.cabins.empty());
+}
+
+// Notes and folds side by side: every note either lands or is counted as
+// lost to a fold's hold, none twice and none nowhere.
+TEST(OptimizerSignalsTest, EveryNoteBesideAFoldLandsOrIsCounted) {
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, /*half_life_ns=*/1'000'000'000, /*cores=*/2);
+    signals.NoteCabinLookup(/*core=*/0, /*cabin_id=*/7, /*served=*/true);
+
+    std::atomic<int> stage{0};
+    std::thread peer([&] {
+        while (stage.load() != 1) std::this_thread::yield();
+        for (int i = 0; i < 20000; ++i) {
+            signals.NoteCabinLookup(/*core=*/0, /*cabin_id=*/7, /*served=*/true);
+            signals.NoteExecution(/*core=*/1, /*pattern_id=*/5, /*pages=*/1);
+        }
+        stage.store(2);
+    });
+    stage.store(1);
+    std::uint64_t folds = 0;
+    while (stage.load() != 2) {
+        signals.Fold();
+        ++folds;
+    }
+    peer.join();
+
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    // The cabin's first note was made before the peer started, so it is
+    // there. The signal may not be: a fold preempted while it holds core 1's
+    // part can see the peer's every note to it dropped and counted busy,
+    // which is the rule, not a loss.
+    ASSERT_EQ(snap.cabins.size(), 1u);
+    ASSERT_LE(snap.fingerprints.size(), 1u);
+    const stats::OptimizerSignals::Drops lost = signals.drops();
+    EXPECT_EQ(lost.full, 0u);
+    // The clock is parked, so a merge is an exact sum: 256 a note, and
+    // 40,001 notes stay far below the saturating ceiling.
+    const std::uint64_t executions =
+        snap.fingerprints.empty() ? 0 : snap.fingerprints[0].frequency_q8;
+    const std::uint64_t landed = (snap.cabins[0].lookups_q8 + executions) / stats::kDecayScoreScale;
+    EXPECT_EQ(landed + lost.busy, 40001u) << "folds=" << folds;
+}
+
+// A full table makes room for a part's newcomers in one pass: the coldest
+// go together, however many arrive, and the survivors are the hottest.
+TEST(OptimizerSignalsTest, AFoldEvictsTheColdestForEveryNewcomerOfAPartAtOnce) {
+    sched::ManualClock clock(1);
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+    // Ids 1..cap, each touched (id) times modulo a small spread, so lower
+    // ids are colder: id i gets 1 + i / 512 touches.
+    for (std::uint64_t id = 1; id <= stats::kMaxTrackedFingerprints; ++id) {
+        for (std::uint64_t t = 0; t <= id / 512; ++t) signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();
+    }
+    signals.Fold();
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+
+    // 300 newcomers in one part, each hotter than the coldest band.
+    for (std::uint64_t n = 0; n < 300; ++n) {
+        for (int t = 0; t < 4; ++t) signals.NoteExecution(/*core=*/0, 1'000'000 + n, 1);
+    }
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    EXPECT_EQ(snap.fingerprints.size(), stats::kMaxTrackedFingerprints);
+    std::size_t newcomers = 0;
+    std::size_t coldest_band = 0;  // ids 1..511: one touch each
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) {
+        if (fp.pattern_id >= 1'000'000) ++newcomers;
+        if (fp.pattern_id < 512) ++coldest_band;
+    }
+    EXPECT_EQ(newcomers, 300u) << "a newcomer was refused or evicted by a later one";
+    // The 300 victims are the lowest ids of the one-touch band (a tie goes
+    // to the lower key): 211 of its 511 are left.
+    EXPECT_EQ(coldest_band, 211u);
+}
+
+// A note names its core, and a core the collector has no part for is
+// dropped and counted - never written into another core's part.
+TEST(OptimizerSignalsTest, ANoteForACoreWithNoPartIsDroppedAndCounted) {
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife, /*cores=*/2);
+    signals.NoteExecution(/*core=*/5, /*pattern_id=*/1, /*pages=*/1);
+    EXPECT_TRUE(signals.Snapshot().fingerprints.empty());
+    EXPECT_EQ(signals.drops().full, 1u);
+}
+
+// What one core notes between two folds is bounded: past it a new shape is
+// dropped and counted, a shape the part already holds still counts, and the
+// fold makes room.
+TEST(OptimizerSignalsTest, APartPastItsBoundDropsNewShapesUntilTheFold) {
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
+    const std::uint64_t bound = stats::OptimizerSignals::kNotedSignalsPerCore;
+    for (std::uint64_t id = 1; id <= bound; ++id) signals.NoteExecution(/*core=*/0, id, 1);
+    EXPECT_EQ(signals.drops().full, 0u);
+    signals.NoteExecution(/*core=*/0, bound + 1, 1);
+    signals.NoteExecution(/*core=*/0, /*pattern_id=*/1, 1);
+    EXPECT_EQ(signals.drops().full, 1u);
+    signals.Fold();
+    EXPECT_EQ(signals.tracked_signals(), bound);
+    signals.NoteExecution(/*core=*/0, bound + 1, 1);
+    signals.Fold();
+    EXPECT_EQ(signals.tracked_signals(), bound + 1);
+    EXPECT_EQ(signals.drops().full, 1u);
+}
+
+// Two cores' notes of one shape fold to what one core's would have been:
+// decay is linear, so the parts' pairs merge exactly at whole half-lives.
+TEST(OptimizerSignalsTest, TwoCoresNotesOfOneShapeFoldAsOne) {
+    sched::ManualClock clock;
+    stats::OptimizerSignals split(&clock, kHalfLife, /*cores=*/2);
+    stats::OptimizerSignals one(&clock, kHalfLife);
+    for (int i = 0; i < 4; ++i) {
+        split.NoteExecution(/*core=*/static_cast<std::uint32_t>(i % 2), /*pattern_id=*/7, /*pages=*/10);
+        one.NoteExecution(/*core=*/0, /*pattern_id=*/7, /*pages=*/10);
+    }
+    clock.Advance(kHalfLife);
+    split.NoteExecution(/*core=*/1, 7, 10);
+    one.NoteExecution(/*core=*/0, 7, 10);
+    clock.Advance(kHalfLife);
+    const stats::OptimizerSnapshot a = split.Snapshot();
+    const stats::OptimizerSnapshot b = one.Snapshot();
+    ASSERT_EQ(a.fingerprints.size(), 1u);
+    ASSERT_EQ(b.fingerprints.size(), 1u);
+    EXPECT_EQ(a.fingerprints[0].frequency_q8, b.fingerprints[0].frequency_q8);
+    EXPECT_EQ(a.fingerprints[0].pages_q8, b.fingerprints[0].pages_q8);
+    // 4 executions halved twice, 1 halved once: 1.5.
+    EXPECT_EQ(b.fingerprints[0].frequency_q8, 3 * stats::kDecayScoreScale / 2);
+}
+
 // ---- S4: the ASH wait signal (CJ's WE13, [EXPERIMENTAL]) ---------------------
 
 TEST(OptimizerSignalsTest, WaitSamplesCountOnlyTrackedShapesAndOnlyWhileTheSwitchIsOn) {
     sched::ManualClock clock;
     stats::OptimizerSignals signals(&clock, kHalfLife);
     std::atomic<bool> on{true};
-    signals.set_wait_gate(&on);
-    signals.NoteExecution(7, 10);
-    signals.NoteWaitSample(7);
-    signals.NoteWaitSample(7);
-    signals.NoteWaitSample(99);  // never executed: admitted nowhere
+    signals.set_gate(&on);
+    signals.NoteExecution(/*core=*/0, 7, 10);
+    signals.NoteWaitSample(/*core=*/0, 7);
+    signals.NoteWaitSample(/*core=*/0, 7);
+    signals.NoteWaitSample(/*core=*/0, 99);  // never executed: admitted nowhere
     on.store(false);
-    signals.NoteWaitSample(7);  // switch off: not counted
+    signals.NoteWaitSample(/*core=*/0, 7);  // switch off: not counted
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     ASSERT_EQ(snap.fingerprints.size(), 1u) << "a wait sample admits no shape";
     ASSERT_EQ(snap.waits.size(), 1u);
@@ -369,10 +603,10 @@ TEST(OptimizerSignalsTest, TheWaitSignalMovesNothingTheControllerReads) {
     sched::ManualClock clock;
     stats::OptimizerSignals plain(&clock, kHalfLife), waited(&clock, kHalfLife);
     for (auto* s : {&plain, &waited}) {
-        s->NoteExecution(5, 3);
-        s->NoteExecution(5, 3);
+        s->NoteExecution(/*core=*/0, 5, 3);
+        s->NoteExecution(/*core=*/0, 5, 3);
     }
-    for (int i = 0; i < 100; ++i) waited.NoteWaitSample(5);
+    for (int i = 0; i < 100; ++i) waited.NoteWaitSample(/*core=*/0, 5);
     const stats::OptimizerSnapshot plain_snap = plain.Snapshot();
     const stats::OptimizerSnapshot waited_snap = waited.Snapshot();
     const auto a = plain_snap.fingerprints.at(0);
@@ -397,9 +631,9 @@ TEST(OptimizerSignalsTest, OnePatternOverTwoCandidatesIsTwoSignalsEachItsOwnHeat
     stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
     const stats::CandidateRef east{/*rel_oid=*/40, /*col_pos=*/2, /*cabin_id=*/0};
     const stats::CandidateRef west{/*rel_oid=*/41, /*col_pos=*/2, /*cabin_id=*/0};
-    for (int i = 0; i < 5; ++i) signals.NoteExecution(7, 10, east);
-    signals.NoteExecution(7, 300, west);  // the one that ran last
-    signals.NoteExecution(7, 1);          // and one with no candidacy
+    for (int i = 0; i < 5; ++i) signals.NoteExecution(/*core=*/0, 7, 10, east);
+    signals.NoteExecution(/*core=*/0, 7, 300, west);  // the one that ran last
+    signals.NoteExecution(/*core=*/0, 7, 1);          // and one with no candidacy
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     ASSERT_EQ(snap.fingerprints.size(), 3u);
@@ -422,8 +656,8 @@ TEST(OptimizerSignalsTest, ACandidatesCabinIsTheOneSeenLastAndMovesNoSignal) {
     // The key is the relation and the column; the Cabin that serves them is
     // what the newest execution saw.
     stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
-    signals.NoteExecution(7, 10, stats::CandidateRef{40, 2, 0});
-    signals.NoteExecution(7, 2, stats::CandidateRef{40, 2, 900});
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteExecution(/*core=*/0, 7, 2, stats::CandidateRef{40, 2, 900});
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     ASSERT_EQ(snap.fingerprints.size(), 1u);
     EXPECT_EQ(snap.fingerprints[0].candidate.cabin_id, 900u);
@@ -433,9 +667,9 @@ TEST(OptimizerSignalsTest, ACandidatesCabinIsTheOneSeenLastAndMovesNoSignal) {
 TEST(OptimizerSignalsTest, APatternsWaitsAreItsOwnAndLeaveWithItsLastSignal) {
     sched::ManualClock clock;
     stats::OptimizerSignals signals(&clock, kHalfLife);
-    signals.NoteExecution(7, 10, stats::CandidateRef{40, 2, 0});
-    signals.NoteExecution(7, 10, stats::CandidateRef{41, 2, 0});
-    signals.NoteWaitSample(7);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{41, 2, 0});
+    signals.NoteWaitSample(/*core=*/0, 7);
     stats::OptimizerSnapshot snap = signals.Snapshot();
     ASSERT_EQ(snap.fingerprints.size(), 2u);
     // One row for the pattern, credited to neither candidate.
@@ -447,14 +681,15 @@ TEST(OptimizerSignalsTest, APatternsWaitsAreItsOwnAndLeaveWithItsLastSignal) {
     // and go one at a time, and its waits go with the second.
     clock.Advance(kHalfLife);
     for (std::uint64_t id = 100; id < 100 + stats::kMaxTrackedFingerprints - 1; ++id) {
-        signals.NoteExecution(id, 1);
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();  // as a tick would: a part's worth at a time
     }
     snap = signals.Snapshot();
     std::size_t sevens = 0;
     for (const stats::SnapshotFingerprint& fp : snap.fingerprints) sevens += fp.pattern_id == 7;
     EXPECT_EQ(sevens, 1u);
     EXPECT_EQ(snap.waits.front().pattern_id, 7u) << "a pattern with a signal keeps its waits";
-    signals.NoteExecution(9000, 1);
+    signals.NoteExecution(/*core=*/0, 9000, 1);
     snap = signals.Snapshot();
     for (const stats::SnapshotFingerprint& fp : snap.fingerprints) EXPECT_NE(fp.pattern_id, 7u);
     for (const stats::SnapshotPatternWaits& w : snap.waits) EXPECT_NE(w.pattern_id, 7u);
@@ -468,16 +703,18 @@ TEST(OptimizerSignalsTest, AVictimOfTheNewcomersPatternLeavesThePatternsWaitsSta
     // and its waits gone, though the pattern still had a signal.
     sched::ManualClock clock;
     stats::OptimizerSignals signals(&clock, kHalfLife);
-    signals.NoteExecution(7, 10, stats::CandidateRef{40, 2, 0});
-    signals.NoteWaitSample(7);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteWaitSample(/*core=*/0, 7);
     clock.Advance(kHalfLife);
     // The table, full, with pattern 7's one signal the coldest.
     for (std::uint64_t id = 100; id < 100 + stats::kMaxTrackedFingerprints - 1; ++id) {
-        signals.NoteExecution(id, 1);
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();  // as a tick would: a part's worth at a time
     }
+    signals.Fold();
     ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
     // Pattern 7 again, over another candidate: its old signal is the victim.
-    signals.NoteExecution(7, 10, stats::CandidateRef{41, 2, 0});
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{41, 2, 0});
 
     const stats::OptimizerSnapshot snap = signals.Snapshot();
     EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
@@ -492,6 +729,87 @@ TEST(OptimizerSignalsTest, AVictimOfTheNewcomersPatternLeavesThePatternsWaitsSta
     EXPECT_EQ(snap.waits.front().pattern_id, 7u);
     EXPECT_GT(snap.waits.front().wait_samples_q8, 0u) << "the pattern's waits were dropped";
     EXPECT_EQ(snap.waits.size(), snap.fingerprints.size()) << "one signal a pattern here";
+}
+
+TEST(OptimizerSignalsTest, AKeyItsOwnPartJustNotedIsNotTheVictimMadeAgain) {
+    // The merge of DI's key onto DL's parts (its review's finding): a fold
+    // that ranked the folded map before merging what the part noted of keys
+    // already in it chose the coldest key as the victim though it had just
+    // run, then made it again - one signal over the cap, its pattern erased
+    // with its waits and never counted again.
+    sched::ManualClock clock;
+    stats::OptimizerSignals signals(&clock, kHalfLife);
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteWaitSample(/*core=*/0, 7);
+    signals.Fold();
+    clock.Advance(kHalfLife);
+    // The table, full, with pattern 7's one signal the coldest.
+    for (std::uint64_t id = 100; id < 100 + stats::kMaxTrackedFingerprints - 1; ++id) {
+        signals.NoteExecution(/*core=*/0, id, 1);
+        if (id % 512 == 0) signals.Fold();
+    }
+    signals.Fold();
+    ASSERT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints);
+
+    // One interval: the coldest signal runs again, beside a newcomer.
+    signals.NoteExecution(/*core=*/0, 7, 10, stats::CandidateRef{40, 2, 0});
+    signals.NoteExecution(/*core=*/0, 9000, 1);
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+
+    EXPECT_EQ(signals.tracked_signals(), stats::kMaxTrackedFingerprints) << "over the cap";
+    std::size_t sevens = 0;
+    bool newcomer = false;
+    for (const stats::SnapshotFingerprint& fp : snap.fingerprints) {
+        sevens += fp.pattern_id == 7;
+        newcomer = newcomer || fp.pattern_id == 9000;
+    }
+    EXPECT_EQ(sevens, 1u) << "the signal that just ran is ranked with that run";
+    EXPECT_TRUE(newcomer);
+    ASSERT_FALSE(snap.waits.empty());
+    EXPECT_EQ(snap.waits.front().pattern_id, 7u);
+    EXPECT_GT(snap.waits.front().wait_samples_q8, 0u) << "the pattern's waits were dropped";
+    EXPECT_EQ(snap.waits.size(), snap.fingerprints.size()) << "one signal a pattern here";
+}
+
+TEST(OptimizerSignalsTest, APartsWaitTableIsBoundedAndAFoldEmptiesIt) {
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife);
+    // A wait noted before its pattern's first execution, in one part and one
+    // interval: the fold merges the part's signals first, so it counts.
+    signals.NoteWaitSample(/*core=*/0, 1);
+    signals.NoteExecution(/*core=*/0, 1, 1);
+    // Patterns with no signal - a waiting write's - take the table's slots.
+    for (std::uint64_t id = 2; id <= stats::OptimizerSignals::kNotedWaitsPerCore; ++id) {
+        signals.NoteWaitSample(/*core=*/0, id);
+    }
+    EXPECT_EQ(signals.drops().full, 0u);
+    signals.NoteWaitSample(/*core=*/0, 5000);  // a new pattern past the bound
+    EXPECT_EQ(signals.drops().full, 1u);
+    signals.NoteWaitSample(/*core=*/0, 1);  // one the table holds still counts
+    EXPECT_EQ(signals.drops().full, 1u);
+
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.waits.size(), 1u) << "a wait alone admits no pattern";
+    EXPECT_EQ(snap.waits[0].pattern_id, 1u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, 2 * stats::kDecayScoreScale);
+
+    signals.NoteWaitSample(/*core=*/0, 5000);  // the fold emptied the table
+    EXPECT_EQ(signals.drops().full, 1u);
+}
+
+TEST(OptimizerSignalsTest, AWaitOnACoreBelowItsPatternsFirstExecutionIsNotCounted) {
+    // Parts fold in core order (the header): the wait's part is folded while
+    // the pattern has no signal yet. The other way round it counts.
+    stats::OptimizerSignals signals(/*clock=*/nullptr, kHalfLife, /*cores=*/2);
+    signals.NoteWaitSample(/*core=*/0, 5);
+    signals.NoteExecution(/*core=*/1, 5, 1);
+    signals.NoteExecution(/*core=*/0, 6, 1);
+    signals.NoteWaitSample(/*core=*/1, 6);
+    const stats::OptimizerSnapshot snap = signals.Snapshot();
+    ASSERT_EQ(snap.waits.size(), 2u);
+    EXPECT_EQ(snap.waits[0].pattern_id, 5u);
+    EXPECT_EQ(snap.waits[0].wait_samples_q8, 0u);
+    EXPECT_EQ(snap.waits[1].pattern_id, 6u);
+    EXPECT_EQ(snap.waits[1].wait_samples_q8, stats::kDecayScoreScale);
 }
 
 TEST(OptimizerSignalsTest, OneTextUnderTwoNamespacesCreditsEachRelationItsOwnExecutions) {

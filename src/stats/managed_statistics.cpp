@@ -154,8 +154,7 @@ Status ManagedStatistics::Delete(catalog::Oid oid, bool force) {
     return Status::OK();
 }
 
-bool ManagedStatistics::Forget(catalog::Oid oid) {
-    const LatchGuard hold(&latch_);
+bool ManagedStatistics::ForgetLocked(catalog::Oid oid) {
     forgotten_.insert(oid);
     const auto it = slots_.find(oid);
     if (it == slots_.end()) return false;
@@ -164,19 +163,43 @@ bool ManagedStatistics::Forget(catalog::Oid oid) {
     return published;
 }
 
+bool ManagedStatistics::Forget(catalog::Oid oid) {
+    const LatchGuard hold(&latch_);
+    return ForgetLocked(oid);
+}
+
+std::optional<bool> ManagedStatistics::TryForget(catalog::Oid oid) {
+    const LatchGuard hold(&latch_, std::try_to_lock);
+    if (!hold.owns()) return std::nullopt;
+    return ForgetLocked(oid);
+}
+
 Status ManagedStatistics::CheckPublishable(catalog::Oid oid, bool force) const {
     const LatchGuard hold(&latch_);
     const auto it = slots_.find(oid);
     return it == slots_.end() ? Status::OK() : CheckUnlocked(it->second, force);
 }
 
-std::vector<std::pair<catalog::Oid, std::int16_t>> ManagedStatistics::PublishedBands() const {
-    const LatchGuard hold(&latch_);
+std::vector<std::pair<catalog::Oid, std::int16_t>> ManagedStatistics::PublishedBandsLocked()
+    const {
     std::vector<std::pair<catalog::Oid, std::int16_t>> out;
     for (const auto& [oid, slot] : slots_) {
         if (slot.published.has_value()) out.emplace_back(oid, slot.band);
     }
     return out;
+}
+
+std::vector<std::pair<catalog::Oid, std::int16_t>> ManagedStatistics::PublishedBands() const {
+    const LatchGuard hold(&latch_);
+    return PublishedBandsLocked();
+}
+
+bool ManagedStatistics::TryPublishedBands(
+    std::vector<std::pair<catalog::Oid, std::int16_t>>* out) const {
+    const LatchGuard hold(&latch_, std::try_to_lock);
+    if (!hold.owns()) return false;
+    *out = PublishedBandsLocked();
+    return true;
 }
 
 std::vector<StatisticsSlotView> ManagedStatistics::Slots() const {

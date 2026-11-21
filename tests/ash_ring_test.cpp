@@ -94,21 +94,32 @@ TEST(AshRing, ASizeUnderOneRecordStillHoldsOne) {
     EXPECT_EQ(ring.Snapshot()[0], Sample(2));
 }
 
+// A reader beside the sampler: every record a snapshot holds is whole and
+// the records are in order. **A sample that meets the reader's copy is not
+// taken** (`docs/rules/rules.md` §3a, DL-S2) - the sampler never waits for
+// the ring's latch - so a snapshot may skip samples, and every sample is
+// either recorded or counted busy.
 TEST(AshRing, ASnapshotDuringWritingHoldsWholeRecordsInOrder) {
     AshRing ring(64 * 50);
     std::atomic<bool> stop{false};
+    std::uint64_t written = 0;
     std::thread writer([&] {
-        for (std::uint64_t n = 1; !stop.load(); ++n) ring.Record(Sample(n));
+        for (std::uint64_t n = 1; !stop.load(); ++n) {
+            ring.Record(Sample(n));
+            written = n;
+        }
     });
     for (int i = 0; i < 200; ++i) {
         const auto got = ring.Snapshot();
         for (std::size_t k = 0; k < got.size(); ++k) {
             EXPECT_EQ(got[k], Sample(got[k].sample_ts_us / 1'000'000)) << "a torn record";
-            if (k > 0) EXPECT_EQ(got[k].sample_ts_us, got[k - 1].sample_ts_us + 1'000'000);
+            if (k > 0) EXPECT_GT(got[k].sample_ts_us, got[k - 1].sample_ts_us) << "out of order";
         }
     }
     stop.store(true);
     writer.join();
+    EXPECT_EQ(ring.recorded() + ring.busy(), written) << "a sample neither taken nor counted";
+    EXPECT_EQ(ring.dropped(), 0u);
 }
 
 }  // namespace

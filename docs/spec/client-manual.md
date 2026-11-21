@@ -373,8 +373,8 @@ recovery block prints `recovery_redo_start` and
 instance's, summed over every core when read, so it reads the same from any
 session. Per latch kind - `other`, `frame_table`, `free_map`, `free_map_flush`, `window`,
 `lock_partition`, `lock_wait_for`, `wal_stream`, `wal_sync_gate`,
-`assertion_dir`, `optimizer`, `superblock`, `cabin_partition`,
-`cabin_stats`, `handoff` - `contention_<kind>_waits` and `contention_<kind>_wait_us`
+`assertion_dir`, `optimizer`, `superblock`, `cabin_partition`, `handoff`,
+`stats_ring`, `plan_table` - `contention_<kind>_waits` and `contention_<kind>_wait_us`
 count only the acquisitions that found the latch held, and the time they
 waited. Beside them: `contention_page_latch_waits` and
 `contention_page_latch_spin_turns`; `contention_syncs_inline` (a sync run

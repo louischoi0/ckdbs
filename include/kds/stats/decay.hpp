@@ -33,8 +33,9 @@
 // acceptance tests pin the exact points, not the buckets.
 //
 // Concurrency: pure functions over a caller-owned pair - no atomics, no
-// locks. Whatever serialises the caller's pair covers them: the optimizer
-// collector's latch since AT-S8 made it the instance's.
+// locks. Whatever serialises the caller's pair covers them: a collector
+// part's latch for the pairs a core notes into, and the controller's view
+// latch for the folded ones (`optimizer_signals.hpp`, DL-S1).
 
 namespace kds::stats {
 
@@ -130,6 +131,24 @@ inline void Accumulate(DecayState& s, const sched::Clock* clock, sched::MonoTime
 // Touch: Accumulate's one-point form, the common case.
 inline void Touch(DecayState& s, const sched::Clock* clock, sched::MonoTimeNs half_life_ns) {
     Accumulate(s, clock, half_life_ns, 1);
+}
+
+// Merge: adds `from`'s score to `into`'s, each decayed to the later of the
+// two stamps, which `into` then carries. Decay is linear in the score, so
+// two pairs touched apart and merged read as one pair that took every touch
+// - to the fraction table's rounding, and exactly at whole half-lives. A
+// pair never touched (`scaled == 0`) merges as nothing and moves no stamp.
+// This is how a per-core part's score reaches its consumer's
+// (`optimizer_signals.hpp`): the part decays as it is touched, with its own
+// core's clock readings, and the fold loses none of them.
+inline void MergeDecay(DecayState& into, const DecayState& from,
+                       sched::MonoTimeNs half_life_ns) noexcept {
+    if (from.scaled == 0) return;
+    const sched::MonoTimeNs at = from.last_bump > into.last_bump ? from.last_bump : into.last_bump;
+    const std::uint64_t added = std::uint64_t{DecayedScaledAt(into, at, half_life_ns)} +
+                                std::uint64_t{DecayedScaledAt(from, at, half_life_ns)};
+    into.scaled = added > UINT32_MAX ? UINT32_MAX : static_cast<std::uint32_t>(added);
+    into.last_bump = at;
 }
 
 // ---- The range-preserving read (2026-08-10) ------------------------------

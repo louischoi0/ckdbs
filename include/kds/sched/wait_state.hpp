@@ -107,7 +107,9 @@ struct SessionWaitStats {
         RelaxedU64 count;
         RelaxedU64 total_ns;
     };
-    std::uint64_t session_id = 0;
+    // 0 while the slot holds no session: what a reader of the registry
+    // asks before and after it copies the words (`MakeSessionWaitStats`).
+    RelaxedU64 session_id;
     std::array<PerEvent, stats::kWaitEventCount> events{};
     RelaxedU64 on_cpu_ns;
     RelaxedU64 current_state;   // `TaskState`
@@ -228,9 +230,22 @@ inline constexpr std::uint32_t kWaitCores = 64;  // `kMaxCores` (superblock.hpp)
 // The instance's sessions that have run a statement, for the views. A session
 // registers on its first statement and leaves with its last owner, so a
 // session's statistics are dropped at its end (§2.6).
+//
+// **The registry takes no latch** (`docs/rules/rules.md` §3a; DL-S2,
+// DL-Q14): a session's first statement and its end run on a reactor, and a
+// wait of theirs would stop every statement on that core. A session's
+// statistics live in a slot of chunks that are never moved or freed; a slot
+// is taken from a free list or the next unused one and given back, each by
+// a compare-exchange; its `session_id` is stored last when it is taken and
+// zeroed first when it is given back. Past `kMaxRegisteredSessions` live at
+// once - or where a chunk cannot be allocated - a session's statistics are
+// its own heap object, kept and not listed.
 std::shared_ptr<SessionWaitStats> MakeSessionWaitStats();
-// Copies of every live session's statistics.
+// Copies of every live session's statistics, each read as its words stand;
+// a slot that changed hands under the copy is left out. Takes nothing.
 std::vector<SessionWaitStats> SnapshotSessionWaits();
+// The most sessions the registry lists at once.
+inline constexpr std::uint32_t kMaxRegisteredSessions = 1u << 20;
 
 // Binds the calling thread to core `core`'s context, so other cores can read
 // its totals. Threads that never call it (tests, mount) keep a private one.

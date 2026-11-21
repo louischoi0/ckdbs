@@ -42,20 +42,19 @@
 // **The instance owns the store** (DA-R6's reason): a restart, a restore and
 // a second instance in one process each start empty with no reset call. The
 // instance hands one object to every core's dispatcher; a dispatcher handed
-// none uses one of its own. `OidParts` (`stats/oid_parts.hpp`): one latched
-// part per core, whose latch guards the part's *map* - a core's first sight
-// of an index (`CountsOf`, the one allocation) and a reader's walk of it.
+// none uses one of its own. `OidParts` (`stats/oid_parts.hpp`): one part per
+// core and **no latch** (`docs/rules/rules.md` §3a; DL-S2) - a core's first
+// sight of an index claims its row (`CountsOf`; the part's first sight of
+// any index is the one allocation) and a reader walks the parts.
 //
-// **The counts themselves are not under the latch.** An index's counts in a
-// part are relaxed single-writer words (`sched::RelaxedU64`), written by
-// the part's core alone and never moved or erased - a map node's address is
-// stable and nothing removes one - so the core keeps the pointer `CountsOf`
-// gave it and adds through it with no latch, no hash and no allocation
-// (`CommandDispatcher`'s small cache). A reader takes the part's latch for
-// the map and reads the words as they stand: a row's columns may differ by a
-// run in flight. **One writer a part is the caller's premise**, as it is
-// `RefusalStats`': two threads recording as one core lose counts and nothing
-// else.
+// An index's counts in a part are relaxed single-writer words
+// (`sched::RelaxedU64`), written by the part's core alone and never moved
+// or released - a slot's address holds for the store's life - so the core
+// keeps the pointer `CountsOf` gave it and adds through it with no hash and
+// no allocation (`CommandDispatcher`'s small cache). A reader reads the
+// words as they stand: a row's columns may differ by a run in flight.
+// **One writer a part is the caller's premise**, as it is `RefusalStats`':
+// two threads recording as one core lose counts and nothing else.
 //
 // **A count never fails, delays or reorders the statement it describes**
 // (DF-R2). A new index past `kIndexesPerCore`, or one that cannot be
@@ -104,16 +103,14 @@ public:
     // part is full or the allocation failed, which is counted. The pointer
     // holds for the store's life, and only `core` writes through it.
     IndexUse* CountsOf(std::uint32_t core, catalog::Oid index_oid) noexcept {
-        IndexUse* counts = nullptr;
-        parts_.With(core, index_oid, [&](IndexUse& found) { counts = &found; });
-        return counts;
+        return parts_.CountsOf(core, index_oid);
     }
 
     // Every index's counts, the cores' parts summed.
-    std::unordered_map<catalog::Oid, IndexUse> Snapshot() { return parts_.Snapshot(); }
+    std::unordered_map<catalog::Oid, IndexUse> Snapshot() const { return parts_.Snapshot(); }
 
     // New indexes no part could take, over every core.
-    std::uint64_t Dropped() noexcept { return parts_.Dropped(); }
+    std::uint64_t Dropped() const noexcept { return parts_.Dropped(); }
 
 private:
     OidParts<IndexUse, kIndexesPerCore> parts_;

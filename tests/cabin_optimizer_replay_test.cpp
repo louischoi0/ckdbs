@@ -173,21 +173,21 @@ std::vector<std::string> Replay(const Scenario& scenario) {
         const Period& period = scenario.periods[step];
 
         for (std::uint32_t i = 0; i < period.executions; ++i) {
-            signals.NoteExecution(
+            signals.NoteExecution(/*core=*/0,
                 scenario.pattern_id, period.pages_per_execution,
                 CandidateRef{scenario.rel_oid, /*col_pos=*/1, owned_cabin});
         }
         for (std::uint32_t i = 0; i < period.cabin_lookups && owned_cabin != 0; ++i) {
-            signals.NoteCabinLookup(owned_cabin, /*served=*/true);
-            signals.NoteCabinHint(owned_cabin, /*ok=*/i >= period.hint_failures);
+            signals.NoteCabinLookup(/*core=*/0, owned_cabin, /*served=*/true);
+            signals.NoteCabinHint(/*core=*/0, owned_cabin, /*ok=*/i >= period.hint_failures);
         }
         // The foreign Cabin: a hot shape someone else's Cabin serves, with
         // terrible quality. The jurisdiction oracle below is what keeps
         // this from ever mattering.
-        signals.NoteExecution(scenario.pattern_id + 1000, 500,
+        signals.NoteExecution(/*core=*/0, scenario.pattern_id + 1000, 500,
                               CandidateRef{scenario.rel_oid + 1000, 1, kForeignCabin});
-        signals.NoteCabinLookup(kForeignCabin, /*served=*/false);
-        signals.NoteCabinHint(kForeignCabin, /*ok=*/false);
+        signals.NoteCabinLookup(/*core=*/0, kForeignCabin, /*served=*/false);
+        signals.NoteCabinHint(/*core=*/0, kForeignCabin, /*ok=*/false);
 
         const OptimizerSnapshot snapshot = signals.Snapshot();
         const ActionSet actions = optimizer.Decide(snapshot);

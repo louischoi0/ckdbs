@@ -1,5 +1,7 @@
 #include "kds/stats/txn_stats.hpp"
 
+#include "kds/base/statistics_scope.hpp"
+
 namespace kds::stats {
 
 const char* TxnEndFieldName(TxnEnd end) noexcept {
@@ -26,10 +28,12 @@ std::array<TxnStats::Part, kStatsParts>& TxnStats::parts() noexcept {
 }
 
 void TxnStats::Count(std::uint32_t core, TxnEnd end) noexcept {
+    const StatisticsRecordScope recording("a transaction's end count");
     parts()[core % kStatsParts].ends[static_cast<std::size_t>(end)].add(1);
 }
 
 void TxnStats::RecordLife(std::uint32_t core, bool read_only, std::uint64_t life_ns) noexcept {
+    const StatisticsRecordScope recording("sys.txn_histogram");
     parts()[core % kStatsParts].lives[read_only ? 1 : 0][sched::WaitBucketOf(life_ns)].add(1);
 }
 

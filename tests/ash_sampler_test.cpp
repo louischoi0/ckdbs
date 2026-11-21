@@ -167,7 +167,7 @@ TEST_F(AshSamplerTest, AShorterIntervalTakesEffectAtTheNextTurn) {
 
 TEST_F(AshSamplerTest, AWaitingSampleOfAShapeIsHandedToTheWaitSink) {
     stats::OptimizerSignals sink(&clock_, 600'000'000'000ULL);
-    sink.NoteExecution(77, 1);  // a shape is tracked once it has run
+    sink.NoteExecution(/*core=*/0, 77, 1);  // a shape is tracked once it has run
     scheduler_.ash().set_wait_sink(&sink);
     auto shaped = MakeSessionWaitStats();
     shaped->pattern_id.set(77);

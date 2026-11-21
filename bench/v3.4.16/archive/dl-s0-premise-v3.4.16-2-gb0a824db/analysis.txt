@@ -1,0 +1,96 @@
+== per-arm results
+select1  c1 set      n=4 cpu mean 23.71 (23.63 22.67 22.17 26.36) spread 4.19 | qps mean 21,955 spread 6,146 | stmts 703,019 bad 0 busy ['1', '0', '0', '0'] load ['4.50', '3.09', '2.99', '2.64']
+select1  c1 unset    n=4 cpu mean 22.77 (23.28 22.39 22.58 22.82) spread 0.89 | qps mean 23,297 spread 816 | stmts 746,028 bad 0 busy ['0', '0', '0', '0'] load ['3.96', '3.58', '2.69', '2.66']
+select8  c8 set      n=4 cpu mean 37.18 (38.45 36.09 39.07 35.12) spread 3.94 | qps mean 72,282 spread 33,969 | stmts 2,323,793 bad 0 busy ['0', '0', '0', '0'] load ['6.10', '13.77', '16.72', '16.54']
+select8  c8 unset    n=4 cpu mean 35.90 (39.87 35.11 34.51 34.12) spread 5.75 | qps mean 80,707 spread 37,325 | stmts 2,592,417 bad 0 busy ['0', '0', '0', '0'] load ['11.39', '12.12', '17.80', '16.76']
+insert1  c1 set      n=2 cpu mean 33.89 (32.56 35.22) spread 2.66 | qps mean 15,092 spread 31 | stmts 241,656 bad 0 busy ['0', '0'] load ['14.55', '14.84']
+insert8  c8 set      n=2 cpu mean 53.13 (54.30 51.95) spread 2.35 | qps mean 54,521 spread 1,276 | stmts 875,825 bad 0 busy ['0', '0'] load ['15.43', '14.40']
+storm8   c8 reader   n=3 cpu mean 41.09 (44.27 38.76 40.24) spread 5.52 | qps mean 65,806 spread 26,424 | stmts 1,587,145 bad 0 busy ['0', '0', '0'] load ['17.03', '17.12', '17.44']
+storm8   c8 quiet    n=3 cpu mean 37.23 (36.08 34.74 40.86) spread 6.12 | qps mean 74,217 spread 37,753 | stmts 1,788,124 bad 0 busy ['0', '0', '0'] load ['17.49', '17.48', '20.02']
+tick8    c8 on       n=3 cpu mean 35.68 (35.60 36.44 34.99) spread 1.45 | qps mean 86,190 spread 5,983 | stmts 2,076,245 bad 0 busy ['0', '0', '0'] load ['19.72', '22.65', '21.69']
+tick8    c8 off      n=3 cpu mean 36.64 (35.48 38.75 35.69) spread 3.28 | qps mean 76,394 spread 29,107 | stmts 1,841,485 bad 0 busy ['0', '0', '0'] load ['19.99', '21.64', '21.21']
+evict8   c8 set      n=3 cpu mean 202.78 (201.16 192.97 214.22) spread 21.25 | qps mean 6,298 spread 1,390 | stmts 151,396 bad 0 busy ['0', '0', '0'] load ['18.39', '19.29', '17.00']
+evict8   c8 unset    n=3 cpu mean 51.90 (57.43 48.50 49.78) spread 8.93 | qps mean 46,656 spread 23,528 | stmts 1,123,995 bad 0 busy ['0', '0', '0'] load ['21.54', '21.77', '18.56']
+pool8    c8 counted  n=3 cpu mean 37.42 (35.32 41.33 35.61) spread 6.01 | qps mean 73,764 spread 40,985 | stmts 1,777,234 bad 0 busy ['0', '0', '0'] load ['17.95', '20.54', '20.15']
+pool8    c8 skipped  n=3 cpu mean 35.55 (34.83 36.93 34.90) spread 2.11 | qps mean 81,644 spread 15,329 | stmts 1,969,386 bad 0 busy ['0', '0', '0'] load ['18.10', '18.31', '19.69']
+join8    c8 counted  n=3 cpu mean 54.83 (54.80 53.99 55.70) spread 1.72 | qps mean 47,161 spread 9,970 | stmts 1,136,749 bad 0 busy ['0', '0', '0'] load ['21.49', '21.21', '22.92']
+join8    c8 skipped  n=3 cpu mean 51.14 (51.16 51.49 50.76) spread 0.73 | qps mean 70,550 spread 73 | stmts 1,699,202 bad 0 busy ['0', '0', '0'] load ['20.87', '20.22', '21.12']
+cabin8   c8 counted  n=4 cpu mean 37.82 (43.15 36.34 35.37 36.43) spread 7.78 | qps mean 87,876 spread 54,632 | stmts 2,820,950 bad 0 busy ['0', '0', '0', '1'] load ['21.30', '19.45', '18.51', '16.85']
+cabin8   c8 skipped  n=4 cpu mean 36.91 (40.64 37.16 35.58 34.24) spread 6.39 | qps mean 89,888 spread 47,244 | stmts 2,885,301 bad 0 busy ['0', '0', '0', '0'] load ['20.13', '19.80', '17.76', '16.72']
+
+== paired (first arm listed second minus first: B - A, A = first label of CELLS)
+select1  c1 set minus unset: cpu delta +0.35 +0.28 -0.41 +3.54 mean +0.94 us; set slower (cpu) in 3/4; qps delta -2.9 -0.1 +1.6 -22.1 mean -5.9%; max within-arm cpu spread 4.19 us
+select8  c8 set minus unset: cpu delta -1.42 +0.97 +4.56 +1.00 mean +1.28 us; set slower (cpu) in 3/4; qps delta +18.9 -10.7 -36.9 -2.1 mean -7.7%; max within-arm cpu spread 5.75 us
+storm8   c8 reader minus quiet: cpu delta +8.19 +4.01 -0.62 mean +3.86 us; reader slower (cpu) in 2/3; qps delta -35.4 -11.3 +26.8 mean -6.6%; max within-arm cpu spread 6.12 us
+tick8    c8 on minus off: cpu delta +0.13 -2.31 -0.70 mean -0.96 us; on slower (cpu) in 1/3; qps delta +7.1 +39.5 +0.2 mean +15.6%; max within-arm cpu spread 3.28 us
+evict8   c8 set minus unset: cpu delta +143.73 +144.47 +164.44 mean +150.88 us; set slower (cpu) in 3/3; qps delta -80.7 -87.8 -88.9 mean -85.8%; max within-arm cpu spread 21.25 us
+pool8    c8 counted minus skipped: cpu delta +0.49 +4.40 +0.71 mean +1.87 us; counted slower (cpu) in 3/3; qps delta -2.2 -34.9 +4.4 mean -10.9%; max within-arm cpu spread 6.01 us
+join8    c8 counted minus skipped: cpu delta +3.64 +2.50 +4.94 mean +3.70 us; counted slower (cpu) in 3/3; qps delta -34.0 -25.6 -39.8 mean -33.1%; max within-arm cpu spread 1.72 us
+cabin8   c8 counted minus skipped: cpu delta +2.52 -0.82 -0.22 +2.18 mean +0.92 us; counted slower (cpu) in 2/4; qps delta -19.9 +13.3 -1.9 -5.3 mean -3.4%; max within-arm cpu spread 7.78 us
+
+== latency (client us, median of per-lifetime percentiles)
+select1  c1 set      n=703,019 p0=35 p25=39 p50=40.5 p90=49.5 p99=68 p999=140.5 pmax med=3797.5
+select1  c1 unset    n=746,028 p0=35 p25=39 p50=39 p90=47.5 p99=66 p999=150.5 pmax med=4933
+select8  c8 set      n=2,323,793 p0=29 p25=109 p50=169 p90=412.5 p99=933 p999=2581.5 pmax med=8677
+select8  c8 unset    n=2,592,417 p0=29 p25=97.5 p50=143 p90=308.5 p99=690 p999=2441 pmax med=9684
+insert1  c1 set      n=241,656 p0=32.5 p25=50 p50=56.5 p90=84 p99=141.5 p999=639 pmax med=207373
+insert8  c8 set      n=875,825 p0=28.5 p25=112.5 p50=175.5 p90=510 p99=1474 p999=3936 pmax med=307970
+storm8   c8 reader   n=1,587,145 p0=28 p25=108 p50=172 p90=464 p99=1224 p999=3302 pmax med=19229
+storm8   c8 quiet    n=1,788,124 p0=29 p25=99 p50=147 p90=329 p99=982 p999=2438 pmax med=13522
+tick8    c8 on       n=2,076,245 p0=29 p25=99 p50=148 p90=307 p99=665 p999=2243 pmax med=11589
+tick8    c8 off      n=1,841,485 p0=28 p25=100 p50=147 p90=344 p99=795 p999=2893 pmax med=13884
+evict8   c8 set      n=151,396 p0=63 p25=1172 p50=2015 p90=4913 p99=9891 p999=14703 pmax med=25414
+evict8   c8 unset    n=1,123,995 p0=57 p25=174 p50=256 p90=547 p99=1235 p999=3203 pmax med=15361
+pool8    c8 counted  n=1,777,234 p0=28 p25=100 p50=150 p90=315 p99=716 p999=3075 pmax med=11592
+pool8    c8 skipped  n=1,969,386 p0=30 p25=98 p50=143 p90=319 p99=850 p999=2837 pmax med=12259
+join8    c8 counted  n=1,136,749 p0=38 p25=146 p50=246 p90=664 p99=1628 p999=3804 pmax med=18898
+join8    c8 skipped  n=1,699,202 p0=36 p25=121 p50=184 p90=378 p99=808 p999=2606 pmax med=14387
+cabin8   c8 counted  n=2,820,950 p0=30.5 p25=90.5 p50=134 p90=262 p99=521.5 p999=1725 pmax med=10631
+cabin8   c8 skipped  n=2,885,301 p0=29.5 p25=94.5 p50=139 p90=281 p99=569 p999=1929 pmax med=10617.5
+
+== waits per statement (count / us), mean over lifetimes
+select1  c1 set      optimizer 0.0000 waits 0.0000 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+select1  c1 unset    optimizer 0.0000 waits 0.0000 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+select8  c8 set      optimizer 0.0201 waits 0.6216 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+select8  c8 unset    optimizer 0.0000 waits 0.0000 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+insert1  c1 set      optimizer 0.0000 waits 0.0000 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+insert8  c8 set      optimizer 0.0000 waits 0.0000 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+storm8   c8 reader   optimizer 0.0182 waits 0.6103 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0006 waits 0.0292 us
+storm8   c8 quiet    optimizer 0.0211 waits 0.7094 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+tick8    c8 on       optimizer 0.0204 waits 0.5749 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+tick8    c8 off      optimizer 0.0200 waits 0.6333 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+evict8   c8 set      optimizer 0.6531 waits 969.9604 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+evict8   c8 unset    optimizer 0.0000 waits 0.0000 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+pool8    c8 counted  optimizer 0.0219 waits 0.7984 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+pool8    c8 skipped  optimizer 0.0221 waits 0.6261 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+join8    c8 counted  optimizer 0.0151 waits 0.6851 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+join8    c8 skipped  optimizer 0.0188 waits 0.4926 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0000 waits 0.0000 us | stats_ring 0.0000 waits 0.0000 us
+cabin8   c8 counted  optimizer 0.0521 waits 0.7426 us | cabin_stats 0.0033 waits 0.0441 us | cabin_partition 0.1056 waits 1.5052 us | stats_ring 0.0000 waits 0.0000 us
+cabin8   c8 skipped  optimizer 0.0183 waits 0.3841 us | cabin_stats 0.0000 waits 0.0000 us | cabin_partition 0.0691 waits 1.2611 us | stats_ring 0.0000 waits 0.0000 us
+
+== other meta keys (sum of lifetimes, per arm)
+select1  c1 set      {}  reads=[0, 0, 0, 0]
+select1  c1 unset    {}  reads=[0, 0, 0, 0]
+select8  c8 set      {}  reads=[0, 0, 0, 0]
+select8  c8 unset    {}  reads=[0, 0, 0, 0]
+insert1  c1 set      {}  reads=[0, 0]
+insert8  c8 set      {}  reads=[0, 0]
+storm8   c8 reader   {}  reads=[10479, 12861, 8748]
+storm8   c8 quiet    {}  reads=[0, 0, 0]
+tick8    c8 on       {'cabin_optimizer_ticks': 240}  reads=[0, 0, 0]
+tick8    c8 off      {}  reads=[0, 0, 0]
+evict8   c8 set      {'statement_stats_dropped': 11114}  reads=[0, 0, 0]
+evict8   c8 unset    {'statement_stats_dropped': 345627}  reads=[0, 0, 0]
+pool8    c8 counted  {}  reads=[0, 0, 0]
+pool8    c8 skipped  {}  reads=[0, 0, 0]
+join8    c8 counted  {}  reads=[0, 0, 0]
+join8    c8 skipped  {}  reads=[0, 0, 0]
+cabin8   c8 counted  {}  reads=[0, 0, 0, 0]
+cabin8   c8 skipped  {}  reads=[0, 0, 0, 0]
+
+== all contention keys seen
+{'contention_syncs_writer': 58, 'contention_checkpoint_runs': 58, 'contention_checkpoint_pages_written': 58, 'contention_data_syncs': 58, 'contention_visibility_window_lookups': 54, 'contention_checkpoint_longest_us': 57, 'contention_other_waits': 3, 'contention_frame_table_waits': 48, 'contention_frame_table_wait_us': 48, 'contention_free_map_waits': 36, 'contention_window_waits': 48, 'contention_window_wait_us': 48, 'contention_lock_partition_waits': 48, 'contention_lock_partition_wait_us': 48, 'contention_optimizer_waits': 39, 'contention_optimizer_wait_us': 39, 'contention_handoff_waits': 7, 'contention_free_map_wait_us': 29, 'contention_wal_stream_waits': 5, 'contention_syncs_inline': 4, 'contention_carves': 4, 'contention_word_moves_root': 2, 'contention_carve_longest_us': 3, 'contention_wal_stream_wait_us': 3, 'contention_wal_sync_gate_waits': 1, 'contention_wal_sync_gate_wait_us': 1, 'contention_assertion_dir_waits': 2, 'contention_assertion_dir_wait_us': 2, 'contention_page_latch_waits': 2, 'contention_page_latch_spin_turns': 2, 'contention_ceiling_waits': 2, 'contention_ceiling_wait_us': 2, 'contention_wal_drain_latch_wait_us': 3, 'contention_wal_roll_blocked_waits': 2, 'contention_wal_roll_blocked_wait_us': 2, 'contention_stats_ring_waits': 3, 'contention_stats_ring_wait_us': 3, 'contention_other_wait_us': 1, 'contention_cabin_partition_waits': 8, 'contention_cabin_partition_wait_us': 8, 'contention_cabin_stats_waits': 4, 'contention_cabin_stats_wait_us': 4}
+
+== notes
+('cabin8', 8) counted analyze rows=1 class=JoinSelect steps=1 examined=2000 pages=13 opens=1 pattern_id=0x75664aed19b9264d fetch_id=0x719303c7f8b040da | class=JoinSelect steps=1 hoisted=0 | step 0 CabinProbe o cabin=1 on=col1 value=7 |   filter 0:0.1 = 7 | project * (3 column(s) of step 0) | step 0 CabinProbe o opens=1 examined=2000 matched=1 sel=0% pages=13 cabin_misses=1 cabin_recorded=1 | DB time 0.36 ms = CPU 0.36
+('cabin8', 8) skipped analyze rows=1 class=JoinSelect steps=1 examined=2000 pages=13 opens=1 pattern_id=0x75664aed19b9264d fetch_id=0x719303c7f8b040da | class=JoinSelect steps=1 hoisted=0 | step 0 CabinProbe o cabin=1 on=col1 value=7 |   filter 0:0.1 = 7 | project * (3 column(s) of step 0) | step 0 CabinProbe o opens=1 examined=2000 matched=1 sel=0% pages=13 cabin_misses=1 cabin_recorded=1 | DB time 0.37 ms = CPU 0.37

@@ -148,7 +148,7 @@ void AshSampler::Add(TaskWaitState* state, std::uint8_t sched_group) noexcept {
     if (state->state == TaskState::kWaiting) {
         if (wait_sink_ != nullptr && session != nullptr) {
             if (const std::uint64_t pattern = session->pattern_id.get(); pattern != 0) {
-                wait_sink_->NoteWaitSample(pattern);
+                wait_sink_->NoteWaitSample(core_id_, pattern);
             }
         }
         r.p1 = state->p1;

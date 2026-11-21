@@ -1,0 +1,10 @@
+select1 set: 
+select1 unset: 
+select8 set: frame_table 0.6777/4.240us; free_map 0.0000/0.000us; handoff 0.0000/0.000us; lock_partition 0.0908/1.223us; optimizer 0.0201/0.622us; other 0.0000/0.000us; window 0.0053/0.163us
+select8 unset: frame_table 0.7289/4.030us; free_map 0.0000/0.000us; lock_partition 0.0988/1.107us; wal_stream 0.0000/0.000us; window 0.0053/0.173us
+insert1 set: 
+insert8 set: assertion_dir 0.0009/0.034us; ceiling 0.0039/1.989us; frame_table 4.1897/16.067us; free_map 0.0046/0.010us; lock_partition 0.4381/2.318us; page_latch 0.1799/0.000us; wal_roll_blocked 0.0001/0.160us; wal_stream 0.2033/2.122us; wal_sync_gate 0.0000/0.004us; window 0.0921/20.193us
+evict8 set: frame_table 0.2136/1.481us; lock_partition 0.0297/0.331us; optimizer 0.6531/969.960us; window 0.0099/0.062us
+evict8 unset: frame_table 0.4701/3.985us; free_map 0.0000/0.000us; lock_partition 0.0734/1.400us; window 0.0054/0.202us
+cabin8 counted: cabin_partition 0.1056/1.505us; cabin_stats 0.0033/0.044us; frame_table 0.8698/3.945us; free_map 0.0000/0.000us; lock_partition 0.0968/0.880us; optimizer 0.0521/0.743us; window 0.0045/0.076us
+cabin8 skipped: cabin_partition 0.0691/1.261us; frame_table 0.8552/4.003us; free_map 0.0000/0.000us; handoff 0.0000/0.000us; lock_partition 0.0963/0.857us; optimizer 0.0183/0.384us; other 0.0000/0.000us; wal_stream 0.0000/0.000us; window 0.0039/0.077us
