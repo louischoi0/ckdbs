@@ -45,8 +45,9 @@ precondition struck out.
 
 *Complete* because maintenance runs on every write, with no threshold and no
 cap that could decline. *Superset* because entries are appended per version
-and never removed, so an entry may name a row whose current version no
-longer carries that key.
+and removed only by `PURGE INDEX` (§2.2), once no reader can reach the
+version and no writer can need it, so an entry may name a row whose current
+version no longer carries that key.
 
 What that buys is the same thing a Cabin buys and more of it: an index probe
 that finds no entries is an authoritative **"no rows" without opening the
@@ -78,7 +79,7 @@ unnecessary. An older snapshot may still match through the undo chain.
 > **IX2 — every maintenance action is an append.** INSERT appends one entry
 > per index on the relation. UPDATE appends an entry for the new key and
 > leaves the old one. DELETE does nothing. Nothing on the write path removes
-> an entry, ever.
+> an entry, ever, and nor does a rollback.
 
 Two rules ride along, and both are load-bearing rather than tidy:
 
@@ -86,12 +87,9 @@ Two rules ride along, and both are load-bearing rather than tidy:
   append to it.** Otherwise the entry set grows by one per write forever:
   correct by IX1's superset rule, and useless. This is `cabin.md` §5's
   third row, and the index carries the same contract test.
-- **Nothing reclaims.** A superseded entry costs memory, a page, and a
-  read-time skip; there is no purge of index entries: readers are
-  registered per core and `ReadHorizon()` bounds a purge (`docs/spec/txn.md`
-  §4.1), but only the undo purge and the catalog's delete-mark purge
-  consume it, and no index purge was built. Same bargain the
-  var-heap and the undo log strike, stated here so it is not discovered.
+- **Nothing on the write path reclaims.** A superseded entry costs memory,
+  a page, and a read-time skip until an administrator's `PURGE INDEX`
+  takes it out (§2.2); nothing runs one unasked.
 
 ### 2.1 Failure on the write path
 
@@ -105,6 +103,68 @@ transaction, not per statement).
 This is the one place an index is more expensive to be correct about than a
 Cabin. An ordinary index refuses no write for a reason of its own; a
 **unique** one does, and IX11 says how.
+
+### 2.2 The index entry purge (DD)
+
+`PURGE INDEX <name>` (admin, autocommit) takes out of a live tree the
+entries no reader can reach and no writer can need
+(`exec/index_purge.hpp`, `instructions/v3.2.0/workorder-dd-index-entry-purge.md`).
+
+> **IX2a - what is removed is what a rebuild would not append, and more
+> only for a deleted row.** For a row, the entries it is owed are the ones
+> `CREATE INDEX`'s backfill would append for it now - one walk,
+> `IndexStagedRow`, given a sink that collects (`OwedIndexEntries`): its
+> head version and every older one whose superseding writer is not
+> resolved for every reader, a head writer in flight never trusted
+> resolved. A row with no slot is owed nothing, and so is a delete-marked
+> row whose deleter every reader sees. Every other entry naming the row is
+> removed. **An entry serves an owed one** when it is byte-equal to it, or
+> differs only in a spilled covered `varchar` cell of the same length
+> (`SameOwedEntry`): an `UPDATE` assigning a spilled value it already held
+> moves nothing by value and appends nothing, while its cell names a new
+> spill. So spilled covered churn under one key is never purged.
+
+> **IX2b - a row's entries are judged and removed under its tuple unit in
+> `U`, asked without waiting.** Every writer that puts a version of a row on
+> a page holds the row's tuple unit in `U` or `X`, or a range or relation
+> unit over it, from before the page write to its decide, and a rollback
+> compensates before it releases; so no version of a row is written, and no
+> byte-identical append (`IndexInsert`'s duplicate arm) relies on an entry,
+> while the purge holds the unit. A refused unit skips the row, whose
+> entries stay. A dispatcher with no lock table or no transaction manager
+> refuses the statement `Unsupported`.
+
+> **IX2c - a leaf's first entry is never removed.** A leaf's upper bound is
+> its right sibling's first entry (§12.2), the separator that sibling's
+> divide copied up, so a removed first entry would send an insert to the
+> leaf left of where a seek looks. No leaf is emptied, merged, freed or
+> re-linked, and no separator changes: a tree's page count falls only by a
+> `REINDEX`. At most one dead entry a leaf survives a purge.
+
+The statement is a `PurgeIndexRun` (`command_dispatcher.cpp`): a run of
+slices, the `analytic` level's 16 leaves each, **yielding its core between
+two**, and holding nothing across a yield. A slice is one attempt under a
+holder of its own - a read holder's id, with no transaction, no view and
+no purge horizon held: the relation's `IX`, asked without waiting (a
+refusal skips the slice and asks again after the yield, up to the lock
+family's fault net, then refuses `TxnConflict`), and each row's tuple `U`,
+all given back when the slice returns. Per leaf it copies the entries under
+a shared hold, judges each row it names under the row's unit with no page
+held, and removes the dead ones under the leaf's exclusive hold, logged as
+one `FULL_PAGE_IMAGE` at `kNoTxnId` under that hold - no new record kind,
+replayed whole, never undone. Every view an index is probed under is
+registered with the horizon or reads latest state, so a version the judge
+owes nothing is reached by no probe. An index flagged building is refused
+(its backfill appends with no row unit), and one gone from the relation's
+indexes at a slice stops the run. It answers `PURGED INDEX name=<name>
+entries=N skipped_rows=M attempts=A`; a refusal part-way ends it with what
+it removed, retryable. A caller that cannot park runs it whole in its
+head, as a build. **The reply is not a durability point**: the images are
+at `kNoTxnId` and no commit follows, so a crash can lose a purge that
+answered, which leaves those entries in place. A DDL on the purge's own
+core passes between two slices; one on another core is not queued for, and
+gets its `X` only in the gap between a slice's release and the next one's
+`IX`.
 
 ---
 
@@ -358,7 +418,7 @@ columns avoided, and nothing else. If it is zero, a `COVERING` clause bought
 exactly the write cost it added.
 
 **An entry judges itself, never its row** (AT-S22). Maintenance is
-append-only, so a row can own several entries, and a stale one can be walked
+append-only (a purge, §2.2, removes only what no reader reaches), so a row can own several entries, and a stale one can be walked
 first: its key moved with a covered column, or an update of a covered column
 alone appended an entry with the same `(key, tuple key)`, which sorts before the
 older one whenever its covered bytes do. So the probe claims a tuple key for its dedup only once one of its entries
@@ -442,7 +502,7 @@ Two checks at each entry are a correctness statement `[quiet-wrong]`
 - **The key check**: a row is emitted only from the entry whose key equals
   its visible version's, encoded again from the decoded row. Maintenance is
   append-only (IX1), so a row whose order column moved has an entry at
-  every value it held; only the one the reader's view sees is in its place.
+  every value it held that a reader can still reach (§2.2); only the one the reader's view sees is in its place.
 - **The seen set**: each tuple key is emitted at most once, for the entries
   a covered column's move leaves side by side under one key.
 
@@ -1131,11 +1191,10 @@ new right sibling.
   (retryable). It is the clustered tree's check (`heap-and-tuple.md` §5,
   AT-S5c) with one difference: an index leaf has no immutable `min_key`, so
   the bound is the sibling's first entry.
-- **That bound rests on a premise: no index entry is ever removed.** The
-  right sibling's first entry equals the separator its divide copied up only
-  while nothing takes entries out (§2's maintenance is append-only). A change
-  that removes index entries revisits the check in the same change
-  (`index_tree.hpp`, "Concurrency").
+- **That bound rests on a premise: no leaf's first entry is ever removed**
+  (IX2c). The right sibling's first entry equals the separator its divide
+  copied up only while it stays; `PURGE INDEX` removes other entries and
+  refuses the first (`index_tree.hpp`, "Concurrency").
 - **A stale root** - a core whose memo predates a level growth
   (`Catalog::AdoptRoot` bumps the schema word; the memo drops at the
   next task boundary) - routes a key outside its subtree to a leaf that no
@@ -1199,8 +1258,8 @@ off is a catalog act: `DROP INDEX`.
 
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
 split point and fill factor, the column caps, reclamation of superseded
-entries in place (a `REINDEX` drops only the entries of versions no
-longer in the relation, §12; nothing removes one from a live tree), an index-only scan, NULLs in a unique key (a nullable key column
+entries unasked (`PURGE INDEX`, §2.2, is the administrator's; nothing
+drives one), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
 stays refused, BX-Q5 (a)), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

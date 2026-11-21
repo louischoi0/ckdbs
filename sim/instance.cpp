@@ -134,7 +134,15 @@ Status SimInstance::Boot() {
     // fault, not the engine's.
     mount_drain.reset();
     trx_ids_.emplace(boot_->superblock, [this] { return PersistSuperBlock(); });
-    txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get());
+    if (options_.lock_table) {
+        // One table a boot, as a server builds one a start: nothing in it is
+        // persisted (`txn.md` §5), so nothing outlives a crash.
+        auto table = txn::LockTable::Create(/*core_count=*/1);
+        if (!table.ok()) return table.status();
+        locks_ = std::move(table.value());
+    }
+    txn_.emplace(*trx_ids_, *undo_, *store_, wal_.get(), /*visibility=*/nullptr, /*core=*/0,
+                 locks_.get());
 
     // The advisory features, wired exactly as Expeditor::Open wires them
     // and gated by the same three switches (SIM06).
@@ -148,6 +156,7 @@ Status SimInstance::Boot() {
                         /*replay_enabled=*/options_.waystone,
                         options_.access_statistics,
                         cabin_store_ ? &*cabin_store_ : nullptr, &*txn_);
+    if (locks_ != nullptr) dispatcher_->set_locks(locks_.get());
     session_ = server::Session();
     if (options_.read_off_reactor) {
         // DE-Q12. The mode outlives a crash - it is the device's - and is set
@@ -262,6 +271,7 @@ void SimInstance::TearDown() {
     trail_recorder_.reset();
     cabin_store_.reset();
     txn_.reset();
+    locks_.reset();
     undo_.reset();
     trx_ids_.reset();
     boot_.reset();

@@ -171,6 +171,28 @@ std::uint16_t IndexLeafView::LowerBound(std::span<const std::byte> sort_key) con
     return lo;
 }
 
+Status IndexLeafView::RemoveEntry(std::uint16_t idx) {
+    IndexLeafHeaderFields h = ReadHeader();
+    if (idx >= h.nr_entries) {
+        return Status::OutOfRange("index leaf entry " + std::to_string(idx) + " is past the " +
+                                  std::to_string(h.nr_entries) + " it holds");
+    }
+    if (idx == 0) {
+        return Status::InvalidArgument(
+            "an index leaf's first entry is never removed: its left neighbour's bound is read "
+            "off it");
+    }
+    std::byte* base = page_.data();
+    const std::size_t stride = h.entry_width;
+    const std::size_t at = kIndexLeafEntriesOffset + static_cast<std::size_t>(idx) * stride;
+    const std::size_t tail = static_cast<std::size_t>(h.nr_entries - idx - 1) * stride;
+    if (tail > 0) std::memmove(base + at, base + at + stride, tail);
+    std::memset(base + at + tail, 0, stride);
+    h.nr_entries = static_cast<std::uint16_t>(h.nr_entries - 1);
+    WriteHeader(h);
+    return Status::OK();
+}
+
 StatusOr<std::uint16_t> IndexLeafView::InsertEntry(std::span<const std::byte> entry) {
     IndexLeafHeaderFields h = ReadHeader();
     if (entry.size() != h.entry_width) {

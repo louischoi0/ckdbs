@@ -1,6 +1,11 @@
 # Work order DN - the heap redefined again: an Oracle-style heap, rows in data pages addressed by a computed rowid, every key served through an index that names the rowid, a full scan that reads the data pages and no index
 
-Status: **WRITTEN 2026-11-20, not opened.** Written in the main checkout on
+Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+(go-ahead-achieving-milestone), linked from DD** (`raft-marks-2026-11-20.md` §28), on
+worktree `dn-heap-rowid` at `34958393`. **DN-S0 and DN-S1 done; stopped at DN-S1's gate,
+the operator's mark on the amended invariants (§8)**. DN-Q0..Q14 adopted on that
+go-ahead, none the operator's own mark, DN-Q1, DN-Q9 and DN-Q13 revised against the tree;
+DN-Q12, DN-Q13 and DN-Q14 added at DN-S0 (§7). **Written 2026-11-20.** Written in the main checkout on
 `main` at `d091d096` (`v3.4.15-19-gd091d096`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §13). The letter DN is CLA's
 proposal. **Exploratory by CLA's proposal** (DN-Q0): the operator's words
@@ -19,8 +24,8 @@ DD is written, not opened, exploratory, and may close with nothing built
 (its own §0); DN gives it a consumer it did not have (§1.4). **Order:
 DD :>> DN-S2.** DN-S0 and DN-S1 do not wait for it.
 
-No stage is started. Every `[source-read]` claim below was read at
-`d091d096`. No suite was run: the order changes no build input.
+Every `[source-read]` claim in §1-§3 was read at `d091d096`; DN-S0's
+(§7) at `34958393`. No suite was run: the order changes no build input.
 
 Tags: `[operator]` the operator's word; `[source-read]` read in the tree,
 with `path:line`; `[measured]` with the results file; `[design]` CLA's,
@@ -213,8 +218,9 @@ Binding once DN opens.
   emission order without `ORDER BY`, which is no contract.
 - **DN-R5 - the hidden Keystone is named by one reserved word** (DN-D6),
   which no relation, column, index or alias may take on any relation, and
-  `*` never includes it. **It is the tree's first word reserved against
-  identifiers by the operator's word**: "nothing new is reserved lightly:
+  `*` never includes it. **It is the first word reserved by the operator's word**
+  (the lexer's keyword table already reserves `JOIN`, `ON`, `AS` and
+  others, DN-S0): "nothing new is reserved lightly:
   keywords hash as identifiers" (`CLAUDE.md`, Working Rules) stands for
   every other word, and what the reservation does to a volume that
   already holds the name, and to a fingerprint (`fingerprint.hpp`'s bump
@@ -257,6 +263,9 @@ Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 | DN-Q8 | What `CREATE TABLE` without `HEAP` makes. | **a btree relation, as today** | (b) a heap |
 | DN-Q9 | A BZ heap on an existing volume. | **the mount refuses the volume by name**, as every earlier format change did | (b) a mount converts it; (c) BZ's heap kept under another keyword |
 | DN-Q10 | Cabin and Waystone over a heap. | **their entries keep the Keystone (C2) and their location hint becomes the rowid**, verified as today | (b) neither serves a heap in DN |
+| DN-Q12 | **Where the amended invariants are written before the heap exists** (raised at DN-S0: DN-R9 writes them into `heap-and-tuple.md` §8 and `CLAUDE.md` before DN-S2, and both files state only what is built). | **staged in this order** (§8), word for word as they will read, marked there by the operator, and moved into the two files with DN-S2's code - so neither file states an invariant no code holds, and the text the code is written against is fixed first | (b) written into the two files at DN-S1, as DN-R9 reads, each marked "binds from DN-S2" |
+| DN-Q13 `[quiet-wrong]` | **Where a declared single `int64` PK that is not the first column sits** (raised at DN-S0: column 0 is the tuple key at every site that checks one - `CheckKeystoneColumn`, `DecodeShapeHolds`, the not-null, Cabin and drop checks, and some nine readers that take `columns.front()`). | **the Keystone is column 0 of the stored row on every relation**: a PK declared elsewhere is placed at position 0, and the declared order is a presentation order `*`, `DESCRIBE` and a positional `INSERT` follow - one map, kept beside the schema - so no reader of column 0 changes | (b) the Keystone at its declared position, every column-0 site generalized; (c) a PK that is the Keystone must be declared first, as today |
+| DN-Q14 `[quiet-wrong]` | **How a deleted row's Keystone stays bound once its slot is reused** (raised by DN-S0's review). On a btree relation a delete-marked slot keeps its key bound until `PURGE` (K1). On a heap, DN-D1 reuses the slot once DD has removed every entry naming it - the Keystone index's included - and a key named again then passes that index's uniqueness check: one Keystone bound to two committed rows, DN-R1 broken with no error. | **by how the heap gets its keys.** A heap whose Keystone is a declared `int64` PK - keys a user names - keeps a deleted row's **Keystone-index entry** until a row `PURGE` frees the key (DD's judge owes it, DD-Q1 (a) for that one index), so its slot waits for the `PURGE` (DN-R2). A heap with the hidden Keystone - keys the engine issues - refuses a named key at or below `sys.tables.next_id` (the KWP load is the one door that names one), so no deleted key can be named again and its slot is reused as soon as DD has cleared it | (b) every heap keeps the Keystone entry until `PURGE`, and a hidden-Keystone heap admits `PURGE` by `keyidentity` - one rule, slot reuse waiting on a statement everywhere; (c) a Keystone tombstone outside every index (a per-relation set of retired keys) - a new persisted structure |
 
 ## 5. Stages
 
@@ -276,6 +285,95 @@ Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 - No foreign key to a non-`int64` PK (DN-Q5 (a)).
 - No index-only scan.
 - No claim against Oracle: no twin cell exists.
+
+## 8. The amended text, staged (DN-S1, DN-Q12 (a))
+
+`[design]` What `docs/spec/heap-and-tuple.md` §8, `CLAUDE.md`'s Hard
+Invariants and the rules files will say once DN-S2's code holds it - word
+for word, for the operator's mark before any of it is written into those
+files (DN-R9). **A changed sentence only**; every invariant not named keeps
+its text. Under DN-D7 as revised, 2 and 3 keep theirs.
+
+**Invariant 4** (`heap-and-tuple.md` §8 and `CLAUDE.md`), in place of its
+present text (in `heap-and-tuple.md` its clauses "whatever order rows arrive
+in and at every core count", BD-R2 and "a retired slot carries no key and
+sits anywhere" are kept):
+
+> 4. Tuples within a catalog chain page are unordered by contract. **A heap
+> data page is unordered**: a row takes a free slot of a page whose
+> `min_key` admits its Keystone (invariant 3, DN-R10), and its slot says
+> nothing of its key. A btree leaf is sorted by placement: every keyed slot
+> ascends by Keystone id, live and delete-marked alike, because a row takes
+> the slot its key sorts to (BD-R1). Readers rely on a leaf's order through
+> the `ORDER BY <tuple key>` elision, the Cabin serve's tuple key sort and
+> the index step's sort (§4.1), **and on a heap none of them reads slot
+> order: the elision is off and both sorts take the Keystone from the row
+> or the entry.**
+
+**Invariant 9** (`heap-and-tuple.md` §8), its fall-through clause:
+
+> ... and falls through to that path - a btree descent on a btree
+> relation, the Keystone index's descent and the rowid's page on a heap
+> (§3.1b) - on any mismatch.
+
+**Invariant 11** (`heap-and-tuple.md` §8 and `CLAUDE.md`), its second
+sentence, in place of "A declared tuple key is the relation's first column
+and must be integer-typed; a heap's is the engine's hidden column 0, which
+no SQL statement names (§3.1b)" (`heap-and-tuple.md`) and "A declared tuple
+key - the first column - must be integer-typed; a heap's is an engine-added
+hidden `int64` column no SQL names" (`CLAUDE.md`):
+
+> A declared tuple key is an integer column, the relation's first; on a
+> heap it is the single `int64` primary key, which is declared first
+> (DN-Q13). A heap with no such key carries an
+> engine-added hidden `int64` column 0, which `*` never includes and which
+> one reserved word, `keyidentity`, reads by name on every relation (DN-D3,
+> DN-D6). **A rowid is not a tuple key**: it names where a heap row is, `page
+> << 16 | slot`, and a slot is reused for a new row with a new Keystone once
+> no index entry names it (DN-D1, DN-R2) - so K1 is the Keystone's, and a
+> rowid is bound to many rows over a relation's life, one at a time. **On a
+> heap a named key's uniqueness is the Keystone index's, not a leaf's**: a
+> key an entry of it names - live or delete-marked - is `AlreadyExists`. A
+> declared-PK heap keeps a deleted row's Keystone entry until a `PURGE`
+> frees the key; a hidden-Keystone heap refuses a named key at or below its
+> issue mark, so a deleted key is never named again (DN-Q14).
+
+**`heap-and-tuple.md` §3.1b**, its first sentence, in place of "A heap
+relation is a btree relation whose tuple key is hidden":
+
+> A heap relation is a set of data pages holding fixed-length rows in no key
+> order, addressed by a rowid, and a Keystone index - its single `int64`
+> primary key's where that is the Keystone, an engine-built one otherwise
+> (DN-Q2), beside any other declared primary key's - through which every
+> key access goes; a full scan reads the data pages and no index.
+
+**`index.md` §1** (IX1), a sentence after "maps an index key to a tuple
+key":
+
+> On a heap an entry maps an index key to a **rowid and the Keystone**
+> (DN-Q3): the rowid is fetched, and the Keystone at the slot is checked
+> against the entry's before the key re-check, so an entry that outlived
+> its slot (DN-R2's defect) is a miss, never another row.
+
+**`foreign-keys.md` F1**, a sentence:
+
+> A heap is a parent only where its Keystone is a declared single `int64`
+> primary key; a heap with another key, or none, is refused as a parent by
+> name (DN-Q5).
+
+**`keystoneid-invariant.md` K3**, in place of "every user relation is a
+btree, a heap under its hidden key included":
+
+> Every user relation finds a row by its Keystone through one authoritative
+> structure - a btree relation's tree, a heap's Keystone index (its single
+> `int64` primary key's, where that is the Keystone) - so a miss there is
+> the row's absence.
+
+**`heap-and-tuple.md` §4.1c (`PURGE`)**, its heap refusal:
+
+> A heap whose Keystone is a declared `int64` primary key is purged by
+> Keystone as a btree relation is, its tombstone found through that key's
+> index; any other heap refuses `PURGE` as today (DN-Q6).
 
 ## 7. Stage log (CLA, appended as stages land)
 
@@ -305,3 +403,190 @@ invariant 3 is a rule of placement, and only a named `int64` key can meet
 it. DN-R10 and DN-Q11 added, DN-Q7 and DN-R9 amended. The reading of a
 catalog chain page that the first form of DN-D7 owed is dropped: 2 and 3
 keep their scope. Nothing was run.
+
+### DN-S0 - census and premise, 2026-11-20
+
+On worktree `dn-heap-rowid` at `34958393` (`v3.4.18-9-g34958393`): DD's
+closed work branch (`e0d43a79`) merged onto `origin/main`, opened on the
+operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone),
+linked from DD by the operator's word (`raft-marks-2026-11-20.md` §27). No
+engine code; one spike, never committed.
+
+**Read** (three censuses, `[source-read]` at `34958393`).
+
+- **Who finds a row by its Keystone** (§1.3 completed). Everything leans
+  on four things the clustered tree gives: (A) a miss is authoritative;
+  (O) slot order is key order (BD-R1); (R) a key range is a leaf-chain
+  walk from a seek; (H) a location hint is verified and falls back to a
+  descent. **Needing the Keystone index authoritative for a hit and a
+  miss** (DN-Q2): a point `UPDATE`/`DELETE` (`LocateByTupleKey`), `FOR
+  UPDATE`'s claim and re-read, `RETURNING`, a foreign key's forward check,
+  an insert's key uniqueness (today the tree's own placement search,
+  `btree.cpp`'s `DuplicateKey`), `ON CONFLICT`'s arbiter, `PURGE`'s
+  tombstone, `CleanDroppedCells`. **Key-order paths §1.3 did not list**:
+  the `ORDER BY` elision on the tuple key (`step_compiler.cpp`'s
+  `EmitsTupleKeyOrder` test and its reverse, `kTupleKeyBackward`; the
+  query layer's `driving_keystone`) -
+  `[quiet-wrong]` on a heap, whose scan is page order, so it is off there;
+  `RunIndexStep`'s IX8a sort back to tuple key order, which needs the
+  Keystone from the entry or the slot (DN-Q3); the Cabin serve's sort; the
+  key set's ascending descent; the reverse walk; `PURGE`'s window; the
+  online build's `HighWaterKey` (its A2 bound "every row above it" needs
+  a fence that is not a key on a heap); recovery undo's rightward re-find;
+  the simulator's order checks. **Simplified by a stable rowid**:
+  rollback's `RowLocatorForRollback`, recovery undo (whose heap arm
+  exists), redo, a walk's resume - each exists because a split moves rows.
+  **A page scan serves**: assertions, Transitions, `GATHER STATISTICS`,
+  `LeafCursor`'s users, backup.
+- **What assumes a clustered tree.** `ClusteredType {kCatalogChain,
+  kBtree}` is the discriminator (`well_known.hpp`); DN is a third value,
+  branched on at `VisitRelation`, `CREATE INDEX`, foreign keys and the
+  views. **The heap page format is reusable**: nothing in `heap::PageView`
+  is key-ordered, `min_key` is a header field. **But there is no slot
+  reuse primitive** (DN-D1 needs one): `InsertTuple` appends, `RetireSlot`
+  keeps the bytes, `RedoWriteTuple` refuses a dead slot `Corruption` - a
+  new write and a new redo case, DN-S2's. `kHeap` today is a catalog
+  chain page, so DN-S2 decides between it and a new `PageType`. Tree-only
+  and not needed on a heap: the leaf split and compaction, the epoch's
+  two movers, `BTREE_INSERT` and `BTREE_SPLIT`. Needing a heap arm: the
+  scan's seek and tail prune, the reverse walk, the DML walk's resume (by
+  rowid), the dropped relation's reclaim walk (`page_reclaim.cpp`), the
+  plan statistics' descent-sampled prior (a page-count prior instead), the
+  online build's high water, the simulator's integrity sweep. No tree
+  assumption: the checkpointer, backup, the free map, the page reader.
+- **The invariants.** 2 and 3 are enforced at the btree door
+  (`btree.cpp`, `OutOfRange` below `min_key`) and the chain's
+  (`RefuseBelowTail`); a heap data page needs its own copy under DN-R10;
+  redo already takes `min_key` from `PAGE_INIT` for every page type. 4 is
+  enforced by `CollectKeyed`. **Invariant 9 also names the btree** - its
+  fall-through is "a btree descent, every user relation being a btree" -
+  **so DN-R9's list is short by one**: 9 is amended with 4 and 11. 11's
+  "the first column, integer-typed" is hard-coded at column 0 across the
+  tree (DN-Q13). K3 and the §1 premises of `keystoneid-invariant.md` say
+  every user relation is a btree.
+- **The reserved word. DN-R5's "the tree's first word reserved against
+  identifiers" is false**: `lexer.cpp`'s keyword table already reserves
+  `JOIN`, `ON`, `AS`, `IN`, `EXISTS`, `NOT`, `BETWEEN`, `LEFT`, `RIGHT`,
+  `FULL`, `OUTER` (and `NULL`), each refused wherever an identifier is
+  parsed. `keyidentity` would be the first reserved by the operator's word.
+  **No fingerprint bump is owed**: a keyword and an identifier hash alike
+  (`fingerprint.cpp`, `ShapeTag::kIdent` over the folded text), so a
+  reservation moves no hash, and reading a pseudo-column by name is the
+  catalog's resolution, not the token stream; no corpus line holds the
+  word.
+- **A BZ heap's volume.** `superblock.cpp` refuses any version but its own
+  before the catalog is read, with "superblock version N is not this
+  build's". A bump for DN refuses every older volume, a heap in it or not,
+  and **cannot refuse "by name"** - it never reaches a relation's name. So
+  DN-Q1 (a)'s "a mount that finds the name declared refuses by name" is
+  moot under a bump, and DN-Q9 (a) is revised below.
+- **What DN needs from DD** (DD's §0a, answered by DD's close). Built:
+  entry removal under a row's unit, the rebuild's judge, DD-Q1 (b) - a
+  deleted row's entries go once every reader sees the delete. **Not built,
+  and DN-S2 needs them**: a driver that runs unasked (DD-S4, put to the
+  operator) - without one a heap reuses a slot only after an
+  administrator's `PURGE INDEX`; and a record that no entry of **any**
+  index names a slot, which is DN's own (DN-R2). **A cost DD leaves**:
+  DD-Q3 (a) never removes a leaf's first entry, so one slot a leaf of each
+  index is never freed while the leaf stands; DM's U2b would lift it.
+
+**Measured** (`bench/v3.4.18/dn-s0-premise-v3.4.18-9-g34958393.md`, by
+`ck-tester`, A = `34958393` against B = a spike never committed - a
+thread-local map from a tuple key to the (page, slot) of its first resolve,
+so `RunIndexStep`'s resolve fetches that one page instead of descending;
+`cores = 1`, `relaxed`, every page resident, a host busy with other
+sessions' builds, waited out per block). **The descent costs about 0.3 to
+0.6 us a resolved row**: an index range of 20 rows is 21-22 % cheaper
+without it, one of 1,000 rows 31-40 %; **a one-row secondary point read
+saves 3-7 %, at the noise floor** (28.8 against 27.7 us at 10,000 rows).
+The spike prices only the saving: an entry's 8 more bytes (DN-Q3), the slot
+check, DD's work and every other consumer of an address are not in it.
+Cut: `cores > 1`, a cold device read, a PostgreSQL twin, the 1,000-row
+cells' noise at 1,000 rows.
+
+**DN-Q0's reading.** The premise holds for an index range and is weak for
+a point read: the address saves a descent a resolved row, and a statement
+that resolves one row barely sees it. DN stays exploratory, as DN-Q0 (a)
+reads; nothing here ends it.
+
+**Adopted on the operator's standing go-ahead of 2026-11-20
+(go-ahead-achieving-milestone)**, none the operator's own mark, the marks
+DN-D1..D7 untouched:
+
+- **DN-Q3 `[quiet-wrong]` (a)**: an index entry carries the Keystone beside
+  the rowid, checked at the slot. Its premise, read again: under DN-D1 a
+  slot is reused, so a rowid alone names two rows over time; the census
+  shows DD's judge (`OwedIndexEntries`) and IX8a's sort both need to know
+  which row an entry is for, and the Keystone is the only identity that
+  never moves (DN-R1). Holds.
+- **DN-Q13 `[quiet-wrong]` (c), revised from (a) on DN-S0's review**: a
+  heap's single `int64` PK, which is its Keystone (DN-D5), is declared
+  first, and one declared elsewhere is refused at its byte. (a)'s premise -
+  that no reader of column 0 changes - holds for storage only: a stored
+  column map replaces BZ's "skip the hidden column" filter at every
+  presentation site (`*`, `RETURNING *`, `DESCRIBE`, `sys.columns`, the
+  wire's row description, a positional `INSERT`, the query layer), needs a
+  catalog row change (`SysColumnRow` has only `pos`), and a missed site
+  lines a positional `INSERT` up wrongly - as `[quiet-wrong]` as (b). (c)
+  costs nothing, keeps every column-0 site, and keeps DN-D5's "a single
+  `int64` PK is the Keystone" by refusing only a declaration order.
+- **DN-Q14 `[quiet-wrong]` (a)**, written into §4 first: a declared-PK
+  heap keeps a deleted row's Keystone-index entry until a row `PURGE`, and
+  a hidden-Keystone heap refuses a named key at or below its issue mark.
+  Its premise, read: the hidden Keystone is named only by the KWP load's
+  field 0 (DN-S0's census A), and every issued key is below the mark
+  (invariant 11), so no deleted key of such a heap can be named again.
+- **DN-Q0 (a)**: exploratory, continuing.
+- **DN-Q1 (a), revised against the tree**: `keyidentity`, reserved by a
+  row in the lexer's keyword table, so it is refused at every declaration
+  site by the parser's one door (`ParseIdent`), and a refusal names the
+  word and its byte - **and admitted, by name, at every site that parses
+  a column reference** (the select list, `WHERE`, `ORDER BY`,
+  `RETURNING`, an `INSERT` column list), which is the cost the reserving
+  takes on; on a relation whose Keystone is a declared `int64` PK it reads
+  that column. **The mount check is dropped**: under DN's superblock bump
+  no older volume reaches its catalog, so no declared `keyidentity` can be
+  met. No fingerprint bump.
+- **DN-Q2 (a)**, **DN-Q4 (a)**, **DN-Q5 (a)**, **DN-Q6 (a)**, **DN-Q7 (a)**,
+  **DN-Q8 (a)**, **DN-Q10 (a)**, **DN-Q11 (a)** as written; DN-Q11's
+  descending named load is measured before DN-S2.
+- **DN-Q9 (a), revised against the tree**: the mount refuses the volume by
+  its superblock version, **naming DN's format event** in the message
+  (the version DN's bump takes, which DA-S3's owed bump may share) -
+  not by a relation's name, which the refusal never reaches.
+- **DN-Q12 (a)**, written into §4 first: the amended invariants are staged
+  in this order (§8) and move into `heap-and-tuple.md` and `CLAUDE.md`
+  with DN-S2's code.
+- **DN-R5 corrected**: "the tree's first word reserved against identifiers"
+  reads "the first word reserved by the operator's word".
+- **DN-R9 widened**: invariant 9 is amended with 4 and 11.
+
+Overhead not measured; measured at the milestone's close.
+
+### DN-S1 - the rules written, staged, 2026-11-20
+
+On worktree `dn-heap-rowid`, documents only: §8, under DN-Q12 (a). **This
+is DN-S1's gate, and DN stops here**: the stage ends in the operator's mark
+on the amended invariants (§5), DN-S2 writes against them, and a hard
+invariant is amended only under a recorded mark of the operator's - DN-D7
+is one for 4, nothing yet is for 9 or for 11's restatement, nor for
+DN-Q13 (c) and DN-Q14 (a), which §8 carries. **Also owed before DN-S2**: a
+driver that removes index entries unasked (DD-S4, with the operator; without
+one a heap reuses a slot only after an administrator's `PURGE INDEX`), and
+DN-Q11's descending named load.
+
+**Reviewed by `critics-developer`** (DN-S0 and DN-S1 together). It read
+every `[source-read]` claim at its line and found them true but one.
+**Fixed by the reviewer**: the `ORDER BY` elision's citation (the ascending
+arm is `EmitsTupleKeyOrder`, `kTupleKeyBackward` only the reverse); §8's
+invariant 4, which dropped three clauses of the present text; 11's "in place
+of", which quoted `CLAUDE.md` alone; §3.1b and K3, which left a heap with a
+multi-column or non-`int64` PK no Keystone index. **Applied from its
+findings**: **DN-Q14 written and adopted** - its most serious finding, a
+deleted row's Keystone bound twice once its slot is reused; **DN-Q13
+revised from (a) to (c)**; DN-Q1's read-side cost stated; DN-Q9's message
+no longer names version numbers nobody has allocated; invariant 11's
+duplicate clause restated for a heap; the order's read-at line names both
+commits; this entry cut to its gate. **Rejected**: none. It recommended
+DN-Q13 go back to the operator unmarked; it goes to the operator with §8,
+adopted as (c) and open to the mark.

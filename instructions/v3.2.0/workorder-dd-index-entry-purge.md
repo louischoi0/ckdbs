@@ -1,6 +1,12 @@
 # Work order DD - secondary index entries removed: an index entry purge, its premise measured before it is built
 
-Status: **WRITTEN 2026-11-18, not opened.** Written on worktree
+Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+(go-ahead-achieving-milestone), linked with DN** (`raft-marks-2026-11-20.md`
+§27), on worktree `dd-index-entry-purge` from `054dbc5e`
+(`v3.4.17-1-g054dbc5e`). **DD-S0's verdict is build**; DD-Q0..Q7 are
+adopted on that go-ahead, none is the operator's own mark, and DD-Q1 and
+DD-Q6 were revised against the tree before adoption (§7, "DD-S0").
+**Written 2026-11-18.** Written on worktree
 `db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
 the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §24): *"Write
 the work order for item 7, index entry removal."* (given in Korean;
@@ -531,3 +537,281 @@ operator's word (`raft-marks-2026-11-20.md` §16): §0a, DN's consumer and
 the eight things DD-S0 reads again with it. No DD-Q marked, no rule or
 stage changed, nothing run.
 
+### DD-S0 - census and premise, 2026-11-20
+
+On worktree `dd-index-entry-purge` from `054dbc5e` (`v3.4.17-1-g054dbc5e`),
+opened on the operator's standing go-ahead of 2026-11-20
+(go-ahead-achieving-milestone), the word linking DD with DN: *"link the work
+that will start later with /go-ahead-achieving-milestone DN"*. Per §0a's
+order, DN's census of what DN needs from DD was read first; it is the list
+under "For DN" below.
+
+**Read, at `054dbc5e`.**
+
+- **DD-R3, every writer** (`[source-read]`). Every path that puts a version
+  on a clustered page holds the row's tuple unit in `U` or `X`, or a range
+  unit over it, from before its page write to its decide: an `INSERT`
+  named or issued (`command_dispatcher.cpp`, `X` from `BorrowOrWait` before
+  `BtreeInsert`, kept across `MaintainIndexes` and an issued key's
+  take-back), multi-row `VALUES`, the KWP load and `INSERT ... SELECT`
+  (each row through `InsertOneRow`), `ON CONFLICT` on either arbiter, an
+  `UPDATE` per row (`U` in `Claim`) or by window (a range `U`), a `DELETE`
+  (`X`, row or range). A range unit refuses a tuple `TryAcquire` inside it
+  (`lock_table.cpp`'s `FenceCoversKey`), so the fence covers the window
+  paths. Commit and abort both release last, an abort after every
+  compensation (`txn/manager.cpp`); no rollback touches an index, so the
+  rollback clause holds trivially. **Three paths are outside the rule, and
+  none needs a design change**: the online `CREATE INDEX` backfill appends
+  with no row unit, but only to the index it builds, which `PURGE INDEX`
+  refuses while it is flagged building (DD-R8); a row `PURGE` and `PURGE
+  DROPPED COLUMNS` hold only the relation `IX` and append no entry - a
+  retired row is owed nothing either way, and no index carries a dropped
+  column (`alter.md` RESTRICT); a dispatcher with no lock table or no
+  transaction manager grants every borrow (`BorrowChain`), and is refused.
+  A relation `X` (offline `CREATE INDEX`, `REINDEX`, DDL) is seen only at
+  the relation entry, so the purge takes the relation `IX` before any
+  tuple unit.
+- **DD-R2, every view an index is probed under.** No index probe runs
+  under an unregistered snapshot. Every step-VM index step - probe, range,
+  key set, CV's ordered and reverse walks, sub-chains, the query layer -
+  reads the runner's snapshot, which is an autocommit lease, an explicit
+  transaction's view or a `READ ONLY` lease, each registered; an autocommit
+  `UPDATE`'s or `DELETE`'s subquery reads under its owned transaction,
+  registered first. The unique check (`CheckUniqueKey`) and the `ON
+  CONFLICT` arbiter mint an unregistered `MintCheckView`, and read latest
+  state only (case (b)). `CheckBuiltKeyUnique` runs under the relation
+  `X`. Every other `MintCheckView` reads no index.
+- **What leans on "no entry is removed".** Removing an entry that is not
+  its leaf's first breaks no structural check. Removing a first entry
+  would break, with no error, `LeafStillCoversKey` (an insert placed left
+  of where a seek lands), `IndexFetchLeafAtOrBelow` and CV's reverse walk
+  (a walk that skips every leaf to the left), and the unique check and the
+  duplicate arm through the first. **So DD-Q3 (a) is a correctness rule,
+  not a convenience.** The forward ordered walk's re-seek is by key and
+  holds either way. Statements of the premise to be amended at the close:
+  `index_tree.hpp`'s "Duplicates" and "Concurrency", `index_tree.cpp`'s
+  `LeafStillCoversKey` and the seek, `index_page.hpp`'s "a leaf's first
+  entry has to stay", `step_vm.cpp`'s CV comments, `fk_check.cpp`'s
+  "append-only set", `index.md` IX1, IX2, IX4a, §7, §10.3, §12.2, §13;
+  DK-R5 and DK-Q5, DM-R7 and U1/U2b name DD and stay correct under DD-Q3
+  (a). No entry count is kept anywhere a removal would make stale:
+  `sys.indexes`' `entries` is counted live.
+- **For DN** (§0a). A slot is free once no entry of any index names it as
+  of every reader; DD answers per row and per index - a row's entries
+  are judged and removed under its unit, and an attempt reports the rows
+  it skipped. What DN-S2 asks beyond that - a pass over every index of a
+  relation, and where "no entry names the slot" is recorded - is DN's
+  (DN-R2). Under DD-Q3 (a) a leaf's first entry is never removed, so on a
+  DN heap one slot a leaf of each index is never freed while the leaf
+  stands; DM's U2b, a bound kept on the page, is what would let it go.
+
+**Tested, with test code only** (`tests/index_purge_premise_test.cpp`).
+**DD-R1's premise is false as written, with a local fix.** On a relation
+with an integer key, a string key, a composite key, an inline covered
+integer, a covered `decimal` assigned the same value spelled again, and a
+covered spilled `varchar`, every entry a `CREATE INDEX` twin holds after a
+churned history is in the write-maintained index byte for byte - **except
+on the spilled covering**: an `UPDATE` that assigns a spilled value it
+already held moves nothing by value (`AppendIndexEntry`'s `Moved`), so the
+write path appends nothing, while the new version's cell names a new
+spill. The entry the rebuild owes that version is in no tree; a judge
+comparing bytes would remove the row's only entry. **The fix is in the
+judge's comparison** (`exec::SameOwedEntry`): two spilled `varchar` cells
+of one length are one value. It is conservative - it can keep an entry no
+version needs (spilled covered churn under one key is never purged), never
+the reverse. The `FULL_PAGE_IMAGE` replay cell moved to DD-S2's crash test,
+where the image is the statement's own.
+
+**Measured** (`bench/v3.4.17/dd-s0-premise-v3.4.17-1-g054dbc5e.md`, by
+`ck-tester`, on a busy host: other sessions' builds and suites ran through
+every block, recorded per block). Two verdict cells clear DD-Q0's bar:
+**cell 1**, a probe of a key whose run holds the surplus, +65 % server CPU
+churned against rebuilt (48.2 ms against 29.2 ms, a quarter of the table
+returned), at 424 pages against 420; **cell 5**, a single-row `INSERT` into
+a unique index whose values were deleted, purged and placed again, +50 %
+(84.6 us against 56.3 us), the unique check's walk of a run holding stale
+entries. Cells 2, 4 and 6 (a fresh-value point probe, a key `UPDATE`, the
+same probe in a pool smaller than the churned tree) sit inside the
+control. Cell 7: a `REINDEX INDEX` at n = 100,000 held the relation's
+writers off for its whole build, 156 to 178 ms, refusing none. The page
+ratio is 2.0x where surplus arrives as appends and 1.0x where it lands in
+leaves a build left half full, so DD-Q0's "narrow" arm could not be met by
+the two cells that cost. Cut: rule 9's small sizes, one surplus level, one
+run a cell, no `cores > 1`, no `group`/`strict`, no PostgreSQL twin; cell
+7's stall wants a quiet-host re-run.
+
+**Verdict: build** (DD-Q0 (a) as written, met by cells 1 and 5). On DN's
+ground it would be build in any case: DN-D1, the operator's mark, makes
+entry removal the only way a DN heap reuses a slot, which DD-Q0's rule has
+no arm for (§0a item 1). Both grounds agree, so the rule is not revised.
+
+**Adopted on the operator's standing go-ahead of 2026-11-20
+(go-ahead-achieving-milestone)**, none the operator's own mark:
+
+- **DD-Q0 (a)**, as written; verdict build.
+- **DD-Q1 `[quiet-wrong]` (b), revised from (a) against the tree before
+  adoption.** (a)'s premise is that a row `PURGE` retires a delete-marked
+  row's entries' last need; on a BZ heap and on a relation under a
+  Transition `PURGE` is refused, and on DN's heap it is admitted only where
+  the Keystone is the PK (DN-Q6 (a)), so under (a) a deleted row's entries
+  would wait for a statement that never comes (§0a item 2). (b)'s premise,
+  read again: a delete-marked row whose deleter is resolved for every
+  reader is reached by no reader through any version (`IndexStagedRow`
+  walks no further than that deleter), no `UPDATE` reaches a deleted row,
+  and its key stays bound until a row `PURGE` (K1), so no writer can rely
+  on its entries; the unique check reads it absent at latest state. The
+  cost (b) states holds: a purged tree is a superset of a rebuild's but
+  for deleted rows, and the test says so.
+- **DD-Q2 `[quiet-wrong]` (a)**: the row's tuple unit in `U`, try-only,
+  from the judge to the removal. Its premise is DD-R3, read above.
+- **DD-Q3 `[quiet-wrong]` (a)**: a leaf's first entry is never removed.
+  Its premise, the coverage check reading a sibling's first entry, is
+  read above and holds; under DN it costs one never-freed slot a leaf of
+  each index, stated for DN-S2.
+- **DD-Q4 (a)**: the statement alone in S1-S3; S4 put to the operator at
+  the close, with DN's need for a driver that runs unasked (§0a item 4).
+- **DD-Q5 (a)**: `FULL_PAGE_IMAGE` at `kNoTxnId`.
+- **DD-Q6 (a), revised in its spelling against the tree**: `PURGE INDEX
+  <name>`. The tree names an index by a bare identifier, unique on the
+  instance (`REINDEX INDEX <name>`, `DROP INDEX <name>`); there is no
+  `ns.` qualifier for an index to take.
+- **DD-Q7 (a)**, at the close.
+
+No engine code was changed by DD-S0. Overhead not measured; measured at the
+milestone's close.
+
+### DD-S1 and DD-S2 - the judge, the leaf primitive and the statement, 2026-11-20
+
+On worktree `dd-index-entry-purge`, built as one step and reviewed as one,
+since the statement is the judge's and the primitive's only caller.
+
+- **The leaf primitive**: `IndexLeafView::RemoveEntry` closes the array,
+  zeroes the vacated slot and refuses position 0 (`InvalidArgument`,
+  DD-Q3 (a)). **The tree's removal**: `IndexRemoveEntries` takes ascending
+  whole entries; each leaf is reached by a write descent - so held
+  exclusive and asked whether it still covers the entry, which a divide
+  since the copy moved right and never left - every following entry the
+  same leaf still covers is taken under the same hold, and the leaf is
+  logged once, under that hold, before anything is returned.
+- **The judge**: `OwedIndexEntries`, `IndexStagedRow` given a collecting
+  sink (`Backfill::owed`) - the rebuild's own walk, with online's caution
+  (a head writer in flight is never trusted resolved) and no unique check;
+  a delete-marked row whose deleter every reader sees owes nothing
+  (DD-Q1 (b)). `EncodeIndexEntry` composes an entry through the tree's own
+  `EncodeIndexSortKey` and the write hook's own covered copy
+  (`CopyCoveredInto`, now shared), and `SameOwedEntry` is DD-S0's
+  comparison.
+- **The statement**: `PURGE INDEX <name>`, admin, autocommit (the row
+  `PURGE`'s gates, the archive's fail-closed list included), refused
+  `Unsupported` with no lock table or no transaction manager, `NotFound`
+  for no index, `TxnConflict` for an index still building or dropped under
+  it. A sequence of attempts, each an owned transaction holding the
+  relation `IX` over at most 64 leaves (`exec::kPurgeIndexLeavesPerAttempt`),
+  each row's tuple `U` asked try-only and given back per leaf in one ledger
+  pass; it answers `PURGED INDEX name=... entries=N skipped_rows=M
+  attempts=A`. A wait before the first attempt parks and re-runs; a wait
+  after one ends the statement with its count, retryable, so steady catalog
+  churn cannot restart it from the leftmost leaf for ever; a refusal part-way
+  keeps and reports what was removed (DD-R9).
+- **The simulator**: `SimInstanceOptions::lock_table`, on one seed in four,
+  and the workload draws `PURGE INDEX <t>_v` where a relation that already
+  has its index used to fall to an aggregate read; the loop accepts the
+  count or, with no lock table, the refusal by name.
+- **Tests**: `tests/index_purge_test.cpp` - a purge changes no result; a
+  purged tree is a superset of a rebuild's but for deleted rows, and on a
+  quiescent tree its surplus is at most one first entry a leaf; a second
+  run removes nothing; writes after a purge land where a probe finds them;
+  an attempt a leaf resumes where the last ended; an old snapshot finds its
+  row through the old key and the entry goes once it ends; an undecided
+  writer that relies on a byte-identical entry is skipped and keeps it;
+  rolled-back, purged and deleted rows' entries go; a unique index refuses
+  the same duplicates after; DD-S0's spilled value keeps its entry; the
+  refusals; and a crash after a synced purge mounts to the purged tree, one
+  before it to the unpurged one, both answering alike.
+
+**Reviewed by `critics-developer`.** It traced every `[quiet-wrong]` path
+(the judge with the owed sink, the DD-Q1 (b) return under the unit, a row
+whose entries span leaves, the coverage logic of a grouped removal,
+`LogFullPageImage` under an exclusive hold, the resume walk, the units'
+release, the simulator's lock table across a crash) and found them sound.
+**Fixed by the reviewer**: B1, `IndexRemoveEntries` returned on three
+failures after removing entries under the hold and before logging the
+leaf - a page change with no record; every width is now checked first and
+a failure logs what was removed before it is returned. **Applied from its
+findings**: L1, a wait after the first attempt re-ran the whole statement
+from the leftmost leaf, so catalog churn could starve it - it now ends with
+its count; L2, a refused attempt's removals were dropped from the count;
+the callback seam replaced by the lock table itself and a one-pass release
+(`ReleaseIf`, where `ReleaseOne` per unit was quadratic in the ledger);
+`EncodeIndexEntry`'s copy of the covered loop and a third `LayoutOf`
+removed (`CopyCoveredInto`, `IndexLayoutOf`); the comments still stating
+"nothing removes an entry" restated as "no leaf's first entry is removed";
+a test crossing the attempt boundary; the workload comment corrected - the
+roll's op changed, every generator's stream did not. **Rejected**: none.
+It flagged, and the order keeps as stated: no test forces a divide between
+the copy and the removal (the descent's coverage check is the clustered
+tree's argument, tested there), and three seeds in four answer the drawn
+statement with a refusal where they used to check a read.
+
+Overhead not measured; measured at the milestone's close.
+
+### DD-S3 - the close, and the remedy it required, 2026-11-20
+
+**Measured** (`bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`, by `ck-tester`,
+B = `b8880f9b` (`v3.4.17-3-gb8880f9b`) against A = `054dbc5e`, a quiet host,
+`cores = 1`, `relaxed`). **DD-Q7's write-path bar is met**: an indexed
+`INSERT`, `UPDATE`s of the indexed, a covered and another column, a point
+probe and an ordered index walk, at 200, 1,000 and 10,000 rows - every
+median B - A within -0.8 % to +1.5 % and inside the in-run control's range.
+**A purged index probes as a rebuilt one**: S0's cells 1 and 5, churned
++75 % and +61-66 % over rebuilt, are within the control pair's spread once
+purged (cell 1: +0.2 % and +0.8 %), and cell 2 too. A purge leaves its
+tree's pages (841 against a rebuild's 421 for cell 2), at no probe cost,
+and one dead first entry a leaf (100,419 entries against 100,000). The
+purge itself: 2.43 us an entry removed at n = 100,000, a run with nothing
+to remove 108 ms (the walk is the floor), the longest 64-leaf attempt
+0.30-0.33 s against the 1 s net; an entry of a row `PURGE`'s window about
+20 us, eight times dearer, not isolated (`known-gaps.md`). Cut: S0's cells
+3, 4 and 6 on a purged twin, `group`/`strict`, a PostgreSQL twin, surplus
+past 2x, a cold device read.
+
+**A regression in DD's own purpose, and its remedy.** The statement ran its
+attempts back to back on its core's reactor: a writer on that core waited
+for the whole of it, 243-283 ms at n = 100,000 - longer than the 71 ms
+`REINDEX` stall DD exists to remove, and against `manual/sql/sql.md`'s
+"writes go on while it runs". **Remedy, within DD** (the skill's §3):
+`PurgeIndexRun`, a `BuildRun` modelled on `GATHER STATISTICS`'s - one
+attempt a slice of the `analytic` level's 16 leaves, yielding between
+slices, each slice's relation `IX` and row units taken under a read
+holder's id and all given back when it returns. **No transaction is held**:
+the judge needs no view, so the run holds no horizon down; a read holder
+never waits, so it is never the waiting half of a wait-for edge, and the
+writer's wait-for edge to it is no longer recorded either. A refused `IX`
+is asked again after the yield, to the fault net. `tests/index_build_slice_rig_test.cpp`'s
+`AWriterOnAPurgesCoreRunsInsideThePurgeAndItsRowIsFound` holds it: a writer
+on the purge's core is answered inside it, and its row is found after.
+
+**Reviewed by `critics-developer`**: no `[quiet-wrong]` case. **Applied**:
+the wait-for edge filtered for a read holder (the graph's own contract);
+a holder named "a positioned reader or an index purge" where it read "a
+positioned reader"; the claim that a DDL passes between slices bounded to
+its own core - one on another core is not queued for, and a long purge can
+hold it to its net (`known-gaps.md`, `index.md` §2.2, the manual); the
+memo comment - a tree another core dropped is purged as the dropped tree
+it is, harmless; the reply is stated as no durability point; the
+unwalked-run refusal merged into `Step`; `txn` renamed `holder`. **Rejected**:
+a shared partial-count helper for `PURGE` and `PURGE INDEX` - two
+statements' wordings, one line each, which a helper would couple for no
+cut; a stronger "it started" assertion in the rig cell - the `attempts=`
+assertion already carries the yield, and the start is the reactor's
+submission order. **Measured again after the remedy** (the same file, its section "After
+the remedy", at `57008fdf`, `v3.4.17-12-g57008fdf`, on a loaded host): a
+writer on the purge's core waits one slice - its longest stall 12.8 ms on
+`w` and 12.9 ms on `v` in the least loaded run, against the close's 243 and
+284 ms and the same server's `REINDEX` 74.5 ms - and 57 to 70 writer
+statements complete inside the purge, where none did. The purge's own cost
+did not move (2.48 us an entry against 2.43, 53 slices). One loaded run
+showed a 254 ms stall the run could not place; a quiet-host repeat is owed.
+
+
+**Synced** with `origin/main` at `49327ef9` (DJ merged; the marks file's section renumbered §24 behind DJ's §22 and §23, §26 at DN's merge behind DJ's landing (§24) and `v3.4.18` (§25), and §27 at the landing behind `v3.5.0` (§26)); suite on the merged tree 0 failed of 5010. **DD is closed on the work branch, not landed**: a push, a merge to `main`, a tag and DD-S4 wait for the operator's word.

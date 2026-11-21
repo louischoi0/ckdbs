@@ -10,6 +10,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/storage/index/index_page.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/read_view.hpp"
@@ -169,6 +170,34 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::span<const parser::AstValue> previous = {},
                                   const IndexWriteLog* log = nullptr,
                                   catalog::Catalog* publish = nullptr);
+
+// `ix`'s layout: the widths its pages are checked against.
+inline index::IndexLayout IndexLayoutOf(const catalog::TableAccess::IndexRef& ix) {
+    index::IndexLayout layout;
+    layout.key_width = ix.key_width;
+    layout.covered_width =
+        static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexTupleKeyWidth);
+    return layout;
+}
+
+// The whole entry `key || tuple key || covered` that `AppendIndexEntry`
+// composes for one version - `values` its decoded columns in schema order,
+// `row` its encoded tuple - without touching the tree: what an index entry
+// purge's judge compares the tree's entries with (DD-R1).
+StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& access,
+                                                  const catalog::TableAccess::IndexRef& ix,
+                                                  std::span<const parser::AstValue> values,
+                                                  std::span<const std::byte> row,
+                                                  std::uint64_t tuple_key);
+
+// Whether the tree's entry `stored` serves the version that is owed `owed`
+// (DD-R1 as DD-S0 found it): the same key, tuple key and covered bytes, but
+// for a spilled `varchar` covered cell, where two spilled cells of one
+// length are one value - the write path judges a move by value and appends
+// nothing for a value assigned again, whose cell then names a new spill.
+// Conservative: it may keep an entry no version needs, never the reverse.
+bool SameOwedEntry(const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
+                   std::span<const std::byte> stored, std::span<const std::byte> owed);
 
 // The root `index_oid`'s slot in the relation's anchor page `anchor` names,
 // read under a shared hold of that page alone. A live index with no slot is

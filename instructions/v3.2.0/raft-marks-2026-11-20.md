@@ -263,3 +263,37 @@ took under them.
 | **Skipped on that word** | the pre-push hook and the full suite for the push of the results (documents and bench only, no build input); pushing the tag |
 | **Does not settle** | when `v3.5.0` (and `v3.4.18`, also unpushed) is pushed; anything after `07f4552a` but this record |
 | **Recorded at** | this file; `CLAUDE.md`'s version of record; `bench/v3.5.0/`; this file's row in `instructions/v3.2.0/index.md` |
+
+## 27. DD opened on the standing go-ahead, linked with DN
+
+| | |
+|---|---|
+| **Word** | *"5 hours 30 minutes from now, /go-ahead-achieving-milestone DD"*, then *"link the work that will start later with /go-ahead-achieving-milestone DN"*, then the skill invoked with `DD`, its argument naming the link, and *"go ahead"* (the first two given in Korean; recorded in English) |
+| **Mark** | **DD is opened**, on worktree `dd-index-entry-purge` from `054dbc5e` (`v3.4.17-1-g054dbc5e`), and DN is to follow it in the same session on the same go-ahead once DD closes. **No item below is the operator's own mark**: each is CLA's proposal, adopted by CLA on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone) |
+| **Adopted at DD-S0** | **DD-Q0 (a)** as written, its verdict **build** (cells 1 and 5 of `bench/v3.4.17/dd-s0-premise-v3.4.17-1-g054dbc5e.md`). **DD-Q1 `[quiet-wrong]` (b), revised from (a) against the tree**: a delete-marked row whose deleter every reader sees is owed nothing, since a heap and a Transition-governed relation refuse the row `PURGE` (a) waited for. **DD-Q2 `[quiet-wrong]` (a)** and **DD-Q3 `[quiet-wrong]` (a)**, their premises read again and holding. **DD-Q4 (a)**, **DD-Q5 (a)**, **DD-Q6 (a)** spelled `PURGE INDEX <name>` (an index has no namespace qualifier), **DD-Q7 (a)** |
+| **Adopted at the close** | **DD-Q7 (a)**: S0's cells again, purged against rebuilt, and the write path A/B - the bar met (`bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`). A regression in DD's own purpose found there - the statement held a writer on its core for its whole length, longer than the `REINDEX` stall it removes - remedied within DD as the skill's §3 says: a sliced run that yields (the order's §7, DD-S3) |
+| **Found at DD-S0** | **DD-R1's premise is false as written**: an `UPDATE` assigning a spilled covered value it already held appends no entry while its cell names a new spill. Fixed in the judge's comparison, not in the write path (the order's §7) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DD-S4, put to the operator at the close |
+| **Recorded at** | this file; the DD order's header and §7; the DD row in `instructions/v3.2.0/index.md` |
+
+## 28. DN opened on the standing go-ahead, after DD; stopped at DN-S1's gate
+
+| | |
+|---|---|
+| **Word** | §27's link: *"link the work that will start later with /go-ahead-achieving-milestone DN"* (given in Korean; recorded in English) - DN opened in the same session once DD closed |
+| **Mark** | **DN is opened**, on worktree `dn-heap-rowid` at `34958393` (`v3.4.18-9-g34958393`, DD's work branch merged onto `origin/main`). **No item below is the operator's own mark**: each is CLA's proposal, adopted by CLA on the operator's standing go-ahead of 2026-11-20 (go-ahead-achieving-milestone). The operator's own marks stay DN-D1..D7 |
+| **Adopted at DN-S0** | **DN-Q3 `[quiet-wrong]` (a)** (an entry carries the Keystone, checked at the slot) **DN-Q13 `[quiet-wrong]` (c)**, added and revised from (a) on the stage's review (a heap's `int64` PK, its Keystone, is declared first, one declared elsewhere refused at its byte), and **DN-Q14 `[quiet-wrong]` (a)**, added on the review (a declared-PK heap keeps a deleted row's Keystone-index entry until a `PURGE`; a hidden-Keystone heap refuses a named key at or below its issue mark - so no Keystone is bound twice once a slot is reused), each premise read again. **DN-Q1 (a), revised**: reserved by the lexer's keyword table, the mount check dropped since a superblock bump refuses every older volume before its catalog. **DN-Q9 (a), revised**: refused by the superblock version, the message naming DN's format event, never by a relation's name. **DN-Q12 (a)**, added: the amended invariants staged in the order until DN-S2's code holds them. DN-Q0, Q2, Q4..Q8, Q10, Q11 (a) as written |
+| **Found at DN-S0** | DN-R5's "first word reserved against identifiers" is false - eleven words are reserved already; invariant 9 names the btree too, so DN-R9 amends it; no slot-reuse primitive exists; the descent a resolved row costs 0.3-0.6 us - 21-40 % of an index range, 3-7 % of a point read (`bench/v3.4.18/dn-s0-premise-v3.4.18-9-g34958393.md`) |
+| **The stop** | **DN-S1 ends in the operator's mark on the amended invariants** (the order's §5, §8): invariant 4 (under DN-D7's mark), 9 and 11's restatement, with DN-Q13 (c) and DN-Q14 (a), which §8 carries (no mark yet). DN-S2 writes against them and does not start before the mark. Also owed before DN-S2: a driver that removes index entries unasked (DD-S4, with the operator), and DN-Q11's descending named load |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DD's landing |
+| **Recorded at** | this file; the DN order's header, §4, §7 and §8; the DN row in `instructions/v3.2.0/index.md` |
+
+## 29. DD and DN's first two stages landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"* (2026-11-21) |
+| **Mark** | **DN's work branch merged onto `origin/main` (`01a7609b`) and pushed with `--no-verify`**: DD, closed on its work branch (§27), and DN-S0 and DN-S1, documents and bench only (§28). DD and DN's sections renumbered §27 and §28 at this merge behind `v3.5.0`'s §26 |
+| **Skipped on that word** | the pre-push hook. The suite ran 0 failed of 5,010 at `49327ef9`, and no build input changed since: DN's commits and `origin/main` since `07f4552a` are documents and bench only |
+| **Does not settle** | DN-S1's gate (the operator's mark on the order's §8, DN-Q13 (c) and DN-Q14 (a) with it); DD-S4; a tag or a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
