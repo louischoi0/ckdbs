@@ -413,6 +413,10 @@ TEST_F(ColumnNameCaseTest, EveryWritePathResolvesANameInAnotherCase) {
     Refused("UPDATE t SET ID = 99", {"tuple key column 'id' cannot be updated", "byte 13"});
     Refused("UPDATE t SET Id = 99, x = 1", {"tuple key column 'id' cannot be updated"});
     EXPECT_EQ(Run("SELECT id FROM t"), "id\\n1");
+    // A heap's hidden Keystone is named by its word, never by the engine's
+    // internal column name (DN-D6).
+    Ok("CREATE TABLE hk (a int64) HEAP");
+    Refused("UPDATE hk SET KeyIdentity = 9", {"tuple key column 'keyidentity' cannot be updated"});
     // `INSERT (a, A)` names one column twice.
     Refused("INSERT INTO t (g, G, amount, st) VALUES (1, 2, 3, 'new')",
             {"'G' is listed twice", "at byte 18"});

@@ -321,7 +321,12 @@ bool PageReclaimer::VisitOne(Job& job, const Visit& visit) {
                 Skip(job, visit.page, "is owned by oid " + std::to_string(owner));
                 return true;
             }
-            if (type == TypeByte(leaf) && (visit.level == 0 || visit.level == kAnyLevel)) {
+            // A heap's data pages (DN) are its relation's one level: the
+            // head is the anchor's clustered root and the rest are reached
+            // by its `next_page_id` chain, as a tree's leaves are.
+            const bool data_page = !index && type == TypeByte(PageType::kHeapData);
+            if ((type == TypeByte(leaf) || data_page) &&
+                (visit.level == 0 || visit.level == kAnyLevel)) {
                 if (!Take(job, visit, visit.page)) return false;
                 if (job.levels.empty()) job.levels.emplace_back();
                 job.levels[0].push_back(visit.page);

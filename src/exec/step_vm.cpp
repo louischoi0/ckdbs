@@ -2316,7 +2316,7 @@ private:
         const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
         const std::uint64_t resume_tuple_key = prefixed ? prefix->resume.last_tuple_key : 0;
         const std::uint16_t resume_slot = prefixed ? prefix->resume.last_slot : 0;
-        const bool heap_walk = access.clustered_type == catalog::ClusteredType::kHeap;
+        const bool heap_walk = access.heap();
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -2348,7 +2348,7 @@ private:
         // Never a heap's (DN): its pages are in no key order. The compiler
         // gives a heap's step no range; this keeps a hand-built one honest.
         const bool pruning =
-            step.range.has_value() && access.clustered_type != catalog::ClusteredType::kHeap;
+            step.range.has_value() && !access.heap();
 
         // The page the visitor is on: the tuple's address, which a trail
         // records rather than re-derives by searching (workplan P09).

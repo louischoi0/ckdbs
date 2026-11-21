@@ -410,7 +410,7 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     std::span<std::byte> entry(entry_buf.data(), sort_key_len);
     if (Status s = EncodeIndexSortKey(layout, key, tuple_key, entry); !s.ok()) return s;
     if (layout.rowid_width != 0) {
-        PutIndexTupleKey(entry.subspan(layout.rowid_offset(), kIndexRowidWidth), rowid);
+        if (Status s = PutIndexRowid(layout, entry, rowid); !s.ok()) return s;
     }
     if (!covered.empty()) {
         std::memcpy(entry.data() + layout.covered_offset(), covered.data(), covered.size());

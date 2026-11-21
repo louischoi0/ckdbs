@@ -180,7 +180,7 @@ private:
 
         // A heap is one level of data pages (DN): no internal node to
         // check, and no slot order to hold.
-        const bool heap_rel = access.clustered_type == catalog::ClusteredType::kHeap;
+        const bool heap_rel = access.heap();
         if (!heap_rel) SweepBtreeInternals(access, name);
         SweepTuples(access, name);
         SweepVarHeap(access, name);
@@ -192,7 +192,7 @@ private:
     void SweepTuples(const catalog::TableAccess& access, const std::string& name) {
         // A heap's pages and slots are in no key order (DN, invariant 4);
         // invariant 3, a row at or above its page's `min_key`, still holds.
-        const bool heap_rel = access.clustered_type == catalog::ClusteredType::kHeap;
+        const bool heap_rel = access.heap();
         PageId current_page = kInvalidPageId;
         std::uint64_t current_min_key = 0;
         std::uint64_t prev_pages_max_id = 0;

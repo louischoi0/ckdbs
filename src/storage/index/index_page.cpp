@@ -56,6 +56,16 @@ void PutIndexTupleKey(std::span<std::byte> out, std::uint64_t tuple_key) {
     }
 }
 
+Status PutIndexRowid(const IndexLayout& layout, std::span<std::byte> entry, std::uint64_t rowid) {
+    // A rowid's page is its upper 32 bits (`heap::EncodeRowid`); page 0 is
+    // the superblock.
+    if ((rowid >> 16) == 0) {
+        return Status::InvalidArgument("a heap's index entry needs its row's rowid, given none");
+    }
+    PutIndexTupleKey(entry.subspan(layout.rowid_offset(), kIndexRowidWidth), rowid);
+    return Status::OK();
+}
+
 std::uint64_t GetIndexRowid(const IndexLayout& layout, std::span<const std::byte> entry) {
     return GetIndexTupleKey(entry.subspan(layout.rowid_offset(), kIndexRowidWidth));
 }

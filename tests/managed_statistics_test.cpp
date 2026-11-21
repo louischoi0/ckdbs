@@ -345,6 +345,21 @@ TEST_F(StatisticsStatementTest, AGatherCountsTheLiveRowsAndEveryLeafAndThePlanne
         << view;
 }
 
+// DN: a heap's walk is its `kHeapData` chain, which the gather refused page
+// by page as "no longer a leaf" - every GATHER over a heap was TxnConflict.
+TEST_F(StatisticsStatementTest, AGatherOverAHeapCountsItsDataPages) {
+    Ok("CREATE TABLE h (id int64 PRIMARY KEY, v int64) HEAP");
+    Fill("h", 1, 3000);
+    Ok("DELETE FROM h WHERE id <= 10");
+    const std::string reply = Run("GATHER STATISTICS ON h");
+    ASSERT_EQ(reply.rfind("GATHERED STATISTICS relation=h version=1 ", 0), 0u) << reply;
+    EXPECT_EQ(Field(reply, "rows"), "2990");
+    EXPECT_GT(std::stoull(Field(reply, "leaves")), 1u);
+    // And `sys.relation_stats` counts the same pages, where it answered NULL.
+    const std::string shown = Run("SELECT leaves FROM sys.relation_stats WHERE name = 'h'");
+    EXPECT_EQ(shown, "leaves\\n" + Field(reply, "leaves")) << shown;
+}
+
 TEST_F(StatisticsStatementTest, ASlicedGatherYieldsBetweenSlicesAndCountsTheSame) {
     ASSERT_GT(Leaves(), 16u) << "the cell needs more than one slice";
     DispatchOutcome out;

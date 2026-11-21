@@ -360,6 +360,8 @@ struct TableAccess {
     Schema schema;
     PageId desc_page_id;
     ClusteredType clustered_type;
+    // A heap of data pages addressed by rowid (DN), not a clustered tree.
+    bool heap() const noexcept { return clustered_type == ClusteredType::kHeap; }
 
     // Root of this relation's var-heap chain, or kInvalidPageId when the
     // schema has nothing that could spill. Cacheable for the reason

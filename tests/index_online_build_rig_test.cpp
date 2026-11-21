@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include "kds/sched/coro.hpp"
+#include "kds/storage/heap/heap_page.hpp"
 #include "kds/sched/task.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "view_text.hpp"
@@ -276,6 +277,84 @@ TEST(IndexOnlineBuildRigTest, WritersDuringTheBackfillLoseNoRowUnderAnOldViewOrA
     const std::string plan_old =
         d1.Dispatch("ANALYZE SELECT id FROM t WHERE v = 10", &old_reader).response;
     EXPECT_NE(plan_old.find("IndexProbe"), std::string::npos) << plan_old;
+}
+
+// DN: an online build over a heap. The high water was a descent by key,
+// which a heap's data page refuses; and the A2 bound ended the walk at the
+// first page past the high water, which on a heap - whose growth links a
+// page after the page that filled, anywhere in the chain - is no bound on
+// the pages after it, so every old row behind a page a writer grew during
+// the backfill went unindexed. Core 1's growth is pinned mid-chain to put
+// such a page ahead of the cursor; every row written before the build must
+// still be found through the index.
+TEST(IndexOnlineBuildRigTest, AnOnlineBuildOverAHeapIndexesEveryOlderRow) {
+    auto opened = TwoCoreRig::Open(TwoCoreRig::Options{});
+    ASSERT_TRUE(opened.ok()) << opened.status().message();
+    std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
+    CommandDispatcher& d0 = rig->core(0).dispatcher();
+    CommandDispatcher& d1 = rig->core(1).dispatcher();
+    ASSERT_EQ(d0.Dispatch("CREATE TABLE h (v int64, pad varchar(2000)) HEAP")
+                  .response.rfind("CREATED", 0),
+              0u);
+    constexpr int kRows = 1200;
+    for (int i = 0; i < kRows; ++i) {
+        const std::string sql = "INSERT INTO h VALUES (" + std::to_string(i) + ", '" +
+                                std::string(1500, 'p') + "')";
+        ASSERT_EQ(d0.Dispatch(sql).response.rfind("INSERTED", 0), 0u) << sql;
+    }
+    auto oid = rig->core(0).catalog().FindTableOidByName(catalog::kNamespacePublic, "h");
+    ASSERT_TRUE(oid.ok());
+    auto access = rig->core(0).catalog().InitTableAccess(oid.value());
+    ASSERT_TRUE(access.ok());
+    std::vector<PageId> chain;
+    for (PageId at = access.value()->desc_page_id; at != kInvalidPageId;) {
+        chain.push_back(at);
+        auto page = rig->store().GetForRead(at);
+        ASSERT_TRUE(page.ok());
+        at = heap::PageView(page.value().bytes()).next_page_id();
+    }
+    ASSERT_GT(chain.size(), 100u);
+    // Core 1 fills a full page near the chain's end, so its growth links
+    // there, behind the backfill's cursor for most of the build.
+    d1.heap_space().SetCurrentPage(oid.value(), 1, chain[chain.size() - 5]);
+
+    Statement build;
+    build.sql = "CREATE INDEX hv ON h (v)";
+    std::vector<std::unique_ptr<Statement>> writes;
+    for (int i = 0; i < 40; ++i) {
+        auto x = std::make_unique<Statement>();
+        x->sql = "INSERT INTO h VALUES (" + std::to_string(100000 + i) + ", '" +
+                 std::string(1500, 'n') + "')";
+        writes.push_back(std::move(x));
+    }
+    Submit(*rig, 0, build);
+    rig->Start();
+    build.go.store(true, std::memory_order_release);
+    for (auto& x : writes) {
+        ASSERT_FALSE(RunOn(*rig, 1, *x).rfind("ERR", 0) == 0) << x->sql << " -> " << x->out.response;
+    }
+    ASSERT_TRUE(
+        KickUntil(*rig, 0, [&] { return build.done.load(std::memory_order_acquire); }, 20000ms))
+        << "the build never finished";
+    ASSERT_EQ(build.out.response.rfind("CREATED INDEX", 0), 0u) << build.out.response;
+    rig->Stop();
+
+    ASSERT_NE(d0.Dispatch("ANALYZE SELECT v FROM h WHERE v = 10").response.find("IndexProbe"),
+              std::string::npos);
+    int missing = 0;
+    for (int i = 0; i < kRows; i += 7) {
+        const std::string got =
+            d0.Dispatch("SELECT v FROM h WHERE v = " + std::to_string(i)).response;
+        missing += testing_view::ReadViewText(got).Column("v") != Ids{std::to_string(i)};
+    }
+    EXPECT_EQ(missing, 0) << "rows written before the build are missing from the index";
+    for (int i = 0; i < 40; ++i) {
+        EXPECT_EQ(testing_view::ReadViewText(
+                      d0.Dispatch("SELECT v FROM h WHERE v = " + std::to_string(100000 + i))
+                          .response)
+                      .Column("v"),
+                  Ids{std::to_string(100000 + i)});
+    }
 }
 
 TEST(IndexOnlineBuildRigTest, AWriterAskingTheRelationXDuringTheDrainIsTheDeadlockVictim) {

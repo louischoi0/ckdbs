@@ -273,7 +273,7 @@ StatusOr<std::optional<StagedRow>> ReadRowAgain(const Backfill& cx, std::uint64_
                                                 std::uint64_t rowid) {
     auto access = cx.catalog.InitTableAccess(cx.access.oid);
     if (!access.ok()) return access.status();
-    auto at = access.value()->clustered_type == catalog::ClusteredType::kHeap
+    auto at = access.value()->heap()
                   ? FetchHeapRow(cx.store, *access.value(), rowid, tuple_key)
                   : btree::BtreeLookup(cx.store, access.value()->desc_page_id, tuple_key);
     if (!at.ok()) {
@@ -508,7 +508,18 @@ StatusOr<PageId> BackfillLeaf(const Backfill& cx, catalog::TableAccess::IndexRef
                                           " is not relation oid " +
                                           std::to_string(cx.access.oid) + "'s");
             }
-            if (page.min_key() > cx.high_water) return kInvalidPageId;
+            // **A heap's chain is in no `min_key` order** (DN): a growth
+            // links its page after the page that filled, anywhere in the
+            // chain, so a page past the high water says nothing of the pages
+            // after it. Its own rows are all above the high water - written
+            // after the drain, by writers that maintain the index - so it is
+            // passed over and the walk goes on.
+            if (page.min_key() > cx.high_water) {
+                if (cx.access.heap()) {
+                    return page.next_page_id();
+                }
+                return kInvalidPageId;
+            }
         }
         const std::uint16_t n = page.slot_count();
         staged.reserve(n);
@@ -524,7 +535,7 @@ StatusOr<PageId> BackfillLeaf(const Backfill& cx, catalog::TableAccess::IndexRef
 
             StagedRow row;
             row.tuple_key = tuple_key.value();
-            if (cx.access.clustered_type == catalog::ClusteredType::kHeap) {
+            if (cx.access.heap()) {
                 row.rowid = heap::EncodeRowid(heap::Rowid{leaf, i});
             }
             row.trx_id = tuple.value().trx_id;
@@ -548,12 +559,15 @@ StatusOr<PageId> BackfillLeaf(const Backfill& cx, catalog::TableAccess::IndexRef
 // The highest tuple key the relation holds now, or the last leaf's
 // `min_key` when that leaf is empty: the leaf the key above every other
 // sorts to, then on along its chain to the end, since a divide may have
-// linked leaves after it since the descent.
+// linked leaves after it since the descent. A heap has no key order to
+// descend by (DN): its whole chain is read from the head.
 StatusOr<std::uint64_t> HighWaterKey(catalog::Catalog& catalog, storage::PageStore& store,
                                      catalog::Oid rel_oid) {
     auto access = catalog.InitTableAccess(rel_oid);
     if (!access.ok()) return access.status();
-    auto leaf = btree::BtreeSeekLeaf(store, access.value()->desc_page_id, kMaxKeystoneId);
+    auto leaf = access.value()->heap()
+                    ? StatusOr<PageId>(access.value()->desc_page_id)
+                    : btree::BtreeSeekLeaf(store, access.value()->desc_page_id, kMaxKeystoneId);
     if (!leaf.ok()) return leaf.status();
     PageId at = leaf.value();
     std::uint64_t high = 0;
@@ -630,7 +644,7 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
     layout.key_width = static_cast<std::uint16_t>(key_width.value());
     layout.covered_width = static_cast<std::uint16_t>(covered_width);
     // A heap's entries carry the row's rowid (DN, IX1).
-    if (access.value()->clustered_type == catalog::ClusteredType::kHeap) {
+    if (access.value()->heap()) {
         layout.rowid_width = static_cast<std::uint16_t>(index::kIndexRowidWidth);
     }
     // Where a wide declaration is refused: by arithmetic, at declaration,
@@ -837,7 +851,7 @@ Status IndexBuild::Begin() {
     }
     index::IndexLayout layout;
     layout.key_width = def_.key_width;
-    if (access_->clustered_type == catalog::ClusteredType::kHeap) {
+    if (access_->heap()) {
         layout.rowid_width = static_cast<std::uint16_t>(index::kIndexRowidWidth);
     }
     layout.covered_width = static_cast<std::uint16_t>(def_.entry_width - def_.key_width -
@@ -869,7 +883,7 @@ Status IndexBuild::Begin() {
     tree_.nkeys = static_cast<std::uint8_t>(def_.key_cols.size());
     tree_.ncovered = static_cast<std::uint8_t>(def_.covered_cols.size());
     tree_.unique = (def_.flags & catalog::kIndexFlagUnique) != 0;
-    tree_.rowid = access_->clustered_type == catalog::ClusteredType::kHeap;
+    tree_.rowid = access_->heap();
     tree_.name = def_.name;
     for (std::size_t i = 0; i < def_.key_cols.size(); ++i) tree_.key_cols[i] = def_.key_cols[i];
     for (std::size_t i = 0; i < def_.covered_cols.size(); ++i) {
@@ -1066,7 +1080,7 @@ StatusOr<catalog::Oid> CreateEmptyIndex(catalog::Catalog& catalog, storage::Page
     if (!key_width.ok()) return key_width.status().WithContext("index '" + name + "'");
     index::IndexLayout layout;
     layout.key_width = static_cast<std::uint16_t>(key_width.value());
-    if (access.value()->clustered_type == catalog::ClusteredType::kHeap) {
+    if (access.value()->heap()) {
         layout.rowid_width = static_cast<std::uint16_t>(index::kIndexRowidWidth);
     }
     if (Status s = index::CheckIndexLayout(layout); !s.ok()) {
@@ -1121,7 +1135,7 @@ StatusOr<std::vector<std::vector<std::byte>>> OwedIndexEntries(
     // kept until a row `PURGE` frees the key, and the slot waits with it.
     const bool keeps_tombstone =
         ix.keystone && !access.schema.hidden_keystone() &&
-        access.clustered_type == catalog::ClusteredType::kHeap;
+        access.heap();
     if (head.deleted && !head.head_in_flight && txns != nullptr &&
         txns->ResolvedForEveryReader(head.trx_id) && !keeps_tombstone) {
         return owed;

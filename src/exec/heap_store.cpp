@@ -35,34 +35,39 @@ std::optional<heap::Rowid> HeapSpace::TakeFree(std::uint64_t oid) {
     std::lock_guard<std::mutex> lock(mu_);
     auto rel = relations_.find(oid);
     if (rel == relations_.end() || rel->second.free.empty()) return std::nullopt;
-    const heap::Rowid out = rel->second.free.back();
-    rel->second.free.pop_back();
+    const auto first = rel->second.free.begin();
+    const heap::Rowid out = heap::DecodeRowid(*first);
+    rel->second.free.erase(first);
     return out;
 }
 
 void HeapSpace::AddFree(std::uint64_t oid, heap::Rowid rowid) {
     std::lock_guard<std::mutex> lock(mu_);
-    relations_[oid].free.push_back(rowid);
+    relations_[oid].free.insert(heap::EncodeRowid(rowid));
 }
 
-std::size_t HeapSpace::FreeCount(std::uint64_t oid) const {
+void HeapSpace::NoteDead(std::uint64_t oid) {
     std::lock_guard<std::mutex> lock(mu_);
-    auto rel = relations_.find(oid);
-    return rel == relations_.end() ? 0 : rel->second.free.size();
+    dead_.insert(oid);
+}
+
+std::optional<std::uint64_t> HeapSpace::TakeDead() {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (dead_.empty()) return std::nullopt;
+    const std::uint64_t oid = *dead_.begin();
+    dead_.erase(dead_.begin());
+    return oid;
 }
 
 void HeapSpace::Forget(std::uint64_t oid) {
     std::lock_guard<std::mutex> lock(mu_);
     relations_.erase(oid);
+    dead_.erase(oid);
 }
 
 // ---- Reads ----------------------------------------------------------------
 
 namespace {
-
-bool IsHeap(const catalog::TableAccess& access) {
-    return access.clustered_type == catalog::ClusteredType::kHeap;
-}
 
 // A page of this heap, or `Corruption`: a rowid that names another page
 // type or another relation's page is damage, never a miss.
@@ -95,7 +100,14 @@ StatusOr<btree::Location> FetchHeapRow(storage::PageStore& store,
     const heap::Rowid at = heap::DecodeRowid(rowid);
     auto ref = store.Fetch(at.page_id, mode);
     if (!ref.ok()) return ref.status();
-    if (Status s = RequireDataPage(ref.value().bytes(), at.page_id, access); !s.ok()) return s;
+    // **A rowid naming a page that is not this heap's is a dangling entry**,
+    // a miss as an entry naming no row is (IX1): a crash can keep an index
+    // entry whose growth's page redo never created, and the page id is then
+    // another relation's. Answered `Corruption` it would refuse every probe
+    // and every judge that could remove it.
+    if (Status s = RequireDataPage(ref.value().bytes(), at.page_id, access); !s.ok()) {
+        return Status::NotFound(s.message());
+    }
     heap::PageView page(ref.value().bytes());
     auto tuple = page.ReadTuple(at.slot);
     if (!tuple.ok()) {
@@ -154,7 +166,7 @@ StatusOr<std::vector<std::uint64_t>> KeystoneRowids(storage::PageStore& store,
 StatusOr<btree::Location> LocateRow(storage::PageStore& store,
                                     const catalog::TableAccess& access, std::uint64_t tuple_key,
                                     storage::PageAccess mode) {
-    if (!IsHeap(access)) return btree::BtreeLookup(store, access.desc_page_id, tuple_key, mode);
+    if (!access.heap()) return btree::BtreeLookup(store, access.desc_page_id, tuple_key, mode);
     // Collected before any data page is fetched, so no data page is taken
     // under an index leaf's span.
     auto rowids = KeystoneRowids(store, access, tuple_key);
@@ -204,7 +216,7 @@ StatusOr<std::optional<HeapPlacement>> PlaceOn(storage::PageRef& ref, PageId id,
 StatusOr<HeapPlacement> HeapInsert(storage::PageStore& store, const catalog::TableAccess& access,
                                    HeapSpace& space, std::uint32_t core, std::uint64_t tuple_key,
                                    std::span<const std::byte> payload, std::uint64_t trx_id) {
-    if (!IsHeap(access)) {
+    if (!access.heap()) {
         return Status::InvalidArgument("relation oid " + std::to_string(access.oid) +
                                        " is not a heap");
     }

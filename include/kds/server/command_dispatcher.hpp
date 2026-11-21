@@ -18,6 +18,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/heap_release.hpp"
 #include "kds/exec/heap_store.hpp"
 #include "kds/exec/query_layer.hpp"
 #include "kds/exec/sort.hpp"
@@ -2100,6 +2101,19 @@ public:
     // core's dispatcher is handed the one the instance owns; one never handed
     // any keeps its own, which is what a single-dispatcher test runs on.
     void SetHeapSpace(exec::HeapSpace* space) noexcept { heap_space_ = space; }
+
+    // **One step of the heap slot release, unasked** (DN-R2; DD-S4's driver,
+    // ruled into DN-S2): the relation a delete or a taken-back insert queued
+    // (`HeapSpace::NoteDead`), `budget` pages or leaves of its job
+    // (`exec::HeapSlotRelease`) under the relation's `IX` as a read holder,
+    // never waiting. Core 0's `system` task calls it on a tick; a test calls
+    // it until it answers false. Returns whether a job is still owed - the
+    // running one or one queued. A refused `IX` skips the step.
+    StatusOr<bool> StepHeapRelease(std::uint32_t budget);
+    // The last finished job's counts, for a test and `ANALYZE`-free checks.
+    const exec::HeapReleaseCounts& last_heap_release() const noexcept {
+        return last_heap_release_;
+    }
     exec::HeapSpace& heap_space() noexcept {
         return heap_space_ != nullptr ? *heap_space_ : own_heap_space_;
     }
@@ -3001,6 +3015,8 @@ private:
     PageReclaimer* reclaim_queue_ = nullptr;
     exec::HeapSpace* heap_space_ = nullptr;
     exec::HeapSpace own_heap_space_;
+    std::optional<exec::HeapSlotRelease> heap_release_;
+    exec::HeapReleaseCounts last_heap_release_;
     // Statement heads open on this core: only the outermost publishes.
     int epoch_depth_ = 0;
     // Whether a DDL was open anywhere when the last statement head read the

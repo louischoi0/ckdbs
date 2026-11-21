@@ -2321,7 +2321,11 @@ Status CompileAssignments(const catalog::TableAccess& access,
         return Status::Corruption("relation oid " + std::to_string(access.oid) +
                                   " has no columns");
     }
-    const std::string_view tuple_key_name = catalog::NameView(access.schema.columns.front().name);
+    // A hidden Keystone is spelled by the word that names it (DN-D6), never
+    // by the engine's internal column name.
+    const std::string_view tuple_key_name =
+        access.schema.hidden_keystone() ? catalog::kKeyIdentityName
+                                        : catalog::NameView(access.schema.columns.front().name);
 
     std::vector<const catalog::SysColumnRow*> assigned;
     // A refusal that is only a `NotImplemented` waits until every assignment
@@ -3260,7 +3264,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // pruned by a tuple key range: the range's conjuncts stay in the
         // residual, which answers them on every row. A build's resumable
         // prefix marks a heap's walk by place instead (`WalkMark`).
-        const bool heap = rel.clustered_type == catalog::ClusteredType::kHeap;
+        const bool heap = rel.heap();
         // Which Cabins those ranks may take (CX-S3b).
         const CabinGate gate = CabinGate::For(pin, rel);
         // The walk's own ranks (a filter scan, the build annotation) stand
@@ -3622,9 +3626,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     const bool one_tuple_key = chain.sort_keys.size() == 1 &&
                                chain.sort_keys[0].ref.rel_slot == 0 &&
                                IsTupleKey(chain.sort_keys[0].ref) && !chain.steps.empty() &&
-                               !scope.relations.empty() &&
-                               scope.relations[0].access->clustered_type !=
-                                   catalog::ClusteredType::kHeap;
+                               !scope.relations.empty() && !scope.relations[0].access->heap();
     if (one_tuple_key && !chain.sort_keys[0].descending) {
         if (EmitsTupleKeyOrder(chain.steps[0].kind)) chain.sort_keys.clear();
     } else if (one_tuple_key && stmt.limit.has_value()) {

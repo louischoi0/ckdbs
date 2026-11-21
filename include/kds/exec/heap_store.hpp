@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -48,16 +49,26 @@ public:
     void SetCurrentPage(std::uint64_t oid, std::uint32_t core, PageId page);
     std::optional<heap::Rowid> TakeFree(std::uint64_t oid);
     void AddFree(std::uint64_t oid, heap::Rowid rowid);
-    std::size_t FreeCount(std::uint64_t oid) const;
+    // A relation gone: its hints and its queue entry, which name pages a
+    // reclaim frees.
     void Forget(std::uint64_t oid);
+
+    // **The slot release's queue** (DN-R2): a relation a delete or a
+    // taken-back insert left a slot to release in. Noted by the writer,
+    // taken by the release's driver, one relation at a time; a relation
+    // noted twice before it is taken is queued once.
+    void NoteDead(std::uint64_t oid);
+    std::optional<std::uint64_t> TakeDead();
 
 private:
     struct Relation {
         std::unordered_map<std::uint32_t, PageId> current;
-        std::vector<heap::Rowid> free;
+        // Encoded rowids, so a slot the release finds free again is one hint.
+        std::set<std::uint64_t> free;
     };
     mutable std::mutex mu_;
     std::unordered_map<std::uint64_t, Relation> relations_;
+    std::set<std::uint64_t> dead_;
 };
 
 // The heap's Keystone index (`kIndexFlagKeystone`), or nullptr on any other
@@ -67,7 +78,8 @@ const catalog::TableAccess::IndexRef* KeystoneIndexOf(const catalog::TableAccess
 // The row at `rowid`, held under `mode`, checked to be `tuple_key`'s: a
 // `kHeapData` page of this relation, a slot in range holding a tuple - live
 // or delete-marked - whose Keystone is `tuple_key`. `NotFound` for any
-// other slot (DN-R3); `Corruption` for a page that is not this heap's.
+// other slot (DN-R3), and for a page that is not this heap's: an entry a
+// crash left naming a page redo never created (IX1's dangling entry).
 StatusOr<btree::Location> FetchHeapRow(storage::PageStore& store,
                                        const catalog::TableAccess& access,
                                        std::uint64_t rowid, std::uint64_t tuple_key,

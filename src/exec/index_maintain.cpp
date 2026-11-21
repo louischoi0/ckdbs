@@ -299,8 +299,7 @@ StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& ac
     const std::span<std::byte> out(entry);
     if (Status s = index::EncodeIndexSortKey(layout, key, tuple_key, out); !s.ok()) return s;
     if (layout.rowid_width != 0) {
-        index::PutIndexTupleKey(out.subspan(layout.rowid_offset(), index::kIndexRowidWidth),
-                                rowid);
+        if (Status s = index::PutIndexRowid(layout, out, rowid); !s.ok()) return s;
     }
     if (Status s = CopyCoveredInto(access, ix, row, out.subspan(layout.covered_offset()));
         !s.ok()) {

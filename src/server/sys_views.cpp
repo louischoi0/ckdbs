@@ -269,7 +269,7 @@ void Define(exec::CatalogView& view,
 // catalog chain, which has no access entry to ask.
 std::string StorageName(const catalog::TableAccess* access) {
     if (access == nullptr) return "CHAIN";
-    return access->clustered_type == catalog::ClusteredType::kHeap ? "HEAP" : "BTREE";
+    return access->heap() ? "HEAP" : "BTREE";
 }
 
 // A column's name, or its position when the schema cannot say - a dropped
@@ -378,7 +378,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
         if (!root.ok()) return root.status();
         const catalog::TableAccess* access = nullptr;
         if (row.value().clustered_type == catalog::ClusteredType::kBtree ||
-            row.value().clustered_type == catalog::ClusteredType::kHeap) {
+            row.value().heap()) {
             auto opened = catalog_.InitTableAccess(object.oid);
             if (!opened.ok()) return opened.status();
             access = opened.value();
@@ -822,7 +822,9 @@ StatusOr<exec::CatalogView> CommandDispatcher::RelationStatsView() {
         const catalog::KeystoneBudget budget = catalog::BudgetOf(row.value().next_id);
         parser::AstValue height = Null();
         parser::AstValue leaves = Null();
-        if (row.value().clustered_type == catalog::ClusteredType::kBtree) {
+        // A heap (DN) is one level of data pages, which the leaf walk counts.
+        if (row.value().clustered_type == catalog::ClusteredType::kBtree ||
+            row.value().heap()) {
             auto root = CurrentRootOf(row.value());
             if (!root.ok()) return root.status();
             if (auto h = btree::BtreeHeight(page_store_, root.value()); h.ok()) {

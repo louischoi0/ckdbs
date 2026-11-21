@@ -49,13 +49,19 @@ Status PurgeCopiedLeaf(storage::PageStore& store, catalog::Catalog& catalog,
                        txn::LockHoldings& holdings, const catalog::TableAccess::IndexRef& ix,
                        const index::IndexLayout& layout, const std::vector<Entry>& copied,
                        IndexPurgeAttempt& out) {
-    std::map<std::uint64_t, std::vector<const Entry*>> named;
+    // By the row each entry names: its tuple key, and on a heap its rowid
+    // too (DN) - the judge reads the row where the entry says it is, and an
+    // entry left at a slot a key no longer holds is judged as that slot's.
+    std::map<std::pair<std::uint64_t, std::uint64_t>, std::vector<const Entry*>> named;
     for (const Entry& e : copied) {
-        named[index::GetIndexTupleKey(std::span<const std::byte>(e).subspan(layout.key_width))]
-            .push_back(&e);
+        const std::span<const std::byte> entry(e);
+        const std::uint64_t rowid =
+            layout.rowid_width != 0 ? index::GetIndexRowid(layout, entry) : 0;
+        named[{index::GetIndexTupleKey(entry.subspan(layout.key_width)), rowid}].push_back(&e);
     }
     std::vector<Entry> dead;
-    for (const auto& [tuple_key, entries] : named) {
+    for (const auto& [row, entries] : named) {
+        const auto& [tuple_key, rowid] = row;
         auto granted = locks.TryAcquire(holder, txn::LockKey::Tuple(access.oid, tuple_key),
                                         txn::LockMode::kUpdate, holdings);
         if (!granted.ok()) return granted.status();
@@ -63,7 +69,7 @@ Status PurgeCopiedLeaf(storage::PageStore& store, catalog::Catalog& catalog,
             ++out.skipped;
             continue;
         }
-        auto owed = OwedIndexEntries(store, catalog, access, txns, ix, tuple_key);
+        auto owed = OwedIndexEntries(store, catalog, access, txns, ix, tuple_key, rowid);
         if (!owed.ok()) {
             return owed.status().WithContext("judging the index entries of tuple key " +
                                              std::to_string(tuple_key));

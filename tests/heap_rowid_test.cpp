@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/catalog/well_known.hpp"
+#include "kds/storage/btree/btree.hpp"
 #include "sim/instance.hpp"
 #include "view_text.hpp"
 
@@ -19,10 +21,17 @@
 namespace kds::server {
 namespace {
 
+// A lock table, which the slot release's fence needs (DD-R8).
+sim::SimInstance::Options WithLocks() {
+    sim::SimInstance::Options options;
+    options.lock_table = true;
+    return options;
+}
+
 class HeapRowidTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        auto created = sim::SimInstance::Create();
+        auto created = sim::SimInstance::Create(WithLocks());
         ASSERT_TRUE(created.ok()) << created.status().message();
         db_ = std::move(created.value());
     }
@@ -210,6 +219,108 @@ TEST(HeapRowidCrashTest, AGrownHeapAndItsIndexesSurviveACrash) {
     ASSERT_EQ(db->Execute("INSERT INTO h VALUES (9999, 2)").substr(0, 8), "INSERTED");
     EXPECT_NE(db->Execute("SELECT a FROM h WHERE b = 2 ORDER BY a").find("9999"),
               std::string::npos);
+}
+
+// ---- The slot release (DN-R2; DD-S4's driver, DN-S2) ----------------------
+
+// Every step the driver owes, run to the end as core 0's tick would.
+exec::HeapReleaseCounts ReleaseAll(sim::SimInstance& db) {
+    for (int i = 0; i < 100000; ++i) {
+        auto owed = db.dispatcher().StepHeapRelease(16);
+        EXPECT_TRUE(owed.ok()) << owed.status().message();
+        if (!owed.ok() || !owed.value()) break;
+    }
+    return db.dispatcher().last_heap_release();
+}
+
+// A heap's data page count, by the btree's leaf count, which walks a heap's
+// chain as a leaf chain.
+std::size_t DataPages(sim::SimInstance& db, const std::string& table) {
+    auto oid = db.catalog().ResolveRelation("", table, catalog::kNamespacePublic);
+    EXPECT_TRUE(oid.ok());
+    auto access = db.catalog().InitTableAccess(oid.value());
+    EXPECT_TRUE(access.ok());
+    auto leaves = btree::BtreeLeafCount(db.store(), access.value()->desc_page_id);
+    EXPECT_TRUE(leaves.ok());
+    return leaves.value();
+}
+
+TEST_F(HeapRowidTest, ADeletedRowsSlotIsFreedAndTakenAgain) {
+    Ok("CREATE TABLE h (a int64, b int64) HEAP", "CREATED");
+    Ok("CREATE INDEX hb ON h (b)", "CREATED");
+    for (int i = 0; i < 1500; ++i) {
+        Ok("INSERT INTO h VALUES (" + std::to_string(i) + ", " + std::to_string(i % 9) + ")",
+           "INSERTED");
+    }
+    const std::size_t pages = DataPages(*db_, "h");
+    Ok("DELETE FROM h WHERE a >= 500 AND a < 1000", "DELETED");
+    const exec::HeapReleaseCounts counts = ReleaseAll(*db_);
+    EXPECT_EQ(counts.retired, 500u);
+    EXPECT_GE(counts.freed, 490u) << "at most one slot a leaf of each index stays named";
+    EXPECT_EQ(counts.retired, counts.freed + counts.named);
+    for (int i = 0; i < 400; ++i) {
+        Ok("INSERT INTO h VALUES (" + std::to_string(10000 + i) + ", 7)", "INSERTED");
+    }
+    EXPECT_EQ(DataPages(*db_, "h"), pages) << "the inserts took the freed slots";
+    EXPECT_EQ(Rows("SELECT COUNT(*) FROM h").rows.at(0).at(0), "1400");
+    EXPECT_TRUE(Rows("SELECT a FROM h WHERE a >= 500 AND a < 1000").rows.empty());
+    EXPECT_EQ(Sorted("SELECT a FROM h WHERE b = 7"),
+              Sorted("SELECT a FROM h WHERE b + 0 = 7"));
+}
+
+// A declared Keystone keeps its tombstone - the key stays bound - so its
+// slot waits for a PURGE; a rolled-back insert's slot is freed.
+TEST_F(HeapRowidTest, ADeclaredKeystonesTombstoneWaitsAndARolledBackSlotIsFreed) {
+    Ok("CREATE TABLE p (id int64 PRIMARY KEY, v int64) HEAP", "CREATED");
+    for (int i = 1; i <= 50; ++i) {
+        Ok("INSERT INTO p VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")",
+           "INSERTED");
+    }
+    Ok("DELETE FROM p WHERE id <= 10", "DELETED");
+    Ok("BEGIN", "BEGIN");
+    for (int i = 100; i < 120; ++i) {
+        Ok("INSERT INTO p VALUES (" + std::to_string(i) + ", 0)", "INSERTED");
+    }
+    Ok("ROLLBACK", "ROLLBACK");
+    const exec::HeapReleaseCounts counts = ReleaseAll(*db_);
+    EXPECT_EQ(counts.retired, 0u) << "a declared Keystone's tombstone is kept";
+    EXPECT_EQ(counts.freed + counts.named, 20u) << "the rolled-back inserts' slots";
+    EXPECT_GE(counts.freed, 18u);
+    Refused("INSERT INTO p VALUES (3, 3)", "already bound");
+    Ok("INSERT INTO p VALUES (110, 1)", "INSERTED");
+    EXPECT_EQ(Rows("SELECT v FROM p WHERE id = 110").rows,
+              (std::vector<std::vector<std::string>>{{"1"}}));
+}
+
+TEST(HeapRowidCrashTest, AReleasedAndReusedSlotReplays) {
+    auto created = sim::SimInstance::Create(WithLocks());
+    ASSERT_TRUE(created.ok()) << created.status().message();
+    std::unique_ptr<sim::SimInstance> db = std::move(created.value());
+    ASSERT_EQ(db->Execute("CREATE TABLE h (a int64, b varchar) HEAP").substr(0, 7), "CREATED");
+    ASSERT_EQ(db->Execute("CREATE INDEX ha ON h (a)").substr(0, 7), "CREATED");
+    for (int i = 0; i < 600; ++i) {
+        ASSERT_EQ(db->Execute("INSERT INTO h VALUES (" + std::to_string(i) + ", '" +
+                              std::string(40, static_cast<char>('a' + i % 26)) + "')")
+                      .substr(0, 8),
+                  "INSERTED");
+    }
+    ASSERT_EQ(db->Execute("DELETE FROM h WHERE a >= 100 AND a < 300").substr(0, 7), "DELETED");
+    const exec::HeapReleaseCounts counts = ReleaseAll(*db);
+    ASSERT_GT(counts.freed, 0u);
+    for (int i = 0; i < 150; ++i) {
+        ASSERT_EQ(db->Execute("INSERT INTO h VALUES (" + std::to_string(5000 + i) + ", 'new')")
+                      .substr(0, 8),
+                  "INSERTED");
+    }
+    const std::string all = db->Execute("SELECT a, b FROM h ORDER BY a");
+    const std::string probed = db->Execute("SELECT b FROM h WHERE a = 5100");
+    ASSERT_EQ(probed, "b\\nnew");
+    db->Crash();
+    ASSERT_TRUE(db->Reboot().ok());
+    EXPECT_EQ(db->Execute("SELECT a, b FROM h ORDER BY a"), all);
+    EXPECT_EQ(db->Execute("SELECT b FROM h WHERE a = 5100"), probed);
+    EXPECT_TRUE(testing_view::ReadViewText(db->Execute("SELECT a FROM h WHERE a = 150"))
+                    .rows.empty());
 }
 
 }  // namespace

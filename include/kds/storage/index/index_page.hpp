@@ -266,6 +266,9 @@ std::uint64_t GetIndexTupleKey(std::span<const std::byte> in);
 // (big-endian, the tuple key's spelling). `layout.rowid_width` must be
 // `kIndexRowidWidth`.
 std::uint64_t GetIndexRowid(const IndexLayout& layout, std::span<const std::byte> entry);
+// Writes it there; `InvalidArgument` for a rowid on page 0, which no data
+// page is - the mark of a caller that handed none.
+Status PutIndexRowid(const IndexLayout& layout, std::span<std::byte> entry, std::uint64_t rowid);
 
 // Composes `key || tuple key` into the front of `out`, which must be exactly
 // `layout.sort_key_width()` bytes, and zeroes the covered bytes after it:

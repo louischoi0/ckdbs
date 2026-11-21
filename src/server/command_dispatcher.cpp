@@ -8824,7 +8824,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // **A heap places by space, not by key** (DN-Q7 (a)): its key is bound
     // by the Keystone index, so the duplicate the btree's descent answers
     // is asked there first, under the row's unit the borrow below holds.
-    const bool heap_rel = ta.clustered_type == catalog::ClusteredType::kHeap;
+    const bool heap_rel = ta.heap();
     bool heap_reused = false;
     const auto place = [&]() -> StatusOr<storage::InsertPlacement> {
         if (!heap_rel) {
@@ -8993,6 +8993,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                         "taking back the unlogged placement of id " +
                             std::to_string(row_id) + " failed: " + undone.message());
         }
+        // A heap row taken back by retiring leaves a slot to release (DN-R2).
+        if (heap_rel) heap_space().NoteDead(ta.oid);
         return failed;
     };
 
@@ -9236,7 +9238,7 @@ Status CommandDispatcher::VisitRelation(
     WalkCursor* cursor) {
     // A user relation is a btree or a heap (DN); a catalog chain is walked
     // by the catalog, never here.
-    if (access.clustered_type == catalog::ClusteredType::kHeap) {
+    if (access.heap()) {
         return WalkHeapPages(access, page_access, fn, cursor);
     }
     if (access.clustered_type != catalog::ClusteredType::kBtree) {
@@ -9244,6 +9246,40 @@ Status CommandDispatcher::VisitRelation(
                                   " is not a btree or a heap");
     }
     return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
+}
+
+StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
+    if (locks_ == nullptr) return false;  // no fence to judge under (DD-R8)
+    if (!heap_release_.has_value()) {
+        const std::optional<std::uint64_t> next = heap_space().TakeDead();
+        if (!next.has_value()) return false;
+        heap_release_.emplace(static_cast<catalog::Oid>(*next));
+    }
+    const std::uint64_t holder = NextReadHolder();
+    txn::LockHoldings holdings;
+    struct GiveBack {
+        txn::LockTable& locks;
+        std::uint64_t holder;
+        txn::LockHoldings& holdings;
+        ~GiveBack() { locks.Release(holder, holdings); }
+    } give_back{*locks_, holder, holdings};
+    auto took = locks_->TryAcquire(holder, txn::LockKey::Relation(heap_release_->rel_oid()),
+                                   txn::LockMode::kIntentionExclusive, holdings);
+    if (!took.ok()) return took.status();
+    if (!took.value()) return true;  // a DDL holds the relation: asked again next tick
+    exec::HeapReleaseContext cx{page_store_, catalog_, txn_, wal_, *locks_, holder,
+                                holdings, heap_space()};
+    const storage::DrainOnPressure drain(page_store_);
+    const Status stepped = heap_release_->Step(cx, budget);
+    if (!stepped.ok() || heap_release_->done()) {
+        last_heap_release_ = heap_release_->counts();
+        // A failed job is queued again whole: its slots stay retired, which
+        // is the state before it ran, and the tick logs the refusal.
+        if (!stepped.ok()) heap_space().NoteDead(heap_release_->rel_oid());
+        heap_release_.reset();
+        if (!stepped.ok()) return stepped;
+    }
+    return true;
 }
 
 Status CommandDispatcher::WalkHeapPages(
@@ -12818,7 +12854,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                 catalog_, page_store_, ta, row,
                 /*first_col_pos=*/0, encoded.value(), id, previous,
                 log_index ? &log_index : nullptr,
-                ta.clustered_type == catalog::ClusteredType::kHeap
+                ta.heap()
                     ? heap::EncodeRowid(heap::Rowid{page_id, slot})
                     : 0);
             !s.ok()) {
@@ -14618,7 +14654,7 @@ Status VisitKeyedSlotsFrom(
         visit) {
     // A heap's rows are in no key order (DN): every page is walked, and the
     // keys below `from` passed over where they lie.
-    auto first = ta.clustered_type == catalog::ClusteredType::kHeap
+    auto first = ta.heap()
                      ? StatusOr<PageId>(ta.desc_page_id)
                      : btree::BtreeSeekLeaf(store, ta.desc_page_id, from);
     if (!first.ok()) return first.status();
@@ -15564,7 +15600,7 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     }
     // DN-Q6 (a): a heap whose Keystone is its declared primary key is purged
     // by Keystone - DN-S3's, not yet built.
-    if (ta.clustered_type == catalog::ClusteredType::kHeap) {
+    if (ta.heap()) {
         return Refused(Status::NotImplemented("'" + stmt.table_name +
                                               "' is a heap; PURGE by its Keystone is not built" +
                                               at_name));
@@ -15852,7 +15888,7 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                     // A heap's walk is in no key order, so a key is no place
                     // to resume from (DN): its dirty rows are taken in one walk.
                     if (dirty.size() == kCleanBatch &&
-                        ta.clustered_type != catalog::ClusteredType::kHeap) {
+                        !ta.heap()) {
                         resume = tuple_key;
                         return storage::VisitControl::kStop;
                     }
@@ -16169,6 +16205,11 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // happens to be empty, when the truth is that maintenance here would
         // be a defect.
 
+        // A heap's slot is released later, once no reader needs the row
+        // and no index names it (DN-R2): queued for the release's driver.
+        if (ta.heap()) {
+            heap_space().NoteDead(ta.oid);
+        }
         ++deleted;
         return Status::OK();
     };
