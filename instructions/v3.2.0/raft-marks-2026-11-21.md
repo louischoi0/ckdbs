@@ -68,3 +68,14 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | DN-S1's gate: CLA read the word as the push it was asked for, not as the mark on DN's §8, which is asked for separately; a tag or a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. DN-S1's gate: §8 marked as staged; DN carried on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | *"For now follow the proposal, and for what remains /go-ahead-achieving-milestone"* (given in Korean; recorded in English), after CLA's account of the DN order's §8 item by item |
+| **Mark** | **The operator's own mark on the DN order's §8 as staged**: invariant 4 (under DN-D7), invariant 9's fall-through clause, invariant 11's restatement, `heap-and-tuple.md` §3.1b and §4.1c, `index.md` IX1, `foreign-keys.md` F1 and `keystoneid-invariant.md` K3, word for word; with **DN-Q13 `[quiet-wrong]` (c)** (a heap's single `int64` PK is declared first) and **DN-Q14 `[quiet-wrong]` (a)** (a declared-PK heap keeps a deleted row's Keystone entry until `PURGE`; a hidden-Keystone heap refuses a named key at or below its issue mark). The account's stated cost of DN-Q14 (a), that a KWP load into a hidden-Keystone heap names its keys ascending, is marked with it. "For now" is recorded as said |
+| **Standing go-ahead** | DN-S2 to DN-S4 on the standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone): every further item is CLA's proposal, adopted and recorded as such, never as the operator's mark |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DN order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
+

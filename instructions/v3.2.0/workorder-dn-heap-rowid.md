@@ -8,7 +8,10 @@ go-ahead, none the operator's own mark, DN-Q1, DN-Q9 and DN-Q13 revised against 
 DN-Q12, DN-Q13 and DN-Q14 added at DN-S0 (§7). **DD-S4, the unasked
 driver, ruled into DN-S2 by the operator on 2026-11-21** (`$!b`,
 `raft-marks-2026-11-21.md` §6); taken up again on the standing go-ahead the
-same day and stopped at the same gate. **Written 2026-11-20.** Written in the main checkout on
+same day and stopped at the same gate. **DN-S1's gate passed on 2026-11-21**:
+the operator marked §8 as staged, DN-Q13 (c) and DN-Q14 (a) with it
+(`raft-marks-2026-11-21.md` §8), and DN-S2 onward runs on the standing
+go-ahead of that day. **Written 2026-11-20.** Written in the main checkout on
 `main` at `d091d096` (`v3.4.15-19-gd091d096`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §13). The letter DN is CLA's
 proposal. **Exploratory by CLA's proposal** (DN-Q0): the operator's words
@@ -249,7 +252,9 @@ Binding once DN opens.
 
 ## 4. Items for the operator (DN-Q)
 
-(a) is CLA's proposal in each. **Marked by the operator: DN-D1..D7 (§0).**
+(a) is CLA's proposal in each. **Marked by the operator: DN-D1..D7 (§0);
+§8 as staged, with DN-Q13 (c) and DN-Q14 (a), on 2026-11-21**
+(`raft-marks-2026-11-21.md` §8).
 Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 
 | | item | (a) | other |
@@ -268,7 +273,7 @@ Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 | DN-Q10 | Cabin and Waystone over a heap. | **their entries keep the Keystone (C2) and their location hint becomes the rowid**, verified as today | (b) neither serves a heap in DN |
 | DN-Q12 | **Where the amended invariants are written before the heap exists** (raised at DN-S0: DN-R9 writes them into `heap-and-tuple.md` §8 and `CLAUDE.md` before DN-S2, and both files state only what is built). | **staged in this order** (§8), word for word as they will read, marked there by the operator, and moved into the two files with DN-S2's code - so neither file states an invariant no code holds, and the text the code is written against is fixed first | (b) written into the two files at DN-S1, as DN-R9 reads, each marked "binds from DN-S2" |
 | DN-Q13 `[quiet-wrong]` | **Where a declared single `int64` PK that is not the first column sits** (raised at DN-S0: column 0 is the tuple key at every site that checks one - `CheckKeystoneColumn`, `DecodeShapeHolds`, the not-null, Cabin and drop checks, and some nine readers that take `columns.front()`). | **the Keystone is column 0 of the stored row on every relation**: a PK declared elsewhere is placed at position 0, and the declared order is a presentation order `*`, `DESCRIBE` and a positional `INSERT` follow - one map, kept beside the schema - so no reader of column 0 changes | (b) the Keystone at its declared position, every column-0 site generalized; (c) a PK that is the Keystone must be declared first, as today |
-| DN-Q14 `[quiet-wrong]` | **How a deleted row's Keystone stays bound once its slot is reused** (raised by DN-S0's review). On a btree relation a delete-marked slot keeps its key bound until `PURGE` (K1). On a heap, DN-D1 reuses the slot once DD has removed every entry naming it - the Keystone index's included - and a key named again then passes that index's uniqueness check: one Keystone bound to two committed rows, DN-R1 broken with no error. | **by how the heap gets its keys.** A heap whose Keystone is a declared `int64` PK - keys a user names - keeps a deleted row's **Keystone-index entry** until a row `PURGE` frees the key (DD's judge owes it, DD-Q1 (a) for that one index), so its slot waits for the `PURGE` (DN-R2). A heap with the hidden Keystone - keys the engine issues - refuses a named key at or below `sys.tables.next_id` (the KWP load is the one door that names one), so no deleted key can be named again and its slot is reused as soon as DD has cleared it | (b) every heap keeps the Keystone entry until `PURGE`, and a hidden-Keystone heap admits `PURGE` by `keyidentity` - one rule, slot reuse waiting on a statement everywhere; (c) a Keystone tombstone outside every index (a per-relation set of retired keys) - a new persisted structure |
+| DN-Q14 `[quiet-wrong]` | **How a deleted row's Keystone stays bound once its slot is reused** (raised by DN-S0's review). On a btree relation a delete-marked slot keeps its key bound until `PURGE` (K1). On a heap, DN-D1 reuses the slot once DD has removed every entry naming it - the Keystone index's included - and a key named again then passes that index's uniqueness check: one Keystone bound to two committed rows, DN-R1 broken with no error. | **by how the heap gets its keys.** A heap whose Keystone is a declared `int64` PK - keys a user names - keeps a deleted row's **Keystone-index entry** until a row `PURGE` frees the key (DD's judge owes it, DD-Q1 (a) for that one index), so its slot waits for the `PURGE` (DN-R2). A heap with the hidden Keystone - keys the engine issues - refuses a named key at or below `sys.tables.next_id` (the KWP load is the one door that names one), so no deleted key can be named again and its slot is reused as soon as DD has cleared it. **The cost, stated at the mark**: the mark is above every key placed (invariant 11), so a KWP load into a hidden-Keystone heap names its keys in ascending order - a key below one already placed is refused | (b) every heap keeps the Keystone entry until `PURGE`, and a hidden-Keystone heap admits `PURGE` by `keyidentity` - one rule, slot reuse waiting on a statement everywhere; (c) a Keystone tombstone outside every index (a per-relation set of retired keys) - a new persisted structure |
 
 ## 5. Stages
 
@@ -611,4 +616,19 @@ the mark on §8 (invariant 4, 9, 11's restatement; DN-Q13 (c), DN-Q14 (a),
 both `[quiet-wrong]`) amends hard invariants, which only a recorded mark of
 the operator's does. Owed before DN-S2, besides the mark: DN-Q11's
 descending named load, measured. No item was adopted at this entry.
+
+### DN-S1's gate passed, 2026-11-21
+
+The operator's word, *"For now follow the proposal, and for what remains
+/go-ahead-achieving-milestone"* (given in Korean; recorded in English),
+given after CLA's account of §8 item by item. **The operator's own mark**:
+§8 as staged - invariant 4 (under DN-D7), 9, 11's restatement, §3.1b,
+IX1, F1, K3 and §4.1c - with **DN-Q13 (c)** and **DN-Q14 (a)**. CLA's
+account named one cost of DN-Q14 (a) the order had not written: a KWP load
+into a hidden-Keystone heap names its keys in ascending order, since the
+mark is above every key placed; it is written into DN-Q14's row as a cost
+of the marked option. "For now" is recorded as said: the mark stands until
+the operator moves it. DN-S2, DN-S3 and DN-S4 run on the standing go-ahead
+of 2026-11-21 (go-ahead-achieving-milestone), on worktree
+`dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, from `3a07ad49`.
 
