@@ -105,9 +105,30 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& lea
     return key < heap::PageView(bytes.value().bytes()).min_key();
 }
 
-// A restart happens when another core split the leaf this descent was
-// routed to, so the key belongs on a page that did not exist when the
-// parent was read. **A restart makes progress rather than spinning**, and
+// **DK's D2: one move right along the leaf chain**, taken where a held
+// leaf no longer covers `key`. The right link is read under the leaf's
+// hold, the leaf is released, and the right page is fetched in the same
+// mode: the hop holds nothing while it asks, and asks only rightward. The
+// failed check proved `key >= right.min_key`, and a `min_key` never moves,
+// so the new leaf's lower bound needs no asking; its upper bound is the
+// caller's to ask, under the new hold. `right` is never invalid here: the
+// rightmost leaf covers every key above its own low key.
+StatusOr<PageId> HopRight(storage::PageStore& store, storage::PageRef& leaf,
+                          storage::PageAccess access) {
+    const PageId right = heap::PageView(leaf.bytes()).next_page_id();
+    leaf.Release();
+    Contention::Add(Tally::kDescentHops);
+    auto next = BtreeFetchLeaf(store, right, access);
+    if (!next.ok()) return next.status();
+    leaf = std::move(next.value());
+    return right;
+}
+
+// A leaf fails its coverage check when another core split it after this
+// descent was routed to it, so the key belongs on a page that did not exist
+// when the parent was read. The descent moves right (`HopRight`), and
+// restarts from the root only when the hops are spent or the leaf is the
+// named root (DK-Q10). **A restart makes progress rather than spinning**, and
 // that is a property of the split rather than of the bound
 // (`storage::kMaxDescentRestarts`): a splitter holds the old leaf exclusive
 // across its own `PromoteSeparator`, so a re-descent blocks on that leaf and
@@ -200,12 +221,25 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
                     }
                     leaf = std::move(writable.value());
                 }
-                heap::PageView relatched(leaf.bytes());
-                auto covers = LeafStillCoversKey(store, relatched, key);
-                if (!covers.ok()) return covers.status();
-                if (!covers.value()) {
-                    break;  // a page was spliced in; `key` is past this leaf now
+                // A page was spliced in and `key` is past this leaf: move
+                // right (D2), up to `kMaxLeafHops`, before starting over.
+                // **Never from the named root** (DK-Q10, `[quiet-wrong]`):
+                // `path[0]` must stay the root, because `SecureParents`
+                // reads "no parent" as "this leaf is the root" and a growth
+                // goes over `path[0]`.
+                const int hops = d.depth > 0 ? storage::kMaxLeafHops : 0;
+                bool covered = false;
+                for (int hop = 0;; ++hop) {
+                    heap::PageView relatched(leaf.bytes());
+                    auto covers = LeafStillCoversKey(store, relatched, key);
+                    if (!covers.ok()) return covers.status();
+                    covered = covers.value();
+                    if (covered || hop == hops) break;
+                    auto right = HopRight(store, leaf, storage::PageAccess::kWrite);
+                    if (!right.ok()) return right.status();
+                    d.path[d.depth] = right.value();
                 }
+                if (!covered) break;  // the hops are spent: start over from the root
                 d.leaf = std::move(leaf);
                 return d;
             }
@@ -233,7 +267,9 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, std::uint64_
     // cause; a **stale root** is the everyday other, and it does not look
     // different from here - a descent from a pre-growth root lands in what
     // is now the leftmost subtree every time, so a key outside that subtree
-    // exhausts the bound without anything racing at all. Retryable is right
+    // exhausts the bound without anything racing at all when the stale root
+    // is itself a leaf (no write moves right from it, DK-Q10) or the key is
+    // more than `kMaxLeafHops` leaves past it. Retryable is right
     // for both (the dispatcher's re-run since BA-S14, or a client's retry,
     // crosses a task boundary, where `Revalidate()` drops the memo and the
     // fill re-reads the anchor), so the message names both causes.
@@ -1213,29 +1249,35 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
     for (int attempt = 0; attempt <= kMaxDescentRestarts; ++attempt) {
         auto descent = DescendTo(store, root, id, /*leaf_for_write=*/for_write);
         if (!descent.ok()) return descent.status();
-        const PageId leaf_id = descent.value().path[descent.value().depth];
-        heap::PageView leaf(descent.value().leaf.bytes());
+        PageId leaf_id = descent.value().path[descent.value().depth];
+        storage::PageRef held = std::move(descent.value().leaf);
+        for (int hop = 0;; ++hop) {
+            heap::PageView leaf(held.bytes());
+            auto at = SearchLeaf(leaf, id);
+            if (!at.ok()) return at.status();
+            if (at.value().present) return Location{leaf_id, at.value().at, std::move(held)};
 
-        auto at = SearchLeaf(leaf, id);
-        if (!at.ok()) return at.status();
-        if (at.value().present) {
-            return Location{leaf_id, at.value().at, std::move(descent.value().leaf)};
+            bool covered = for_write;
+            if (!covered) {
+                auto covers = LeafStillCoversKey(store, leaf, id);
+                if (!covers.ok()) return covers.status();
+                covered = covers.value();
+            }
+            if (covered) {
+                return Status::NotFound("no tuple with tuple key " + std::to_string(id) +
+                                        " in leaf " + std::to_string(leaf_id));
+            }
+            // The key belongs past this leaf now, so the miss says nothing
+            // about the row. Move right (D2): a read holds no path, so it
+            // may hop from any leaf, the named root included (DK-Q10).
+            if (hop == storage::kMaxLeafHops) break;
+            auto right = HopRight(store, held, storage::PageAccess::kRead);
+            if (!right.ok()) return right.status();
+            leaf_id = right.value();
         }
-
-        bool covered = for_write;
-        if (!covered) {
-            auto covers = LeafStillCoversKey(store, leaf, id);
-            if (!covers.ok()) return covers.status();
-            covered = covers.value();
-        }
-        if (covered) {
-            return Status::NotFound("no tuple with tuple key " + std::to_string(id) +
-                                    " in leaf " + std::to_string(leaf_id));
-        }
-        // The key belongs past this leaf now, so the miss says nothing about
-        // the row. Descend again; the splitter held this leaf across its own
-        // `PromoteSeparator`, so the parent already carries the separator
-        // that routes the second attempt correctly.
+        // The hops are spent. Descend again; the splitter held each leaf
+        // across its own `PromoteSeparator`, so the parents already carry
+        // the separators that route the next attempt.
     }
     Contention::Add(Tally::kRefusalBtreeLookup);
     storage::NoteStructuralRefusal();

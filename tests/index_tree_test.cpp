@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/contention.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/index/index_page.hpp"
 #include "kds/storage/page_header.hpp"
@@ -681,9 +682,12 @@ TEST(IndexTreeTest, ALeafDividedBeforeTheDescentReadsItIsNotWrittenPast) {
     DivideOnFetchStore store(f.store);
     store.OnFetch(left, /*nth=*/1, [&] { ASSERT_TRUE(f.Insert(kKeyB, kTupleKeyNew).ok()); });
 
+    const std::uint64_t hops = Contention::Read().of(Tally::kDescentHops);
     auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kTupleKeyNew, {}, /*owner_oid=*/0);
     ASSERT_TRUE(placed.ok()) << placed.status().message();
     ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
+    EXPECT_EQ(Contention::Read().of(Tally::kDescentHops) - hops, 1u)
+        << "the descent moved right once (DK's D2) rather than starting over";
     EXPECT_NE(left, placed.value().page_id)
         << "A's entry landed in the leaf that had already given its key away";
     ExpectAsEntryReachable(f);
@@ -704,7 +708,11 @@ TEST(IndexTreeTest, AnInsertFromARootThatHasSinceGrownIsRefusedOutsideItsSubtree
     auto before = IndexEntryCount(f.store, f.root, f.layout);
     ASSERT_TRUE(before.ok()) << before.status().message();
 
+    // The stale root is a leaf, so the write does not move right from it
+    // (DK-Q10): `path[0]` must stay the root a growth goes over.
+    const std::uint64_t hops = Contention::Read().of(Tally::kDescentHops);
     auto refused = IndexInsert(f.store, stale, f.layout, Key(600), kTupleKeyNew, {}, /*owner_oid=*/0);
+    EXPECT_EQ(Contention::Read().of(Tally::kDescentHops), hops) << "a write hopped from the root";
     ASSERT_FALSE(refused.ok()) << "an entry for key 600 was placed through a stale root, in page "
                                << refused.value().page_id;
     EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();

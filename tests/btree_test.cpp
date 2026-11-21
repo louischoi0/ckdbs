@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include "kds/base/contention.hpp"
 #include "kds/storage/btree/btree_page.hpp"
 #include "kds/storage/heap/heap_page.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -1724,13 +1725,190 @@ TEST(BtreeTest, ALeafDividedBeforeTheWriteDescentReadsItIsNotWrittenPast) {
     // place - to a new page, before A's descent fetches the leaf.
     store.OnFetch(left.value(), /*nth=*/1,
                   [&] { ASSERT_TRUE(tree.Insert(15, kFiller).ok()) << "B's divide must land"; });
+    const std::uint64_t hops = Contention::Read().of(Tally::kDescentHops);
     auto placed = tree.Insert(65, kFiller);
     ASSERT_TRUE(placed.ok()) << placed.status().message();
     ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
+    EXPECT_EQ(Contention::Read().of(Tally::kDescentHops) - hops, 1u)
+        << "the descent moved right once (D2) rather than starting over";
     EXPECT_NE(left.value(), placed.value().page_id)
         << "65 landed in the leaf that had already given its key away";
     testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
     ExpectEveryIdFound(store, tree.root, {10, 15, 20, 30, 40, 50, 60, 65, 70, 80});
+}
+
+// ---- D2: a descent that moves right instead of restarting (DK-S2) ------
+//
+// A leaf that no longer covers the key hands the descent its right
+// sibling: the failed check proved the key at or above that sibling's
+// immutable low key, so the walk right needs no coupling. The cells count
+// hops through `sys.meta`'s `descent_hops` tally (process-wide: a delta
+// across the cell).
+//
+// **Mutations**: hop from the named root too (DK-Q10) and the root-leaf
+// cell places 85 where it must refuse; take the hop budget to 0 and the
+// stale internal root cells are refused again, as before D2.
+
+std::uint64_t Hops() { return Contention::Read().of(Tally::kDescentHops); }
+
+// A stale **internal** root: R, full at level 1, has had a level grown over
+// it, and 6800's leaf sits under R's new sibling. A write and a read from
+// R land in R's rightmost leaf, which no longer covers 6805 or 6800, and
+// move right to the leaf that does - where until D2 every attempt failed
+// alike and the statement was refused.
+TEST(BtreeTest, AWriteAndALookupFromAStaleInternalRootMoveRightToTheirLeaf) {
+    storage::InMemoryPageStore backing(128);
+    Tree tree(backing);
+    auto ids = FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId stale = tree.root;
+    ASSERT_TRUE(tree.Insert(6800, kOnePerLeafFiller).ok());  // grows a level over R
+    ASSERT_NE(stale, tree.root) << "the root must have grown, or there is no stale root";
+    ids.push_back(6800);
+
+    const std::uint64_t before = Hops();
+    // A small row: it fits beside 6800's, so the insert needs no split and
+    // no parent - the case D2 answers under a stale root.
+    auto placed = BtreeInsert(backing, stale, 6805, MakeTuple(6805, 64), /*trx_id=*/1,
+                              /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    EXPECT_EQ(Hops() - before, 1u) << "one hop, from R's rightmost leaf to 6800's";
+    ids.push_back(6805);
+
+    auto found = BtreeLookup(backing, stale, 6800);
+    ASSERT_TRUE(found.ok()) << "a read lookup from the stale root: " << found.status().message();
+    EXPECT_EQ(found.value().page_id, placed.value().page_id);
+    found.value().leaf.Release();
+    EXPECT_EQ(Hops() - before, 2u) << "the lookup's miss hopped once too";
+
+    ExpectEveryIdFound(backing, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(backing, tree.root);
+}
+
+// **A split while the hop is between pages.** The hop has released R's
+// rightmost leaf and not yet fetched 6800's - the target's second fetch,
+// after the coverage check's shared read of it - and another core's 6801
+// splits 6800's leaf there, so 6805 belongs to the new page beyond it. The
+// check under the new hold fails again, and the walk takes a second hop.
+TEST(BtreeTest, ALeafSplitWhileAHopIsBetweenPagesIsWalkedPastToo) {
+    storage::InMemoryPageStore backing(128);
+    testing_race::ActOnFetchStore store(backing);
+    Tree tree(store);
+    auto ids = FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId stale = tree.root;
+    ASSERT_TRUE(tree.Insert(6800, kOnePerLeafFiller).ok());
+    ASSERT_NE(stale, tree.root);
+    auto target = BtreeSeekLeaf(store, tree.root, 6800);
+    ASSERT_TRUE(target.ok()) << target.status().message();
+
+    store.OnFetch(target.value(), /*nth=*/2, [&] {
+        ASSERT_TRUE(tree.Insert(6801, kOnePerLeafFiller).ok()) << "the split must land";
+    });
+    const std::uint64_t before = Hops();
+    auto placed = BtreeInsert(store, stale, 6805, MakeTuple(6805, 64), /*trx_id=*/1,
+                              /*owner_oid=*/0);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    ASSERT_TRUE(store.fired()) << "the split never ran; the cell tested nothing";
+    EXPECT_EQ(store.watched_modes().substr(0, 2), "SX")
+        << "the coverage read of 6800's leaf, then the hop's exclusive fetch of it";
+    EXPECT_EQ(Hops() - before, 2u) << "R's leaf to 6800's, then 6800's to 6801's";
+    EXPECT_NE(target.value(), placed.value().page_id) << "6805 landed left of 6801";
+    for (std::uint64_t id : {6800u, 6801u, 6805u}) ids.push_back(id);
+    ExpectEveryIdFound(store, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+}
+
+// **A hop out of the stale root's subtree, then a split.** 6805 is moved
+// right from R's rightmost leaf to 6800's, which lies under R's new
+// sibling; it is a full-size row, so the leaf must split, and no parent
+// at or below R routes to it. `FetchParent` finds none and the insert is
+// refused, retryable, with nothing written - never a separator promoted
+// into R, which would route 6800's keys through a page no descent from the
+// real root reads for them.
+TEST(BtreeTest, ASplitFromALeafAHopReachedOutsideTheStaleRootIsRefusedWritingNothing) {
+    storage::InMemoryPageStore backing(128);
+    Tree tree(backing);
+    auto ids = FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId stale = tree.root;
+    ASSERT_TRUE(tree.Insert(6800, kOnePerLeafFiller).ok());
+    ASSERT_NE(stale, tree.root);
+    ids.push_back(6800);
+    auto target = BtreeSeekLeaf(backing, tree.root, 6800);
+    ASSERT_TRUE(target.ok()) << target.status().message();
+
+    const std::uint64_t before = Hops();
+    auto refused = BtreeInsert(backing, stale, 6805, MakeTuple(6805, kOnePerLeafFiller),
+                               /*trx_id=*/1, /*owner_oid=*/0);
+    ASSERT_FALSE(refused.ok()) << "6805 was placed through a stale root's parent";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+    EXPECT_GE(Hops() - before, 1u) << "the descent never moved right; the cell tested nothing";
+    {
+        auto leaf = backing.GetForRead(target.value());
+        ASSERT_TRUE(leaf.ok()) << leaf.status().message();
+        EXPECT_EQ(heap::PageView(leaf.value().bytes()).next_page_id(), kInvalidPageId)
+            << "a refused split spliced a page in after 6800's leaf";
+    }
+    EXPECT_EQ(StatusCode::kNotFound, BtreeLookup(backing, tree.root, 6805).status().code());
+    ExpectEveryIdFound(backing, tree.root, ids);
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(backing, tree.root);
+}
+
+// **The budget.** Ten leaves under R's new sibling put 6905's leaf eleven
+// hops from R's rightmost: past `kMaxLeafHops`, every attempt from R spends
+// its hops and starts over, and the descent is refused as before D2.
+TEST(BtreeTest, AWalkRightPastTheHopBudgetStartsOverAndIsRefused) {
+    storage::InMemoryPageStore backing(256);
+    Tree tree(backing);
+    FillOnePerLeaf(tree, kInternalMaxEntries + 1);
+    const PageId stale = tree.root;
+    for (std::uint64_t id = 6800; id <= 6900; id += 10) {
+        ASSERT_TRUE(tree.Insert(id, kOnePerLeafFiller).ok()) << id;
+    }
+    ASSERT_NE(stale, tree.root);
+
+    const std::uint64_t before = Hops();
+    auto refused = BtreeInsert(backing, stale, 6905, MakeTuple(6905, 64), /*trx_id=*/1,
+                               /*owner_oid=*/0);
+    ASSERT_FALSE(refused.ok()) << "6905 was placed past the hop budget";
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+    EXPECT_EQ(Hops() - before,
+              static_cast<std::uint64_t>(storage::kMaxLeafHops) *
+                  (storage::kMaxDescentRestarts + 1))
+        << "every attempt spends its hops, and no more";
+}
+
+// **Not from the named root** (DK-Q10, `[quiet-wrong]`). A root that was a
+// leaf and has been grown over is still named by a stale memo; a write that
+// hopped from it would hold a non-root leaf as `path[0]`, and a split from
+// there would grow a level over that leaf. So the write does not hop: it is
+// refused, retryable, as before D2, and writes nothing.
+TEST(BtreeTest, AWriteFromAStaleRootLeafIsRefusedRatherThanMovedRight) {
+    storage::InMemoryPageStore backing(64);
+    Tree tree(backing);
+    constexpr std::size_t kFiller = 1016;  // seven to a leaf
+    for (std::uint64_t id = 10; id <= 70; id += 10) {
+        ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << id;
+    }
+    const PageId stale = tree.root;
+    ASSERT_TRUE(tree.Insert(80, kFiller).ok());  // splits the root leaf and grows a level
+    ASSERT_NE(stale, tree.root) << "the root must have grown, or there is no stale root";
+
+    const std::uint64_t before = Hops();
+    auto refused = BtreeInsert(backing, stale, 85, MakeTuple(85, 64), /*trx_id=*/1,
+                               /*owner_oid=*/0);
+    ASSERT_FALSE(refused.ok()) << "85 was placed through a stale root leaf, in page "
+                               << refused.value().page_id;
+    EXPECT_EQ(StatusCode::kTxnConflict, refused.status().code()) << refused.status().message();
+    EXPECT_EQ(Hops(), before) << "a write hopped from the named root";
+    auto missing = BtreeLookup(backing, tree.root, 85);
+    EXPECT_EQ(StatusCode::kNotFound, missing.status().code()) << "a refused insert wrote 85";
+
+    // A read holds no path, so a lookup does move right from the root leaf
+    // (DK-Q10 limits writes only): 80 is found through the stale root.
+    const std::uint64_t reads = Hops();
+    auto found = BtreeLookup(backing, stale, 80);
+    ASSERT_TRUE(found.ok()) << "a read lookup from a stale root leaf: " << found.status().message();
+    found.value().leaf.Release();
+    EXPECT_EQ(Hops() - reads, 1u);
 }
 
 // **A `level` that lies is Corruption, never a write into an internal

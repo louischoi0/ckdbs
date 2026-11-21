@@ -562,3 +562,66 @@ reached had already given the key away" stays true.
   `sys.meta`'s contention block beside the refusal tallies; (b) none.
   **(a) adopted**: DK-S4 compares restarts and refusals before and after,
   and without it the close cannot say how often D2 answered.
+
+### DK-S2 - D2 built, 2026-11-21
+
+On worktree `dk-descent-low-key` over `7622d619`, as the paper above says
+it. **A descent whose leaf no longer covers its key moves right** along
+the leaf chain, up to `storage::kMaxLeafHops` (8) hops an attempt, then
+restarts from the root as before: the clustered write descent and read
+lookup's miss (`btree.cpp`, `HopRight`), the index write descent
+(`index_tree.cpp`, its own `HopRight`). A write never hops from the named
+root (DK-Q10). A new tally, `contention_descent_hops` (DK-Q11), in
+`sys.meta`'s contention block. Amended: `btree.hpp`, `index_tree.hpp`,
+`insert_placement.hpp` (the restart bound's account), both descents'
+stale-root accounts, `heap-and-tuple.md` §5, `index.md` IX14 and its stale
+root bullet, `client-manual.md`'s contention fields.
+
+Adopted on the operator's standing go-ahead of 2026-11-21
+(go-ahead-achieving-milestone): **DK-Q4 (a)** (8 hops), **DK-Q5 (a)** (both
+trees; DD keeps a leaf's first entry, `IndexRemoveEntries` removes only at
+`at > 0`), **DK-Q8 (a)** (`BtreeSeekLeaf` unchanged), **DK-Q10
+`[quiet-wrong]` (a)** (no write hop from the named root; premise re-read
+against the tree before adoption - `SecureParents`' `count == 0` branch
+and `PromoteSeparator`'s growth over `path[0]`, both trees), **DK-Q11
+(a)** (the tally).
+
+- **Tests** (`tests/btree_test.cpp`'s D2 block): a stale internal root's
+  write and read answered by one hop each; a split while a hop is between
+  pages walked past by a second hop; a hop out of the stale root's subtree
+  that must split refused with nothing written; a walk past the budget
+  refused after exactly `kMaxLeafHops x (kMaxDescentRestarts + 1)` hops; a
+  write from a stale root leaf refused with no hop, and a read from it
+  answered by one; the outrun cells of both trees now answered by one hop.
+  **Mutants**: a write hop from depth 0 is killed by the root-leaf cell in
+  each tree; a budget of 0 by the stale internal root cell; a hop that
+  skips the coverage re-check by the between-pages cell.
+- **Review** (`critics-developer`): no correctness defect - DK-R1, DK-R2,
+  DK-R3 and DK-Q10 traced in both trees, the lower bound (immutable
+  `min_key`; the index's first entry equal to its separator and never
+  removed), the path's consumers, growth over a non-root, latch order, DE's
+  miss refusal, the messages. Applied: the between-pages cell armed on the
+  hop's own fetch (it fired on the coverage read before, so its name
+  overstated it), with the fetch modes pinned; the crossing-then-split,
+  budget and read-from-root-leaf cells; seven stale comments and spec
+  lines (the stale root accounts in both descents, `index_tree.hpp`,
+  `insert_placement.hpp`, `index.md`, `heap-and-tuple.md` §5's overclaim,
+  `btree.hpp`'s two-pages sentences); the index's hop as a helper
+  mirroring the clustered one; the path written inside the hop.
+  **Rejected, with the reason**: an index stale-internal-root cell and an
+  index between-pages cell - the index's hop is the clustered one's shape
+  line for line, and its outrun-hop and root-leaf cells pin the two
+  branches a mutant there would change; and extending the two-core rigs
+  (the stage row's "and its index counterpart") - every window D2 adds is
+  pinned deterministically by a seam in one thread, and the rigs run D2's
+  paths unchanged and green. Noted for the close: a write hop takes each
+  intermediate leaf exclusive, which marks it dirty (and may owe a page
+  image) though nothing is written there; it is on the race path only.
+- Overhead not measured; measured at the milestone's close.
+
+### DK-S3 - D3, 2026-11-21
+
+**Closed with nothing built** (DK-Q1 (a), DK-Q6 not reached): D3 is CW's
+C3a and builds only under CW's protocol and gates, and CW is not open. If
+CW opens, DK-Q6 (a) - restart at the failed node, now that D2 stands - is
+recorded there and the restart-at-node case joins CW's contract suite.

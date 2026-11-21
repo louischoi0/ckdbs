@@ -27,13 +27,22 @@ namespace kds::storage {
 inline constexpr std::uint16_t kMaxBtreeDepth = 16;
 
 // How many times a write descent may start over, having found its leaf no
-// longer covers its key, before it gives up and asks the caller to retry
-// (AT-S5c for the clustered tree, AT-S15 for the index tree). Each tree's
-// `DescendTo` carries its own progress argument; the bound is here so that
-// a pathological stream of splits - or a stale root, which fails the same
-// way every attempt - ends in a refusal a client can read rather than in a
-// loop nothing reports.
+// longer covers its key and spent its hops right (`kMaxLeafHops` below),
+// before it gives up and asks the caller to retry (AT-S5c for the clustered
+// tree, AT-S15 for the index tree). Each tree's `DescendTo` carries its own
+// progress argument; the bound is here so that a pathological stream of
+// splits - or a stale root the hops cannot cross, which fails the same way
+// every attempt - ends in a refusal a client can read rather than in a loop
+// nothing reports.
 inline constexpr int kMaxDescentRestarts = 4;
+
+// How many times one descent attempt may move right along the leaf chain,
+// having found its leaf no longer covers its key, before it starts over
+// from the root instead (DK's D2, `workorder-dk-descent-low-key.md` DK-Q4).
+// A hop cannot loop - each strictly raises the low key and nothing removes
+// a leaf - so this bounds the walk's length, not a cycle: past it a restart
+// re-reads the routing, which a long walk says has moved a lot.
+inline constexpr int kMaxLeafHops = 8;
 
 // **A structural refusal, noted for the statement** (BA-S14, BA-R11). The
 // four clustered-tree sites that give up a stale descent - descend, parent,

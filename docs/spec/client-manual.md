@@ -388,7 +388,9 @@ ceiling already covers); `contention_carves`, `contention_checkpoint_runs`,
 `contention_carve_longest_us` and `contention_checkpoint_longest_us`; and
 one `contention_refused_<site>` per site a stale descent is refused
 `TXN_CONFLICT` at (`btree_descend`, `btree_parent`, `btree_secure`,
-`btree_lookup`, `index_descend`, `index_parent`, `index_secure`).
+`btree_lookup`, `index_descend`, `index_parent`, `index_secure`), and
+`contention_descent_hops`, the moves right along a leaf chain a descent
+took in place of starting over from the root (DK's D2).
 Since BA-S14 a clustered-tree refusal is re-run inside the engine rather
 answered, for a statement that wrote nothing before it, and
 `contention_structural_reruns` counts the re-runs. A `SELECT` discarded and run again for a page whose read left its reactor (`page.md` §12) is counted apart, as `contention_miss_reruns`, and is never answered as a refusal. Every

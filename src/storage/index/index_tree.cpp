@@ -117,10 +117,28 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
 // reason: `IndexInsert` keeps the descent's exclusive hold on the old leaf
 // across its whole walk up, so a re-descent that meets the leaf waits until
 // the parent carries the separator that routes it past. **A stale root**
-// (`Catalog::AdoptRoot`'s note) fails every attempt alike - it routes
-// a key outside its subtree to that subtree's rightmost leaf, whose right
-// sibling now bounds it - and exhausts the bound into a retryable refusal
-// instead of an entry placed where no descent from the current root looks.
+// (`Catalog::AdoptRoot`'s note) routes a key outside its subtree to that
+// subtree's rightmost leaf, whose right sibling now bounds it; the descent
+// moves right from there (D2) and places the entry where the current root
+// routes it too, within `kMaxLeafHops`. What still fails every attempt
+// alike, and exhausts the bound into a retryable refusal instead of an
+// entry placed where no descent from the current root looks, is a stale
+// root that is itself a leaf (no write moves right from the named root,
+// DK-Q10), or a key more than `kMaxLeafHops` leaves past it.
+// DK's D2, one move right, as btree.cpp's `HopRight` states it: the right
+// link read under the leaf's hold, the leaf released, the right page fetched
+// in the same mode. The caller asks the new leaf's coverage.
+StatusOr<PageId> HopRight(storage::PageStore& store, storage::PageRef& leaf,
+                          const IndexLayout& layout, storage::PageAccess access) {
+    const PageId right = IndexLeafView(leaf.bytes()).right_sibling();
+    leaf.Release();
+    Contention::Add(Tally::kDescentHops);
+    auto next = IndexFetchLeaf(store, right, layout, access);
+    if (!next.ok()) return next.status();
+    leaf = std::move(next.value());
+    return right;
+}
+
 StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexLayout& layout,
                             std::span<const std::byte> sort_key, bool leaf_for_write) {
     for (int attempt = 0; attempt <= storage::kMaxDescentRestarts; ++attempt) {
@@ -167,12 +185,26 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
                     if (!writable.ok()) return writable.status();
                     leaf = std::move(writable.value());
                 }
-                const IndexLeafView relatched(leaf.bytes());
-                auto covers = LeafStillCoversKey(store, relatched, layout, sort_key);
-                if (!covers.ok()) return covers.status();
-                if (!covers.value()) {
-                    break;  // a divide took the key's place to the right; start over
+                // A divide took the key's place to the right: move right
+                // (DK's D2, as btree.cpp's `DescendTo` states it), up to
+                // `kMaxLeafHops`, before starting over - never from the
+                // named root (DK-Q10, `[quiet-wrong]`). The failed check
+                // proved the key at or above the right leaf's first entry,
+                // which no removal touches (DD keeps it, DK-R5), so the new
+                // leaf's lower bound needs no asking.
+                const int hops = d.depth > 0 ? storage::kMaxLeafHops : 0;
+                bool covered = false;
+                for (int hop = 0;; ++hop) {
+                    const IndexLeafView relatched(leaf.bytes());
+                    auto covers = LeafStillCoversKey(store, relatched, layout, sort_key);
+                    if (!covers.ok()) return covers.status();
+                    covered = covers.value();
+                    if (covered || hop == hops) break;
+                    auto right = HopRight(store, leaf, layout, storage::PageAccess::kWrite);
+                    if (!right.ok()) return right.status();
+                    d.path[d.depth] = right.value();
                 }
+                if (!covered) break;  // the hops are spent: start over from the root
                 d.leaf = std::move(leaf);
                 return d;
             }

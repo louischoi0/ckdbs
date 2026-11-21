@@ -122,6 +122,10 @@ enum class Tally : std::uint8_t {
     // DE (`storage/miss_refusal.hpp`): a statement head discarded and run
     // again because a page it fetched would have had to be waited for.
     kMissReruns,
+    // DK's D2 (`workorder-dk-descent-low-key.md` DK-Q11): a descent's move
+    // right along the leaf chain in place of a restart from the root,
+    // counted once per hop, on the failed-coverage path only.
+    kDescentHops,
     kCount,
 };
 
@@ -140,6 +144,7 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
     "fence_walks",            "wal_drain_latch_wait_us",
     "wal_roll_blocked_waits", "wal_roll_blocked_wait_us",
     "visibility_window_lookups", "miss_reruns",
+    "descent_hops",
 };
 static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
 
