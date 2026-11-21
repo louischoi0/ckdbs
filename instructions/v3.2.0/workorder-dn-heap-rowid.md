@@ -1,6 +1,10 @@
 # Work order DN - the heap redefined again: an Oracle-style heap, rows in data pages addressed by a computed rowid, every key served through an index that names the rowid, a full scan that reads the data pages and no index
 
-Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+Status: **CLOSED 2026-11-21 on the work branch, not landed** (DN-S2, DN-S3
+and DN-S4 on the standing go-ahead; the close
+`bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`: DN-R7 met as
+measured, a 1,000-row heap index range 27-32 % cheaper, a heap's INSERT
+about 15 % dearer than a btree twin's; §7, "DN-S4"). **OPENED 2026-11-20 on the operator's standing go-ahead
 (go-ahead-achieving-milestone), linked from DD** (`raft-marks-2026-11-20.md` §28), on
 worktree `dn-heap-rowid` at `34958393`. **DN-S0 and DN-S1 done; stopped at DN-S1's gate,
 the operator's mark on the amended invariants (§8)**. DN-Q0..Q14 adopted on that
@@ -747,3 +751,43 @@ performance change, stated in `known-gaps.md`.
 **Gate**: the full suite 0 failed of 5094; `scripts/sim.sh` 280 runs, 0
 failures, heaps drawn and the release stepped. Overhead not measured;
 measured at the milestone's close.
+
+### DN-S4 - the close, 2026-11-21
+
+**Measured** (`bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`, by
+`ck-tester`, A = `b7262f9b` (`v3.5.0-43-gb7262f9b`) against B = `9c061907`
+(`v3.5.0-48-g9c061907`), an in-run control A2 = A, `build-release`,
+`cores = 1`, `relaxed`, every page resident, two interleaved runs pooled,
+about 25 minutes of the hour).
+
+- **DN-R7, a btree relation pays nothing: met as measured.** No btree cell -
+  a tuple key read, a secondary point read, an index range of 20 and of
+  1,000 rows, a scan, a one-row INSERT and UPDATE, at 200 to 100K rows - is
+  slower than A outside the control's range; 22 of 24 medians within 5.5 %.
+  **The limit is resolution**: for the 20-50 us statements the control's own
+  range is -20 % to +45 %, so a few percent there is not excluded; the 0.8
+  to 2.4 ms cells, whose control is -3 % to +5 %, show none. The 100K-row
+  INSERT read B 11 % cheaper in both runs, inside the control, not cleared.
+- **DN's premise holds where DN-S0 said it would**: a 1,000-row index range
+  over a heap costs 27 % (10K rows) to 32 % (100K) less server CPU than A's
+  heap, B faster in 26 of 26 rounds, 0.22-0.34 us a resolved row; a 20-row
+  range 11-22 % less, inside the control; a one-row secondary read at the
+  floor, as DN-S0's spike found.
+- **The cost DN adds, said**: a heap's one-row INSERT costs about 3.7 us of
+  server CPU (+15 %) more than its btree twin's on B, 16 of 16 rounds at 1K
+  rows - the Keystone index every heap maintains; A's heap, a btree, had no
+  such gap. A key read through the Keystone index is +5-10 %, an UPDATE by
+  key +4 %, a full scan level.
+- **Space is reused unasked on a hidden-Keystone heap**: 20,000 rows, a
+  quarter deleted and re-inserted twice - a btree 121, 151, 181 pages; the
+  hidden-Keystone heap 141, 142, 142; a declared-Keystone heap 121, 121, 122
+  with a `PURGE` after each delete, and 121, 151, 181 without one, its
+  tombstones being kept until a `PURGE` (DN-Q14 (a)). One un-interleaved run.
+- **Cut**: `cores > 1`, `group` and `strict`, a cold read, a PostgreSQL twin,
+  a hidden-Keystone heap in the interleaved matrix, the write cells at 200
+  rows. The drivers derive from DN-S0's and are not in `tools/`.
+
+**DN is closed on the work branch, not landed**: worktree
+`dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, synced with
+`origin/main` at `55b61512` (documents only) in `39b227b0`. A push, a merge
+to `main`, a tag and a version wait for the operator's word.

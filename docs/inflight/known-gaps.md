@@ -3312,6 +3312,13 @@ the thirteen fixes leave, each `[source-read]` unless marked.
 
 Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
 
+- **A heap's one-row INSERT costs about 15 % more than a btree twin's**
+  (about 3.7 us of server CPU at 1K rows, `cores = 1`; DN's close,
+  `bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`): the Keystone
+  index every heap maintains. A key read through it is 5-10 % dearer, an
+  UPDATE by key 4 %. The 20-50 us btree cells' control spread (-20 % to
+  +45 %) leaves a few percent there unresolved.
+
 - **A Keystone range is a full scan.** `WHERE keyidentity > 2` (or a range on
   a declared Keystone) is answered by the walk with the range in the
   residual; the Keystone index is not chosen for it, so a heap's key range
