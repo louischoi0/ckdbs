@@ -46,6 +46,11 @@ run records the stamps of the measured window's edges. The server log is
 copied to `--out` as `<tag>.s.log` before the run's directory is removed;
 `--log-level info` is what keeps Info-level lines in it.
 
+`--insert-rate R` holds the inserter to R statements a second, a late one
+sent at once (DG-S0, `instructions/v3.2.0/workorder-dg-wal-segment-body.md`
+DG-Q8): with `--batch`, it sets the log's rate and a commit's size together.
+The default, 0, is the closed loop as before.
+
 `--normal-walkers N` adds N walkers at `normal` (BL §5.2's rung-3 probe,
 `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
 BL-R7): the walker's statement, declaring nothing unless `--levels` names
@@ -222,7 +227,19 @@ def client(args):
             due += interval
     else:
         n = 0
+        # `--insert-rate`: the inserter held to a rate, so two arms carry one
+        # load. Statements are due at a fixed interval from the start; one
+        # that is late is sent at once, so a stall is caught up and the mean
+        # rate holds while the server can serve it.
+        held = args.role == "inserter" and args.insert_rate > 0
+        step = 1.0 / args.insert_rate if held else 0.0
+        due = args.start_at
         while time.time() < stop_at:
+            if held:
+                now = time.time()
+                if now < due:
+                    time.sleep(due - now)
+                due += step
             if args.role in ("walker", "nwalker"):
                 # Unindexed and not aggregated, so its outermost walk is the
                 # one that reaches the slice boundary (an aggregate does not).
@@ -359,6 +376,8 @@ def run_one(args, run):
                   "--seconds", str(args.seconds)]
             if role in levels:
                 cl += ["--level", levels[role]]
+            if args.insert_rate and role == "inserter":
+                cl += ["--insert-rate", str(args.insert_rate)]
             if args.client_cpus:
                 cpus = args.client_cpus.split(",")
                 cl = ["taskset", "-c", cpus[i % len(cpus)]] + cl
@@ -451,6 +470,7 @@ def run_one(args, run):
             "targets": targets, "roles": roles, "slice": args.slice, "levels": args.levels,
             "run": run, "durability": args.durability, "rate": args.rate, "readers": args.readers,
             "writers": args.writers, "writer_rate": args.writer_rate, "batch": args.batch,
+            "insert_rate": args.insert_rate if args.arm in ("insert", "mixed") else 0.0,
             "walk_rows": args.walk_rows, "seconds": args.seconds, "warmup": args.warmup,
             "log_level": args.log_level, "ctl_core": args.ctl_core,
             "wait_s": round(wait, 1), "host_before": before, "host_after": after,
@@ -572,6 +592,8 @@ def main():
                    help="BL's rung-3 probe: walkers placed like readers, `normal` unless --levels names nwalker")
     p.add_argument("--meta-cores", action="store_true",
                    help="read SHOW META on every core at the window's edges (`meta_by_core`)")
+    p.add_argument("--insert-rate", type=float, default=0.0,
+                   help="the inserter's statements per second (0: closed loop)")
     p.add_argument("--rate", type=float, default=2000.0, help="point reads per second, all readers together")
     p.add_argument("--writers", type=int, default=0, help="open-loop one-row pk UPDATE sessions")
     p.add_argument("--writer-rate", type=float, default=800.0,
