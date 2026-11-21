@@ -147,13 +147,34 @@ an unknown target is refused at its byte.
 
 **Memory-resident** (BO-Q5 (b)): no oid, no root page, no format change;
 emptied by a restart and by a restore. Each keeps **one part per core**
-(`stats::kStatsParts`, asserted equal to `kMaxCores`) under a latch of its
-own (`LatchKind::kStatsRing`): the core a row describes is its part's only
-writer, and a builder on any core copies each part under its latch. **A
-write never fails, delays or reorders what it describes**: a row past a
-bound or an allocation that fails is dropped and counted in `sys.meta`
-(SV3). No row is read by the engine, so none can change a result - a lost
-or wrong row costs a reader's insight, never an answer. **No switch**
+(`stats::kStatsParts`, asserted equal to `kMaxCores`): the core a row
+describes is its part's only writer. **A write never fails, delays or
+reorders what it describes, and never waits** (`docs/rules/rules.md` §3a;
+DL-S2) - in one of two shapes:
+
+- **a row of fixed counters takes no latch**: relaxed single-writer words
+  in a part that is never moved, which a builder on any core reads as they
+  stand - `sys.relation_stats`' activity and lock columns, the leaf
+  counts, `sys.indexes`' usage, `sys.access_stats`, the Cabin store's
+  counts (`stats/counter_table.hpp`, `stats/access_stats.hpp`), as
+  `sys.refusal_stats` and the transaction counts always were. A row's
+  columns may differ by an event in flight. **Such a part is a fixed table
+  allocated whole at its core's first row** - about 576 KiB a core for the
+  relation counts, 384 KiB each for the leaf counts and the index usage,
+  192 KiB for the Cabin probe counts, where the maps they replaced grew
+  with use - and never grown: its bound is the store's own (§6.2, §6.2b);
+- **a row that is more than counters is under its part's latch**
+  (`LatchKind::kStatsRing`), which a record takes by the try form:
+  `sys.statement_stats`, `sys.lock_waits`, `sys.checkpoints`, `sys.ash`,
+  the planner's parts. The one other taker is a builder's copy - room made
+  before the hold, nothing merged or decoded under it - and a record that
+  meets it is dropped and counted, apart from the bound's drops:
+  `statement_stats_busy`, `lock_waits_busy`, `checkpoints_busy`,
+  `ash_busy`, `plan_stats_part_busy` (`sys.meta`).
+
+A row past a bound or an allocation that fails is dropped and counted in
+`sys.meta` (SV3). No row is read by the engine, so none can change a
+result - a lost or wrong row costs a reader's insight, never an answer. **No switch**
 (BO-Q8): recording is always on - but for `sys.access_stats` (§6.2d),
 which kept the `access_statistics` key it had as a catalog relation
 (DA-Q4 (a)). At BO's close it cost 0.35-0.52 us of
@@ -373,9 +394,11 @@ and `relation_stats_dropped` above 0 says so.
 waits registered on a unit of the relation since the instance started,
 every core's summed - how many, their time, and how many of them ended
 `deadlock` and `fault_net`. **Counted where a `sys.lock_waits` row is
-written** (§6.3), from that row's relation, time and outcome, so the four
-keep what that ring has overwritten and are bounded by it in nothing else:
-what writes no row there is in none of them. `lock_deadlocks` summed is
+recorded** (§6.3), from that row's relation, time and outcome, so the four
+keep what that ring has overwritten - and a row the ring lost to a
+reader's copy (`lock_waits_busy`), since these columns take no latch - and
+are bounded by it in nothing else: what records no row there is in none of
+them. `lock_deadlocks` summed is
 therefore the deadlocks that wrote a row, not every deadlock refusal - a
 victim whose slot had already flipped writes none, nor does an online index
 build's drain - and a wait a destroyed frame ended (`cancelled`) is in
@@ -419,14 +442,13 @@ nowhere. `REINDEX` builds under a new oid, so a rebuilt index starts at 0.
 **The instance owns the store**, unlike §6's others: a restart, a restore
 and a second instance in one process each start empty with no reset. One
 part per core (`stats/oid_parts.hpp`, §6.2's shape), the core a statement
-ran on its only writer. **The part's latch guards its map, not its
-counts**: a core's first sight of an index takes the latch and makes the
-one allocation; the counts are single-writer relaxed words that are never
-moved or erased, so the core keeps the pointer to an index's counts (its
+ran on its only writer. **No latch** (§6): a core's first sight of an
+index claims its row - a part's first sight of any index is the one
+allocation; the counts are single-writer relaxed words that are never
+moved or released, so the core keeps the pointer to an index's counts (its
 dispatcher's eight-slot cache, by oid) and a repeated read adds through it
-with no latch, no lookup and no allocation. A reader takes each part's
-latch for the map and reads the words as they stand, so a row's columns
-may differ by a run in flight. Bounded at
+with no lookup and no allocation. A reader reads the words as they stand,
+so a row's columns may differ by a run in flight. Bounded at
 4096 indexes a core, dropped ones included; past it a new index's counts
 are dropped and `index_stats_dropped` (`sys.meta`) says so. **Nothing reads
 a count**: no advisor, no automatic drop (DF-R3).
@@ -487,7 +509,12 @@ a second instance in one process each start empty.
 
 **A part is a flat table of 40-byte slots, at most half of them live**
 (DA-Q8 (a), DA-Q11 (a)), allocated whole at its core's first record and
-never grown; its bytes are the boot key `access_stats_bytes_per_core`
+never grown, **and takes no latch** (§6; DL-S2): a slot's state is one
+atomic word, a record claims or adds, and a column change's forget marks a
+slot dead where it stands and waits for nothing - the slot is free again,
+for its own shape from zero or for a new one, and no tombstone counts
+against the bound. A reader leaves out a slot that changed hands under its
+copy; its bytes are the boot key `access_stats_bytes_per_core`
 (DA-Q12 (a): `[80, 256 MiB]`, default 327,680, 4,096 shapes a core). A new
 shape past a part's bound, or every record of a part whose table could not
 be allocated, is dropped and counted: `sys.meta`'s `access_stats_dropped`,
@@ -560,7 +587,13 @@ two columns of one row may differ by a wait in flight.
   2 us.
 - `session_waits`: `session_id`, `event`, `count`, `total_us`; a session's
   `cpu.on_cpu` row is its ON_CPU time and its RUNNABLE time is `sched.run_queue`.
-  A session's rows leave with it; a background task is no session.
+  A session's rows leave with it; a background task is no session. **The
+  sessions are listed with no latch** (§6; DL-S2): a session's words live in
+  a slot that is never moved or freed, taken at its first statement and
+  given back at its end by a compare-exchange, and both views walk the
+  slots and read each as it stands - a slot that changed hands under the
+  read is left out, and past 1,048,576 sessions at once a session is
+  counted and not listed.
 - `session_state`: `session_id`, `state`, `event`, `p1`-`p3`, `elapsed_us`,
   `txn_age_us`, `view_age_us`. A
   session between statements shows IDLE on `idle.client`. `session_id` is the
@@ -603,9 +636,13 @@ and `trx_id`, which nothing fills yet and the view does not show.
 `sys.statement_stats` by it meets every binding's row of that text (§6.1),
 and nothing in the engine makes that join.
 
-A view read copies each core's ring under that ring's own latch, so a query
+A view read copies each core's ring under that ring's own latch - the raw
+records, into room made before the hold, decoded after it - so a query
 during sampling sees whole records, and merges by time (ties by core, then
-ring order). The ring is memory only, a fixed `ash_ring_bytes_per_core`
+ring order). **The sampler takes the latch by the try form** (§6): a
+sample that meets a view's copy is not taken and is counted (`sys.meta`'s
+`ash_busy`), because the sampler runs on its core's reactor and a wait of
+its would stop the core's statements. The ring is memory only, a fixed `ash_ring_bytes_per_core`
 (default 4 MiB, 1-64 MiB, restart-only) overwritten oldest-first; a restart
 begins empty. Filters are `WHERE` on the columns above.
 

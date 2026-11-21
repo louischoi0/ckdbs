@@ -49,6 +49,9 @@ public:
                             exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
                             /*access_statistics=*/true, &*cabins_, &*txn_);
         dispatcher_->set_optimizer_signals(&signals_);
+        // The controller is on in this fixture: a switched-off one collects
+        // nothing (`docs/rules/rules.md` §3a), and these tests feed it.
+        dispatcher_->set_cabin_optimizer_enabled(true);
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }

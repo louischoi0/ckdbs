@@ -4,6 +4,7 @@
 #include <unordered_map>
 
 #include "kds/catalog/oid.hpp"
+#include "kds/sched/wait_state.hpp"
 #include "kds/stats/oid_parts.hpp"
 
 // **How often a tree's leaves divide, and how often one is compacted in
@@ -41,21 +42,24 @@
 //
 // The process's, as the BO stores are: the storage layer has no instance to
 // ask. `OidParts` (`stats/oid_parts.hpp`), the part chosen by the calling
-// thread's core (`CurrentCore()`); a count is taken under a page hold, and a
-// reader of the view holds a part's latch for its copy and no page. **The
-// one allocation is a part's first division of a tree**, under that hold
+// thread's core (`CurrentCore()`). **A count is taken under a page's
+// exclusive hold and takes nothing itself** (`docs/rules/rules.md` §3a;
+// DL-S2): relaxed single-writer words in a latch-free part, so a split
+// never waits for a view's reader with its pages held. **The one
+// allocation is a part's first division of any tree**, under that hold
 // (DF-Q22 (a): DF-R2's first-sight exception, read to reach this store);
 // it cannot refuse the split - a failure drops the count.
 
 namespace kds::stats {
 
 struct LeafActivity {
-    std::uint64_t divisions = 0;
-    std::uint64_t compactions = 0;
+    sched::RelaxedU64 divisions;
+    sched::RelaxedU64 compactions;
 
+    // A reader's merge of two cores' parts.
     LeafActivity& operator+=(const LeafActivity& o) noexcept {
-        divisions += o.divisions;
-        compactions += o.compactions;
+        divisions.add(o.divisions);
+        compactions.add(o.compactions);
         return *this;
     }
 };

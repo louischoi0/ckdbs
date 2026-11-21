@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "kds/base/contention.hpp"
+#include "kds/base/statistics_scope.hpp"
 
 // The latch AR0's revised G1 admits beside the ring indices
 // (`instructions/v3.0.0/ar0-architecture-revision.md` §3), and the shape
@@ -67,6 +68,11 @@ public:
     // `lock`, returning the nanoseconds it waited: 0 when uncontended, and
     // charged to the kind exactly as `lock` charges it (BQ-S1).
     std::uint64_t LockReportingWait() {
+        // The form that may wait: never inside a statistics record, which
+        // takes a latch by the try form only (`statistics_scope.hpp`). Asked
+        // before the try, so the abort does not depend on the latch being
+        // held at that instant.
+        AssertNoStatisticsRecord("a blocking latch acquisition");
         if (mutex_.try_lock()) return 0;
         const auto start = std::chrono::steady_clock::now();
         mutex_.lock();
@@ -108,6 +114,9 @@ public:
     // null latch or an uncontended one (BQ-S1).
     explicit LatchGuard(Latch* latch, std::uint64_t* waited_ns = nullptr) noexcept
         : latch_(latch) {
+        // Asked of the form, not of the latch: an unarmed (null) latch at
+        // `cores = 1` is the same call site that waits above one core.
+        AssertNoStatisticsRecord("a blocking latch acquisition");
         std::uint64_t waited = 0;
         if (latch_ != nullptr) {
             waited = latch_->LockReportingWait();

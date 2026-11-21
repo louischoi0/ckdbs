@@ -10,7 +10,7 @@ DK-S4). Opened 2026-11-21 on the operator's standing go-ahead of
 `dk-descent-low-key` from `2c2639df` (`v3.5.0-12-g2c2639df`). DK was taken
 as the highest-priority written order: DN, the one opened order not closed,
 waits at its own gate for the operator's mark (`raft-marks-2026-11-21.md`
-§1). **DK-S0 done**: D1 go, D2 go, D3 handed to CW (§7). Written in the
+§2). **DK-S0 done**: D1 go, D2 go, D3 handed to CW (§7). Written in the
 main checkout on `main` at `1c7bb774` (`v3.4.15-4-g1c7bb774`) on the
 operator's words of 2026-11-20 (`raft-marks-2026-11-20.md` §7).
 **Exploratory is the operator's word** (DK-Q0). The letter DK and every

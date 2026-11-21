@@ -182,13 +182,13 @@ public:
 
 private:
     struct Partition {
-        Latch latch{LatchKind::kStatsRing};
+        Latch latch{LatchKind::kPlanTable};
         std::unordered_map<CapturedKey, CapturedOrder, CapturedKeyHash> plans;
     };
     Partition& PartitionOf(const CapturedKey& key) noexcept;
 
     std::array<Partition, kPartitions> partitions_;
-    Latch queue_latch_{LatchKind::kStatsRing};
+    Latch queue_latch_{LatchKind::kPlanTable};
     std::vector<CapturedPlan> pending_;
     std::vector<catalog::Oid> forgotten_;
     std::atomic<std::uint64_t> pending_count_{0};

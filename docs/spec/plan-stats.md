@@ -87,7 +87,11 @@ nothing.
 
 **One part per core**, a fixed table under its own `LatchKind::kStatsRing`
 latch, written only by its core at a planned statement's end and read only
-by the steward - `statement_stats.hpp`'s protocol. A part holds, per key and
+by the steward. **Neither waits for the other** (`docs/rules/rules.md`
+§3a; DL-S2): a statement's fold and its wanted priors take the part by the
+try form and are dropped where the steward's copy holds it
+(`plan_stats_part_busy`), and the steward tries too and leaves a busy part
+to its next step. A part holds, per key and
 mask, the sum and count since the last merge, the decline bits, and the
 oids it saw without a prior (the wanted set). A part half full of keys drops a new key's observation and counts it, so
 its probes stay short; the steward empties every part each step. No allocation on the statement's path, no
@@ -97,8 +101,8 @@ cross-core write.
 
 **PS4.** Core 0's `system` group, every `kPlanStatsTickNs` (1 s), one bounded step:
 
-1. copy every part's entries out under its latch, one latch at a time, and
-   sum them across the cores - so a posterior moves one step however many
+1. copy every part's entries out under its latch, one latch at a time,
+   into room made before the hold, and sum them across the cores - so a posterior moves one step however many
    cores ran its statement;
 2. fold each posterior: the first observation sets it, later ones move it
    by `alpha = 1/4`; past `kMaxMasterKeys` keys the least recently seen go,
@@ -123,6 +127,26 @@ arrive. The catalog lookup that names a relation's pages is outside the page
 budget (a memo hit for a relation a statement just used).
 
 ## 5. Bands and publication
+
+**PS5a - a compile waits for no publish** (`docs/rules/rules.md` §3a (d);
+DL-S3). A snapshot is built - its sorts, its copies, the managed bands
+read - under a latch only installers take: the steward, an operator's
+statistics statement, a mount. The finished snapshot is swapped in under
+the publish latch, held for that pointer and nothing else, and announced
+by the generation. A compile reads the generation with one load and,
+where it moved, **tries** the publish latch for a copy of the pointer: a
+pin that meets the swap prices from the snapshot it has and asks again at
+its next pin. The steward tries every latch of a publish too - the
+installers', the managed store's, the pointer's - and a publish that
+meets one stays owed to its next step, a second later.
+
+**PS5b - a relation's drop waits for no statistics statement** (DL-Q19).
+`DROP TABLE` forgets the relation's managed object and republishes where a
+published one went, each by a try: where the managed store's latch or an
+install is held, the oid is queued and the republish owed, and the
+steward's next step does both. An object that outlives its relation by
+that step prices nothing: an oid is never issued again, so no compile asks
+for it.
 
 **PS5.** A value `v` is published as its half-octave band `b = round(2 log2 v)`,
 with Schmitt hysteresis: a published band moves only when `|2 log2 v - b| >=
@@ -158,8 +182,9 @@ its band's centre) and `generation`; the planner never reads the view.
 **The steward's side table** (DF-S4, `sys-views.md` §6.2c). A seed that
 reads a leaf for a prior also counts that leaf's delete-marked slots, and
 keeps the relation's scaled total in a table of its own under its own
-latch, written by the steward and read by `sys.relation_stats`'
-`est_delete_marked` alone. **It is no fact of §2**: it is in no snapshot,
+latch, written by the steward - by the try form: a sample that meets a
+view's read is left for the relation's next seed - and read by
+`sys.relation_stats`' `est_delete_marked` alone. **It is no fact of §2**: it is in no snapshot,
 it sets no band, a change of it publishes nothing and moves no generation,
 and `exec::EstimateChain` cannot reach it (PS9). It costs the seed no page
 read it did not already make. A dropped relation's entry goes when the
@@ -324,8 +349,8 @@ RelationRows` reads the managed band first. A gather publishing over a
 gather moves the band with PS5's hysteresis; an import, a restore and a
 mount publish fresh (CY-Q19 (a)), so one stored value gives one band on every
 instance. Every act that changes a published version publishes the next
-generation at once (`PlanStats::RepublishManaged`), under `publish_latch_`
-and then the store's latch, never the reverse; the order memo's key carries
+generation at once (`PlanStats::RepublishManaged`), under the installers'
+latch and then the store's latch, never the reverse; the order memo's key carries
 the generation (§6a), so the next compile on every core prices from it.
 Under `join_order = fixed` a captured order does not move (CX).
 

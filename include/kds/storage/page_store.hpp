@@ -11,6 +11,7 @@
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
+#include "kds/base/statistics_scope.hpp"
 #include "kds/storage/page_header.hpp"
 
 // Abstract "give me the bytes for page_id" seam: every store - the
@@ -274,6 +275,8 @@ public:
     // Fetches an already-created page, pinned, for read or in-place
     // mutation. Fails with NotFound if page_id was never created.
     StatusOr<PageRef> Get(PageId page_id) {
+        // A statistics record takes no page hold (`statistics_scope.hpp`).
+        AssertNoStatisticsRecord("a page fetch");
         auto bytes = FetchPinned(page_id, PinMode::kExclusive, /*for_read=*/false,
                                  FetchHeat::kWarm);
         if (!bytes.ok()) return bytes.status();
@@ -286,6 +289,7 @@ public:
     // `kScanNoWait` is `kScan` refused where it would wait (DE-Q8).
     StatusOr<PageRef> Fetch(PageId page_id, PageAccess access) {
         if (access == PageAccess::kWrite) return Get(page_id);
+        AssertNoStatisticsRecord("a page fetch");
         auto bytes = FetchPinned(page_id, PinMode::kShared, /*for_read=*/true,
                                  access == PageAccess::kScan         ? FetchHeat::kScan
                                  : access == PageAccess::kScanNoWait ? FetchHeat::kScanNoWait
@@ -328,6 +332,7 @@ public:
     // Creates a brand-new page at exactly `page_id`, zero-initialized and
     // pinned. Fails with AlreadyExists if that id is already in use.
     StatusOr<PageRef> CreateAt(PageId page_id) {
+        AssertNoStatisticsRecord("a page creation");
         auto made = CreatePinned(CreateKind::kAt, page_id);
         if (!made.ok()) return made.status();
         return PageRef(this, made.value().first, made.value().second);
@@ -337,6 +342,7 @@ public:
     // stored page fails its checksum, which CreateAt() refuses as in use.
     // Only a whole-page record may ask, since it replaces every byte.
     StatusOr<PageRef> CreateOverTorn(PageId page_id) {
+        AssertNoStatisticsRecord("a page creation");
         auto made = CreatePinned(CreateKind::kOverTorn, page_id);
         if (!made.ok()) return made.status();
         return PageRef(this, made.value().first, made.value().second);
@@ -345,6 +351,7 @@ public:
     // Creates a brand-new page at an id the store chooses, zero-
     // initialized and pinned. Fails with OutOfSpace when out of ids.
     StatusOr<std::pair<PageId, PageRef>> CreateNew() {
+        AssertNoStatisticsRecord("a page creation");
         auto made = CreatePinned(CreateKind::kNew, kInvalidPageId);
         if (!made.ok()) return made.status();
         return std::pair<PageId, PageRef>(
@@ -355,6 +362,7 @@ public:
     // `kInvalidPageId` pins nothing and answers an empty handle.
     StatusOr<UnlatchedPin> PinUnlatched(PageId page_id) {
         if (page_id == kInvalidPageId) return UnlatchedPin();
+        AssertNoStatisticsRecord("a page fetch");
         auto bytes = FetchPinned(page_id, PinMode::kUnlatched, /*for_read=*/true,
                                  FetchHeat::kWarm);
         if (!bytes.ok()) return bytes.status();
@@ -378,6 +386,7 @@ public:
     // CreateNew() for a page with no common header - see
     // CreateNewHeaderlessUnpinned() for who needs that and why.
     StatusOr<std::pair<PageId, PageRef>> CreateNewHeaderless() {
+        AssertNoStatisticsRecord("a page creation");
         auto made = CreatePinned(CreateKind::kNewHeaderless, kInvalidPageId);
         if (!made.ok()) return made.status();
         return std::pair<PageId, PageRef>(
@@ -830,6 +839,7 @@ inline StatusOr<std::pair<PageId, PageRef>> PageClaims::CreateNew() {
         assert(ids_.empty() && "a claiming store ran past its claims");
         return store_->CreateNew();
     }
+    AssertNoStatisticsRecord("a page creation");
     const PageId id = ids_[next_++];
     auto made = store_->CreatePinned(PageStore::CreateKind::kClaimed, id);
     if (!made.ok()) return made.status();

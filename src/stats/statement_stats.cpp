@@ -74,26 +74,33 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
                             std::string_view plan_label,
                             const StatementCost& cost,
                             const StatementBinding& binding) noexcept {
+    const StatisticsRecordScope recording("sys.statement_stats");
     // Derived here, so every key's kind is `StatementKindOf`'s static
     // storage - the pointer `KeyHash` hashes by.
     const std::string_view kind = StatementKindOf(line);
     Part& part = parts()[core % kStatsParts];
-    const LatchGuard held(&part.latch);
+    // **Tried, never waited for** (`rules.md` §3a (b)): the one other taker
+    // is a reader's copy, and a statement that meets it loses its count,
+    // not its time.
+    const LatchGuard held(&part.latch, std::try_to_lock);
+    if (!held.owns()) {
+        part.busy.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     const Key key{fetch_id, kind, binding};
     auto found = part.shapes.find(key);
     if (found == part.shapes.end()) {
         if (part.shapes.size() >= kShapesPerCore) {
-            ++part.dropped;
+            part.dropped.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         // The one allocation, on a shape's first statement; a failure drops
         // the row rather than the statement (the header's rule).
         try {
-            StatementShape shape;
-            shape.fetch_id = fetch_id;
-            shape.kind = std::string(kind);
-            shape.binding = binding;
-            shape.first_seen_us = now_us;
+            Row row;
+            row.counts.fetch_id = fetch_id;
+            row.counts.binding = binding;  // a fixed array: a row's copy still allocates nothing
+            row.counts.first_seen_us = now_us;
             // Cut at a character boundary: a UTF-8 continuation byte
             // (`10xxxxxx`) at the cut moves it back, so the text stays
             // decodable by a client that decodes strictly.
@@ -102,14 +109,16 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
                    (static_cast<unsigned char>(line[cut]) & 0xC0) == 0x80) {
                 --cut;
             }
-            shape.shape_text = std::string(line.substr(0, cut));
-            found = part.shapes.emplace(key, std::move(shape)).first;
+            row.shape_text = std::make_shared<const std::string>(line.substr(0, cut));
+            found = part.shapes.emplace(key, std::move(row)).first;
+            part.held.store(part.shapes.size(), std::memory_order_relaxed);
         } catch (const std::bad_alloc&) {
-            ++part.dropped;
+            part.dropped.fetch_add(1, std::memory_order_relaxed);
             return;
         }
     }
-    StatementShape& shape = found->second;
+    Row& row = found->second;
+    StatementShape& shape = row.counts;
     ++shape.calls;
     if (refused) ++shape.refused;
     shape.total_us += elapsed_us;
@@ -134,17 +143,19 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
     // **The latest compile decides the source** (sys-views.md §6.1): a call
     // that compiled its own chain, or handed a source, writes the pair - an
     // empty one too, so a shape a plan stopped applying to reads NULL - and
-    // a call that compiled nothing keeps what the shape had. Assigned only
+    // a call that compiled nothing keeps what the shape had. Replaced only
     // where it moved: a shape runs one source statement after statement, so
     // this is two compares and no allocation.
     if (!cost.compiled && plan_source.empty()) return;
-    if (shape.plan_source != plan_source || shape.plan_label != plan_label) {
+    if (plan_source.empty()) {
+        row.plan.reset();  // a reader's copy keeps the note it took
+        return;
+    }
+    if (row.plan == nullptr || row.plan->source != plan_source || row.plan->label != plan_label) {
         try {
-            // Both made before either is kept, so the pair never mixes.
-            std::string source(plan_source);
-            std::string label(plan_label);
-            shape.plan_source = std::move(source);
-            shape.plan_label = std::move(label);
+            // Made whole before it is kept, so the pair never mixes.
+            row.plan = std::make_shared<const PlanNote>(
+                PlanNote{std::string(plan_source), std::string(plan_label)});
         } catch (const std::bad_alloc&) {
             // The counts stand; the source stays the last one written.
         }
@@ -153,12 +164,35 @@ void StatementStats::Record(std::uint32_t core, std::uint64_t fetch_id, std::str
 
 std::vector<StatementShape> StatementStats::Snapshot() {
     std::unordered_map<Key, StatementShape, KeyHash> merged;
+    // One part's rows at a time, copied under its latch into room reserved
+    // before the hold and merged after it.
+    std::vector<std::pair<Key, Row>> taken;
     for (Part& part : parts()) {
-        const LatchGuard held(&part.latch);
-        for (const auto& [key, shape] : part.shapes) {
+        for (;;) {
+            taken.clear();
+            const std::size_t expected = part.held.load(std::memory_order_relaxed);
+            if (expected == 0) break;  // a core that recorded nothing: no latch taken
+            taken.reserve(expected);
+            const LatchGuard held(&part.latch);
+            // A shape first seen between the reserve and the hold: let go
+            // and reserve again, rather than allocate under the latch.
+            if (part.shapes.size() > taken.capacity()) continue;
+            for (const auto& entry : part.shapes) taken.emplace_back(entry.first, entry.second);
+            break;
+        }
+        for (const auto& [key, row] : taken) {
+            const StatementShape& shape = row.counts;
             auto [at, fresh] = merged.try_emplace(key, shape);
-            if (fresh) continue;
             StatementShape& into = at->second;
+            if (fresh) {
+                into.kind = std::string(key.kind);
+                into.shape_text = *row.shape_text;
+                if (row.plan != nullptr) {
+                    into.plan_source = row.plan->source;
+                    into.plan_label = row.plan->label;
+                }
+                continue;
+            }
             into.calls += shape.calls;
             into.refused += shape.refused;
             into.total_us += shape.total_us;
@@ -177,12 +211,12 @@ std::vector<StatementShape> StatementStats::Snapshot() {
             }
             if (shape.first_seen_us < into.first_seen_us) {
                 into.first_seen_us = shape.first_seen_us;
-                into.shape_text = shape.shape_text;
+                into.shape_text = *row.shape_text;
             }
             // The source of the core that saw the shape last.
-            if (shape.last_seen_us > into.last_seen_us && !shape.plan_source.empty()) {
-                into.plan_source = shape.plan_source;
-                into.plan_label = shape.plan_label;
+            if (shape.last_seen_us > into.last_seen_us && row.plan != nullptr) {
+                into.plan_source = row.plan->source;
+                into.plan_label = row.plan->label;
             }
             into.last_seen_us = std::max(into.last_seen_us, shape.last_seen_us);
         }
@@ -208,10 +242,13 @@ std::vector<StatementShape> StatementStats::Snapshot() {
 
 std::uint64_t StatementStats::Dropped() noexcept {
     std::uint64_t total = 0;
-    for (Part& part : parts()) {
-        const LatchGuard held(&part.latch);
-        total += part.dropped;
-    }
+    for (Part& part : parts()) total += part.dropped.load(std::memory_order_relaxed);
+    return total;
+}
+
+std::uint64_t StatementStats::Busy() noexcept {
+    std::uint64_t total = 0;
+    for (Part& part : parts()) total += part.busy.load(std::memory_order_relaxed);
     return total;
 }
 
@@ -219,7 +256,9 @@ void StatementStats::ResetForTest() noexcept {
     for (Part& part : parts()) {
         const LatchGuard held(&part.latch);
         part.shapes.clear();
-        part.dropped = 0;
+        part.held.store(0, std::memory_order_relaxed);
+        part.dropped.store(0, std::memory_order_relaxed);
+        part.busy.store(0, std::memory_order_relaxed);
     }
 }
 

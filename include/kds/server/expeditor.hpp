@@ -882,13 +882,13 @@ private:
 
     // **The optimizer surface's shared state** (AT-S8, `OptimizerSurface`):
     // the `CABIN_OPTIMIZER` switch every core's `SET` flips and the cadence
-    // reads; the collector's latch, armed above one core; and the view latch
-    // core 0's cadence holds across a tick while any core's
-    // `SHOW CABIN_OPTIMIZER` reads the controller. Order: the view latch is
-    // outer to the collector's. **The tick holds the view latch across I/O**
-    // - a `CreateCabin` and the whole seeded build's walk - so a
-    // `SHOW CABIN_OPTIMIZER` on a peer sleeps that peer's reactor for a
-    // build (`known-gaps.md`); a reader never holds it across I/O.
+    // and every note read; and the board core 0's cadence publishes the
+    // controller's view to (`exec/cabin_optimizer_view.hpp`, DL-S3). **The
+    // controller, the executor and the collector's folded state are the
+    // tick's alone, and no latch is held across a tick**: a
+    // `SHOW CABIN_OPTIMIZER` or a `SHOW META` on any core reads the copy
+    // the last tick published. The collector has no latch here either: a
+    // note takes its own core's part (`stats/optimizer_signals.hpp`).
     std::atomic<bool> cabin_optimizer_on_{false};
     // `join_order`, the instance's one value, seeded from the config and
     // flipped by any core's `SET JOIN_ORDER`; and the captured plans of
@@ -911,8 +911,10 @@ private:
     // Whether the persisting step's last call failed: its warning is logged
     // when a run of failures starts, not once a second through it.
     bool plans_persist_failing_ = false;
-    Latch optimizer_signals_latch_{LatchKind::kOptimizer};
-    Latch cabin_view_latch_{LatchKind::kOptimizer};
+    exec::CabinOptimizerViewBoard cabin_view_board_;
+    // A publish that met a view's copy of the pointer and is owed again;
+    // the cadence's alone.
+    bool cabin_view_owed_ = false;
     wal::CheckpointGate checkpoint_gate_;
 
     std::optional<txn::TrxIdSequence> trx_ids_;
@@ -1039,9 +1041,9 @@ private:
     void StopPageReader() noexcept;
 
     // The optimizer surface every core's dispatcher is handed (AT-S8,
-    // `OptimizerSurface`): the collector, the switch, and
-    // the controller view where a Cabin store exists. The view latch is
-    // armed above one core only.
+    // `OptimizerSurface`): the collector, the switch, and the board the
+    // tick publishes the controller's view to where a Cabin store exists
+    // (DL-S3).
     OptimizerSurface Optimizer();
 
     // Core 0's checkpointer; the live set it records comes from the

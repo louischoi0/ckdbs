@@ -1,5 +1,8 @@
+#include <atomic>
+#include <chrono>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -83,6 +86,94 @@ protected:
     std::optional<CommandDispatcher> dispatcher_;
     stats::PlanStats stats_{1};
 };
+
+// **The steward waits for nothing** (`docs/rules/rules.md` §3a, DL-Q17): it
+// is a timer callback on core 0's reactor, so a latch it waited for would
+// stop that core's statements. With the installers' latch held - the way an
+// operator's statistics statement holds it - a step that has something to
+// publish returns, publishes nothing and stays owed; with a part's latch
+// held it leaves that part's observations where they are. The next step,
+// nothing held, publishes both.
+TEST_F(PlanStatsTest, AStewardStepReturnsUnderHeldLatchesAndPublishesAtTheNext) {
+    Fill();
+    const std::string sql = "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31";
+    Ok(sql);  // wants the two relations' priors and folds an observation
+    const std::uint64_t before = stats_.generation();
+
+    const auto step_under = [&](Latch* latch, std::uint64_t now) {
+        std::atomic<bool> returned{false};
+        std::optional<LatchGuard> held(std::in_place, latch);
+        std::thread steward([&] {
+            (void)stats_.StewardStep(boot_->catalog, store_, now);
+            returned.store(true);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!returned.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const bool under = returned.load();
+        held.reset();
+        steward.join();
+        return under;
+    };
+
+    // The part held: its entries and wanted priors stay in it.
+    ASSERT_TRUE(step_under(stats_.PartLatchForTest(0), kSecond)) << "the steward waited for a part";
+    EXPECT_EQ(stats_.generation(), before) << "a step that merged nothing published";
+    // The installers' latch held: the merge and the seeds run, the publish does not.
+    ASSERT_TRUE(step_under(stats_.InstallLatchForTest(), 2 * kSecond))
+        << "the steward waited for an install";
+    EXPECT_EQ(stats_.generation(), before) << "a publish landed under another installer's hold";
+    // The managed store's latch held, as an operator's statistics statement
+    // holds it: the bands cannot be read, so nothing is installed.
+    ASSERT_TRUE(step_under(stats_.ManagedLatchForTest(), 2 * kSecond + 1))
+        << "the steward waited for the managed store";
+    EXPECT_EQ(stats_.generation(), before);
+    // The pointer's latch held, as a pin's copy holds it: the snapshot is
+    // built and not swapped in.
+    ASSERT_TRUE(step_under(stats_.PublishLatchForTest(), 2 * kSecond + 2))
+        << "the steward waited for a pin's copy";
+    EXPECT_EQ(stats_.generation(), before);
+    const std::uint64_t publishes = stats_.counters().publishes;
+
+    // Nothing held: what the steps left owed is published.
+    Steward(3 * kSecond);
+    EXPECT_GT(stats_.generation(), before);
+    EXPECT_EQ(stats_.counters().publishes, publishes + 1);
+    const auto snapshot = stats_.Current();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_TRUE(snapshot->RelationRows(OidOf("u")).has_value());
+    EXPECT_NE(Posterior(snapshot, {"u", "l"}, FetchIdOf(sql)), nullptr)
+        << "the observation a held part kept was lost";
+}
+
+// **A switched-off consumer collects nothing** (`docs/rules/rules.md` §3a's
+// second rule), for the planner's statistics: under `join_order = written`
+// no order is searched, captured or advised from what a run measured, and a
+// joined statement folds nothing and wants no prior. The part is untouched
+// - no entry, no wanted relation, nothing busy or dropped - so a steward
+// step after it seeds nothing and publishes nothing. Back under `planned`,
+// the same statement is the first the planner has seen.
+TEST_F(PlanStatsTest, UnderWrittenAJoinedStatementGathersNothingForThePlanner) {
+    Fill();
+    const std::string sql = "SELECT u.code FROM u JOIN l ON u.id = l.uid WHERE l.v = 31";
+    Ok("SET JOIN_ORDER written");
+    for (int i = 0; i < 3; ++i) Ok(sql);
+    Steward(kSecond);
+    const stats::PlanStats::Counters off = stats_.counters();
+    EXPECT_EQ(off.seeds, 0u) << "a relation was wanted for a planner that is off";
+    EXPECT_EQ(off.publishes, 0u) << "an observation was folded for a planner that is off";
+    EXPECT_EQ(off.part_busy + off.part_drops, 0u);
+    EXPECT_EQ(stats_.generation(), 0u);
+
+    Ok("SET JOIN_ORDER planned");
+    Ok(sql);
+    Steward(2 * kSecond);
+    EXPECT_GT(stats_.counters().seeds, 0u);
+    const auto snapshot = stats_.Current();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_NE(Posterior(snapshot, {"u", "l"}, FetchIdOf(sql)), nullptr);
+}
 
 TEST(PlanStatsBandTest, BandsAreHalfOctavesAndTheirCentresInvert) {
     EXPECT_EQ(stats::BandOf(1.0), 0);

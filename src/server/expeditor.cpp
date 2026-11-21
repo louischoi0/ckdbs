@@ -1401,18 +1401,23 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->WireInstanceServices(*expeditor->dispatcher_);
 
     // PHY01's collector, wired to both feeders: every core's dispatcher
-    // touches S1/S2 per successful SELECT, the one Cabin store forwards S3
-    // from its counting sites. One construction site, the config's clock
-    // and half-life bound once, and latched above one core (AT-S8).
-    expeditor->optimizer_signals_.emplace(&expeditor->clock_,
-                                          expeditor->config_.decay_half_life_ns);
-    if (expeditor->config_.cores > 1) {
-        expeditor->optimizer_signals_->SetLatch(&expeditor->optimizer_signals_latch_);
-    }
+    // notes S1/S2 per successful SELECT, the one Cabin store forwards S3
+    // from its counting sites - each into its own core's part, which the
+    // controller's tick folds (DL-S1). One construction site, the config's
+    // clock and half-life bound once. **Built only where its consumer can
+    // run** (`rules.md` §3a): with no Cabin store (`cabins = off`) or no
+    // cadence (`cabin_optimizer_snapshot_interval_ms = 0`) nothing ever
+    // folds a note, so there is no collector and no core is handed one.
     expeditor->cabin_optimizer_on_.store(expeditor->config_.cabin_optimizer);
     expeditor->join_order_.store(expeditor->config_.join_order);
-    // S4 (CJ WE13) counts only while the controller's own switch is on.
-    expeditor->optimizer_signals_->set_wait_gate(&expeditor->cabin_optimizer_on_);
+    if (expeditor->cabin_store_ && expeditor->config_.cabin_optimizer_snapshot_interval_ms > 0) {
+        expeditor->optimizer_signals_.emplace(&expeditor->clock_,
+                                              expeditor->config_.decay_half_life_ns,
+                                              expeditor->config_.cores);
+        // **Nothing is noted while the controller's own switch is off**:
+        // every note asks it first.
+        expeditor->optimizer_signals_->set_gate(&expeditor->cabin_optimizer_on_);
+    }
     expeditor->plan_stats_.emplace(expeditor->config_.cores);
     expeditor->access_stats_.emplace(expeditor->config_.access_stats_bytes_per_core);
     // CY-S1: the priors and managed objects the mount took, published
@@ -1428,7 +1433,14 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
             expeditor->database_->catalog, *expeditor->store_, *expeditor->cabin_store_,
             *expeditor->cabin_controller_, &*expeditor->txn_manager_);
         expeditor->cabin_executor_->set_plans(&expeditor->admin_plans_);
-        expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
+        // The views' first copy, before any core can read one: an empty
+        // controller and its budget. No reader exists yet, so the try holds.
+        (void)expeditor->cabin_view_board_.Publish(exec::BuildCabinOptimizerView(
+            &*expeditor->cabin_controller_, &*expeditor->cabin_executor_,
+            expeditor->optimizer_signals_ ? &*expeditor->optimizer_signals_ : nullptr));
+        if (expeditor->optimizer_signals_) {
+            expeditor->cabin_store_->set_signals(&*expeditor->optimizer_signals_);
+        }
     }
     // One surface for every core (AT-S8): core 0's dispatcher here, every
     // peer's at `Start`.
@@ -1503,7 +1515,7 @@ Status Expeditor::PersistTrxIdCeiling() {
 
 OptimizerSurface Expeditor::Optimizer() {
     OptimizerSurface surface;
-    surface.signals = &*optimizer_signals_;
+    surface.signals = optimizer_signals_ ? &*optimizer_signals_ : nullptr;
     surface.plan_stats = &*plan_stats_;
     surface.join_order = &join_order_;
     surface.captured_plans = &captured_plans_;
@@ -1512,11 +1524,7 @@ OptimizerSurface Expeditor::Optimizer() {
     surface.index_stats = &index_stats_;
     surface.access_stats = &*access_stats_;
     surface.cabin_optimizer_on = &cabin_optimizer_on_;
-    if (cabin_controller_) {
-        surface.controller = &*cabin_controller_;
-        surface.executor = &*cabin_executor_;
-    }
-    surface.view_latch = config_.cores > 1 ? &cabin_view_latch_ : nullptr;
+    if (cabin_controller_) surface.view_board = &cabin_view_board_;
     return surface;
 }
 
@@ -1910,7 +1918,7 @@ Status Expeditor::Start() {
     // Core 0's ASH ring into `sys.ash`'s registry (CJ WE08): at `cores = 1`
     // no `AttachWakerTable` runs below, which is where every other core's is.
     scheduler.ash().set_core_id(0);
-    scheduler.ash().set_wait_sink(&*optimizer_signals_);
+    if (optimizer_signals_) scheduler.ash().set_wait_sink(&*optimizer_signals_);
     // `SHOW META`'s group-accounting block on core 0 (sched.md §4), cleared
     // on every exit by `~ServeRuntime`.
     dispatcher_->set_scheduler_view(&scheduler);
@@ -2213,15 +2221,26 @@ Status Expeditor::Start() {
         const sched::MonoTimeNs interval =
             config_.cabin_optimizer_snapshot_interval_ms * 1'000'000ULL;
         scheduler.SubmitEvery(interval, [this] {
-            // Under the view latch (AT-S8): a `SHOW CABIN_OPTIMIZER` on any
-            // core reads the controller this tick mutates. The switch is the
-            // instance's, so a `SET` on a peer reaches it.
-            const LatchGuard view(Optimizer().view_latch);
+            // **No latch across the tick** (DL-S3): the controller, the
+            // executor and the collector's folded state are this callback's
+            // alone, and a view on any core reads the copy published below.
+            // The switch is the instance's, so a `SET` on a peer reaches it.
+            // Whether this tick ran is the executor's tick count, not a read
+            // of the switch beside it: a `SET` between such a read and
+            // `Tick`'s own would leave a tick's changes unpublished.
+            const std::uint64_t ticks_before = cabin_executor_->counters().ticks;
             Status ticked = cabin_executor_->Tick(*optimizer_signals_, [this] {
                 return cabin_optimizer_on_.load(std::memory_order_relaxed);
             });
             if (!ticked.ok() && logger_->enabled(LogLevel::kWarn)) {
                 logger_->Warn("expeditor", "cabin optimizer tick failed: " + ticked.message());
+            }
+            // What the views show, as this tick left it; a tick that was off
+            // changed nothing. Tried, never waited for (DL-Q17): a publish
+            // that met a view's copy of the pointer is owed to the next tick.
+            if (cabin_executor_->counters().ticks != ticks_before || cabin_view_owed_) {
+                cabin_view_owed_ = !cabin_view_board_.Publish(exec::BuildCabinOptimizerView(
+                    &*cabin_controller_, &*cabin_executor_, &*optimizer_signals_));
             }
         });
         logger_->Info("expeditor",

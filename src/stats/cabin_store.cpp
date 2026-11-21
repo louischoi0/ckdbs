@@ -129,36 +129,24 @@ CabinSet CabinStore::Find(const CabinKey& key) {
 }
 
 void CabinStore::NoteHit(std::uint64_t cabin_id) {
-    {
-        Partition& part = PartitionFor(cabin_id);
-        LatchGuard hold(Armed(part.latch));
-        ++part.info[cabin_id].hits;
-    }
-    {
-        LatchGuard hold(Armed(stats_latch_));
-        ++stats_.hits;
-    }
-    // Outside both latches: the signals sink is another structure with its
-    // own rules, and calling into it under ours would order two latches
-    // nothing else orders.
-    if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/true);
+    const StatisticsRecordScope recording("a Cabin probe's count");
+    // This core's words: no latch (the header's "counters" note).
+    if (CabinUse* use = MyUse(cabin_id); use != nullptr) use->hits.add(1);
+    MyStats().hits.add(1);
+    // The signals sink is another structure with its own rules: a note
+    // goes to this core's part of it, and only while its consumer is on.
+    if (signals_ != nullptr) signals_->NoteCabinLookup(CurrentCore(), cabin_id, /*served=*/true);
 }
 
 void CabinStore::NoteMiss(std::uint64_t cabin_id) {
-    {
-        Partition& part = PartitionFor(cabin_id);
-        LatchGuard hold(Armed(part.latch));
-        ++part.info[cabin_id].misses;
-    }
-    {
-        LatchGuard hold(Armed(stats_latch_));
-        ++stats_.misses;
-    }
-    if (signals_ != nullptr) signals_->NoteCabinLookup(cabin_id, /*served=*/false);
+    const StatisticsRecordScope recording("a Cabin probe's count");
+    if (CabinUse* use = MyUse(cabin_id); use != nullptr) use->misses.add(1);
+    MyStats().misses.add(1);
+    if (signals_ != nullptr) signals_->NoteCabinLookup(CurrentCore(), cabin_id, /*served=*/false);
 }
 
 void CabinStore::NoteHint(std::uint64_t cabin_id, bool ok) {
-    if (signals_ != nullptr) signals_->NoteCabinHint(cabin_id, ok);
+    if (signals_ != nullptr) signals_->NoteCabinHint(CurrentCore(), cabin_id, ok);
 }
 
 bool CabinStore::MayObserve(const CabinKey& key) const {
@@ -170,15 +158,9 @@ bool CabinStore::MayObserve(const CabinKey& key) const {
     return info == part.info.end() || info->second.values < limits_.max_values;
 }
 
-void CabinStore::NoteCapRefusal() {
-    LatchGuard hold(Armed(stats_latch_));
-    ++stats_.cap_refusals;
-}
+void CabinStore::NoteCapRefusal() { MyStats().cap_refusals.add(1); }
 
-void CabinStore::NoteUnbankableView() {
-    LatchGuard hold(Armed(stats_latch_));
-    ++stats_.unbankable_views;
-}
+void CabinStore::NoteUnbankableView() { MyStats().unbankable_views.add(1); }
 
 void CabinStore::NoteEntryCapRefusal(const CabinKey& key) {
     {
@@ -187,13 +169,29 @@ void CabinStore::NoteEntryCapRefusal(const CabinKey& key) {
         part.entry_capped.insert(key);
         part.sightings.erase(key);
     }
-    LatchGuard hold(Armed(stats_latch_));
-    ++stats_.cap_refusals;
+    MyStats().cap_refusals.add(1);
 }
 
 CabinStore::Stats CabinStore::stats() const {
-    LatchGuard hold(Armed(stats_latch_));
-    return stats_;
+    Stats total;
+    for (const StatsPart& part : stats_parts_) {
+        const StatsWords& w = part.words;
+        total.hits += w.hits.get();
+        total.misses += w.misses.get();
+        total.recordings += w.recordings.get();
+        total.appends += w.appends.get();
+        total.unobserved += w.unobserved.get();
+        total.cap_refusals += w.cap_refusals.get();
+        total.sighting_clears += w.sighting_clears.get();
+        total.unbankable_views += w.unbankable_views.get();
+    }
+    return total;
+}
+
+std::uint64_t CabinStore::use_dropped() const noexcept {
+    std::uint64_t total = 0;
+    for (const UsePart& part : use_parts_) total += part.dropped();
+    return total;
 }
 
 std::size_t CabinStore::observed_value_count() const {
@@ -231,10 +229,7 @@ std::uint8_t CabinStore::Observe(const CabinKey& key) {
         if (held != std::numeric_limits<std::uint8_t>::max()) ++held;
         count = held;
     }
-    if (cleared) {
-        LatchGuard hold(Armed(stats_latch_));
-        ++stats_.sighting_clears;
-    }
+    if (cleared) MyStats().sighting_clears.add(1);
     return count;
 }
 
@@ -350,9 +345,8 @@ bool CabinStore::Commit(const CabinKey& key, std::vector<CabinEntry> entries) {
             }
         }
     }
-    LatchGuard hold(Armed(stats_latch_));
-    if (counted == Counted::kCapRefusal) ++stats_.cap_refusals;
-    if (counted == Counted::kRecording) ++stats_.recordings;
+    if (counted == Counted::kCapRefusal) MyStats().cap_refusals.add(1);
+    if (counted == Counted::kRecording) MyStats().recordings.add(1);
     return accepted;
 }
 
@@ -427,8 +421,7 @@ void CabinStore::Unobserve(const CabinKey& key) {
         part.sightings.erase(key);
         part.entry_capped.erase(key);
     }
-    LatchGuard hold(Armed(stats_latch_));
-    ++stats_.unobserved;
+    MyStats().unobserved.add(1);
 }
 
 namespace {
@@ -517,6 +510,16 @@ void CabinStore::Forget(std::uint64_t cabin_id) {
         it = it->first.cabin_id == cabin_id ? part.building.erase(it) : std::next(it);
     }
     part.info.erase(cabin_id);
+    // Its probe counts go with it: every core's words for the id are
+    // zeroed where they stand - a store, never a wait. A probe that was
+    // compiled before the drop and counts after it leaves a count nothing
+    // reads: the id is never issued again.
+    for (UsePart& use_part : use_parts_) {
+        if (CabinUse* use = use_part.Find(cabin_id); use != nullptr) {
+            use->hits.set(0);
+            use->misses.set(0);
+        }
+    }
 }
 
 void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
@@ -558,19 +561,32 @@ void CabinStore::NoteWrite(const CabinKey& key, const CabinEntry& entry) {
             counted = Counted::kAppend;
         }
     }
-    LatchGuard hold(Armed(stats_latch_));
-    if (counted == Counted::kAppend) ++stats_.appends;
+    // The writer's own core's words: nothing is taken for the count, which
+    // is made under the write's exclusive page hold.
+    StatsWords& mine = MyStats();
+    if (counted == Counted::kAppend) mine.appends.add(1);
     if (counted == Counted::kCap) {
-        ++stats_.unobserved;
-        ++stats_.cap_refusals;
+        mine.unobserved.add(1);
+        mine.cap_refusals.add(1);
     }
 }
 
 CabinStore::CabinInfo CabinStore::InfoFor(std::uint64_t cabin_id) const {
-    const Partition& part = PartitionFor(cabin_id);
-    LatchGuard hold(Armed(part.latch));
-    auto it = part.info.find(cabin_id);
-    return it == part.info.end() ? CabinInfo{} : it->second;
+    CabinInfo info;
+    {
+        const Partition& part = PartitionFor(cabin_id);
+        LatchGuard hold(Armed(part.latch));
+        auto it = part.info.find(cabin_id);
+        if (it != part.info.end()) info = it->second;
+    }
+    // The probe counts are every core's words, summed as they stand.
+    for (const UsePart& part : use_parts_) {
+        if (const CabinUse* use = part.Peek(cabin_id); use != nullptr) {
+            info.hits += use->hits.get();
+            info.misses += use->misses.get();
+        }
+    }
+    return info;
 }
 
 // **`Locked` in the name, and it is the contract**: both are called from

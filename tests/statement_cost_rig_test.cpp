@@ -292,8 +292,9 @@ TEST_F(StatementCostRig, AConflictArmsSubqueryIsBoundWhetherOrNotARowConflicts) 
 
     EXPECT_EQ(free_key.binding.n, 2u) << "the target, then the arm's subquery's relation";
     EXPECT_TRUE(free_key.binding == taken_key.binding);
-    const stats::StatementShape* shape =
-        ShapeOf(stats::StatementStats::Snapshot(), "INSERT", upsert);
+    // Kept: the row found points into it.
+    const std::vector<stats::StatementShape> shapes = stats::StatementStats::Snapshot();
+    const stats::StatementShape* shape = ShapeOf(shapes, "INSERT", upsert);
     ASSERT_NE(shape, nullptr);
     EXPECT_EQ(shape->calls, 2u) << "one row for both";
 }
@@ -343,14 +344,28 @@ TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheView
     ASSERT_EQ(refused_replies, static_cast<std::uint64_t>(kRounds));
 
     const std::vector<stats::StatementShape> shapes = stats::StatementStats::Snapshot();
+    // **A record that met the other core's view read was not waited for**
+    // (`docs/rules/rules.md` §3a, DL-S2): it is counted busy and is in no
+    // shape. So every statement of both scripts is in a shape or in that
+    // count, and a shape's calls fall short of what ran by no more than it.
+    const std::uint64_t busy = stats::StatementStats::Busy();
+    std::uint64_t recorded = 0;
+    for (const stats::StatementShape& shape : shapes) recorded += shape.calls;
+    EXPECT_EQ(recorded + busy, scripts[0].lines.size() + scripts[1].lines.size())
+        << "a statement neither recorded nor counted busy";
+    const auto ran = [&](const stats::StatementShape& shape, std::uint64_t statements) {
+        EXPECT_LE(shape.calls, statements) << shape.shape_text;
+        EXPECT_GE(shape.calls + busy, statements) << shape.shape_text;
+    };
+
     // One row for the shape both cores ran, with the sums.
     const stats::StatementShape* read = ShapeOf(shapes, "SELECT", select);
     ASSERT_NE(read, nullptr);
-    EXPECT_EQ(read->calls, 2u * kRounds);
-    EXPECT_EQ(read->rows, 2u * kRounds);
+    ran(*read, 2u * kRounds);
+    EXPECT_EQ(read->rows, read->calls);
     EXPECT_EQ(read->refused, 0u);
-    EXPECT_EQ(read->executed_calls, 2u * kRounds);
-    EXPECT_GE(read->rows_examined, 2u * kRounds);
+    EXPECT_EQ(read->executed_calls, read->calls);
+    EXPECT_GE(read->rows_examined, read->calls);
     std::uint64_t in_buckets = 0;
     for (std::uint64_t n : read->latency) in_buckets += n;
     EXPECT_EQ(in_buckets, read->calls) << "a shape's histogram sums to its calls";
@@ -359,25 +374,27 @@ TEST_F(StatementCostRig, BothCoresRecordOneShapeAndRefusalsWhileEachReadsTheView
     // counted: the outcome is replaced by the walk's reply in between.
     const stats::StatementShape* walked = ShapeOf(shapes, "SELECT", scan);
     ASSERT_NE(walked, nullptr);
-    EXPECT_EQ(walked->calls, static_cast<std::uint64_t>(kRounds));
-    EXPECT_EQ(walked->rows, 2u * kRounds) << "two rows a call";
-    EXPECT_EQ(walked->executed_calls, static_cast<std::uint64_t>(kRounds));
-    EXPECT_GE(walked->rows_examined, 2u * kRounds);
-    EXPECT_EQ(walked->compiled_calls, static_cast<std::uint64_t>(kRounds));
-    EXPECT_EQ(walked->timed_calls, static_cast<std::uint64_t>(kRounds));
+    ran(*walked, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(walked->rows, 2u * walked->calls) << "two rows a call";
+    EXPECT_EQ(walked->executed_calls, walked->calls);
+    EXPECT_GE(walked->rows_examined, 2u * walked->calls);
+    EXPECT_EQ(walked->compiled_calls, walked->calls);
+    EXPECT_EQ(walked->timed_calls, walked->calls);
 
     const stats::StatementShape* write =
         ShapeOf(shapes, "UPDATE", "UPDATE r SET v = v + 1 WHERE id = 2");
     ASSERT_NE(write, nullptr);
-    EXPECT_EQ(write->calls, static_cast<std::uint64_t>(kRounds));
-    EXPECT_EQ(write->rows, static_cast<std::uint64_t>(kRounds));
+    ran(*write, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(write->rows, write->calls);
 
     const stats::StatementShape* refused =
         ShapeOf(shapes, "INSERT", "INSERT INTO r (id, v) VALUES (1, 9)");
     ASSERT_NE(refused, nullptr);
-    EXPECT_EQ(refused->refused, static_cast<std::uint64_t>(kRounds));
+    ran(*refused, static_cast<std::uint64_t>(kRounds));
+    EXPECT_EQ(refused->refused, refused->calls);
     EXPECT_EQ(refused->conflicts, 0u) << "a bound key is no lost race";
 
+    // The refusal counts take no latch, so none is lost to a reader.
     // The refusals are core 1's, under the code its client was told.
     const std::vector<stats::RefusalCount> refusals = stats::RefusalStats::Snapshot();
     ASSERT_EQ(refusals.size(), 1u);

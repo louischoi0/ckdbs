@@ -584,6 +584,30 @@ TEST_F(ExpeditorTest, ThePageReaderRunsAtEveryCoreCountAndEveryDispatcherHoldsIt
     }
 }
 
+// **A switched-off consumer collects nothing** (`docs/rules/rules.md` §3a;
+// DL-S1): the Cabin controller's collector is folded by the controller's
+// tick and by nothing else, so where no tick can run - no Cabin store, or no
+// cadence - there is no collector, and no core is handed one, whatever the
+// switch says. With both, every core is handed the instance's one.
+TEST_F(ExpeditorTest, WhereNoTickCanRunNoCoreIsHandedACollector) {
+    const auto handed = [&](bool cabins, std::uint64_t interval_ms) {
+        Expeditor::Config config = ConfigAt(/*cores=*/2);
+        config.cabins = cabins;
+        config.cabin_optimizer = true;
+        config.cabin_optimizer_snapshot_interval_ms = interval_ms;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        EXPECT_TRUE(opened.ok()) << opened.status().message();
+        if (!opened.ok()) return false;
+        Expeditor& db = *opened.value();
+        EXPECT_TRUE(Started(db.Start()));
+        if (db.cores().empty()) return false;
+        return db.cores().front()->config().optimizer.signals != nullptr;
+    };
+    EXPECT_TRUE(handed(/*cabins=*/true, /*interval_ms=*/10000));
+    EXPECT_FALSE(handed(/*cabins=*/true, /*interval_ms=*/0)) << "a collector nothing folds";
+    EXPECT_FALSE(handed(/*cabins=*/false, /*interval_ms=*/10000)) << "a collector nothing folds";
+}
+
 // ---- AT-S8: a session runs where it was accepted --------------------------
 //
 // Every core listens on the port, so what a peer is handed decides what a
@@ -624,7 +648,7 @@ TEST_F(ExpeditorTest, EveryPeerListensAndCarriesCoreZerosStatementLimits) {
     db.dispatcher().set_cabin_optimizer_enabled(true);
     EXPECT_TRUE(surface.cabin_optimizer_on->load()) << "core 0 and the peer hold two switches";
     EXPECT_NE(surface.signals, nullptr) << "the peer's reads feed no optimizer signal";
-    EXPECT_NE(surface.view_latch, nullptr) << "two cores and no view latch";
+    EXPECT_NE(surface.view_board, nullptr) << "the peer's views read no published copy";
 }
 
 // CX-R10: the configured `join_order` is the instance's one value - core 0

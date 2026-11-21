@@ -606,14 +606,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   latch would produce it. Not investigated, not re-measured. Owner: whoever
   measures next, from `wal.md` §3 and `page.md` §6.
 
-- **A `SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build.**
-  Core 0's cadence tick (`src/server/expeditor.cpp`) holds the controller's
-  view latch, a `std::mutex` (`include/kds/base/latch.hpp`), across a tick
-  that may create a Cabin and walk its relation; a peer's `SHOW` takes the
-  same latch (`src/server/sys_views.cpp`) and sleeps that reactor, and every
-  session on it, for the build. Liveness, not correctness. The fix is for
-  the tick to publish a copy of the view and the `SHOW` to read the copy.
-  Re-verified at `7dd9b789` by reading. Owner:
+- **The Cabin controller's seeded build stops core 0 for a whole-relation
+  walk.** A created or extended Cabin's build
+  (`CabinOptimizerExecutor::BuildSeededSets`) runs inside the tick's one
+  timer callback with no yield, a shared latch on the leaf it stands on, and
+  a create holds `sys.cabins`' root exclusive across a catalog scan and a
+  log append; every session on core 0 waits for the walk. Not a statistic's
+  wait - an entry set is the Cabin's feature (`rules.md` §3a's readings) -
+  so DL did not close it; what DL closed is the other cores' wait behind
+  it: `SHOW CABIN_OPTIMIZER` and `SHOW META` read a published copy and wait
+  for no tick. Off by default (`cabin_optimizer`). Verified on worktree
+  `dl-statistics-queue-no-statement` at `b0a824db` by reading. Owner:
   `docs/spec/cabin-controller.md`.
 
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
@@ -2065,10 +2068,38 @@ Verified on `bo-relation-stats-checkpoints` at `86d1fe1a` (BO-S7). Owned by
   or undo page is labelled `HEAP` and its contents read as heap slots. A
   diagnostic's mislabel, not an answer; the page type byte is the
   authority, and the view's `page_type` should spell it.
-- **A view's read delays the writer of each part it copies** by the copy: a
-  reader takes each core's statistics latch in turn. Bounded by the part
-  (4096 shapes, 4096 relations, 4096 waits, 1024 runs), unmeasured as a
-  tail on the writing core.
+- **A view's read costs the writer of a latched part the records that meet
+  its copy**, never a wait (DL-S2): a record tries its part's latch and is
+  dropped and counted where a reader holds it (`sys.meta`'s `*_busy`
+  fields). Bounded by the part (4096 shapes, 4096 waits, 1024 runs, an ASH
+  ring). Measured at DL's close (`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`,
+  `storm8`, on a host that was not quiet): one session reading
+  `sys.statement_stats`, `sys.relation_stats` and `sys.meta` in a loop
+  beside 16 point-`SELECT` clients at `cores` 8 cost 254 dropped
+  `sys.statement_stats` records in 1.03 million statements (0.00025 a
+  statement) and 38 `stats_ring` waits, all of them the reader's; **what it
+  does to the described statements' tail is not resolved** (DL-Q9's bar,
+  M3): every p99 of that run was 4-6 ms in both arms, the host's.
+- **DL-Q4's two words are unpriced** (DL-S6): the buffer pool's hit count
+  (`device_page_store.cpp`, `hits_.Add()`) and `CapturedPlans::CountServed`
+  are one word every core writes on a statement's path. DL's close measured
+  each against the same binary with it skipped and found nothing above the
+  floor (+0.26 us and -1.02 us a statement, inside 4.5 us and 8.3 us of a
+  contended host's spread), so they stay as they are; a quiet re-run of
+  `pool8x` and `join8ix` (the archive's `dl_close.py`) is what prices them.
+- **`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` fails about
+  one run in 70 on `origin/main` at `07f4552a`** (3 of 200 interleaved with
+  DL's merged tree at `43cecfa0`, which failed 0 of 200; found by DL's second
+  sync). Each failure is one kick skipped (`kicks skipped 1`), which the wake
+  registry allows by design and which costs the reactor one 5 s idle block,
+  past the cell's 2 s bound: the cell claims more than the contract. Not
+  bisected inside `main`.
+- **A shape past a part's 4,096 statement shapes loses its record, every
+  time** (`sys.statement_stats`, `kShapesPerCore`): at 6,000 live shapes DL's
+  close found B dropping 0.28-0.30 of `sys.statement_stats` records, counted
+  in `statement_stats_dropped`. A bound, as designed, and now reached: with
+  the eviction cliff gone (DL-S1) a statement reaches it at 20,902 a second
+  where it used to stall first.
 - **An in-process restart keeps the statistics stores**: they are
   process-wide, so the sim harness's restart (`sim/`) and a test's second
   instance in one process see the rows the first wrote. A real restart
@@ -2452,6 +2483,16 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   Owned by `plan-stats.md` PS16.
 
 ## Captured plans (CX)
+
+- **A compile of a captured shape can wait for the captured-plan table's
+  latch** (`plan_table`), which another core's compile or core 0's
+  `system` task holds: 0.0147 waits a statement, 0.09 us, on DL's close's
+  `join8i` at `cores` 8 on `30e169df`, the same with `CountServed` skipped
+  (`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`). Before DL-Q18
+  the latch was counted as `stats_ring`, which is where A's 0.0142 waits on
+  that cell are (CLA's reading of the relabel; the results file does not
+  isolate it). A plan table is not a statistic (DL-Q0 (a)), so `rules.md`
+  §3a does not reach it; whether a compile may wait for it is CX's.
 
 - **A capture is lost if the instance crashes within about a second of
   it.** Verified at CX-S1a on `cx-plan-change-option`. A capture is in
@@ -3054,56 +3095,6 @@ Verified on `da-access-stats-memory-resident` at DA-S1
   how many were lost; the key raises the bound.
 - **A dropped relation's shapes stay until a restart** and count against
   their cores' bounds, as they stayed until a mount before.
-
-## Statistics that can queue a statement (DL)
-
-Verified in the main checkout on `main` at `1aaafe1b` by reading; nothing
-here is measured. The rules are `docs/rules/rules.md` §3a's two; the milestone that
-closes these is `instructions/v3.2.0/workorder-dl-statistics-queue-no-statement.md`,
-whose §1.2 carries the `path:line` of each. A first reading of `src/stats/`
-and its call sites, not a census: DL-S0 is the census.
-
-- **Every successful `SELECT` with an identity takes one latch for the
-  instance to note itself to the Cabin controller's collector**
-  (`OptimizerSignals::NoteExecution`), on every core, whether or not
-  `cabin_optimizer` is on - it is off by default, and only the wait sample
-  asks the switch. Under that latch a new fingerprint past 4,096 evicts by
-  a scan of the whole table, and the controller's tick copies and sorts
-  every entry. Breaks clauses (a) and (c), and the second rule: the consumer is
-  off and the statement still builds an identity and notes for it. Its cost is inside every
-  `cores = 8` number of DA's results files and separated in none.
-  **DI-S2 changed this path's key and nothing else of it** (on
-  `di-shape-identity`): the table holds a signal a `(fingerprint,
-  candidate)` and a second map a fingerprint's waits, so the 4,096 is
-  reached sooner and the eviction's scan with it; the latch, the switch
-  and the scan are as they were, and are DL's.
-- **A Cabin probe's hit or miss takes three shared latches to count
-  itself**: the cabin's partition latch a second time, the instance's one
-  `stats_latch_`, and the collector's latch above (`CabinStore::NoteHit`,
-  `NoteMiss`). Reached by a statement whose plan names a Cabin. Breaks (a).
-- **A record into a per-core statistics part waits for a reader's copy of
-  that part**, and the latch is a `std::mutex`, so the wait sleeps the
-  core's reactor and every session on it: `StatementStats` (whose
-  `Snapshot` merges and allocates under the latch, up to 4,096 shapes a
-  part, and whose `sys.meta` drop count takes every part's latch),
-  `RelationStats`, `LeafStats` (counted under a leaf's page hold),
-  `AccessStats`, `LockWaitLog`, `CheckpointLog`, `AshRing`, and
-  `PlanStats`' parts (the steward's `Merge` allocates under the latch over
-  a 1,024-slot table). Allowed by DF-R2 and DA-R3 as written; breaks (b),
-  the strict end state, and for the two allocating readers (c). The BO
-  entry above ("A view's read delays the writer of each part it copies")
-  is the same gap, older.
-- **A core's first compile after a plan-statistics publish takes the
-  instance's `publish_latch_`**, which an install holds across the
-  snapshot's construction (`PlanStats::Current`, `InstallLocked`). Breaks
-  (d).
-- **`SHOW CABIN_OPTIMIZER` can stall its core for a whole Cabin build**:
-  the entry under "Multi-core state, continued". Within the rule if the
-  controller's view is a statistic (DL-Q0).
-
-What already meets the rule: `RefusalStats`, `TxnStats`, `IndexStats`'
-counts, the wait statistics, the contention instrument and the per-core
-load slots - single-writer words a core, read with no latch.
 
 ## Connections and sessions (DJ)
 

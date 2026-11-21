@@ -66,7 +66,7 @@ private:
         PlanAdvice advice;
         std::uint64_t seq = 0;
     };
-    Latch latch_{LatchKind::kStatsRing};
+    Latch latch_{LatchKind::kPlanTable};
     std::unordered_map<CapturedKey, Entry, CapturedKeyHash> rows_;
     std::uint64_t next_seq_ = 0;
 };

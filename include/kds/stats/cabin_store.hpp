@@ -12,8 +12,12 @@
 #include <vector>
 
 #include "kds/base/common.hpp"
+#include "kds/base/current_core.hpp"
 #include "kds/base/latch.hpp"
 #include "kds/parser/ast.hpp"
+#include "kds/sched/wait_state.hpp"
+#include "kds/stats/counter_table.hpp"
+#include "kds/stats/per_core_ring.hpp"
 
 namespace kds::stats {
 // Forward-declared rather than included: the store only holds a pointer
@@ -347,7 +351,8 @@ public:
     // Counts a probe that was served / that fell through. Split from Find()
     // so a caller may look without being counted (tests, inspection), and so
     // the miss is counted once at the decision point rather than once per
-    // fallback path.
+    // fallback path. **A count takes no latch** (`docs/rules/rules.md` §3a,
+    // DL-S1): the calling core's own words, below.
     void NoteHit(std::uint64_t cabin_id);
     void NoteMiss(std::uint64_t cabin_id);
 
@@ -362,7 +367,8 @@ public:
     // exists (cabin-controller.md §II.2 S3). Null is the ordinary
     // no-optimizer configuration and costs one predicate per note. The
     // store forwards and never owns: eviction, snapshotting and caps are
-    // the collector's policy, not this class's.
+    // the collector's policy, not this class's - and so is the switch: a
+    // collector whose consumer is off takes no note (`rules.md` §3a).
     void set_signals(OptimizerSignals* signals) noexcept { signals_ = signals; }
 
     // ---- Recording ------------------------------------------------------
@@ -531,10 +537,11 @@ public:
 
     // ---- Inspection -----------------------------------------------------
 
-    // **By value since AT-S7**: the counters are read under their latch,
-    // so a caller cannot hold a reference into them while another core
-    // writes. Every reader copied the fields it printed anyway.
+    // **By value**: every core's words summed as they stand, no latch
+    // (DL-S1), so the totals may differ by a count in flight.
     Stats stats() const;
+    // Probes whose Cabin a core's part could not take, over every core.
+    std::uint64_t use_dropped() const noexcept;
     CabinInfo InfoFor(std::uint64_t cabin_id) const;
     std::size_t observed_value_count() const;
 
@@ -599,10 +606,54 @@ private:
         return partitions_[PartitionOf(cabin_id)];
     }
 
-    // The counters, under their own latch rather than a partition's: they
-    // are the instance's totals and every partition writes them, so folding
-    // them into one partition would make that partition every core's.
-    mutable Latch stats_latch_{LatchKind::kCabinStats};
+    // ---- The counters: a core's own words, no latch (DL-S1) --------------
+    //
+    // `Stats` is the instance's totals and a Cabin's `hits` and `misses` are
+    // its probes' - statistics, both (`docs/rules/rules.md` §3a). Each is
+    // kept as relaxed single-writer words in the calling core's part
+    // (`CurrentCore()`), so a count takes nothing a statement on another
+    // core can hold - and nothing at all, a write's included, which counts
+    // under its leaf's exclusive hold. `stats()` and `InfoFor` sum the
+    // parts as the words stand. Two threads counting as one core lose
+    // counts and nothing else. A Cabin's `recordings`, `appends`, `values`
+    // and `entries` stay in its partition: they move under the latch the
+    // set's own change already holds, and `values` is a cap's input.
+    struct StatsWords {
+        sched::RelaxedU64 hits;
+        sched::RelaxedU64 misses;
+        sched::RelaxedU64 recordings;
+        sched::RelaxedU64 appends;
+        sched::RelaxedU64 unobserved;
+        sched::RelaxedU64 cap_refusals;
+        sched::RelaxedU64 sighting_clears;
+        sched::RelaxedU64 unbankable_views;
+    };
+    // A line of its own a core, so no two cores write one.
+    struct alignas(64) StatsPart {
+        StatsWords words;
+    };
+    StatsWords& MyStats() noexcept { return stats_parts_[CurrentCore() % kStatsParts].words; }
+
+    struct CabinUse {
+        sched::RelaxedU64 hits;
+        sched::RelaxedU64 misses;
+    };
+    // The Cabins one core's part counts probes of; past it a new Cabin's
+    // probes on that core are dropped (`sys.meta`'s `cabins_use_dropped`).
+    // A cabin id is never reissued, so a dropped Cabin's words stay, are
+    // never asked for, **and count toward the bound**: a core that has
+    // probed 4,096 Cabins since the instance started - dropped ones
+    // included - counts no probe of a Cabin new to it until a restart, and
+    // `cabins_use_dropped` above 0 is what says so. The shape `OidParts`
+    // states for a dropped relation.
+    static constexpr std::size_t kUseCabinsPerCore = 4096;
+    using UsePart = CounterTable<CabinUse, kUseCabinsPerCore>;
+    // `cabin_id`'s probe counts on the calling core; null where its part is
+    // at the bound.
+    CabinUse* MyUse(std::uint64_t cabin_id) noexcept {
+        return cabin_id == 0 ? nullptr
+                             : use_parts_[CurrentCore() % kStatsParts].CountsOf(cabin_id);
+    }
 
     // `latch` when the store is shared, null otherwise: what every
     // acquisition passes to `LatchGuard`, which takes nothing for a null.
@@ -611,7 +662,8 @@ private:
 
     CabinLimits limits_;
     std::array<Partition, kPartitions> partitions_;
-    Stats stats_;
+    std::array<StatsPart, kStatsParts> stats_parts_;
+    std::array<UsePart, kStatsParts> use_parts_;
     OptimizerSignals* signals_ = nullptr;
 };
 

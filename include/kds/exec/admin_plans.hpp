@@ -190,7 +190,7 @@ class AdminPlans {
         bool enabled = false;
     };
     struct Partition {
-        Latch latch{LatchKind::kStatsRing};
+        Latch latch{LatchKind::kPlanTable};
         std::unordered_map<CapturedKey, Entry, CapturedKeyHash> plans;
     };
 
