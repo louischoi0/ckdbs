@@ -78,3 +78,13 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Corrected** | Two claims CLA made in the conversation are false on the tree, and the order says so in its §0: that `EvictColdFrames` holds the structure latch across full laps in production (it has test callers only; production sweeps are bounded batches, at most 512 slot visits a hold), and that the hit path's usage bump should be made to read before it writes (it already does, `device_page_store.cpp:1089`) |
 | **Does not settle** | DO-Q0..Q8; whether DO opens; CW's C1, which DO-Q8 (a) would amend to read "after DO" at DO's close; a push |
 | **Recorded at** | this file; the DO order's header, §0 and §7; the DO row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. DO pushed with `--no-verify`
+
+| | |
+|---|---|
+| **Word** | *"Push it."* (given in Korean; recorded in English), in reply to CLA's report that ended by asking whether to push `d4fc645e` |
+| **Mark** | **§8's order lands on `main`**: `d4fc645e` (the DO order, its index row and §8) and this record, on `origin/main` `3a07ad49`, pushed. Documents only, so no suite was run for it and none was run by the hook |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | DO-Q0..Q8; whether DO opens; a tag or a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
