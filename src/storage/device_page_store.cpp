@@ -1117,6 +1117,10 @@ void DevicePageStore::ReturnSlotLocked(std::uint32_t slot) noexcept {
 }
 
 void DevicePageStore::ReleaseFrameLocked(Frame& frame) noexcept {
+    // **No eraser removes a pinned frame** (DO-R6): every caller refuses a
+    // pin first, and a handle holds this frame's address for its release
+    // (`UnpinFrameAt`, DO's E4d).
+    assert(frame.pins == 0 && "a pinned frame erased");
     const std::uint32_t slot = frame.slot;
     frames_.erase(frame.page_id);  // `frame` dies here
     ReturnSlotLocked(slot);
@@ -2544,7 +2548,8 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 // would put it in every store that never faults anything.
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId page_id, PinMode mode,
                                                                       bool for_read,
-                                                                      FetchHeat heat) {
+                                                                      FetchHeat heat,
+                                                                      void** frame) {
     // Armed, the debt is taken in the exclusive grant's own hold (DO's E4a,
     // `AcquirePageLatch`); unarmed there is no hold, and `LogOwedImage`
     // looks it up.
@@ -2552,9 +2557,14 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
     // taken only by an exclusive grant.
     assert((for_read || mode == PinMode::kExclusive) && "a write fetch that is not exclusive");
     bool owed = false;
+    Frame* pinned = nullptr;
     auto bytes = FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr,
-                             for_read ? nullptr : &owed);
-    if (!bytes.ok() || for_read) return bytes;
+                             for_read ? nullptr : &owed, &pinned);
+    if (!bytes.ok()) return bytes;
+    if (for_read) {
+        *frame = pinned;
+        return bytes;
+    }
     // **The write fetch pays the image its frame owes** (DB-R1, the
     // header's "The write fetch's image"), holding the page exclusive and
     // pinned, before its caller has changed a byte. A refusal gives both
@@ -2566,6 +2576,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
         UnpinFrame(page_id);
         return s;
     }
+    *frame = pinned;
     return bytes;
 }
 
@@ -2672,7 +2683,8 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
                                                                       bool for_read,
                                                                       FetchHeat heat,
                                                                       bool* faulted,
-                                                                      bool* owed) {
+                                                                      bool* owed,
+                                                                      Frame** pinned) {
     if (faulted != nullptr) *faulted = false;
     // **AM-S2: the fetch and the pin are one operation** (`page_store.hpp`
     // records the obligation). Between a separate fetch and pin a frame can
@@ -2737,7 +2749,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             // **One lookup a hit** (DO's E4c): the latch is held
             // continuously from the `find`, so the frame found is the one
             // the pin lands on.
-            return PinFrameAndRelease(page_id, found->second, mode, hold, owed);
+            return PinFrameAndRelease(page_id, found->second, mode, hold, owed, pinned);
         }
         if (in_flight) {
             // **A fetch that may be refused does not wait here either**
@@ -2799,13 +2811,14 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         if (faulted != nullptr) *faulted = true;
         const auto loaded = frames_.find(page_id);
         if (loaded == frames_.end()) continue;  // `hold` is held again: re-test
-        return PinFrameAndRelease(page_id, loaded->second, mode, hold, owed);
+        return PinFrameAndRelease(page_id, loaded->second, mode, hold, owed, pinned);
     }
 }
 
 std::span<std::byte, kPageSize> DevicePageStore::PinFrameAndRelease(
-    PageId page_id, Frame& frame, PinMode mode, std::unique_lock<Latch>& hold,
-    bool* owed) noexcept {
+    PageId page_id, Frame& frame, PinMode mode, std::unique_lock<Latch>& hold, bool* owed,
+    Frame** pinned) noexcept {
+    if (pinned != nullptr) *pinned = &frame;
     // The same accounting `PinFrame` does, **including its two debug
     // checks** (the MG04 ceiling and AM-S1's never-upgrade census).
     CountPin(frame);
@@ -2822,7 +2835,7 @@ std::span<std::byte, kPageSize> DevicePageStore::PinFrameAndRelease(
 }
 
 StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::CreatePinned(
-    CreateKind which, PageId page_id) {
+    CreateKind which, PageId page_id, void** handle_frame) {
     // **The create half of AM-S2's pair.** A freshly created frame is dirty,
     // so a sweep only queues it, and `FreePage` never reaches an id a create
     // just claimed; losing it between the create and the pin takes a
@@ -2830,7 +2843,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     Latch* latch = structure_latch();
     if (latch == nullptr) {
         // Unarmed: one thread, nothing can evict between the two calls.
-        return PageStore::CreatePinned(which, page_id);
+        return PageStore::CreatePinned(which, page_id, handle_frame);
     }
 
     // The raw create runs **outside** the latch. It grows the file, reads the
@@ -2881,6 +2894,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
         // in the grant's own hold (DO's E4a), its taken answer unread.
         bool dropped = false;
         AcquirePageLatch(id, *frame, PinMode::kExclusive, &dropped, /*drop_always=*/true);
+        *handle_frame = frame;
         return made;
     }
 
@@ -2889,7 +2903,7 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
     // both correct and the only thing left; the id is already allocated, so
     // this cannot re-enter the create path.
     auto refetched = FetchPinned(id, PinMode::kExclusive, /*for_read=*/false,
-                                 FetchHeat::kWarm);
+                                 FetchHeat::kWarm, handle_frame);
     if (!refetched.ok()) return refetched.status();
     return std::pair<PageId, std::span<std::byte, kPageSize>>(id, refetched.value());
 }
@@ -3086,32 +3100,47 @@ void DevicePageStore::UnpinFrame(PageId page_id) noexcept {
         if (found->second.pins == 0) return;
         frame = &found->second;
     }
-    // The latch leaves with the pin: one handle, one hold of each. The word
-    // knows whether this core is the exclusive owner, so no mode travels
-    // here.
-    // The same identity that took it, for the same reason: release under
-    // `X` checks the owner field against the asking core, so acquire and
-    // release must read `CurrentCore()` alike.
     if (latch_armed_) {
+        UnpinFrameAt(page_id, frame);
+        return;
+    }
+    // Unarmed: no page latch, and the null latch below costs a null test.
+    LatchGuard structure(structure_latch());
+    UncountPin(*frame);
+}
+
+void DevicePageStore::UnpinFrameAt(PageId page_id, void* handle_frame) noexcept {
+    // **The one release order** - `UnpinFrame`'s armed tail, and a handle's
+    // release on the frame its fetch pinned, handed back armed only (DO's
+    // E4d). The pin this handle holds keeps the frame in the table at this
+    // address (no eraser takes a pinned frame, `ReleaseFrameLocked`; a node
+    // outlives a rehash), so it needs no lookup and no first hold.
+    Frame& frame = *static_cast<Frame*>(handle_frame);
+    assert(latch_armed_ && "a frame handed to a handle by an unarmed store");
 #ifndef NDEBUG
-        // Erase one instance if this thread had a share on this page, and
-        // before the release rather than after: the word is the authority
-        // and this set only mirrors it. An exclusive hold was never
-        // recorded, so the find misses and nothing is erased - and a thread
-        // holding one page both shared and exclusively is the state the
-        // detector aborts on, so it cannot be the case here.
-        if (auto held = SharedHoldsHere().find(page_id); held != SharedHoldsHere().end()) {
-            SharedHoldsHere().erase(held);
-        }
+    // Erase one instance if this thread had a share on this page, and
+    // before the release rather than after: the word is the authority and
+    // this set only mirrors it. An exclusive hold was never recorded, so the
+    // find misses and nothing is erased - and a thread holding one page both
+    // shared and exclusively is the state the detector aborts on.
+    if (auto held = SharedHoldsHere().find(page_id); held != SharedHoldsHere().end()) {
+        SharedHoldsHere().erase(held);
+    }
 #endif
-        PageLatch::Release(frame->latch, CurrentCore());
-    }
-    {
-        LatchGuard structure(structure_latch());
-        // **The two decrements stay coupled**: the gauge must move with the
-        // pin or `kPinCeiling` stops meaning anything.
-        UncountPin(*frame);
-    }
+    // The latch leaves with the pin: one handle, one hold of each, by the
+    // identity that took it (release under `X` checks the owner field).
+    PageLatch::Release(frame.latch, CurrentCore());
+    // **The two decrements stay coupled**: the gauge must move with the pin
+    // or `kPinCeiling` stops meaning anything.
+    LatchGuard structure(structure_latch());
+#ifndef NDEBUG
+    const auto found = frames_.find(page_id);
+    assert(found != frames_.end() && &found->second == &frame && frame.pins != 0 &&
+           "a handle's frame is not the pinned frame of its page");
+#else
+    (void)page_id;
+#endif
+    UncountPin(frame);
 }
 
 void DevicePageStore::UnpinUnlatchedFrame(PageId page_id) noexcept {

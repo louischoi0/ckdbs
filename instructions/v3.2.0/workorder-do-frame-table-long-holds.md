@@ -617,3 +617,35 @@ change DO-R5 measures anyway.
   store's suites (151 cells, `KDS_TEST_PAGE_LATCH=1`) pass, and the full
   suite runs again at E4d. Overhead not measured; measured at the
   milestone's close.
+
+### DO-S2 - E4d, done 2026-11-21
+
+`PageRef` carries the frame its pin landed on (an opaque `void*`, DO-Q5
+(a)): `FetchPinned` and `CreatePinned` hand it back through an out
+parameter the caller nulls, and the handle's release calls
+`UnpinFrameAt`, which releases the page latch and uncounts the pin in one
+structure-latch hold with no lookup. `UnpinFrame`'s armed tail is
+`UnpinFrameAt`, so the release order has one definition. An unlatched pin,
+the scan ring and the writeback still release by id. `ReleaseFrameLocked`
+asserts that no eraser takes a pinned frame (DO-R6). **A read hit is two
+structure-latch holds in place of three, and a write hit three in place
+of four, exactly**; against `9e8c5a81` on 64 Ki frames, one thread: hold
+time a read hit 121.7 to 80.7 ns (`build-census`) and one reader 3.84 to
+4.14 million fetches a second (**+8.0 %**, three interleaved rounds,
+`build-release`, load 5.4-7.1, another session's).
+
+- **Reviewed by `critics-developer`**: no bug; every token is the frame
+  the pin was counted on (both fetch arms, the create, its refetch
+  fallback, the claims path), the three erasers all refuse a pin, moved
+  and released handles clear the token, no other store overrides the
+  changed virtuals. Applied: the release order's two copies collapsed into
+  `UnpinFrameAt`; the out parameter written on success only, which drops
+  the one new test on the unarmed fetch path (DO-R2); two comments.
+  Recorded, not changed: `PageRef` grows from 24 to 32 bytes for every
+  store, the cost DO-Q5 (a) carries; the unarmed release gains one null
+  test in `PageRef::Release`; the scan ring's and the writeback's unpins
+  and `PageRef::MarkDirty` still look the frame up by id (outside E4d).
+- **Suite**: 0 failed of 5101 on E4d before the review's cuts; after them
+  the store's 231 cells pass under `KDS_TEST_PAGE_LATCH=1`, and the full
+  suite runs again on the merged tree at the close. Overhead not measured
+  here; measured at the milestone's close.

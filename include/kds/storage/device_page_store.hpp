@@ -1322,8 +1322,11 @@ private:
     // handle through the base interface, so no caller can unpin someone
     // else's frame by hand.
     // AM-S2: the fetch-and-pin pair, held together (`page_store.hpp`).
+    // Armed, `frame` receives the `Frame*` the pin landed on, for the
+    // handle's release (`UnpinFrameAt`, DO's E4d); unarmed it is left null.
     StatusOr<std::span<std::byte, kPageSize>> FetchPinned(PageId page_id, PinMode mode,
-                                                         bool for_read, FetchHeat heat) override;
+                                                         bool for_read, FetchHeat heat,
+                                                         void** frame) override;
 
     // `FetchPinned`'s whole body, plus the answer only the scan ring needs:
     // **did this call take the branch that loads?** The ring rotates a slot
@@ -1333,19 +1336,26 @@ private:
     // loop leaves it true. It also says true when another core loaded the
     // page while this call was outside the latch. `owed`, when given, is
     // `AcquirePageLatch`'s: set when an armed exclusive grant took the
-    // frame's image debt (DO's E4a).
+    // frame's image debt (DO's E4a). `pinned`, when given, receives the
+    // frame an armed fetch pinned (null unarmed).
     StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
                                                           bool for_read, FetchHeat heat,
-                                                          bool* faulted, bool* owed = nullptr);
+                                                          bool* faulted, bool* owed = nullptr,
+                                                          Frame** pinned = nullptr);
 
     // The create half of the same pair. See the definition for why its
     // window is narrower than `Get`'s and why it can still close.
     StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreatePinned(
-        CreateKind which, PageId page_id) override;
+        CreateKind which, PageId page_id, void** frame) override;
 
     void PinFrame(PageId page_id, PinMode mode) noexcept override;
     void UnpinUnlatchedFrame(PageId page_id) noexcept override;
     void UnpinFrame(PageId page_id) noexcept override;
+    // **A handle's release on the frame it pinned** (DO's E4d): no lookup,
+    // and one structure-latch hold in place of `UnpinFrame`'s two. Sound
+    // because no eraser removes a pinned frame (`ReleaseFrameLocked`
+    // asserts it) and a table node keeps its address across a rehash.
+    void UnpinFrameAt(PageId page_id, void* frame) noexcept override;
     void MarkFrameDirty(PageId page_id) noexcept override;
 
     // The two halves of taking a pin, split because `FetchPinned`'s armed
@@ -1382,7 +1392,7 @@ private:
     std::span<std::byte, kPageSize> PinFrameAndRelease(PageId page_id, Frame& frame,
                                                        PinMode mode,
                                                        std::unique_lock<Latch>& hold,
-                                                       bool* owed) noexcept;
+                                                       bool* owed, Frame** pinned) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }
