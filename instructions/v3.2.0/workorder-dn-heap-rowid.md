@@ -10,7 +10,7 @@ driver, ruled into DN-S2 by the operator on 2026-11-21** (`$!b`,
 `raft-marks-2026-11-21.md` §6); taken up again on the standing go-ahead the
 same day and stopped at the same gate. **DN-S1's gate passed on 2026-11-21**:
 the operator marked §8 as staged, DN-Q13 (c) and DN-Q14 (a) with it
-(`raft-marks-2026-11-21.md` §8), and DN-S2 onward runs on the standing
+(`raft-marks-2026-11-21.md` §10), and DN-S2 onward runs on the standing
 go-ahead of that day. **Written 2026-11-20.** Written in the main checkout on
 `main` at `d091d096` (`v3.4.15-19-gd091d096`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §13). The letter DN is CLA's
@@ -254,7 +254,7 @@ Binding once DN opens.
 
 (a) is CLA's proposal in each. **Marked by the operator: DN-D1..D7 (§0);
 §8 as staged, with DN-Q13 (c) and DN-Q14 (a), on 2026-11-21**
-(`raft-marks-2026-11-21.md` §8).
+(`raft-marks-2026-11-21.md` §10).
 Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 
 | | item | (a) | other |

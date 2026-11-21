@@ -69,7 +69,27 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Does not settle** | DN-S1's gate: CLA read the word as the push it was asked for, not as the mark on DN's §8, which is asked for separately; a tag or a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
 
-## 8. DN-S1's gate: §8 marked as staged; DN carried on the standing go-ahead
+## 8. DO written: the frame table's long holds
+
+| | |
+|---|---|
+| **Word** | *"Yes."*, given after CLA's account of CW's C1 - what it buys without the rest of CW - and its proposal to cut "the structure latch's long holds removed" out as a small milestone of its own, ending with the question whether to write it (given in Korean; recorded in English) |
+| **Mark** | **DO is written, not opened**: `instructions/v3.2.0/workorder-do-frame-table-long-holds.md`, on `main` at `3a07ad49`, documents only. That it is an order of its own, cut out of CW's C1, is the operator's yes to CLA's proposal; the letter, the candidates (E1-E4), the rules (DO-R1..R6) and the stages are CLA's proposals, DO-Q0..Q8 unmarked |
+| **Corrected** | Two claims CLA made in the conversation are false on the tree, and the order says so in its §0: that `EvictColdFrames` holds the structure latch across full laps in production (it has test callers only; production sweeps are bounded batches, at most 512 slot visits a hold), and that the hit path's usage bump should be made to read before it writes (it already does, `device_page_store.cpp:1089`) |
+| **Does not settle** | DO-Q0..Q8; whether DO opens; CW's C1, which DO-Q8 (a) would amend to read "after DO" at DO's close; a push |
+| **Recorded at** | this file; the DO order's header, §0 and §7; the DO row and this file's row in `instructions/v3.2.0/index.md` |
+
+## 9. DO pushed with `--no-verify`
+
+| | |
+|---|---|
+| **Word** | *"Push it."* (given in Korean; recorded in English), in reply to CLA's report that ended by asking whether to push `d4fc645e` |
+| **Mark** | **§8's order lands on `main`**: `0c24d15a` (the DO order, its index row and §8; `d4fc645e` in the session's read-only clone, applied here by `git am`, which gave it a new hash) and this record, on `origin/main` `3a07ad49`, pushed. Documents only, so no suite was run for it and none was run by the hook |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | DO-Q0..Q8; whether DO opens; a tag or a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 10. DN-S1's gate: §8 marked as staged; DN carried on the standing go-ahead
 
 | | |
 |---|---|
@@ -77,5 +97,5 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Mark** | **The operator's own mark on the DN order's §8 as staged**: invariant 4 (under DN-D7), invariant 9's fall-through clause, invariant 11's restatement, `heap-and-tuple.md` §3.1b and §4.1c, `index.md` IX1, `foreign-keys.md` F1 and `keystoneid-invariant.md` K3, word for word; with **DN-Q13 `[quiet-wrong]` (c)** (a heap's single `int64` PK is declared first) and **DN-Q14 `[quiet-wrong]` (a)** (a declared-PK heap keeps a deleted row's Keystone entry until `PURGE`; a hidden-Keystone heap refuses a named key at or below its issue mark). The account's stated cost of DN-Q14 (a), that a KWP load into a hidden-Keystone heap names its keys ascending, is marked with it. "For now" is recorded as said |
 | **Standing go-ahead** | DN-S2 to DN-S4 on the standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone): every further item is CLA's proposal, adopted and recorded as such, never as the operator's mark |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
-| **Recorded at** | this file; the DN order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
+| **Recorded at** | this file (numbered §8 on the work branch, §10 at its merge behind DO's §8 and §9); the DN order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
 
