@@ -295,6 +295,16 @@ Binding from DO-S1 on.
   2026-11-21 (go-ahead-achieving-milestone)**, at DO-S0; not the
   operator's own mark. It is DO-Q6 (a)'s number, so DO-Q3 (a)'s gate - E2
   past a proof and the operator's own mark - stands unchanged.
+- **DO-Q10 - does a candidate that improves every cell but alone misses
+  the bar land?** (raised by DO-S1). DO-R5 says a candidate that does not
+  meet DO-Q6's bar is recorded and not landed, and in the same breath that
+  E1, E3 and E4c change no behaviour and are measured anyway. (a) **E1 and
+  E3 land**: they change no output, cut every hold they touch by 60-82 %,
+  and DO-Q3 (a) itself presupposes E1 measured and in the tree before E2 is
+  priced against what is left - the bar for H1-H3 is E1 and E2's together;
+  (b) E1 and E3 held back until E2 meets the bar with them. CLA proposes
+  (a). **Adopted (a) on the operator's standing go-ahead of 2026-11-21
+  (go-ahead-achieving-milestone)**, at DO-S1; not the operator's own mark.
 
 ## 5. Stages
 
@@ -389,3 +399,33 @@ timing every hold of every latch kind; and `bench/frame_table_hold_bench.cpp`.
   in place of four. Noted in the results file: threads with no core write
   slot 0. Not taken: merging `WalkTimer` with `StallTimer` (the records
   differ, as the review itself says).
+
+### DO-S1 - E1 and E3, done 2026-11-21
+
+`bench/v3.5.0/results-do-s1-e1-e3-v3.5.0-56-g47f7016c.md`, interleaved
+A/B against DO-S0's `47f7016c`. E1: H1's and H2's vector reserved before
+the hold (from `configured_capacity_`, which never moves after `Open`; §2
+and DO-Q4 (a) said `capacity_`, which does) and sorted after it; `Flush`'s
+collection (H6) is `DirtyPageIds()`. E3: `frames_` reserved at `Open`, an
+insert asserting it does not rehash (DO-R6).
+
+- **Every hold cut**: H1 1,658 to 497 us, 7,415 to 1,876 us and 38,675 to
+  15,372 us at 64 Ki, 256 Ki and 1 Mi frames; H2 1,269 to 231 us, 5,631 to
+  1,173 us and 29,580 to 8,740 us; H3's rehashes, up to 12.5 ms, gone.
+- **DO-Q9 (a)'s bar not met** from 256 Ki frames: the walk itself is left,
+  15 ms and 9 ms at 1 Mi. DO-S3 is reached (DO-Q3 (a)).
+- **DO-Q10 added and adopted (a)**: E1 and E3 land though alone they miss
+  the bar.
+- Tried and not taken: the output vector written through before the hold
+  (H1 -30 %, H2 +25 %, a whole-capacity write a checkpoint).
+- **Reviewed by `critics-developer`**: no bug; E1's output and instant
+  confirmed identical (DO-R1), `configured_capacity_` confirmed written
+  once and an upper bound. Applied: `Flush` through `DirtyPageIds()`; the
+  H3 timer replaced by the assertion; four comments that had become false
+  (`WouldRehash`'s, the manual's list of walks, `capacity_`'s "set once",
+  and the work order's `capacity_`, recorded here). Recorded, not changed:
+  the per-call reserve is address space, an `mmap` above 32 MiB, outside
+  the hold.
+- **Suite**: 0 failed of 5094 on E1 and E3 before the review's cuts; the
+  cuts are covered by DO-S2's first run. Overhead not measured; measured
+  at the milestone's close.

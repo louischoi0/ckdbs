@@ -1737,7 +1737,7 @@ private:
     // advancing modulo the slots that exist. One step is one slot, O(1);
     // the sort that re-found an id-valued hand per sweep is gone with it.
     std::size_t clock_hand_ = 0;
-    std::size_t capacity_ = 0;  // set once, at Open
+    std::size_t capacity_ = 0;  // set at Open; lowered by MG05, raised by ApplyMountFloor
     // What `Open` was asked for, before the debug override lowered it.
     std::size_t configured_capacity_ = 0;
     // Frames promised to open no-refuse windows and not yet spent, under
@@ -1779,7 +1779,8 @@ private:
     // list nor the table.
     std::vector<std::uint32_t> free_slots_;
     // The page table: each resident page's frame. Every structural change -
-    // publish, unmap - is under the structure latch.
+    // publish, unmap - is under the structure latch. Reserved to the
+    // configured capacity at `Open` (DO's E3), so an insert never rehashes.
     std::unordered_map<PageId, Frame> frames_;
 
 public:

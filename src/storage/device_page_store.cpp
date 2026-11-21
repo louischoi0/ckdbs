@@ -109,15 +109,17 @@ private:
     WalkTimer timer_;
 };
 
+#ifndef NDEBUG
 // Whether inserting one more element rehashes `map`: libstdc++'s
 // `_M_need_rehash`, `size + 1 > floor(buckets * max_load_factor)` in
-// `double`, exact for a map that is never reserved or shrunk. The empty
-// map's first insert rehashes zero nodes and reads "no" here.
+// `double`, exact for a map that is never shrunk (a reserve sets the
+// threshold a growth does). Debug only: E3's premise, asserted.
 template <typename Map>
 bool WouldRehash(const Map& map) noexcept {
     return static_cast<double>(map.size() + 1) >
            static_cast<double>(map.bucket_count()) * static_cast<double>(map.max_load_factor());
 }
+#endif
 
 }  // namespace
 
@@ -374,6 +376,11 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
     // Every chunk the configured capacity can need, now (`chunks_` says why).
     store->chunks_ =
         std::make_unique<FrameChunk[]>((capacity.frames + kFrameChunk - 1) / kFrameChunk);
+    // **The frame table sized once, too** (DO's E3, DO-Q4 (a)): the table
+    // never holds more than the configured capacity, so no insert rehashes
+    // it under the structure latch - a hold of every node that grew with
+    // the pool, 12 ms at 1 Mi frames on DO-S0's host. A bucket a frame.
+    store->frames_.reserve(store->configured_capacity_);
 
     // Region 0 always exists - it holds the superblock, both of its own
     // bitmaps and the catalog's fixed roots - so it is loaded, or created, rather
@@ -827,12 +834,11 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::InsertFrame(
     // Mapped first: an `emplace` that throws leaves the slot untouched and
     // the guard still holding it, which gives it back.
     const std::uint32_t index = reserved.slot_;
-    Frame* slot = nullptr;
-    {
-        // H3: an insert past the load factor rehashes every node here.
-        const WalkTimer rehash(latch_armed_ && WouldRehash(frames_));
-        slot = &frames_.try_emplace(page_id).first->second;
-    }
+    // **No insert rehashes the table under this hold** (DO's E3, DO-R6):
+    // `Open` reserved it to the configured capacity, which bounds the slots
+    // and so the frames.
+    assert(!WouldRehash(frames_) && "the frame table was reserved at Open (DO's E3)");
+    Frame* const slot = &frames_.try_emplace(page_id).first->second;
     reserved.slot_ = kNoSlot;
     SlotOwner(index) = page_id;
     slot->bytes = &SlotPage(index);
@@ -2387,16 +2393,9 @@ Status DevicePageStore::Flush() {
     // **Collect under the hold, write outside it** (AM-S2 step 3f): the
     // writeback is device I/O, which this latch may never span. A page that
     // turns dirty after the collection is the next flush's.
-    std::vector<PageId> dirty;
-    {
-        const WalkHold structure(structure_latch());
-        dirty.reserve(frames_.size());
-        for (const auto& [page_id, frame] : frames_) {
-            if (frame.dirty) dirty.push_back(page_id);
-        }
-    }
-
-    auto written = WriteBack(dirty);
+    // `DirtyPageIds` is that collection (H6 is H2's walk); `WriteBack` sorts
+    // its own copy.
+    auto written = WriteBack(DirtyPageIds());
     if (!written.ok()) return written.status();
 
     if (auto flushed = FlushMaps(); !flushed.ok()) return flushed.status();
@@ -2432,25 +2431,33 @@ Status DevicePageStore::Sync() {
 }
 
 std::vector<PageId> DevicePageStore::DirtyPageIds() const {
-    // The whole body under the hold: it is a collection and touches no
-    // device, so there is nothing to hoist out (AM-S2 step 3f).
-    const WalkHold structure(structure_latch());
+    // **Only the collection under the hold** (DO's E1): the reserve before
+    // it and the sort after it touch no frame. The configured capacity
+    // never moves after `Open` and bounds the table, so it sizes the
+    // vector with no latch. The first touch of its pages still faults
+    // under the hold, as it did.
     std::vector<PageId> dirty;
-    dirty.reserve(frames_.size());
-    for (const auto& [page_id, frame] : frames_) {
-        if (frame.dirty) dirty.push_back(page_id);
+    dirty.reserve(configured_capacity_);
+    {
+        const WalkHold structure(structure_latch());
+        for (const auto& [page_id, frame] : frames_) {
+            if (frame.dirty) dirty.push_back(page_id);
+        }
     }
     std::sort(dirty.begin(), dirty.end());
     return dirty;
 }
 
 std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn() const {
-    // As `DirtyPageIds`, and for the same reason.
-    const WalkHold structure(structure_latch());
+    // As `DirtyPageIds`, and for the same reason: the table is the instant
+    // of the one hold, and sorting a copy changes no entry (DO-R1).
     std::vector<std::pair<PageId, wal::Lsn>> dirty;
-    dirty.reserve(frames_.size());
-    for (const auto& [page_id, frame] : frames_) {
-        if (frame.dirty) dirty.emplace_back(page_id, frame.rec_lsn);
+    dirty.reserve(configured_capacity_);
+    {
+        const WalkHold structure(structure_latch());
+        for (const auto& [page_id, frame] : frames_) {
+            if (frame.dirty) dirty.emplace_back(page_id, frame.rec_lsn);
+        }
     }
     std::sort(dirty.begin(), dirty.end());
     return dirty;
