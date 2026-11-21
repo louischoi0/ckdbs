@@ -68,3 +68,13 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | DN-S1's gate: CLA read the word as the push it was asked for, not as the mark on DN's §8, which is asked for separately; a tag or a version |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 8. DO written: the frame table's long holds
+
+| | |
+|---|---|
+| **Word** | *"Yes."*, given after CLA's account of CW's C1 - what it buys without the rest of CW - and its proposal to cut "the structure latch's long holds removed" out as a small milestone of its own, ending with the question whether to write it (given in Korean; recorded in English) |
+| **Mark** | **DO is written, not opened**: `instructions/v3.2.0/workorder-do-frame-table-long-holds.md`, on `main` at `3a07ad49`, documents only. That it is an order of its own, cut out of CW's C1, is the operator's yes to CLA's proposal; the letter, the candidates (E1-E4), the rules (DO-R1..R6) and the stages are CLA's proposals, DO-Q0..Q8 unmarked |
+| **Corrected** | Two claims CLA made in the conversation are false on the tree, and the order says so in its §0: that `EvictColdFrames` holds the structure latch across full laps in production (it has test callers only; production sweeps are bounded batches, at most 512 slot visits a hold), and that the hit path's usage bump should be made to read before it writes (it already does, `device_page_store.cpp:1089`) |
+| **Does not settle** | DO-Q0..Q8; whether DO opens; CW's C1, which DO-Q8 (a) would amend to read "after DO" at DO's close; a push |
+| **Recorded at** | this file; the DO order's header, §0 and §7; the DO row and this file's row in `instructions/v3.2.0/index.md` |
