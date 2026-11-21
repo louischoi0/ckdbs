@@ -1,12 +1,18 @@
 # Work order DK - a btree descent that leans on the immutable low key: one fetch fewer for a write, a leaf that moves right instead of restarting, and the internal levels read optimistically only under CW's protocol
 
-Status: **WRITTEN 2026-11-20, not opened.** Written in the main checkout on
-`main` at `1c7bb774` (`v3.4.15-4-g1c7bb774`) on the operator's words of
-2026-11-20 (`raft-marks-2026-11-20.md` §7). **Exploratory is the
-operator's word** (DK-Q0). The letter DK and every candidate are CLA's
-proposals. No stage is started and no DK-Q item but DK-Q0 is marked. Every
-`[source-read]` claim below was read at `1c7bb774`. No suite was run: the
-order changes no build input.
+Status: **OPENED 2026-11-21 on the operator's standing go-ahead of
+2026-11-21 (go-ahead-achieving-milestone), on worktree
+`dk-descent-low-key` from `2c2639df` (`v3.5.0-12-g2c2639df`).** DK was taken
+as the highest-priority written order: DN, the one opened order not closed,
+waits at its own gate for the operator's mark (`raft-marks-2026-11-21.md`
+§1). **DK-S0 done**: D1 go, D2 go, D3 handed to CW (§7). Written in the
+main checkout on `main` at `1c7bb774` (`v3.4.15-4-g1c7bb774`) on the
+operator's words of 2026-11-20 (`raft-marks-2026-11-20.md` §7).
+**Exploratory is the operator's word** (DK-Q0). The letter DK and every
+candidate are CLA's proposals. **DK-Q1..Q9 are adopted as CLA proposed, on
+the operator's standing go-ahead of 2026-11-21
+(go-ahead-achieving-milestone)** - none is the operator's own per-item
+mark (§4). Every `[source-read]` claim in §1 was read at `1c7bb774`.
 
 **Exploratory, and the measurement comes first.** DK-S0 can close the
 order with nothing built, and that is a result, not a failure.
@@ -267,7 +273,7 @@ Binding from DK-S1 on, if the order reaches it.
 
 ## 4. Items for the operator (DK-Q)
 
-(a) is CLA's proposal in each; only DK-Q0 is marked.
+(a) is CLA's proposal in each; only DK-Q0 is the operator's mark. **DK-Q1..Q9 (a) are adopted on the operator's standing go-ahead of 2026-11-21 (go-ahead-achieving-milestone)**, each at the stage that reached it (§7); the record says who decided and how, and none is the operator's own per-item mark.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -349,3 +355,56 @@ documents only.
   and `index_tree.cpp:590` still hold; DK-S0's census starts from these
   two functions. DK was rebased over CV without this re-reading.
 
+
+### DK-S0 - census and premise, 2026-11-21
+
+On worktree `dk-descent-low-key`; the counters on the spike branch
+`worktree-dk-s0-spike` at `187ff9b1` (`v3.5.0-13-g187ff9b1`), never landed.
+Results: `bench/v3.5.0/dk-s0-premise-v3.5.0-13-g187ff9b1.md`; driver
+`tools/dk_s0_premise.py`.
+
+- **Census, callers.** The clustered `DescendTo` is reached by
+  `BtreeInsert` (write), `BtreeLookup` (read, or write under
+  `PageAccess::kWrite`: `clean_dropped.cpp:47`, `BtreeHoldTombstone`) and
+  `BtreeSeekLeaf` (read, no coverage; `BtreeFetchLeafAtOrBelow` walks right
+  from it). `BtreeLookup` has 17 callers in `src/` outside `src/storage/btree/`
+  (`step_vm.cpp` 6, `command_dispatcher.cpp` 5, `fk_check.cpp` 2,
+  `index_ddl.cpp`, `index_maintain.cpp`, `cabin_optimizer_exec.cpp`,
+  `clean_dropped.cpp` 1 each), `BtreeSeekLeaf` 4
+  (`step_vm.cpp:2484`, `index_ddl.cpp:539`, `command_dispatcher.cpp:8969`,
+  `:14364`). The secondary `DescendTo` is reached by `IndexInsert` (write,
+  `index_tree.cpp:365`), the batch insert (write, `:642`), the probe
+  (read, `:578`) and `IndexFetchLeafAtOrBelow` (read, `:604`).
+- **Census, writers of what D1 and D2 lean on.** `min_key`: written only at
+  a page's creation (`heap_page.cpp`'s init, a split's new leaf); never by
+  a division of the old page or a compaction. `next_page_id`: a split's
+  splice (`btree.cpp`'s two split paths and the append split), the
+  compaction's rebuild that copies it, the catalog chain and the heap chain
+  (no btree leaf). `right_sibling`: only the index divide's splice
+  (`index_tree.cpp:469-470`). A leaf's first entry: never removed - DD's
+  `PURGE INDEX` keeps it (`src/exec/index_purge.cpp:136`). **`level`**:
+  every internal node is created through `CreateEmpty(level)` - a divide
+  and a right-split copy the node's own level, a root growth writes the old
+  root's plus one - and every load checks it is in `[1, kMaxBtreeDepth)`;
+  a leaf is level 0, an internal node over leaves level 1, in both trees.
+  So `level == 1` at a node names a leaf child for the life of the page,
+  which is D1's premise.
+- **M1.** Every write descent fetched its leaf twice, in every write shape
+  and both trees: 1.00 second fetches a write descent.
+- **M2, M3.** No restart at `cores = 1` or on a relation of its own. On a
+  shared relation 0.005-0.039 % of clustered descents restarted, and in
+  five of twelve multi-core cells over two runs one descent exhausted the
+  bound (`refused_btree_descend` 4, `refused_index_descend` 1), each in the
+  cell's first second, when the relation's root grows a level - the stale
+  root. The index refusal was answered by `index_maintain.cpp`'s retry,
+  which re-reads the root, so it was a stale root by construction.
+- **M4 not taken**: no sampling profiler on this host. D1's price is
+  measured at the close instead.
+
+Adopted on the operator's standing go-ahead of 2026-11-21
+(go-ahead-achieving-milestone): **DK-Q1 (a)** (D3 is CW's C3a; CW is not
+open, so D3 does not build in DK and DK-S3 closes with nothing built),
+**DK-Q2 (a)** (D1 built: the second fetch is on every write descent),
+**DK-Q3 (a)** (D2 built: its second clause, a refusal in the standard
+cells, is met; its first, 0.1 % restarts, is not), **DK-Q7 (a)** (D4 stays
+rejected), **DK-Q9 (a)** (the standing budget: about 8 minutes of 20 spent).
