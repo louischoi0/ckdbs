@@ -2,6 +2,7 @@
 #include "kds/storage/keystone.hpp"
 
 #include <array>
+#include <optional>
 #include <cstring>
 #include <span>
 #include <string>
@@ -431,6 +432,89 @@ TEST(HeapPageTest, TryReadTupleInGivesReadTupleInsReasonForEverySlot) {
         EXPECT_EQ(payload.status().code(), c.code) << c.slot;
         EXPECT_EQ(payload.status().message(), worded.status().message());
     }
+}
+
+// ---- DN: a heap data page's slot release and reuse (DN-R2) ------------
+
+TEST(HeapPageTest, ADataPageFreesARetiredSlotAndAnInsertTakesItAgain) {
+    PageBuf buf{};
+    auto created = PageView::CreateEmptyAs(AsSpan(buf), 1, PageType::kHeapData);
+    ASSERT_TRUE(created.ok());
+    PageView page = created.value();
+    const auto a = BytesOf("row-aaaa");
+    const auto b = BytesOf("row-bbbb");
+    const auto c = BytesOf("row-cccc");
+    ASSERT_TRUE(page.InsertTuple(a, 5).ok());
+    ASSERT_TRUE(page.InsertTuple(b, 5).ok());
+    ASSERT_TRUE(page.InsertTuple(c, 5).ok());
+    const std::uint16_t upper_before = page.upper();
+
+    // Live and delete-marked slots are not freed; a retired one is.
+    EXPECT_EQ(page.FreeSlot(1).code(), StatusCode::kInvalidArgument);
+    ASSERT_TRUE(page.DeleteMark(1, 6).ok());
+    EXPECT_EQ(page.FreeSlot(1).code(), StatusCode::kInvalidArgument);
+    EXPECT_FALSE(page.FindFreeSlot(b.size()).has_value());
+    ASSERT_TRUE(page.RetireSlot(1).ok());
+    EXPECT_FALSE(page.FindFreeSlot(b.size()).has_value()) << "a retired slot is not yet free";
+    ASSERT_TRUE(page.FreeSlot(1).ok());
+    ASSERT_TRUE(page.FreeSlot(1).ok()) << "freeing a free slot is redo's re-application";
+
+    // A free slot reads retired, and its reservation is the old tuple's.
+    EXPECT_EQ(page.ReadTuple(1).status().code(), StatusCode::kNotFound);
+    ASSERT_EQ(page.FindFreeSlot(b.size()), std::optional<std::uint16_t>{1});
+    EXPECT_FALSE(page.FindFreeSlot(b.size() + 1).has_value());
+
+    const auto d = BytesOf("row-dddd");
+    ASSERT_TRUE(page.ReuseSlot(1, d, 9, 0).ok());
+    EXPECT_EQ(page.slot_count(), 3u) << "a reuse adds no slot";
+    EXPECT_EQ(page.upper(), upper_before) << "and takes no free space";
+    auto got = page.ReadTuple(1);
+    ASSERT_TRUE(got.ok());
+    EXPECT_EQ(StringOf(got.value().payload), "row-dddd");
+    EXPECT_EQ(got.value().trx_id, 9u);
+    EXPECT_FALSE(got.value().deleted);
+    EXPECT_EQ(StringOf(page.ReadTuple(0).value().payload), "row-aaaa");
+    EXPECT_EQ(StringOf(page.ReadTuple(2).value().payload), "row-cccc");
+    EXPECT_EQ(page.ReuseSlot(1, d, 9, 0).code(), StatusCode::kInvalidArgument)
+        << "a taken slot is not free";
+}
+
+TEST(HeapPageTest, TheFirstSlotsReservationRunsToTheTailReservation) {
+    PageBuf buf{};
+    PageView page = PageView::CreateEmptyAs(AsSpan(buf), 1, PageType::kHeapData).value();
+    ASSERT_TRUE(page.InsertTuple(BytesOf("first"), 5).ok());
+    ASSERT_TRUE(page.InsertTuple(BytesOf("second"), 5).ok());
+    ASSERT_TRUE(page.RetireSlot(0).ok());
+    ASSERT_TRUE(page.FreeSlot(0).ok());
+    EXPECT_TRUE(page.FindFreeSlot(5).has_value());
+    EXPECT_FALSE(page.FindFreeSlot(6).has_value());
+    EXPECT_EQ(page.ReuseSlot(0, BytesOf("sixsix"), 9, 0).code(), StatusCode::kOutOfSpace);
+}
+
+TEST(HeapPageTest, ReleaseAndReuseAreADataPagesAlone) {
+    for (PageType type : {PageType::kHeap, PageType::kBtreeLeaf}) {
+        PageBuf buf{};
+        PageView page = PageView::CreateEmptyAs(AsSpan(buf), 1, type).value();
+        ASSERT_TRUE(page.InsertTuple(BytesOf("x"), 5).ok());
+        ASSERT_TRUE(page.RetireSlot(0).ok());
+        EXPECT_EQ(page.FreeSlot(0).code(), StatusCode::kInvalidArgument);
+        EXPECT_EQ(page.ReuseSlot(0, BytesOf("y"), 5, 0).code(), StatusCode::kInvalidArgument);
+    }
+}
+
+TEST(HeapPageTest, RedoOfAReusedSlotsInsertTakesTheFreeSlot) {
+    PageBuf buf{};
+    PageView page = PageView::CreateEmptyAs(AsSpan(buf), 1, PageType::kHeapData).value();
+    ASSERT_TRUE(page.InsertTuple(BytesOf("old1"), 5).ok());
+    ASSERT_TRUE(page.RetireSlot(0).ok());
+    // Retired and not freed: a write naming it is not this page's.
+    EXPECT_EQ(page.RedoWriteTuple(0, BytesOf("new1"), 9, 0).code(), StatusCode::kCorruption);
+    ASSERT_TRUE(page.FreeSlot(0).ok());
+    ASSERT_TRUE(page.RedoWriteTuple(0, BytesOf("new1"), 9, 0).ok());
+    EXPECT_EQ(StringOf(page.ReadTuple(0).value().payload), "new1");
+    // Replayed again, the slot is live: the overwrite arm, idempotent.
+    ASSERT_TRUE(page.RedoWriteTuple(0, BytesOf("new1"), 9, 0).ok());
+    EXPECT_EQ(StringOf(page.ReadTuple(0).value().payload), "new1");
 }
 
 }  // namespace

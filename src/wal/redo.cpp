@@ -76,7 +76,7 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     // decodes as owner 0, so replaying old log leaves old pages exactly as
     // unattributed as the build that wrote them did.
     const std::uint64_t owner_oid = fields.value().owner_oid;
-    if (type == PageType::kHeap || type == PageType::kBtreeLeaf) {
+    if (type == PageType::kHeap || type == PageType::kBtreeLeaf || type == PageType::kHeapData) {
         auto view = heap::PageView::CreateEmptyAs(page, fields.value().min_key, type, owner_oid);
         if (!view.ok()) {
             return view.status();
@@ -145,6 +145,16 @@ Status ApplyDeleteUnmark(std::span<std::byte, kPageSize> page, const DecodedReco
     // byte.
     return view.ClearDeleteMark(fields.value().slot, fields.value().trx_id,
                                 fields.value().undo_ptr);
+}
+
+Status ApplySlotFree(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    auto fields = DecodeSlotRetire(record.payload);
+    if (!fields.ok()) {
+        return fields.status();
+    }
+    heap::PageView view(page);
+    // Idempotent: FreeSlot answers OK on a slot already free.
+    return view.FreeSlot(fields.value().slot);
 }
 
 Status ApplySlotRetire(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
@@ -335,6 +345,7 @@ Applier ApplierFor(RecordType type) noexcept {
         case RecordType::kHeapDeleteMark: return ApplyDeleteMark;
         case RecordType::kHeapDeleteUnmark: return ApplyDeleteUnmark;
         case RecordType::kSlotRetire: return ApplySlotRetire;
+        case RecordType::kSlotFree: return ApplySlotFree;
         case RecordType::kUndoWrite: return ApplyUndoWrite;
         case RecordType::kVarHeapAppend: return ApplyVarHeapAppend;
         case RecordType::kVarHeapRelease: return ApplyVarHeapRelease;

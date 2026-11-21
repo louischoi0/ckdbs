@@ -347,7 +347,7 @@ TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
 // binary refuses the record kind or leaves the loser's departure counted.
 TEST(SuperBlockTest, AVersion34VolumeDoesNotMount) {
     ExpectRefusedNamingBoth(34);
-    EXPECT_EQ(kSuperBlockVersion, 38u);
+    EXPECT_EQ(kSuperBlockVersion, 39u);
 }
 
 // DA-S3 and DI-S3: a version-37 volume still has `sys.access_stats`'

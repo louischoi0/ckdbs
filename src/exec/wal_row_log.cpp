@@ -113,6 +113,18 @@ Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint6
     return store.StampPageLsn(page_id, rec.value());
 }
 
+Status LogSlotFree(wal::WalManager* wal, storage::PageStore& store, PageId page_id,
+                   std::uint16_t slot) {
+    if (wal == nullptr) return Status::OK();
+    std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
+    const wal::SlotRetirePayload fields{slot};
+    if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
+    auto rec =
+        wal->Append(wal::RecordSpec{wal::RecordType::kSlotFree, wal::kNoTxnId, page_id}, buf);
+    if (!rec.ok()) return rec.status();
+    return store.StampPageLsn(page_id, rec.value());
+}
+
 Status LogHeapWrite(wal::WalManager* wal, storage::PageStore& store, wal::RecordType type,
                     std::uint64_t env_txn, PageId page_id, std::uint16_t slot,
                     std::span<const std::byte> bytes, std::uint64_t hdr_trx,

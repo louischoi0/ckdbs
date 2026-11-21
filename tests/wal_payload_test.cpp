@@ -715,7 +715,10 @@ TEST(WalPayloadTest, AppendedTypesAreAssignedAndNamed) {
     // Derived from the enum now, not typed here: pinning it as a literal is
     // what let type 23 ship unwritable (record.hpp).
     EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kPackedPageImage), 35);
-    EXPECT_EQ(kMaxAssignedRecordType, 35);
+    EXPECT_EQ(static_cast<std::uint8_t>(RecordType::kSlotFree), 36);
+    EXPECT_EQ(kMaxAssignedRecordType, 36);
+    EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kSlotFree)));
+    EXPECT_STREQ(RecordTypeName(RecordType::kSlotFree), "SLOT_FREE");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kPackedPageImage)));
     EXPECT_STREQ(RecordTypeName(RecordType::kPackedPageImage), "PACKED_PAGE_IMAGE");
     EXPECT_TRUE(IsAssignedRecordType(static_cast<std::uint8_t>(RecordType::kAssertPending)));

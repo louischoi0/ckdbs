@@ -22,7 +22,8 @@ VerifiedTuple VerifyTupleAt(storage::PageStore& store, PageId page_id, std::uint
     // relation the location was recorded for.
     const std::uint8_t type = storage::RawPageType(bytes.value().bytes());
     if ((type != static_cast<std::uint8_t>(PageType::kHeap) &&
-         type != static_cast<std::uint8_t>(PageType::kBtreeLeaf)) ||
+         type != static_cast<std::uint8_t>(PageType::kBtreeLeaf) &&
+         type != static_cast<std::uint8_t>(PageType::kHeapData)) ||
         storage::GetOwnerOid(bytes.value().bytes()) != expected_owner) {
         out.outcome = VerifyOutcome::kNotThisRelation;
         return out;

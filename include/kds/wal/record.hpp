@@ -246,6 +246,15 @@ enum class RecordType : std::uint8_t {
     // has no applier for (named `UNKNOWN`: it has no name for the kind) -
     // nothing an older build could mis-read.
     kPackedPageImage = 35,
+    // **A heap data page's slot released** (DN-R2, `heap-and-tuple.md`
+    // §3.1b): the retired slot the envelope's page and the payload's slot
+    // name is free - every index of the relation was swept with no entry
+    // left naming its rowid - and an insert may take it again. The payload
+    // is SLOT_RETIRE's. Written at `kNoTxnId` by the slot release, never
+    // undone; redo marks the slot free, a re-application finding it free
+    // already. Since superblock 39 (DN): a version-38 binary has no applier
+    // for the kind, and would also refuse the reused slot's HEAP_INSERT.
+    kSlotFree = 36,
     // INDEX_PAGE_INIT (index.md §12.1's proposal) is not assigned: a new
     // index page leaves a divide holding half the entries, so only a full
     // page image describes it.
@@ -257,7 +266,7 @@ enum class RecordType : std::uint8_t {
 // Keep it pinned to the last enumerator; the test that every named type
 // encodes proves it.
 inline constexpr std::uint8_t kMaxAssignedRecordType =
-    static_cast<std::uint8_t>(RecordType::kPackedPageImage);
+    static_cast<std::uint8_t>(RecordType::kSlotFree);
 
 bool IsAssignedRecordType(std::uint8_t raw) noexcept;
 

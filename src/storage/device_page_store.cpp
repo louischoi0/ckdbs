@@ -2557,6 +2557,7 @@ bool DevicePageStore::ImagedClass(PageId page_id,
         case PageType::kIndexLeaf:
         case PageType::kCabinBound:
         case PageType::kAnchor:
+        case PageType::kHeapData:
             break;
         default:
             return false;

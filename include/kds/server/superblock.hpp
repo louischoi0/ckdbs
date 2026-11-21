@@ -259,7 +259,19 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // row for oid 130, which is retired; a version-37 volume has all three,
 // and its `sys.tables` names a relation this build has no root and no row
 // codec for. Refused with no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 38;
+//
+// 39 (DN-S2, `instructions/v3.2.0/workorder-dn-heap-rowid.md` DN-Q9 (a)):
+// **a heap is data pages addressed by rowid**, not a btree with a hidden
+// key. A heap relation's `sys.tables.clustered_type` is `kHeap` (2), its
+// rows are on `kHeapData` pages (15) in no key order, each of its index
+// entries carries the row's rowid, and the log may carry SLOT_FREE (36) and
+// a HEAP_INSERT that reuses a freed slot. A version-38 volume's heap is a
+// btree with a hidden column 0, which this build would read as a heap's
+// data and index entries it is not; a version-38 binary has neither the
+// page type, the record kind nor the clustered type. Refused by the
+// version, naming DN's format event, with no migration, the standing order
+// of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 39;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //
