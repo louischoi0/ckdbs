@@ -58,3 +58,13 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **The stop** | **DN stops at DN-S1's gate at once.** That gate is the operator's mark on the amended hard invariants (the DN order's §8: invariant 4 under DN-D7, 9, 11's restatement, with DN-Q13 (c) and DN-Q14 (a), both `[quiet-wrong]`). A hard invariant is amended only under a recorded mark of the operator's (DN-S1's log), which the standing go-ahead is not (the skill's §5). **Still owed before DN-S2, apart from the mark**: DN-Q11's descending named load, measured |
 | **Does not settle** | DN-S1's gate; DN-Q13, DN-Q14; the driver's design (DN-S2's); a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the DD order's header, §5 and §7; the DN order's header, §5 and §7; their rows and this file's row in `instructions/v3.2.0/index.md`; `docs/inflight/known-gaps.md` (Index entry purge) |
+
+## 7. §6's record pushed with `--no-verify`
+
+| | |
+|---|---|
+| **Word** | *"approve"* (given in Korean; recorded in English), in reply to CLA's report that ended by asking for a push word for `2d930204` |
+| **Mark** | **§6's record lands on `main`**: the work branch `worktree-dn-dd-s4-into-dn-s2` (`2d930204` and this record), merged `--no-ff` onto `origin/main` `dcab41e5` and pushed. Documents only, so no suite was run for it and none was run by the hook |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | DN-S1's gate: CLA read the word as the push it was asked for, not as the mark on DN's §8, which is asked for separately; a tag or a version |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
