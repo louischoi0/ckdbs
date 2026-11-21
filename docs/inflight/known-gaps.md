@@ -474,7 +474,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     its samples of 10 ms or more at `group` (76 % at `strict`) are due
     inside that `fsync`.
   - Without the fill, the commit's median rises 76-94 % instead.
-  - Which body to build is DG's, opened and stopped at its V0. Owner:
+  - DG was closed on 2026-11-21, abandoned with nothing built, and no order
+    owns the stall. The body stays reserved, zero-filled and synced ahead. Owner:
     `docs/spec/wal.md` §6.
 
 ## Multi-core state
