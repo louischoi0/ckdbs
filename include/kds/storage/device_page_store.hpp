@@ -1357,6 +1357,11 @@ private:
     // **outside** it - the order that keeps neither latch held across the
     // other (PinFrame's comment says why).
     void CountPin(Frame& frame) noexcept;
+    // `Resolve`'s hit, on a frame the caller found under the structure
+    // latch: the hit count, the dirty mark, the usage bump, the span. Shared with the
+    // armed fetch's hit, which asks no `IsAllocated` (DO's E4b).
+    std::span<std::byte, kPageSize> HitLocked(Frame& frame, bool mark_dirty,
+                                              FetchHeat heat) noexcept;
     // An armed exclusive grant given `owed` also takes the frame's image
     // debt in the hold it already takes for the dirty mark, setting
     // `*owed` (DO's E4a): only while images are on, or whatever the switch
@@ -1647,12 +1652,13 @@ private:
 
     // ---- The free map's latch, and the order (AM-S3) ---------------------
     //
-    // **A second latch because the two are nested**: `FetchPinned`'s hit
-    // path holds the frame table across `Resolve`, which asks `IsAllocated`
-    // (and on a miss `FaultIn` asks `IsHeaderless`) - free-map reads that would
-    // re-acquire a non-recursive latch (`base/latch.hpp`) if the map shared
-    // `frames_latch_`. The sweep and the other callers of
-    // `IsPinnedClassFrame` nest it the same way.
+    // **A second latch because the two are nested**: `FreePage`, the
+    // named-id claim and the free-list pop decide under the frame table and
+    // then the map, and the sweep and the other callers of
+    // `IsPinnedClassFrame` ask the map under the frame table - free-map
+    // reads that would re-acquire a non-recursive latch (`base/latch.hpp`)
+    // if the map shared `frames_latch_`. (The armed hit asks no bit since
+    // DO's E4b; a debug build still asserts it there, under both.)
     //
     // **The declared order is `frames_latch_` then `map_latch_`, never the
     // reverse** (`docs/rules/rules.md` §3): the allocation paths end their

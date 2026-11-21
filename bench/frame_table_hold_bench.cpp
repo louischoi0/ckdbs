@@ -16,7 +16,8 @@
 //            DO's E1 moved it, is in the second and not the first)
 //   contend  `--readers` threads, each a core of its own, fetch random
 //            resident pages for `--seconds` while the main thread runs H1
-//            every `--every-ms`; each fetch's latency is recorded, with the
+//            every `--every-ms` (0: none, the fetches alone); each fetch's
+//            latency is recorded, with the
 //            frame-table waits and their longest. `--readers 0` skips it
 //
 // With `-DKDS_LATCH_HOLD_CENSUS=ON` the census build's per-kind holds are
@@ -196,7 +197,8 @@ int main(int argc, char** argv) {
         }
         std::vector<double> hold_us;
         const auto end = Clock::now() + std::chrono::duration<double>(seconds);
-        while (Clock::now() < end) {
+        if (every_ms == 0) std::this_thread::sleep_until(end);  // fetches alone
+        while (every_ms != 0 && Clock::now() < end) {
             std::this_thread::sleep_for(std::chrono::milliseconds(every_ms));
             const std::uint64_t ns0 = ReadWalks().ns;
             (void)store.DirtyPagesWithRecLsn();
@@ -234,7 +236,7 @@ int main(int argc, char** argv) {
     {
         store.EnableFetchImages(true);
         const auto i = static_cast<std::size_t>(LatchKind::kFrameTable);
-        constexpr std::size_t kFetches = 100'000;
+        constexpr std::size_t kFetches = 1'000'000;
         const auto count = [&](const char* name, bool write) {
             const auto before = Contention::Read();
             for (std::size_t k = 0; k < kFetches; ++k) {
@@ -243,8 +245,10 @@ int main(int argc, char** argv) {
                 if (!ref.ok()) std::abort();
             }
             const auto after = Contention::Read();
-            std::printf("count %s holds_per_fetch=%.3f\n", name,
+            std::printf("count %s holds_per_fetch=%.3f hold_ns_per_fetch=%.1f\n", name,
                         static_cast<double>(after.holds[i] - before.holds[i]) /
+                            static_cast<double>(kFetches),
+                        static_cast<double>(after.hold_ns[i] - before.hold_ns[i]) /
                             static_cast<double>(kFetches));
         };
         count("read_hit", false);

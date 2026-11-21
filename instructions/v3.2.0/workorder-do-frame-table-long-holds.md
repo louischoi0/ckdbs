@@ -560,3 +560,34 @@ images on: 5.000 at `b8759946`, 4.000 here); a read hit stays three.
   `FetchImageTest`'s 14 cells and the eviction and frame-table suites pass
   on the commit. The full suite runs again at E4b. Overhead not measured;
   measured at the milestone's close.
+
+### DO-S2 - E4b, done 2026-11-21
+
+The armed hit asks no `IsAllocated`, so no nested free-map hold: one
+`frames_.find` serves the resident test and `HitLocked` (the hit's touch,
+factored out of `Resolve`, which the unarmed path still runs whole,
+DO-R2); `assert(IsAllocated(...))` in its place (DO-R6). The audit's G56
+(`docs/pending/whole-engine-audit-second-run-twelve-slices.md`), noted
+there as taken. **Measured against `a97bd952`**, on 64 Ki frames, one
+thread: structure-latch hold time a read hit **212 to 121 ns** (`build-census`,
+1,000,000 hits; a write hit 241 to 152 ns), holds unchanged at 3 and 4; and
+one reader's fetch rate **3.44 to 3.71 million a second (+7.9 %)**, p50
+0.24 to 0.22 us, three interleaved rounds in `build-release` at load
+5.4-7.1 (another session's). **The number carries one of E4c's lookups**:
+bypassing `Resolve` drops its `find`, so a hit is two lookups here, and
+E4c removes the third.
+
+- **Reviewed by `critics-developer`**: no bug; every path that clears a
+  free-map bit re-read at `a97bd952` (four in the store, one offline) and
+  the premise holds for every caller that fetches only ids it holds; the
+  debug assertion's order is the declared one. Applied: the comment at the
+  assertion now says the one exposure - a stale fetch of a claimed id
+  given back unpublished, a defect class `InsertFrame`'s create refusal
+  already guards, would now be served in a release build where it used to
+  answer `NotFound`; four comments and docs that gave the hit's
+  `IsAllocated` as the second latch's reason reworded (`FetchAndPin`,
+  `FreePage`, the header, `page.md` §5, `rules.md` §3), the order
+  unchanged (DO-R3); `HitLocked`'s comment. Not changed: the unlatched
+  `*Unpinned` accessors' `Resolve` (tests only, a race of its own already).
+- **Suite**: 0 failed of 5101 on the code before the review's comment
+  changes. Overhead not measured; measured at the milestone's close.

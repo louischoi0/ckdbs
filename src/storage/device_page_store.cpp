@@ -1130,17 +1130,22 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::Resolve(PageId page_i
     // (per-core fault grants retired at AW-S1b, AT-S5).
     if (!IsAllocated(page_id)) return NotAllocated(page_id);
     if (auto it = frames_.find(page_id); it != frames_.end()) {
-        // Never clears the flag: a frame already dirty from an earlier
-        // mutation stays dirty however many readers touch it afterwards.
-        hits_.Add();
-        if (mark_dirty) it->second.MarkDirty(++dirty_gens_);
-        // §3.1-2: a saturating bump on every hit, including a read -
-        // "recently used" is about access, not about mutation. A *ring*
-        // fetch is the one exception (§5): a scan's touch is not heat.
-        if (heat != FetchHeat::kRing && it->second.usage < kClockUsageCap) ++it->second.usage;
-        return std::span<std::byte, kPageSize>(*it->second.bytes);
+        return HitLocked(it->second, mark_dirty, heat);
     }
     return FaultIn(page_id, mark_dirty, heat);
+}
+
+std::span<std::byte, kPageSize> DevicePageStore::HitLocked(Frame& frame, bool mark_dirty,
+                                                           FetchHeat heat) noexcept {
+    // Never clears the flag: a frame already dirty from an earlier
+    // mutation stays dirty however many readers touch it afterwards.
+    hits_.Add();
+    if (mark_dirty) frame.MarkDirty(++dirty_gens_);
+    // §3.1-2: a saturating bump on every hit, including a read -
+    // "recently used" is about access, not about mutation. A *ring*
+    // fetch is the one exception (§5): a scan's touch is not heat.
+    if (heat != FetchHeat::kRing && frame.usage < kClockUsageCap) ++frame.usage;
+    return std::span<std::byte, kPageSize>(*frame.bytes);
 }
 
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FaultIn(PageId page_id,
@@ -1761,9 +1766,9 @@ StatusOr<PageStore::FreeOutcome> DevicePageStore::FreePage(PageId page_id) {
                                   " is a system or map page and is never freed");
     }
     // **One hold, the frame table then the map** (BF-R5): the frame's erase
-    // and the bit's clear are one step, so no accessor - each tests the bit
-    // under the frame table's hold before it serves a frame - ever finds a
-    // clear bit with a resident frame.
+    // and the bit's clear are one step, so no accessor ever finds a clear
+    // bit with a resident frame - which is what lets the armed hit serve a
+    // frame it found without asking the bit (DO's E4b).
     AssertOrderBeforeFrames("FreePage");
     LatchGuard structure(structure_latch());
     LatchGuard map(map_latch());
@@ -2700,10 +2705,10 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
     // reservation (BE-S2), under holds of its own, never with this latch
     // held.
     //
-    // The hit path runs the raw fetch under the latch, and that does no I/O
-    // because no clear bit has a resident frame (BF-R5: `FreePage` erases
-    // the frame in the hold that clears the bit), so `IsAllocated` answers
-    // from memory and `Resolve` reads the device only on a miss.
+    // The hit path does no I/O and asks no free-map bit: no clear bit has a
+    // resident frame (BF-R5: `FreePage` erases the frame in the hold that
+    // clears the bit), so a frame found is a page allocated (DO's E4b). The
+    // miss path asks `IsAllocated` before it faults.
     AssertOrderBeforeFrames("FetchPinned");
     std::unique_lock<Latch> hold(*latch);
     for (;;) {
@@ -2712,12 +2717,22 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // the page is resident *and* in flight, and a hit taken in that
         // window would return bytes whose loader has not yet finished its
         // own accounting.
-        const bool resident = frames_.find(page_id) != frames_.end();
+        const auto found = frames_.find(page_id);
+        const bool resident = found != frames_.end();
         if (resident && loading_.find(page_id) == loading_.end()) {
-            // On a hit the raw fetch touches no device: it finds the frame,
-            // applies the dirty mark and the usage bump, and returns the span.
-            auto bytes = Resolve(page_id, /*mark_dirty=*/!for_read, heat);
-            if (!bytes.ok()) return bytes.status();
+            // On a hit nothing touches the device: the dirty mark and the
+            // usage bump, on the frame just found. **No `IsAllocated`, so
+            // no nested free-map hold** (DO's E4b): a resident frame's bit
+            // is set - `FreePage` erases the frame in the hold that clears
+            // the bit (BF-R5), and no other path clears a bit under a
+            // resident frame (DO-S0's census) - for a caller that fetches no
+            // id it does not hold: a stale fetch of a claimed id given back
+            // unpublished could fault the dead page in, which `ReleaseClaim`
+            // then clears under, and a release build would serve it where it
+            // used to answer `NotFound` (InsertFrame's create refusal is the
+            // defence that class has). Asserted (DO-R6).
+            assert(IsAllocated(page_id) && "a resident frame whose free-map bit is clear");
+            HitLocked(found->second, /*mark_dirty=*/!for_read, heat);
             // The `nullopt` arm is unreachable as the code stands - the latch
             // is held continuously from the `resident` test, and the only
             // eraser the raw fetch can reach runs on its miss branch - and is
