@@ -26,25 +26,16 @@
 //
 // `btree_test.cpp` is this file's sibling and asks every structural
 // question one thread can ask. This one asks the question AT-S5 created:
-// **a write descent cannot hold what it found.** The page latch is never
-// upgraded (AM-S1), so `DescendTo` releases the leaf's shared hold before
-// asking for it exclusive, and between those two lines the leaf is held by
-// nobody. Until AT-S5 nothing could enter that window - a relation's writes
-// all ran on its owner core and the reactor serialised them - and the code
-// said so in as many words: *"Nothing can evict between the release and the
-// re-fetch on a single-threaded core."* AT-S5 made a write run where the
-// session is.
-//
-// **And the gap is wider than that re-fetch**, which these cells are how
-// the stage found out. There is no latch coupling in the descent: an
-// internal node is read, a child chosen, and the node released before the
-// child is asked for - so the child's key range can shrink between the
-// parent read and the leaf's arrival, before this descent has touched the
-// leaf at all. A first draft of the fix compared the leaf's right link
-// across the re-fetch alone; it closed the narrow window, and
-// `TheLeafChainStillAscendsAfterConcurrentSplits` below still failed. What
-// the descent checks now is coverage itself, asked of the chain as it
-// stands (`LeafStillCoversKey`).
+// **a write descent cannot hold what it found.** There is no latch
+// coupling in the descent: an internal node is read, a child chosen, and
+// the node released before the child is asked for - so the child's key
+// range can shrink between the parent read and the leaf's arrival, before
+// this descent has touched the leaf at all. A write runs where the session
+// is (AT-S5), so another core's split can land in that gap. Below a level-1
+// node the leaf is then fetched exclusive at once (DK's D1); only a root
+// leaf is read shared, released and fetched again. What the descent checks
+// is coverage itself, asked of the chain as it stands under the exclusive
+// hold (`LeafStillCoversKey`).
 //
 // ---- The three cells, and what each is about ---------------------------
 //
@@ -68,13 +59,17 @@
 // **Why this shape produces the interleaving rather than hoping for it.**
 // Both threads enter the same leaf at the same instant - `Rendezvous` below
 // says what that is worth and what it was measured against - so one holds
-// the leaf's share while the other is queued on its exclusive latch. The
-// release hands the leaf to the queued writer, which splits it, and the
-// first writer's own re-fetch is handed a leaf that has given the key away.
+// the leaf exclusive while the other is queued on it. The first writer's
+// split hands the leaf to the queued one, which is then holding a leaf
+// that has given its key away.
 //
-// **Mutations**: drop the `LeafStillCoversKey` arm from `DescendTo`, and
-// separately from `BtreeLookup`. Each was run ten times against these
-// cells; each was killed ten times.
+// **Mutations**: drop the `LeafStillCoversKey` arm from `DescendTo` - run
+// ten times with the one-fetch write descent (DK-S1, 2026-11-21) and killed
+// ten times, by `TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree`
+// alone; the three cells above no longer kill it, and
+// `btree_test.cpp`'s `ALeafDividedBeforeTheWriteDescentReadsItIsNotWrittenPast`
+// kills it in one thread. The same arm dropped from `BtreeLookup` was run
+// ten times and killed ten times before D1, which does not touch a read.
 
 namespace kds::btree {
 namespace {

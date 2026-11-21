@@ -627,6 +627,19 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   Unobserved; a flake, not an engine defect. Re-verified at `7dd9b789` by
   reading. Owner: the test fixture.
 
+- **A write from a stale root that is a leaf is still refused after five
+  attempts** (verified at `9a551ddd`, DK-S4). DK's D2 moves a descent right
+  along the leaf chain instead of restarting, but never a write from the
+  named root (DK-Q10, `[quiet-wrong]`: a growth goes over `path[0]`), so a
+  session whose memo names a relation's first root, a leaf, is refused in
+  the window that root is grown over; the dispatcher's re-run answers it
+  (no client error in DK-S4's 96 cells). DK-S4 counted 24-25 refusals in 32
+  multi-core cells an arm, A and B alike, at least 16 of B's from a root
+  leaf (`bench/v3.5.0/results-dk-close-v3.5.0-15-g9a551ddd.md`; the order's
+  DK-S4 entry). Curing it is a descent re-reading its root from the anchor
+  when the root it was given is marked grown over, which no order owns.
+  Owner: `docs/spec/heap-and-tuple.md` §5.
+
 - **An eight-core append workload reaches the clustered tree's bounded
   re-descent refusal, and the cause is not established.** The scenario
   rebaseline (`bench-rerun-scenarios`, `v2.7.0-531-g9a0525d`, 2026-09-30)

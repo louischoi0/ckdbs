@@ -26,8 +26,10 @@
 // the same question with real threads on an armed latch, the way
 // `btree_race_test.cpp` asks it of the clustered tree: two cores inserting
 // into one leaf at the same instant, so one's divide lands between the
-// other's shared read and its exclusive re-fetch, or between its parent
-// read and its leaf read.
+// other's parent read and its leaf fetch. A write descent below a level-1
+// node fetches its leaf exclusive at once (DK's D1), so that is the one gap
+// below the root; a queued exclusive writer that is handed a leaf another
+// writer has just divided is the same question asked a fetch later.
 //
 // **What is asserted is the tree, not one key**: after the rounds, the
 // whole leaf chain ascends by sort key, and every entry either thread
@@ -44,12 +46,9 @@
 // a leaf holds entries: sixteen-entry leaves keep divides frequent, and
 // three regions keep the leaf count under the root's fifteen separators.
 //
-// **Mutation**: drop the coverage arm from `DescendTo` - killed 20 runs in
-// 20 (2026-09-26, each run six fresh trees), and 20 in 20 again on the
-// three-region layout (2026-10-15, thirty fresh trees). The first draft AT-S5c
-// rejected, a comparison of the leaf's right link across the descent's own
-// two fetches, is killed 20 in 20 as well: with real threads the divide
-// lands before the leaf is read about as often as between its two fetches.
+// **Mutation**: drop the coverage arm from `DescendTo` - killed 10 runs in
+// 10 with the one-fetch write descent (DK-S1, 2026-11-21), by
+// `TwoCoresDividingOneIndexLeaveEveryEntryWhereAProbeFindsIt` every run.
 // Before the fix every run failed (60 in 60).
 
 namespace kds::index {

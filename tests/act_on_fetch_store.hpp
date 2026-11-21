@@ -29,11 +29,13 @@ public:
         return inner_.CreateNewUnpinned();
     }
     StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
+        Note(page_id, 'X');
         Tick(page_id);
         if (Refuses(page_id)) return Refusal(page_id);
         return inner_.GetUnpinned(page_id);
     }
     StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
+        Note(page_id, 'S');
         Tick(page_id);
         if (Refuses(page_id)) return Refusal(page_id);
         return inner_.GetForReadUnpinned(page_id);
@@ -41,11 +43,15 @@ public:
 
     void OnFetch(PageId page_id, int nth, std::function<void()> action) {
         watched_ = page_id;
+        watched_modes_.clear();
         nth_ = nth;
         fetches_ = 0;
         action_ = std::move(action);
     }
     bool fired() const noexcept { return fired_; }
+    // The watched page's fetches since `OnFetch`, in order: 'S' shared,
+    // 'X' exclusive.
+    const std::string& watched_modes() const noexcept { return watched_modes_; }
 
     // The `nth` fetch of `page_id` from now on answers `IoError`; once.
     void FailFetch(PageId page_id, int nth) {
@@ -55,6 +61,9 @@ public:
     }
 
 private:
+    void Note(PageId page_id, char mode) {
+        if (page_id == watched_) watched_modes_ += mode;
+    }
     void Tick(PageId page_id) {
         if (action_ && page_id == watched_ && ++fetches_ == nth_) {
             auto action = std::move(action_);  // disarmed first: the action fetches too
@@ -78,6 +87,7 @@ private:
     int refuse_nth_ = 0;
     int refused_fetches_ = 0;
     PageId watched_ = kInvalidPageId;
+    std::string watched_modes_;
     int nth_ = 0;
     int fetches_ = 0;
     bool fired_ = false;

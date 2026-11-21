@@ -91,22 +91,30 @@
 // latch ride in the `PageRef` it holds (`page.md` §6 - the latch is held
 // by a *core*, so it serialises cores as readily as tasks on one). There
 // is still **no latch coupling and no B-link right-link protocol**: a
-// descent never holds two pages at once, and an internal node is read and
-// let go before its child is asked for.
+// descent holds two pages at once only in the coverage check (its leaf and
+// the right sibling, read rightward), and an internal node is read and let
+// go before its child is asked for. At the leaf level a descent that
+// finds its leaf no longer covers the key **moves right** along the leaf
+// chain before it starts over (DK's D2): the low key it passes never
+// moves, so the walk needs no coupling, and no internal node gains a link.
 //
 // A write runs where the session is (AT-S5), so two cores reach one
-// relation's leaves, and one place in this file depends on that: **a
-// write descent's re-fetch**,
-// which must drop the leaf's shared hold before asking for it exclusive
-// because the page latch is never upgraded. `DescendTo` carries the
-// window's whole account; what closes it is that a leaf's coverage
+// relation's leaves, and one place in this file depends on that: **the
+// window between a parent's read and its leaf's fetch**, which a write
+// descent crosses holding nothing - it takes the leaf exclusive at once
+// below a level-1 node, and at a root leaf drops its shared hold before
+// asking for it exclusive, because the page latch is never upgraded.
+// `DescendTo` carries the window's whole account; what closes it is that a
+// leaf's coverage
 // interval can shrink in exactly one way, and that way rewrites the leaf's
 // own `next_page_id`.
 //
 // **What is still owed to the single-core reading** is the *absence* of a
 // protocol rather than any particular line: a reader holds one page's
 // share while it reads, and nothing here reasons across two pages without
-// holding both. A structural change that had to be seen atomically across
+// holding both - but one: D2's move right trusts, after both pages are
+// released, the right leaf's `min_key` it read with both held, which is
+// sound only because a `min_key` never moves. A structural change that had to be seen atomically across
 // levels - a merge, a rebalance - would need the coupling this file does
 // not have, and none exists.
 

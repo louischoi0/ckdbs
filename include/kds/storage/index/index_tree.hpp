@@ -68,8 +68,9 @@
 // the child. Since AT-S5 two cores write one index, so a divide on one can
 // run inside another's descent; `IndexInsert` answers it the way the
 // clustered tree does (AT-S5c) - once its leaf is held exclusive it asks
-// whether the leaf **still covers** the sort key, and a stale descent starts
-// over, a bounded number of times (`storage::kMaxDescentRestarts`).
+// whether the leaf **still covers** the sort key, and a stale descent moves
+// right along the leaf chain (DK's D2, up to `storage::kMaxLeafHops`), then
+// starts over, a bounded number of times (`storage::kMaxDescentRestarts`).
 // index_tree.cpp's `DescendTo` carries the argument; `IndexSeekLeaf` needs
 // no such check, and says why.
 //

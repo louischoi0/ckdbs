@@ -1179,27 +1179,41 @@ is the code it always was. Redo of these records is `docs/spec/wal.md`'s.
 An index hangs off its relation's catalog row; a write runs where its
 session is, and `CREATE INDEX` does too (AT-S5e), so two cores maintain one index concurrently. The pages carry the
 page latch (`page.md` §6). A descent is not latch-coupled - it releases a
-parent before reading the child, and a write descent drops the leaf's shared
-hold before taking it exclusive - so another core's divide can run inside
-either gap and leave the descent holding a leaf that has given the key to a
-new right sibling.
+parent before reading the child - so another core's divide can run inside
+that gap and leave the descent holding a leaf that has given the key to a
+new right sibling. A write descent takes its leaf exclusive at once below a
+level-1 node (DK's D1, as `heap-and-tuple.md` §5 states it); only at a root
+leaf does it drop a shared hold before taking it exclusive, a second gap of
+the same kind.
 
 - **The write side checks coverage.** Once the leaf is held exclusive,
   `IndexInsert` asks whether the key still sorts below the right sibling's
-  first entry; if not, the descent starts over, at most
+  first entry; if not, the descent **moves right** to that sibling (DK's
+  D2: the failed check proved the key at or above its first entry, which
+  no removal touches) and asks again under the new hold, up to
+  `storage::kMaxLeafHops` hops, then starts over from the root, at most
   `storage::kMaxDescentRestarts` more times, then refuses `TxnConflict`
-  (retryable). It is the clustered tree's check (`heap-and-tuple.md` §5,
+  (retryable). A write never moves right from the named root itself: a
+  growth goes over `path[0]`, so it must stay the root (DK-Q10). It is the clustered tree's check (`heap-and-tuple.md` §5,
   AT-S5c) with one difference: an index leaf has no immutable `min_key`, so
   the bound is the sibling's first entry.
 - **That bound rests on a premise: no leaf's first entry is ever removed**
   (IX2c). The right sibling's first entry equals the separator its divide
   copied up only while it stays; `PURGE INDEX` removes other entries and
-  refuses the first (`index_tree.hpp`, "Concurrency").
+  refuses the first (`index_tree.hpp`, "Concurrency"). **DK's D1 and D2
+  rest on it too, with no leaf ever removed** (DK-R5,
+  `workorder-dk-descent-low-key.md`): an order that would remove a leaf's
+  first entry or a leaf reopens them by name.
 - **A stale root** - a core whose memo predates a level growth
   (`Catalog::AdoptRoot` bumps the schema word; the memo drops at the
   next task boundary) - routes a key outside its subtree to a leaf that no
-  longer covers it, every attempt alike, and is refused retryable rather than
-  placed where no descent from the current root looks. Inside its subtree the
+  longer covers it. The descent moves right from there (DK's D2) and, within
+  `storage::kMaxLeafHops`, reaches the leaf the current root routes the key
+  to; a divide from that leaf, when the hop crossed out of the stale root's
+  subtree, finds no parent below the stale root and is refused with nothing
+  written. A stale root that is itself a leaf, or a key past the hop budget,
+  fails every attempt alike and is refused retryable rather than placed
+  where no descent from the current root looks. Inside its subtree the
   placement is right, and a divide it causes is placed right too, up to the
   stale root itself, which the root's mark (below) refuses to grow over.
 - **The read side checks nothing, and the reason is directional.** A probe's
