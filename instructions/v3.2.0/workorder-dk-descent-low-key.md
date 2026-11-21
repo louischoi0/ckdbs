@@ -1,8 +1,13 @@
 # Work order DK - a btree descent that leans on the immutable low key: one fetch fewer for a write, a leaf that moves right instead of restarting, and the internal levels read optimistically only under CW's protocol
 
-Status: **OPENED 2026-11-21 on the operator's standing go-ahead of
+Status: **CLOSED NARROW 2026-11-21 on the work branch, not landed** - D1
+and D2 built (DK-S1 `7622d619`, DK-S2 `9a551ddd`), D3 closed with nothing
+built (CW's), the close measured level with the opening commit in every
+cell (`bench/v3.5.0/results-dk-close-v3.5.0-15-g9a551ddd.md`), and **D2's
+aim not met by its measure**: the stale-descent refusals did not fall (§7,
+DK-S4). Opened 2026-11-21 on the operator's standing go-ahead of
 2026-11-21 (go-ahead-achieving-milestone), on worktree
-`dk-descent-low-key` from `2c2639df` (`v3.5.0-12-g2c2639df`).** DK was taken
+`dk-descent-low-key` from `2c2639df` (`v3.5.0-12-g2c2639df`). DK was taken
 as the highest-priority written order: DN, the one opened order not closed,
 waits at its own gate for the operator's mark (`raft-marks-2026-11-21.md`
 §1). **DK-S0 done**: D1 go, D2 go, D3 handed to CW (§7). Written in the
@@ -625,3 +630,52 @@ and `PromoteSeparator`'s growth over `path[0]`, both trees), **DK-Q11
 C3a and builds only under CW's protocol and gates, and CW is not open. If
 CW opens, DK-Q6 (a) - restart at the failed node, now that D2 stands - is
 recorded there and the restart-at-node case joins CW's contract suite.
+
+### DK-S4 - the close, 2026-11-21
+
+Measured by `ck-tester`: A = `2c2639df` (`v3.5.0-12-g2c2639df`), B =
+`9a551ddd` (`v3.5.0-15-g9a551ddd`), Release, interleaved with a
+same-binary control A2; `bench/v3.5.0/results-dk-close-v3.5.0-15-g9a551ddd.md`,
+driver `tools/dk_close.py`, about 19 minutes in all, no compilation on the
+host in any cell.
+
+- **No cell slower beyond its control.** `cores = 1`, 15 cells (`point`,
+  `insert1`, `named`, `ixinsert`, `update1` at 200, 1,000 and 10,000
+  rows): every B - A median inside the control's ~1 us or smaller than it;
+  the largest, `named` at 10,000 rows, -1.77 us of 35.4 us (B faster).
+  `point` nil, as claimed. **D1's one fetch fewer is not resolvable** by
+  server CPU at this floor: the claim stands on the census (DK-S0's M1 and
+  DK-S1's cells), not on a measured saving.
+- **Multi-core** (`cores` 2 and 4, shared issued-key inserts and named
+  random-key inserts with a secondary index, 8 rounds an arm): throughput
+  -0.39 % to +0.37 % of A, inside the control (client-bound Python
+  driver). No client-visible error in any of 96 cells.
+- **Refusals did not fall**: `refused_*` A 24, A2 24, B 25 over 32 cells an
+  arm; `refused_*_parent` 0 in every arm; B took 373 hops. **CLA's reading
+  of why** (from the counts, not a counter of cause): a refusal that may
+  hop spends `kMaxLeafHops x (kMaxDescentRestarts + 1)` = 40 hops first, so
+  B's 373 hops leave room for at most 9 such refusals, and **at least 16 of
+  B's 25 took no hop at all - a write from a named root that is a leaf**,
+  the one case DK-Q10 keeps refused. On a relation that starts empty, a
+  session's memo names the first root, a leaf, and the refusals cluster in
+  the window it is grown over (DK-S0). D2 answers what it was built for -
+  a stale internal root and a mid-chain outrun (DK-S2's cells) - and those
+  are not what these cells refuse.
+- **No remedy built.** The one sound change in reach is to refuse a
+  write from a grown-over root leaf at the first attempt instead of the
+  fifth (its `grown_over` mark says no restart from it can succeed); it
+  changes no refusal count and saves four descents a refusal, at about
+  25 refusals in 1.15 million statements, every one re-run inside the
+  engine. Hopping from a root leaf is DK-Q10's `[quiet-wrong]` case and is
+  not a remedy. What would cure the class is a write descent that re-reads
+  its root from the anchor when the root it was given is marked, which is
+  the catalog memo's question (`Revalidate()`), not the descent's - outside
+  DK's scope (§6).
+- **Docs**: `heap-and-tuple.md` §5, `index.md` IX14, `page.md` §6 and
+  `client-manual.md` carry D1 and D2 (DK-S1, DK-S2); `CLAUDE.md`'s
+  clustered-tree row; `known-gaps.md`'s eight-core re-descent entry
+  rewritten. No SQL surface changed, so `manual/` is unchanged.
+
+**DK is closed narrow**: built and enforcing as specified, its cost level
+with the opening commit, D1's saving below the floor and D2's refusal aim
+not met by the cells measured. Not pushed, not tagged.

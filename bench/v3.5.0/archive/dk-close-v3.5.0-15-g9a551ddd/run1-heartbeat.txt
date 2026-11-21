@@ -1,0 +1,113 @@
+01:59:37 start
+01:59:44 m1 n=200 point done
+01:59:45 m1 n=200 insert1 done
+01:59:45 m1 n=200 named done
+01:59:46 m1 n=200 ixinsert done
+01:59:47 m1 n=200 update1 done
+01:59:53 m1 n=1000 point done
+01:59:55 m1 n=1000 insert1 done
+01:59:56 m1 n=1000 named done
+01:59:58 m1 n=1000 ixinsert done
+01:59:59 m1 n=1000 update1 done
+02:00:08 m1 n=10000 point done
+02:00:12 m1 n=10000 insert1 done
+02:00:18 m1 n=10000 named done
+02:00:23 m1 n=10000 ixinsert done
+02:00:28 m1 n=10000 update1 done
+02:00:30 m2 A cores=2 ins1_shared r0 tps=28624.0 errors=0
+02:00:32 m2 A2 cores=2 ins1_shared r0 tps=27152.8 errors=0
+02:00:34 m2 B cores=2 ins1_shared r0 tps=28039.9 errors=0
+02:00:37 m2 A cores=2 ins1_shared r1 tps=28379.2 errors=0
+02:00:39 m2 B cores=2 ins1_shared r1 tps=28402.6 errors=0
+02:00:41 m2 A2 cores=2 ins1_shared r1 tps=28437.2 errors=0
+02:00:43 m2 B cores=2 ins1_shared r2 tps=28675.1 errors=0
+02:00:45 m2 A cores=2 ins1_shared r2 tps=28298.7 errors=0
+02:00:47 m2 A2 cores=2 ins1_shared r2 tps=28627.8 errors=0
+02:00:49 m2 B cores=2 ins1_shared r3 tps=28687.0 errors=0
+02:00:51 m2 A2 cores=2 ins1_shared r3 tps=28444.6 errors=0
+02:00:54 m2 A cores=2 ins1_shared r3 tps=28216.7 errors=0
+02:00:56 m2 A2 cores=2 ins1_shared r4 tps=28010.2 errors=0
+02:00:58 m2 B cores=2 ins1_shared r4 tps=28285.1 errors=0
+02:01:00 m2 A cores=2 ins1_shared r4 tps=28439.4 errors=0
+02:01:02 m2 A2 cores=2 ins1_shared r5 tps=28582.1 errors=0
+02:01:04 m2 A cores=2 ins1_shared r5 tps=28420.2 errors=0
+02:01:06 m2 B cores=2 ins1_shared r5 tps=28363.2 errors=0
+02:01:09 m2 A cores=2 ins1_shared r6 tps=28714.4 errors=0
+02:01:11 m2 A2 cores=2 ins1_shared r6 tps=28281.4 errors=0
+02:01:13 m2 B cores=2 ins1_shared r6 tps=28416.8 errors=0
+02:01:15 m2 A cores=2 ins1_shared r7 tps=28464.8 errors=0
+02:01:17 m2 B cores=2 ins1_shared r7 tps=28788.7 errors=0
+02:01:19 m2 A2 cores=2 ins1_shared r7 tps=28503.8 errors=0
+02:01:22 m2 A cores=2 named_ix r0 tps=19402.4 errors=0
+02:01:25 m2 A2 cores=2 named_ix r0 tps=19525.2 errors=0
+02:01:28 m2 B cores=2 named_ix r0 tps=19367.1 errors=0
+02:01:31 m2 A cores=2 named_ix r1 tps=19401.9 errors=0
+02:01:34 m2 B cores=2 named_ix r1 tps=19517.1 errors=0
+02:01:37 m2 A2 cores=2 named_ix r1 tps=19796.3 errors=0
+02:01:40 m2 B cores=2 named_ix r2 tps=19786.3 errors=0
+02:01:42 m2 A cores=2 named_ix r2 tps=19580.3 errors=0
+02:01:45 m2 A2 cores=2 named_ix r2 tps=19635.6 errors=0
+02:01:48 m2 B cores=2 named_ix r3 tps=19598.8 errors=0
+02:01:51 m2 A2 cores=2 named_ix r3 tps=19662.5 errors=0
+02:01:54 m2 A cores=2 named_ix r3 tps=19608.1 errors=0
+02:01:57 m2 A2 cores=2 named_ix r4 tps=19825.9 errors=0
+02:02:00 m2 B cores=2 named_ix r4 tps=19036.3 errors=0
+02:02:03 m2 A cores=2 named_ix r4 tps=19841.3 errors=0
+02:02:06 m2 A2 cores=2 named_ix r5 tps=19754.5 errors=0
+02:02:09 m2 A cores=2 named_ix r5 tps=19699.7 errors=0
+02:02:11 m2 B cores=2 named_ix r5 tps=19437.5 errors=0
+02:02:14 m2 A cores=2 named_ix r6 tps=19525.1 errors=0
+02:02:17 m2 A2 cores=2 named_ix r6 tps=19627.0 errors=0
+02:02:20 m2 B cores=2 named_ix r6 tps=19832.8 errors=0
+02:02:23 m2 A cores=2 named_ix r7 tps=19697.1 errors=0
+02:02:26 m2 B cores=2 named_ix r7 tps=19502.6 errors=0
+02:02:29 m2 A2 cores=2 named_ix r7 tps=19284.3 errors=0
+02:02:33 m2 A cores=4 ins1_shared r0 tps=26621.8 errors=0
+02:02:37 m2 A2 cores=4 ins1_shared r0 tps=27046.6 errors=0
+02:02:41 m2 B cores=4 ins1_shared r0 tps=26731.8 errors=0
+02:02:45 m2 A cores=4 ins1_shared r1 tps=26793.5 errors=0
+02:02:49 m2 B cores=4 ins1_shared r1 tps=26683.7 errors=0
+02:02:53 m2 A2 cores=4 ins1_shared r1 tps=26929.3 errors=0
+02:02:57 m2 B cores=4 ins1_shared r2 tps=26734.5 errors=0
+02:03:01 m2 A cores=4 ins1_shared r2 tps=26917.9 errors=0
+02:03:05 m2 A2 cores=4 ins1_shared r2 tps=26877.0 errors=0
+02:03:09 m2 B cores=4 ins1_shared r3 tps=27054.2 errors=0
+02:03:13 m2 A2 cores=4 ins1_shared r3 tps=26923.8 errors=0
+02:03:17 m2 A cores=4 ins1_shared r3 tps=26843.1 errors=0
+02:03:21 m2 A2 cores=4 ins1_shared r4 tps=27036.6 errors=0
+02:03:25 m2 B cores=4 ins1_shared r4 tps=26762.1 errors=0
+02:03:30 m2 A cores=4 ins1_shared r4 tps=26764.3 errors=0
+02:03:34 m2 A2 cores=4 ins1_shared r5 tps=26602.3 errors=0
+02:03:38 m2 A cores=4 ins1_shared r5 tps=27106.4 errors=0
+02:03:42 m2 B cores=4 ins1_shared r5 tps=27003.6 errors=0
+02:03:46 m2 A cores=4 ins1_shared r6 tps=26902.6 errors=0
+02:03:50 m2 A2 cores=4 ins1_shared r6 tps=22979.5 errors=0
+02:03:54 m2 B cores=4 ins1_shared r6 tps=26777.5 errors=0
+02:03:58 m2 A cores=4 ins1_shared r7 tps=26719.1 errors=0
+02:04:03 m2 B cores=4 ins1_shared r7 tps=24773.6 errors=0
+02:04:07 m2 A2 cores=4 ins1_shared r7 tps=26657.6 errors=0
+02:04:13 m2 A cores=4 named_ix r0 tps=17167.2 errors=0
+02:04:19 m2 A2 cores=4 named_ix r0 tps=18137.4 errors=0
+02:04:24 m2 B cores=4 named_ix r0 tps=18209.5 errors=0
+02:04:30 m2 A cores=4 named_ix r1 tps=18026.8 errors=0
+02:04:36 m2 B cores=4 named_ix r1 tps=17956.6 errors=0
+02:04:42 m2 A2 cores=4 named_ix r1 tps=18190.6 errors=0
+02:04:48 m2 B cores=4 named_ix r2 tps=17994.7 errors=0
+02:04:53 m2 A cores=4 named_ix r2 tps=17845.8 errors=0
+02:04:59 m2 A2 cores=4 named_ix r2 tps=18165.0 errors=0
+02:05:05 m2 B cores=4 named_ix r3 tps=18290.6 errors=0
+02:05:11 m2 A2 cores=4 named_ix r3 tps=17983.7 errors=0
+02:05:17 m2 A cores=4 named_ix r3 tps=18167.7 errors=0
+02:05:22 m2 A2 cores=4 named_ix r4 tps=18494.7 errors=0
+02:05:28 m2 B cores=4 named_ix r4 tps=18189.9 errors=0
+02:05:34 m2 A cores=4 named_ix r4 tps=18320.6 errors=0
+02:05:39 m2 A2 cores=4 named_ix r5 tps=18134.2 errors=0
+02:05:45 m2 A cores=4 named_ix r5 tps=18089.9 errors=0
+02:05:51 m2 B cores=4 named_ix r5 tps=18102.1 errors=0
+02:05:57 m2 A cores=4 named_ix r6 tps=17999.8 errors=0
+02:06:03 m2 A2 cores=4 named_ix r6 tps=18060.2 errors=0
+02:06:08 m2 B cores=4 named_ix r6 tps=18377.8 errors=0
+02:06:14 m2 A cores=4 named_ix r7 tps=18284.5 errors=0
+02:06:20 m2 B cores=4 named_ix r7 tps=18152.4 errors=0
+02:06:26 m2 A2 cores=4 named_ix r7 tps=18017.8 errors=0
+02:06:26 end
