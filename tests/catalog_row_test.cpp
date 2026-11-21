@@ -318,8 +318,14 @@ TEST(SysIndexRowTest, TheBuildingFlagRoundTripsAndAnUndefinedBitIsCorruption) {
     ASSERT_TRUE(out.ok()) << out.status().message();
     EXPECT_EQ(out.value().flags, kIndexFlagBuilding);
 
+    // DN: a heap's Keystone index, unique, round-trips too (superblock 39).
+    in.flags = kIndexFlagUnique | kIndexFlagKeystone;
+    auto keystone = SysIndexRow::Decode(in.Encode());
+    ASSERT_TRUE(keystone.ok()) << keystone.status().message();
+    EXPECT_EQ(keystone.value().flags, kIndexFlagUnique | kIndexFlagKeystone);
+
     for (const std::uint8_t refused_flags :
-         {std::uint8_t{0x4}, std::uint8_t(kIndexFlagUnique | kIndexFlagBuilding)}) {
+         {std::uint8_t{0x8}, std::uint8_t(kIndexFlagUnique | kIndexFlagBuilding)}) {
         in.flags = refused_flags;
         auto refused = SysIndexRow::Decode(in.Encode());
         ASSERT_FALSE(refused.ok()) << int(refused_flags);

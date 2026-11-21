@@ -30,6 +30,10 @@ Status CheckIndexLayout(const IndexLayout& layout) {
     if (layout.key_width == 0) {
         return Status::InvalidArgument("an index key must occupy at least one byte");
     }
+    if (layout.rowid_width != 0 && layout.rowid_width != kIndexRowidWidth) {
+        return Status::InvalidArgument("an index entry's rowid is " +
+                                       std::to_string(kIndexRowidWidth) + " bytes or absent");
+    }
     // An internal entry is a leaf entry plus a child pointer (a separator
     // is a whole entry), so it is the wider and the one to bound.
     const std::uint32_t internal = layout.internal_entry_width();
@@ -39,6 +43,7 @@ Status CheckIndexLayout(const IndexLayout& layout) {
             std::to_string(kMaxIndexEntryWidth) +
             "-byte limit; a page must hold two entries or a full page has no split to make "
             "(key " + std::to_string(layout.key_width) + " + tuple key " + std::to_string(kIndexTupleKeyWidth) +
+            " + rowid " + std::to_string(layout.rowid_width) +
             " + covered " + std::to_string(layout.covered_width) + " + child pointer " +
             std::to_string(sizeof(PageId)) + ")");
     }
@@ -49,6 +54,10 @@ void PutIndexTupleKey(std::span<std::byte> out, std::uint64_t tuple_key) {
     for (std::uint32_t i = 0; i < kIndexTupleKeyWidth; ++i) {
         out[i] = static_cast<std::byte>((tuple_key >> (8 * (kIndexTupleKeyWidth - 1 - i))) & 0xFF);
     }
+}
+
+std::uint64_t GetIndexRowid(const IndexLayout& layout, std::span<const std::byte> entry) {
+    return GetIndexTupleKey(entry.subspan(layout.rowid_offset(), kIndexRowidWidth));
 }
 
 std::uint64_t GetIndexTupleKey(std::span<const std::byte> in) {
@@ -68,7 +77,8 @@ Status EncodeIndexSortKey(const IndexLayout& layout, std::span<const std::byte> 
     }
     std::memcpy(out.data(), key.data(), key.size());
     PutIndexTupleKey(out.subspan(layout.key_width), tuple_key);
-    std::fill(out.begin() + layout.covered_offset(), out.end(), std::byte{0});
+    // Rowid and covered bytes zero: the lowest sort key carrying the pair.
+    std::fill(out.begin() + layout.rowid_offset(), out.end(), std::byte{0});
     return Status::OK();
 }
 

@@ -92,6 +92,11 @@ struct WalkCursor {
     // has not written - so a resume offers that same key again rather than
     // stepping past it.
     std::uint64_t tuple_key = 0;
+    // **A heap's walk stops at a place, not a key** (DN): its rows are in no
+    // key order but never move, so the page and slot it stopped at are where
+    // it resumes, that slot offered again.
+    PageId page = kInvalidPageId;
+    std::uint16_t slot = 0;
     bool active = false;
     // **How many rows the statement has written so far**, carried because
     // the count a client is told is the *statement's* and the resume is a

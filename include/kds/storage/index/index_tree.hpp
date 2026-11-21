@@ -177,12 +177,16 @@ Status FormatRoot(std::span<std::byte, kPageSize> page, const IndexLayout& layou
 // follows; anything else it leaves is a stated leak (`drop-table.md` DT1).
 //
 // `anchor_page` is the anchor a growth pins (`UnlatchedPin`); none pins nothing.
+//
+// `rowid` is the row's `heap::EncodeRowid` word on a heap's index
+// (`layout.rowid_width` set), and ignored otherwise.
 StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t tuple_key,
                                         std::span<const std::byte> covered,
                                         std::uint64_t owner_oid,
-                                        PageId anchor_page = kInvalidPageId);
+                                        PageId anchor_page = kInvalidPageId,
+                                        std::uint64_t rowid = 0);
 
 // The leaf that holds `sort_key`, or that *would* hold it - the descent
 // alone, with no question about whether anything matches.

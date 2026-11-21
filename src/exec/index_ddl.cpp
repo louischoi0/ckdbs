@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "kds/catalog/schema.hpp"
+#include "kds/exec/heap_store.hpp"
 #include "kds/exec/index_key.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/row_codec.hpp"
@@ -64,6 +65,9 @@ StatusOr<std::uint16_t> ResolveColumn(const catalog::TableAccess& access,
 // page rather than at one relation.
 struct StagedRow {
     std::uint64_t tuple_key = 0;
+    // Where a heap's row is (DN): every entry the row is owed carries it.
+    // 0 on a btree relation.
+    std::uint64_t rowid = 0;
     std::uint64_t trx_id = 0;  // the current version's writer (a delete-mark's deleter)
     std::uint64_t undo_ptr = 0;
     bool deleted = false;
@@ -223,13 +227,14 @@ StatusOr<std::vector<parser::AstValue>> DecodeVersion(const Backfill& cx,
 StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
                                                       catalog::TableAccess::IndexRef& ix,
                                                       std::uint64_t tuple_key,
+                                                      std::uint64_t rowid,
                                                       std::span<const std::byte> payload,
                                                       std::vector<parser::AstValue> row) {
     storage::PageStore& store = cx.store;
     const catalog::TableAccess& access = cx.access;
 
     if (cx.owed != nullptr) {
-        auto entry = EncodeIndexEntry(access, ix, row, payload, tuple_key);
+        auto entry = EncodeIndexEntry(access, ix, row, payload, tuple_key, rowid);
         if (!entry.ok()) return entry.status();
         cx.owed->push_back(std::move(entry.value()));
         return row;
@@ -250,7 +255,7 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
     // which is the point of building it before it is visible.
     auto moved = AppendIndexEntry(store, access, ix, row, /*first_col_pos=*/0, payload,
                                   tuple_key, /*previous=*/{}, cx.log,
-                                  cx.online && cx.log == nullptr ? &cx.catalog : nullptr);
+                                  cx.online && cx.log == nullptr ? &cx.catalog : nullptr, rowid);
     if (!moved.ok()) return moved.status();
     if (moved.value() != kInvalidPageId) ix.root_page_id = moved.value();
     return row;
@@ -261,10 +266,16 @@ StatusOr<std::vector<parser::AstValue>> AppendVersion(const Backfill& cx,
 // purged. Descends from the clustered root as this core's catalog now
 // names it, since a growth moves it and the build's own `access` is the
 // generation it pinned before H3.
-StatusOr<std::optional<StagedRow>> ReadRowAgain(const Backfill& cx, std::uint64_t tuple_key) {
+//
+// A heap's row is read where its rowid says (DN-R3: checked to be
+// `tuple_key`'s), since a heap row never moves.
+StatusOr<std::optional<StagedRow>> ReadRowAgain(const Backfill& cx, std::uint64_t tuple_key,
+                                                std::uint64_t rowid) {
     auto access = cx.catalog.InitTableAccess(cx.access.oid);
     if (!access.ok()) return access.status();
-    auto at = btree::BtreeLookup(cx.store, access.value()->desc_page_id, tuple_key);
+    auto at = access.value()->clustered_type == catalog::ClusteredType::kHeap
+                  ? FetchHeapRow(cx.store, *access.value(), rowid, tuple_key)
+                  : btree::BtreeLookup(cx.store, access.value()->desc_page_id, tuple_key);
     if (!at.ok()) {
         if (at.status().code() == StatusCode::kNotFound) return std::optional<StagedRow>{};
         return at.status();
@@ -275,6 +286,7 @@ StatusOr<std::optional<StagedRow>> ReadRowAgain(const Backfill& cx, std::uint64_
     if (!tuple.ok()) return tuple.status();
     StagedRow row;
     row.tuple_key = tuple_key;
+    row.rowid = rowid;
     row.trx_id = tuple.value().trx_id;
     row.undo_ptr = tuple.value().undo_ptr;
     row.deleted = tuple.value().deleted;
@@ -336,7 +348,8 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
             released = latest.status();
             stale = true;
         } else if (latest.ok()) {
-            latest = AppendVersion(cx, ix, row.tuple_key, row.payload, std::move(latest.value()));
+            latest = AppendVersion(cx, ix, row.tuple_key, row.rowid, row.payload,
+                                   std::move(latest.value()));
         }
         if (!stale && !latest.ok()) {
             // **Online, a `PURGE` can retire the row under the walk** (CI-S4's
@@ -391,7 +404,8 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                             return storage::VisitControl::kStop;
                         }
                         if (older.ok()) {
-                            older = AppendVersion(cx, ix, row.tuple_key, version.image,
+                            older = AppendVersion(cx, ix, row.tuple_key, row.rowid,
+                                                  version.image,
                                                   std::move(older.value()));
                         }
                         if (!older.ok()) {
@@ -430,7 +444,7 @@ Status IndexStagedRow(const Backfill& cx, catalog::TableAccess::IndexRef& ix,
                 " was taken back by a rollback under the index build " +
                 std::to_string(reread + 1) + " times; the build can be run again");
         }
-        auto again = ReadRowAgain(cx, row.tuple_key);
+        auto again = ReadRowAgain(cx, row.tuple_key, row.rowid);
         if (!again.ok()) return again.status();
         if (!again.value().has_value()) return Status::OK();  // gone: nothing to index
         const StagedRow& now = *again.value();
@@ -510,6 +524,9 @@ StatusOr<PageId> BackfillLeaf(const Backfill& cx, catalog::TableAccess::IndexRef
 
             StagedRow row;
             row.tuple_key = tuple_key.value();
+            if (cx.access.clustered_type == catalog::ClusteredType::kHeap) {
+                row.rowid = heap::EncodeRowid(heap::Rowid{leaf, i});
+            }
             row.trx_id = tuple.value().trx_id;
             row.undo_ptr = tuple.value().undo_ptr;
             row.deleted = tuple.value().deleted;
@@ -612,6 +629,10 @@ StatusOr<catalog::Catalog::IndexDef> PrepareIndexDef(catalog::Catalog& catalog,
     index::IndexLayout layout;
     layout.key_width = static_cast<std::uint16_t>(key_width.value());
     layout.covered_width = static_cast<std::uint16_t>(covered_width);
+    // A heap's entries carry the row's rowid (DN, IX1).
+    if (access.value()->clustered_type == catalog::ClusteredType::kHeap) {
+        layout.rowid_width = static_cast<std::uint16_t>(index::kIndexRowidWidth);
+    }
     // Where a wide declaration is refused: by arithmetic, at declaration,
     // rather than by an insert that fails much later.
     if (Status s = index::CheckIndexLayout(layout); !s.ok()) {
@@ -816,8 +837,12 @@ Status IndexBuild::Begin() {
     }
     index::IndexLayout layout;
     layout.key_width = def_.key_width;
+    if (access_->clustered_type == catalog::ClusteredType::kHeap) {
+        layout.rowid_width = static_cast<std::uint16_t>(index::kIndexRowidWidth);
+    }
     layout.covered_width = static_cast<std::uint16_t>(def_.entry_width - def_.key_width -
-                                                      index::kIndexTupleKeyWidth);
+                                                      index::kIndexTupleKeyWidth -
+                                                      layout.rowid_width);
 
     // **Fenced, the tree is unlogged until `LogBuiltTree`** (DB-R3): its
     // pages carry the index's oid, registered before the first one exists.
@@ -844,6 +869,7 @@ Status IndexBuild::Begin() {
     tree_.nkeys = static_cast<std::uint8_t>(def_.key_cols.size());
     tree_.ncovered = static_cast<std::uint8_t>(def_.covered_cols.size());
     tree_.unique = (def_.flags & catalog::kIndexFlagUnique) != 0;
+    tree_.rowid = access_->clustered_type == catalog::ClusteredType::kHeap;
     tree_.name = def_.name;
     for (std::size_t i = 0; i < def_.key_cols.size(); ++i) tree_.key_cols[i] = def_.key_cols[i];
     for (std::size_t i = 0; i < def_.covered_cols.size(); ++i) {
@@ -1021,24 +1047,83 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
     return row.value().index_oid;
 }
 
+StatusOr<catalog::Oid> CreateEmptyIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                        wal::WalManager* wal, catalog::Oid table_oid,
+                                        std::string name, std::vector<std::uint16_t> key_cols,
+                                        std::uint8_t flags, std::uint64_t trx_id,
+                                        catalog::CatalogRowRef* where) {
+    auto access = catalog.InitTableAccess(table_oid);
+    if (!access.ok()) return access.status();
+    std::vector<catalog::SysColumnRow> cols;
+    for (std::uint16_t pos : key_cols) {
+        if (pos >= access.value()->schema.columns.size()) {
+            return Status::InvalidArgument("index key column " + std::to_string(pos) +
+                                           " is past the relation's columns");
+        }
+        cols.push_back(access.value()->schema.columns[pos]);
+    }
+    auto key_width = IndexKeyWidth(cols);
+    if (!key_width.ok()) return key_width.status().WithContext("index '" + name + "'");
+    index::IndexLayout layout;
+    layout.key_width = static_cast<std::uint16_t>(key_width.value());
+    if (access.value()->clustered_type == catalog::ClusteredType::kHeap) {
+        layout.rowid_width = static_cast<std::uint16_t>(index::kIndexRowidWidth);
+    }
+    if (Status s = index::CheckIndexLayout(layout); !s.ok()) {
+        return s.WithContext("index '" + name + "'");
+    }
+    catalog::Catalog::IndexDef def;
+    def.table_oid = table_oid;
+    def.name = std::move(name);
+    def.key_cols = std::move(key_cols);
+    def.flags = flags;
+    def.key_width = layout.key_width;
+    def.entry_width = static_cast<std::uint16_t>(layout.leaf_entry_width());
+    if (Status s = catalog.CheckIndexDef(def, trx_id); !s.ok()) return s;
+    auto oid = catalog.AllocateRowId(catalog::kSysIndexesTable);
+    if (!oid.ok()) return oid.status();
+    def.index_oid = oid.value();
+    {
+        auto created = store.CreateNew();
+        if (!created.ok()) return created.status();
+        def.root_page_id = created.value().first;
+        if (Status s = index::FormatRoot(created.value().second.bytes(), layout, def.index_oid);
+            !s.ok()) {
+            return s;
+        }
+    }
+    // The root's image before the row names it, so redo never meets an
+    // entry for a page it has no image of.
+    if (Status s = storage::LogFullPageImage(wal, store, trx_id, def.root_page_id); !s.ok()) {
+        return s.WithContext("logging the index root");
+    }
+    return catalog.CreateIndex(def, trx_id, where);
+}
+
 StatusOr<std::vector<std::vector<std::byte>>> OwedIndexEntries(
     storage::PageStore& store, catalog::Catalog& catalog, const catalog::TableAccess& access,
     const txn::TransactionManager* txns, catalog::TableAccess::IndexRef ix,
-    std::uint64_t tuple_key) {
+    std::uint64_t tuple_key, std::uint64_t rowid) {
     std::vector<std::vector<std::byte>> owed;
     Backfill cx{store, catalog, access, txns, /*progress=*/nullptr};
     // Online's caution (CI-R7): a head writer in flight is never trusted
     // resolved, so its undo - the version a rollback restores - is owed too.
     cx.online = true;
     cx.owed = &owed;
-    auto row = ReadRowAgain(cx, tuple_key);
+    auto row = ReadRowAgain(cx, tuple_key, rowid);
     if (!row.ok()) return row.status();
     if (!row.value().has_value()) return owed;  // no slot: owed nothing
     StagedRow& head = *row.value();
     // DD-Q1 (b): a delete-marked row whose deleter every reader sees is
-    // reached by no reader through any version, so it is owed nothing.
+    // reached by no reader through any version, so it is owed nothing -
+    // **but its Keystone entry, on a heap whose Keystone a user names**
+    // (DN-Q14 (a)): there it is what refuses the key named again, so it is
+    // kept until a row `PURGE` frees the key, and the slot waits with it.
+    const bool keeps_tombstone =
+        ix.keystone && !access.schema.hidden_keystone() &&
+        access.clustered_type == catalog::ClusteredType::kHeap;
     if (head.deleted && !head.head_in_flight && txns != nullptr &&
-        txns->ResolvedForEveryReader(head.trx_id)) {
+        txns->ResolvedForEveryReader(head.trx_id) && !keeps_tombstone) {
         return owed;
     }
     txn::UndoLog undo(store);

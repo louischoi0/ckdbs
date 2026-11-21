@@ -43,6 +43,20 @@ bool IsLeafPage(std::span<const std::byte, kPageSize> page) {
     return storage::RawPageType(page) == static_cast<std::uint8_t>(PageType::kBtreeLeaf);
 }
 
+// **A walk's leaf: a btree leaf, or a heap's data page** (DN): a heap is one
+// level of `kHeapData` pages chained through `next_page_id` from its head,
+// so the leaf walk below - the leftmost leaf, a leaf's fetch, its slot loop,
+// the height and the leaf count - reads a heap's pages in page order as it
+// reads a tree's leaves in key order. **Only the walk**: every descent by
+// key (`DescendTo`, so a lookup, an insert, a seek and the reverse walk's
+// start) keeps `IsLeafPage` and refuses a data page `Corruption`, so no
+// key-ordered question is ever answered over rows in no key order.
+bool IsWalkLeafPage(std::span<const std::byte, kPageSize> page) {
+    const std::uint8_t raw = storage::RawPageType(page);
+    return raw == static_cast<std::uint8_t>(PageType::kBtreeLeaf) ||
+           raw == static_cast<std::uint8_t>(PageType::kHeapData);
+}
+
 // The root-to-leaf path an insert descended, so a split can walk back up.
 // path[0] is the root; path[depth] is the leaf.
 struct Descent {
@@ -1335,7 +1349,7 @@ StatusOr<PageId> BtreeLeftmostLeaf(storage::PageStore& store, PageId root) {
         }
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
-        if (IsLeafPage(bytes.value().bytes())) return current;
+        if (IsWalkLeafPage(bytes.value().bytes())) return current;
 
         if (Status s = RequireType(bytes.value().bytes(), current, PageType::kBtreeInternal); !s.ok()) {
             return s;
@@ -1394,8 +1408,10 @@ StatusOr<storage::PageRef> BtreeFetchLeaf(storage::PageStore& store, PageId leaf
                                           storage::PageAccess access) {
     auto bytes = store.Fetch(leaf_id, access);
     if (!bytes.ok()) return bytes.status();
-    if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kBtreeLeaf); !s.ok()) {
-        return s;
+    if (!IsWalkLeafPage(bytes.value().bytes())) {
+        if (Status s = RequireType(bytes.value().bytes(), leaf_id, PageType::kBtreeLeaf); !s.ok()) {
+            return s;
+        }
     }
     return bytes;
 }
@@ -1425,7 +1441,7 @@ StatusOr<PageId> BtreeVisitLeafPage(
 StatusOr<std::uint16_t> BtreeHeight(storage::PageStore& store, PageId root) {
     auto bytes = store.GetForRead(root);
     if (!bytes.ok()) return bytes.status();
-    if (IsLeafPage(bytes.value().bytes())) return std::uint16_t{1};
+    if (IsWalkLeafPage(bytes.value().bytes())) return std::uint16_t{1};
     if (Status s = RequireType(bytes.value().bytes(), root, PageType::kBtreeInternal); !s.ok()) return s;
 
     const std::uint16_t level = InternalView(bytes.value().bytes()).level();

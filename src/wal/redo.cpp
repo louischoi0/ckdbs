@@ -117,8 +117,31 @@ Status ApplyHeapWrite(std::span<std::byte, kPageSize> page, const DecodedRecord&
         return decoded.status();
     }
     heap::PageView view(page);
-    return view.RedoWriteTuple(decoded.value().fields.slot, decoded.value().tuple,
-                               decoded.value().fields.trx_id, decoded.value().fields.undo_ptr);
+    const std::uint16_t slot = decoded.value().fields.slot;
+    // RedoWriteTuple takes a heap data page's free slot as a reused insert
+    // (DN-R2). An overwrite names a live row, so one meeting a free slot is
+    // not this page's record - Corruption, as a dead slot is.
+    if (record.type() == RecordType::kHeapOverwrite) {
+        auto info = view.DebugSlotInfo(slot);
+        if (info.ok() && (info.value().flags & heap::kSlotFlagFree) != 0) {
+            return Status::Corruption("HEAP_OVERWRITE names free slot " + std::to_string(slot) +
+                                      "; only a reused insert takes a free slot");
+        }
+    }
+    // **DN-R10 again at redo**: a heap data page holds no row below its
+    // `min_key` (invariant 3), whichever slot the row took.
+    if (record.type() == RecordType::kHeapInsert &&
+        storage::RawPageType(page) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+        auto id = KeystoneIdOfPayload(decoded.value().tuple);
+        if (!id.ok()) return id.status();
+        if (id.value() < view.min_key()) {
+            return Status::Corruption("HEAP_INSERT places Keystone " + std::to_string(id.value()) +
+                                      " on a data page whose min_key is " +
+                                      std::to_string(view.min_key()));
+        }
+    }
+    return view.RedoWriteTuple(slot, decoded.value().tuple, decoded.value().fields.trx_id,
+                               decoded.value().fields.undo_ptr);
 }
 
 Status ApplyDeleteMark(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {

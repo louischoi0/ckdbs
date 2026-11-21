@@ -136,8 +136,9 @@ enum class PageType : std::uint8_t {
     // the slotted `heap::PageView` body, its rows in no key order, each
     // addressed by a rowid (`storage/heap/rowid.hpp`) and reached by key
     // only through an index. **Not kHeap**: kHeap is a catalog chain's
-    // page, which eviction pins as a catalog root's class
-    // (`device_page_store.hpp`), and a data page is no root. Headered,
+    // page, which only appends and never takes a slot again, and the slot
+    // release and reuse (`PageView::FreeSlot`, `ReuseSlot`) and redo's
+    // reuse arm are this type's alone. Headered,
     // checksummed, logged and authoritative, as a btree leaf is.
     kHeapData = 15,
 };

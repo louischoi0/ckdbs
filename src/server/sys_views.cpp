@@ -264,12 +264,12 @@ void Define(exec::CatalogView& view,
     }
 }
 
-// How the relation is stored: `HEAP` for a btree whose tuple key is hidden
-// (BZ-R1), `BTREE` for one with a declared tuple key, `CHAIN` for a system
-// relation's catalog chain, which has no access entry to ask.
+// How the relation is stored: `HEAP` for data pages addressed by rowid
+// (DN), `BTREE` for a clustered tree, `CHAIN` for a system relation's
+// catalog chain, which has no access entry to ask.
 std::string StorageName(const catalog::TableAccess* access) {
     if (access == nullptr) return "CHAIN";
-    return access->schema.heap() ? "HEAP" : "BTREE";
+    return access->clustered_type == catalog::ClusteredType::kHeap ? "HEAP" : "BTREE";
 }
 
 // A column's name, or its position when the schema cannot say - a dropped
@@ -377,7 +377,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
         auto root = CurrentRootOf(row.value());
         if (!root.ok()) return root.status();
         const catalog::TableAccess* access = nullptr;
-        if (row.value().clustered_type == catalog::ClusteredType::kBtree) {
+        if (row.value().clustered_type == catalog::ClusteredType::kBtree ||
+            row.value().clustered_type == catalog::ClusteredType::kHeap) {
             auto opened = catalog_.InitTableAccess(object.oid);
             if (!opened.ok()) return opened.status();
             access = opened.value();

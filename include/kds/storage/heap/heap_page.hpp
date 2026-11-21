@@ -97,8 +97,12 @@ inline constexpr std::uint16_t kHeaderFlagGrownOver = 0x2;
 // ---- Slot directory entry ---------------------------------------------
 
 struct HeapSlotFields {
-    std::uint16_t offset;  // absolute page offset of the tuple, 0 if dead
-    std::uint16_t length;  // total tuple size (header + payload), 0 if dead
+    // Absolute page offset of the tuple. **Kept when the slot is retired**:
+    // FreeSlot reads a retired slot's reservation off the offsets.
+    std::uint16_t offset;
+    // Total tuple size (header + payload); 0 if dead, but for a free slot,
+    // where it is the reservation (kSlotFlagFree).
+    std::uint16_t length;
     std::uint8_t flags;
 };
 
@@ -495,6 +499,10 @@ public:
     StatusOr<SlotInfo> DebugSlotInfo(std::uint16_t slot_idx) const;
 
 private:
+    // The one writer of a new tuple's header and payload at `offset`: an
+    // append's and a reused slot's (an overwrite keeps the tuple flags).
+    void WriteNewTuple(std::uint16_t offset, std::span<const std::byte> payload,
+                       std::uint64_t trx_id, std::uint64_t undo_ptr);
     HeapPageHeaderFields ReadHeader() const;
     void WriteHeader(const HeapPageHeaderFields& header);
     // Inline for TryReadTupleIn(); the slot directory starts after the header.

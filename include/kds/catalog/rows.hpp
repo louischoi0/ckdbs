@@ -474,7 +474,15 @@ inline constexpr std::uint8_t kIndexFlagUnique = 0x1;
 // superblock 34, so no binary that reads it as an ordinary index can mount
 // a volume carrying it.
 inline constexpr std::uint8_t kIndexFlagBuilding = 0x2;
-inline constexpr std::uint8_t kIndexFlagsDefined = kIndexFlagUnique | kIndexFlagBuilding;
+// **A heap's Keystone index** (DN-Q2 (a), `docs/spec/heap-and-tuple.md`
+// §3.1b): unique, keyed on column 0 - the Keystone - and built with the
+// relation, it is the one authoritative structure a heap finds a row by
+// its Keystone through (K3), a miss there the row's absence. No statement
+// drops or rebuilds it; it goes with its relation. Only a `kHeap` relation
+// carries one, and every one does. Written since superblock 39.
+inline constexpr std::uint8_t kIndexFlagKeystone = 0x4;
+inline constexpr std::uint8_t kIndexFlagsDefined =
+    kIndexFlagUnique | kIndexFlagBuilding | kIndexFlagKeystone;
 
 struct SysIndexRow {
     // From AllocateRowId(kSysIndexesTable) - this relation's own persistent

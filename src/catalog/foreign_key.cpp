@@ -18,13 +18,20 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
         return Status::InvalidArgument("column '" + column +
                                        "' cannot hold a Keystone id, so it cannot reference one");
     }
-    if (parent.schema.heap()) {
+    if (parent.schema.hidden_keystone()) {
         // BZ-R7: the child's column holds the parent's tuple key (F1), and a
         // heap's tuple key is hidden - no statement reads or names it, so no
         // client could write a value this constraint would accept.
         return Status::Unsupported(
             "the parent relation is a heap: its tuple key is hidden, so no child value could "
             "name a parent row - reference a relation with a declared tuple key");
+    }
+    if (parent.clustered_type == ClusteredType::kHeap) {
+        // DN-Q5 (a): a heap whose Keystone is its declared `int64` primary
+        // key is a parent - DN-S3's, not yet built.
+        return Status::NotImplemented(
+            "the parent relation is a heap; a foreign key to a heap's declared Keystone is not "
+            "built");
     }
     if (parent.clustered_type != ClusteredType::kBtree) {
         // A system relation's catalog chain has no descent to check against.

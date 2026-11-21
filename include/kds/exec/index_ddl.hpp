@@ -291,9 +291,22 @@ StatusOr<catalog::Oid> DropIndex(catalog::Catalog& catalog, const parser::IndexS
 // with no slot is owed nothing, and so is a delete-marked row whose deleter
 // is resolved for every reader (DD-Q1 (b)). The tree is not touched and no
 // lock is taken: the caller holds the row's tuple unit (DD-R3).
+// **An empty index on a heap its own transaction is creating** (DN-Q2 (a),
+// DN-D3): the Keystone index, or a declared primary key that is not the
+// Keystone as a unique index beside it. The relation holds no row and no
+// other transaction can reach it, so there is no backfill and no lock: the
+// root is formatted and logged as an image at `trx_id`, then the row and the
+// anchor slot are written by `Catalog::CreateIndex`, its address in `where`
+// for the rollback. `flags` as `sys.indexes` stores them.
+StatusOr<catalog::Oid> CreateEmptyIndex(catalog::Catalog& catalog, storage::PageStore& store,
+                                        wal::WalManager* wal, catalog::Oid table_oid,
+                                        std::string name, std::vector<std::uint16_t> key_cols,
+                                        std::uint8_t flags, std::uint64_t trx_id,
+                                        catalog::CatalogRowRef* where);
+
 StatusOr<std::vector<std::vector<std::byte>>> OwedIndexEntries(
     storage::PageStore& store, catalog::Catalog& catalog, const catalog::TableAccess& access,
     const txn::TransactionManager* txns, catalog::TableAccess::IndexRef ix,
-    std::uint64_t tuple_key);
+    std::uint64_t tuple_key, std::uint64_t rowid = 0);
 
 }  // namespace kds::exec

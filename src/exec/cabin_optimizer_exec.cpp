@@ -1,4 +1,5 @@
 #include "kds/exec/cabin_optimizer_exec.hpp"
+#include "kds/exec/heap_store.hpp"
 
 #include <unordered_map>
 #include <utility>
@@ -416,7 +417,7 @@ Status CabinOptimizerExecutor::ApplyHeal(const stats::ActionItem& action) {
                 rebuilt.push_back(entry);
                 continue;
             }
-            auto found = btree::BtreeLookup(store_, access.value()->desc_page_id, entry.tuple_key);
+            auto found = exec::LocateRow(store_, *access.value(), entry.tuple_key);
             if (!found.ok()) {
                 // Dangling: no row now, so left out of the set being
                 // rebuilt; a later insert under the key witnesses itself.

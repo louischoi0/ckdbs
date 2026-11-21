@@ -216,6 +216,81 @@ TEST_F(RedoTest, APurgesSlotRetireReplaysOnceAndTwiceIsANoOp) {
     EXPECT_EQ(second.value().applied, 0u);
 }
 
+// DN-R2: a heap data page's slot is retired, freed (SLOT_FREE) and taken
+// again by a HEAP_INSERT naming it. Replayed onto a store that never saw
+// the page, the reused slot holds the new row; a second pass moves no byte.
+TEST_F(RedoTest, ADataPagesFreedSlotAndItsReuseReplayOnceAndTwiceIsANoOp) {
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeapData),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/0, 0xA1), 0u);
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/1, 0xA2), 0u);
+        std::array<std::byte, kSlotRetirePayloadSize> buf{};
+        ASSERT_TRUE(EncodeSlotRetire(buf, SlotRetirePayload{/*slot=*/0}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kSlotRetire, kNoTxnId, kPage}, buf).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kSlotFree, kNoTxnId, kPage}, buf).ok());
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/0, 0xB1), 0u);
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    const AnalysisResult analysis = Analyzed();
+    auto r = Redo((*device_), 0, store_, analysis);
+    ASSERT_TRUE(r.ok()) << r.status().message();
+    EXPECT_EQ(r.value().applied, 6u);
+    {
+        auto page = store_.Get(kPage);
+        ASSERT_TRUE(page.ok()) << page.status().message();
+        heap::PageView view(page.value().bytes());
+        EXPECT_EQ(view.slot_count(), 2u) << "a reuse adds no slot";
+        auto reused = view.ReadTuple(0);
+        ASSERT_TRUE(reused.ok()) << reused.status().message();
+        EXPECT_EQ(std::vector<std::byte>(reused.value().payload.begin(),
+                                         reused.value().payload.end()),
+                  Bytes(24, 0xB1));
+    }
+    const std::vector<std::byte> after_first = PageBytes(kPage);
+    auto second = Redo((*device_), 0, store_, analysis);
+    ASSERT_TRUE(second.ok()) << second.status().message();
+    EXPECT_EQ(PageBytes(kPage), after_first);
+    EXPECT_EQ(second.value().applied, 0u);
+}
+
+// An overwrite names a live row: a HEAP_OVERWRITE meeting a free slot is
+// not this page's record, never a reuse.
+TEST_F(RedoTest, AnOverwriteNamingAFreeSlotIsCorruption) {
+    {
+        auto s = WalStream::Open(device_.get(), 0);
+        ASSERT_TRUE(s.ok()) << s.status().message();
+        std::vector<std::byte> init(kPageInitPayloadSize, std::byte{0});
+        const PageInitPayload fields{/*min_key=*/1, static_cast<std::uint8_t>(PageType::kHeapData),
+                                     {0, 0, 0}, /*reserved2=*/0, /*owner_oid=*/0};
+        ASSERT_TRUE(EncodePageInit(init, fields).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kPageInit, 1, kPage}, init).ok());
+        ASSERT_NE(AppendHeapInsert(*s.value(), /*slot=*/0, 0xA1), 0u);
+        std::array<std::byte, kSlotRetirePayloadSize> buf{};
+        ASSERT_TRUE(EncodeSlotRetire(buf, SlotRetirePayload{/*slot=*/0}).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kSlotRetire, kNoTxnId, kPage}, buf).ok());
+        ASSERT_TRUE(s.value()->Append({RecordType::kSlotFree, kNoTxnId, kPage}, buf).ok());
+        const auto payload = Bytes(24, 0xC1);
+        std::vector<std::byte> hw_buf(kHeapWriteFixedSize + payload.size(), std::byte{0});
+        const HeapWritePayload hw{/*trx_id=*/7, /*undo_ptr=*/0, /*slot=*/0,
+                                  static_cast<std::uint16_t>(payload.size())};
+        auto n = EncodeHeapWrite(hw_buf, hw, payload);
+        ASSERT_TRUE(n.ok()) << n.status().message();
+        ASSERT_TRUE(s.value()
+                        ->Append({RecordType::kHeapOverwrite, 7, kPage},
+                                 std::span(hw_buf).first(n.value()))
+                        .ok());
+        ASSERT_TRUE(s.value()->Sync().ok());
+    }
+    auto r = Redo((*device_), 0, store_, Analyzed());
+    EXPECT_EQ(r.status().code(), StatusCode::kCorruption) << r.status().message();
+}
+
 TEST_F(RedoTest, ARecordAtOrBelowThePagesLsnIsSkipped) {
     WriteHeapStream(2);
     const AnalysisResult analysis = Analyzed();

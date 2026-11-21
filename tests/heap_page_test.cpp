@@ -491,6 +491,28 @@ TEST(HeapPageTest, TheFirstSlotsReservationRunsToTheTailReservation) {
     EXPECT_EQ(page.ReuseSlot(0, BytesOf("sixsix"), 9, 0).code(), StatusCode::kOutOfSpace);
 }
 
+// The reservation is read off the offsets, not the slot's last length: a
+// slot reused by a shorter row and freed again gets its whole reservation
+// back, and a retired neighbour above it still bounds it.
+TEST(HeapPageTest, AReservationSurvivesAShorterReuseAndARetiredNeighbour) {
+    PageBuf buf{};
+    PageView page = PageView::CreateEmptyAs(AsSpan(buf), 1, PageType::kHeapData).value();
+    ASSERT_TRUE(page.InsertTuple(BytesOf("top"), 5).ok());
+    ASSERT_TRUE(page.InsertTuple(BytesOf("eightbyt"), 5).ok());
+    ASSERT_TRUE(page.InsertTuple(BytesOf("low"), 5).ok());
+    ASSERT_TRUE(page.RetireSlot(0).ok());  // the neighbour above slot 1
+    ASSERT_TRUE(page.RetireSlot(1).ok());
+    ASSERT_TRUE(page.FreeSlot(1).ok());
+    ASSERT_TRUE(page.ReuseSlot(1, BytesOf("ab"), 9, 0).ok());
+    ASSERT_TRUE(page.RetireSlot(1).ok());
+    ASSERT_TRUE(page.FreeSlot(1).ok());
+    EXPECT_EQ(page.FindFreeSlot(8), std::optional<std::uint16_t>{1});
+    EXPECT_FALSE(page.FindFreeSlot(9).has_value());
+    ASSERT_TRUE(page.FreeSlot(0).ok());
+    EXPECT_EQ(page.FindFreeSlot(3), std::optional<std::uint16_t>{0});
+    EXPECT_EQ(StringOf(page.ReadTuple(2).value().payload), "low");
+}
+
 TEST(HeapPageTest, ReleaseAndReuseAreADataPagesAlone) {
     for (PageType type : {PageType::kHeap, PageType::kBtreeLeaf}) {
         PageBuf buf{};

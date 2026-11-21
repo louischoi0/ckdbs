@@ -3254,6 +3254,13 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         const bool cabin = pin.Admits(ArmPin::Arm::kCabin);
         const catalog::TableAccess& rel = *scope.relations[i].access;
         const auto slot = static_cast<std::uint16_t>(i);
+        // **A heap holds its rows in no key order** (DN, invariant 4): a
+        // tuple key equality or key set still descends - through the
+        // Keystone index - but no walk of a heap is bounded, seeked or
+        // pruned by a tuple key range: the range's conjuncts stay in the
+        // residual, which answers them on every row. A build's resumable
+        // prefix marks a heap's walk by place instead (`WalkMark`).
+        const bool heap = rel.clustered_type == catalog::ClusteredType::kHeap;
         // Which Cabins those ranks may take (CX-S3b).
         const CabinGate gate = CabinGate::For(pin, rel);
         // The walk's own ranks (a filter scan, the build annotation) stand
@@ -3336,7 +3343,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         // of these could serve it.
         if (step.kind == AccessKind::kScan) {
             const auto key_range =
-                tuple_key ? TupleKeyRangeOf(step, slot) : std::nullopt;
+                tuple_key && !heap ? TupleKeyRangeOf(step, slot) : std::nullopt;
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
@@ -3610,9 +3617,14 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
     // A build keeps the sort: `RunStep` dispatches a build before it reads
     // the order, so that test is load-bearing. A key set, an index or a
     // Cabin arm is another kind and keeps it too.
+    // Never a heap's (DN, invariant 4): its walk is page order, which is
+    // no key's.
     const bool one_tuple_key = chain.sort_keys.size() == 1 &&
                                chain.sort_keys[0].ref.rel_slot == 0 &&
-                               IsTupleKey(chain.sort_keys[0].ref) && !chain.steps.empty();
+                               IsTupleKey(chain.sort_keys[0].ref) && !chain.steps.empty() &&
+                               !scope.relations.empty() &&
+                               scope.relations[0].access->clustered_type !=
+                                   catalog::ClusteredType::kHeap;
     if (one_tuple_key && !chain.sort_keys[0].descending) {
         if (EmitsTupleKeyOrder(chain.steps[0].kind)) chain.sort_keys.clear();
     } else if (one_tuple_key && stmt.limit.has_value()) {

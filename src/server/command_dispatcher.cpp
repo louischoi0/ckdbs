@@ -17,6 +17,7 @@
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
 
+#include "kds/exec/heap_store.hpp"
 #include "kds/exec/type_literals.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
@@ -5046,7 +5047,7 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         }
         // A heap's last declared column (BZ-Q3): without it the relation has
         // no column a statement can write or read, only its hidden key.
-        if (access.value()->schema.heap() && access.value()->layout.live_columns == 2) {
+        if (access.value()->schema.hidden_keystone() && access.value()->layout.live_columns == 2) {
             const Status s = Status::InvalidArgument(
                 "column '" + stmt.old_column + "' is the heap's last declared column and cannot "
                 "be dropped; a heap keeps at least one" + at);
@@ -5708,7 +5709,7 @@ StatusOr<std::vector<const catalog::SysColumnRow*>> InsertTargetColumns(
     }
     if (width == live.size()) return live;
     // A heap's row is its declared columns, never one short (BZ-R3).
-    if (!ta.schema.heap() && width + 1 == live.size()) {
+    if (!ta.schema.hidden_keystone() && width + 1 == live.size()) {
         return std::vector<const catalog::SysColumnRow*>(live.begin() + 1, live.end());
     }
     return out;
@@ -5874,7 +5875,7 @@ StatusOr<std::optional<parser::InsertStmt>> NormalizeInsertRows(
         if (!listed.ok()) return listed.status();
         return std::optional<parser::InsertStmt>(std::move(listed.value()));
     }
-    const bool heap = ta.schema.heap() && written.described.oid == 0;
+    const bool heap = ta.schema.hidden_keystone() && written.described.oid == 0;
     const std::size_t live = ta.layout.live_columns;
     const bool changed = ta.layout.column_set_changed();
     // A row the copy below must reshape or refuse: on a heap, any row but
@@ -6575,11 +6576,80 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // stand-in type registry (Catalog::ResolveTypeByName(), see its
         // comment) - before touching storage, so a bad type name fails clean
         // with nothing created.
+        // ---- The primary key (DN-D3, DN-D5, DN-Q13 (c)) --------------------
+        //
+        // A heap's alone. One, written as a column's suffix or as a
+        // constraint in the list. A single `int64` is the heap's Keystone and
+        // is declared first; any other is a unique index beside a hidden
+        // Keystone, which is also what a heap with none gets.
+        std::vector<std::size_t> primary;  // declared column indexes, in key order
+        std::uint32_t primary_at = stmt.primary_key_byte_offset;
+        for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
+            const std::uint32_t at = stmt.columns[i].primary_key_byte_offset;
+            if (at == 0) continue;
+            if (primary_at != 0) {
+                return Refused(Status::InvalidArgument(
+                    "a relation has one primary key and this is a second (byte " +
+                    std::to_string(at) + ")"));
+            }
+            primary_at = at;
+            primary.push_back(i);
+        }
+        for (std::size_t k = 0; k < stmt.primary_key_columns.size(); ++k) {
+            const std::string& name = stmt.primary_key_columns[k];
+            const std::uint32_t at = stmt.primary_key_column_offsets[k];
+            std::optional<std::size_t> found;
+            for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
+                if (catalog::ColumnNamesCollide(stmt.columns[i].name, name)) found = i;
+            }
+            if (!found.has_value()) {
+                return Refused(Status::NotFound("PRIMARY KEY names column '" + name +
+                                                "', which this relation does not declare (byte " +
+                                                std::to_string(at) + ")"));
+            }
+            if (std::find(primary.begin(), primary.end(), *found) != primary.end()) {
+                return Refused(Status::InvalidArgument("PRIMARY KEY names column '" + name +
+                                                       "' twice (byte " + std::to_string(at) +
+                                                       ")"));
+            }
+            primary.push_back(*found);
+        }
+        if (!primary.empty() && !stmt.heap) {
+            return Refused(Status::NotImplemented(
+                "PRIMARY KEY is a heap's (byte " + std::to_string(primary_at) +
+                "); a btree relation's tuple key is its first column, with no keyword"));
+        }
+        bool keystone_declared = false;
+        if (primary.size() == 1) {
+            catalog::SysColumnRow probe{};
+            if (auto refused = ColumnRowOf(stmt.columns[primary.front()], 0, probe);
+                refused.has_value()) {
+                return *refused;
+            }
+            keystone_declared = probe.type_val == catalog::kTypeValInt64;
+            if (keystone_declared && primary.front() != 0) {
+                return Refused(Status::InvalidArgument(
+                    "a heap's single int64 primary key is its Keystone, which is declared first "
+                    "(byte " + std::to_string(primary_at) + ")"));
+            }
+        }
+        for (std::size_t i : primary) {
+            if (!stmt.columns[i].notnull) {
+                return Refused(Status::InvalidArgument(
+                    "primary key column '" + stmt.columns[i].name + "' is declared NULL (byte " +
+                    std::to_string(stmt.columns[i].null_byte_offset) +
+                    "); a primary key is never NULL"));
+            }
+        }
+
         catalog::Schema schema;
         schema.spare_slots = stmt.spare_slots;
-        // A heap's tuple key is the engine's column 0 (BZ-R1), so its
-        // declared columns start at position 1 and none of them is the key.
-        if (stmt.heap) schema.columns.push_back(catalog::HiddenTupleKeyColumn());
+        // A heap's Keystone is the engine's hidden column 0 unless a single
+        // `int64` primary key declared first is it (DN-D5), so the declared
+        // columns of a hidden-Keystone heap start at position 1.
+        if (stmt.heap && !keystone_declared) {
+            schema.columns.push_back(catalog::HiddenTupleKeyColumn());
+        }
         const std::size_t first_declared = schema.columns.size();
         std::uint32_t pos = static_cast<std::uint32_t>(first_declared);
         for (const auto& col : stmt.columns) {
@@ -6700,7 +6770,10 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // refused for a key-mode reason.
 
         DdlScope ddl = DdlScopeFor(scope);
-        auto oid = catalog_.CreateTable(create_ns.value(), stmt.table_name, schema, ddl.trx_id, ddl.sink());
+        auto oid = catalog_.CreateTable(create_ns.value(), stmt.table_name, schema, ddl.trx_id,
+                                        ddl.sink(),
+                                        stmt.heap ? catalog::ClusteredType::kHeap
+                                                  : catalog::ClusteredType::kBtree);
         // Registered before the status is read: a create that failed partway
         // still left rows on the page, and those are exactly the rows a
         // rollback has to retire.
@@ -6719,6 +6792,39 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 }
             }
             return Refused(oid.status());
+        }
+
+        // ---- A heap's indexes, in its transaction (DN-Q2 (a), DN-D3) --------
+        //
+        // The Keystone index first, then a primary key that is not the
+        // Keystone as a unique index. Both named `$...` - a parameter's
+        // spelling, which no statement can write - so neither is dropped,
+        // rebuilt or shadowed by name.
+        if (stmt.heap) {
+            const auto index_of = [&](std::string name, std::vector<std::uint16_t> cols,
+                                      std::uint8_t flags) -> Status {
+                catalog::CatalogRowRef written;
+                auto made = exec::CreateEmptyIndex(catalog_, page_store_, wal_, oid.value(),
+                                                   std::move(name), std::move(cols), flags,
+                                                   ddl.trx_id, &written);
+                if (written.page_id != kInvalidPageId) NoteRowWritten(ddl, written);
+                return made.ok() ? Status::OK() : made.status();
+            };
+            Status made = index_of("$keystone_" + std::to_string(oid.value()), {0},
+                                   catalog::kIndexFlagUnique | catalog::kIndexFlagKeystone);
+            if (made.ok() && !primary.empty() && !keystone_declared) {
+                std::vector<std::uint16_t> cols;
+                for (std::size_t i : primary) {
+                    cols.push_back(static_cast<std::uint16_t>(first_declared + i));
+                }
+                made = index_of("$pkey_" + std::to_string(oid.value()), std::move(cols),
+                                catalog::kIndexFlagUnique);
+            }
+            if (!made.ok()) {
+                return {"ERR CREATE TABLE '" + stmt.table_name +
+                            "' failed: its index: " + made.message(),
+                        false};
+            }
         }
 
         // The constraints, now that there is a child relation to hang them on.
@@ -6919,7 +7025,7 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed,
                                     std::uint64_t owner_oid, PageId anchor_page_id,
                                     const std::vector<exec::AppendedSpill>& spills,
                                     const std::vector<exec::IndexWrite>& index_writes,
-                                    bool own_txn) {
+                                    bool own_txn, bool heap_rel) {
     if (wal_ == nullptr) {
         // Nothing to log, and a root the split grew is published all the
         // same.
@@ -6973,8 +7079,11 @@ Status CommandDispatcher::LogInsert(storage::InsertPlacement& placed,
                                            static_cast<std::uint16_t>(tuple.size())};
         if (auto n = wal::EncodeHeapWrite(payload, fields, tuple); !n.ok()) return n.status();
 
+        // A heap's row is a HEAP_INSERT at its slot (DN): an append, or a
+        // freed slot taken again, which redo replays through `ReuseSlot`.
         auto rec = wal_->Append(
-            wal::RecordSpec{wal::RecordType::kBtreeInsert, txn_id, placed.page_id},
+            wal::RecordSpec{heap_rel ? wal::RecordType::kHeapInsert : wal::RecordType::kBtreeInsert,
+                            txn_id, placed.page_id},
             payload);
         if (!rec.ok()) return rec.status();
         if (Status s = page_store_.StampPageLsn(placed.page_id, rec.value()); !s.ok()) return s;
@@ -7742,9 +7851,10 @@ struct RowOnPage {
     std::uint64_t trx_id = 0;
     bool deleted = false;
 };
-StatusOr<RowOnPage> ReadRowByKey(storage::PageStore& store, PageId root, std::uint64_t key,
+StatusOr<RowOnPage> ReadRowByKey(storage::PageStore& store, const catalog::TableAccess& access,
+                                 std::uint64_t key,
                                  std::vector<std::byte>& payload) {
-    auto at = btree::BtreeLookup(store, root, key);
+    auto at = exec::LocateRow(store, access, key);
     if (!at.ok()) return at.status();
     auto tuple = heap::PageView(at.value().leaf.bytes()).ReadTuple(at.value().slot);
     if (!tuple.ok()) return tuple.status();
@@ -8066,7 +8176,7 @@ constexpr int kUniqueCheckRounds = 3;
 
 Status CommandDispatcher::NamedKeyVerdict(const catalog::TableAccess& ta, std::uint64_t id,
                                           std::uint32_t byte, const txn::Transaction* own) {
-    auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, id);
+    auto present = exec::LocateRow(page_store_, ta, id);
     if (!present.ok()) {
         // Answered by the placement's own descent, so a structural refusal
         // here is not the statement's (BA-S14).
@@ -8127,7 +8237,7 @@ constexpr const catalog::TableAccess::IndexRef* kTupleKeyArbiter = nullptr;
 StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConflictArbiter(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
     if (!written.conflict_target.has_value()) {
-        if (written.on_conflict_do_update && ta.schema.heap()) {
+        if (written.on_conflict_do_update && ta.schema.hidden_keystone()) {
             return Status::NotImplemented(
                 "ON CONFLICT DO UPDATE at byte " + std::to_string(written.conflict_byte_offset) +
                 " on a heap names its arbiter: a heap's tuple key is hidden (BZ-R4), so write "
@@ -8149,7 +8259,7 @@ StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConfli
     }
     return Status::NotImplemented(
         "ON CONFLICT (" + target.name + ") at byte " + std::to_string(target.byte_offset) +
-        (ta.schema.heap()
+        (ta.schema.hidden_keystone()
              ? ": the arbiter is the one column of a unique index, and a heap's tuple key is "
                "hidden (BZ-R4)"
              : ": the arbiter is the tuple key or the one column of a unique index"));
@@ -8329,7 +8439,7 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
                                  RepeatableReadWait::kCapable)) {
                 return refuse(*held, k);
             }
-            auto present = btree::BtreeLookup(page_store_, ta.desc_page_id, *p.key);
+            auto present = exec::LocateRow(page_store_, ta, *p.key);
             if (present.ok()) {
                 auto version =
                     heap::PageView(present.value().leaf.bytes()).ReadTuple(present.value().slot);
@@ -8467,7 +8577,7 @@ StatusOr<bool> CommandDispatcher::RowHoldsUniqueKey(const catalog::TableAccess& 
                                                     const catalog::TableAccess::IndexRef& ix,
                                                     std::uint64_t tuple_key,
                                                     const exec::UniqueKey& key) {
-    auto at = btree::BtreeLookup(page_store_, ta.desc_page_id, tuple_key);
+    auto at = exec::LocateRow(page_store_, ta, tuple_key);
     if (!at.ok()) {
         if (at.status().code() != StatusCode::kNotFound) return at.status();
         return false;
@@ -8711,6 +8821,28 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     if (!window.ok()) return window.status();
 
     std::optional<StatusOr<storage::InsertPlacement>> attempt;
+    // **A heap places by space, not by key** (DN-Q7 (a)): its key is bound
+    // by the Keystone index, so the duplicate the btree's descent answers
+    // is asked there first, under the row's unit the borrow below holds.
+    const bool heap_rel = ta.clustered_type == catalog::ClusteredType::kHeap;
+    bool heap_reused = false;
+    const auto place = [&]() -> StatusOr<storage::InsertPlacement> {
+        if (!heap_rel) {
+            return btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
+                                      /*trx_id=*/WriterId(scope), ta.oid, ta.anchor_page_id);
+        }
+        auto present = exec::LocateRow(page_store_, ta, row_id);
+        if (present.ok()) {
+            return Status::AlreadyExists("tuple key " + std::to_string(row_id) +
+                                         " is already bound in this heap");
+        }
+        if (present.status().code() != StatusCode::kNotFound) return present.status();
+        auto at = exec::HeapInsert(page_store_, ta, heap_space(), core_id_, row_id, encoded,
+                                   /*trx_id=*/WriterId(scope));
+        if (!at.ok()) return at.status();
+        heap_reused = at.value().reused;
+        return std::move(at.value().placed);
+    };
     if (explicit_key) {
         const txn::LockKey key_unit = txn::LockKey::Tuple(ta.oid, supplied_id);
         // **A refused borrow is judged once, and only then** (AO-S6c-c's
@@ -8747,13 +8879,18 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // and two statements naming one key serialise on its row unit. The
         // admission never refuses; it moves the mark past `k` or leaves it
         // where it is.
-        if (Status s = catalog_.AdmitExplicitRowId(oid, supplied_id); !s.ok()) {
+        if (Status s = catalog_.AdmitExplicitRowId(
+                oid, supplied_id,
+                /*above_mark=*/heap_rel && ta.schema.hidden_keystone());
+            !s.ok()) {
             give_back(key_unit, held_before);
+            if (s.code() == StatusCode::kOutOfRange && heap_rel) {
+                return Status::OutOfRange(s.message() + " (byte " +
+                                          std::to_string(values.front().byte_offset) + ")");
+            }
             return s;
         }
-        attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
-                                           /*trx_id=*/WriterId(scope), ta.oid,
-                                           ta.anchor_page_id));
+        attempt.emplace(place());
         if (!attempt->ok()) give_back(key_unit, held_before);
     } else {
         // A refused borrow burns the id (K3), which is then free (BD-R4):
@@ -8781,9 +8918,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             spills.clear();
             if (Status s = encode(); !s.ok()) return s;
             if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
-            attempt.emplace(btree::BtreeInsert(page_store_, ta.desc_page_id, row_id, encoded,
-                                               /*trx_id=*/WriterId(scope), ta.oid,
-                                               ta.anchor_page_id));
+            attempt.emplace(place());
             if (attempt->ok()) break;
             // Nothing was placed, so the burned id's borrow is given back
             // whatever refused it: a structural refusal inside `BEGIN` is
@@ -8837,7 +8972,10 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             heap::PageView leaf(page.value().bytes());
             const bool restructured = placed.value().restructured();
             const std::uint16_t slot = placed.value().slot;
-            if (Status s = restructured ? leaf.RetireSlot(slot) : leaf.UnInsertTuple(slot);
+            // A heap row on a slot it reused cannot be un-appended: it is
+            // retired, and freed by a later release (DN-R2).
+            if (Status s = restructured || heap_reused ? leaf.RetireSlot(slot)
+                                                       : leaf.UnInsertTuple(slot);
                 !s.ok()) {
                 return s;
             }
@@ -8886,9 +9024,12 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     Status maintained =
         after_placement_for_test_ ? after_placement_for_test_() : Status::OK();
     if (maintained.ok()) {
-        maintained = exec::MaintainIndexes(catalog_, page_store_, ta, body,
-                                           /*first_col_pos=*/1, encoded, row_id,
-                                           /*previous=*/{}, log_index ? &log_index : nullptr);
+        maintained = exec::MaintainIndexes(
+            catalog_, page_store_, ta, body,
+            /*first_col_pos=*/1, encoded, row_id,
+            /*previous=*/{}, log_index ? &log_index : nullptr,
+            heap_rel ? heap::EncodeRowid(heap::Rowid{placed.value().page_id, placed.value().slot})
+                 : 0);
     }
     if (Status s = maintained; !s.ok()) {
         if (logging(LogLevel::kError)) {
@@ -8951,7 +9092,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // is answered - this class's header's ordering note (AT-S21).
     if (Status s = LogInsert(placed.value(), encoded,
                              WriterId(scope), oid, ta.anchor_page_id, spills, index_writes,
-                             /*own_txn=*/scope.txn == nullptr);
+                             /*own_txn=*/scope.txn == nullptr, heap_rel);
         !s.ok()) {
         if (logging(LogLevel::kError)) {
             log_->Error("wal", "logging the insert of id " + std::to_string(row_id) +
@@ -9093,13 +9234,69 @@ Status CommandDispatcher::VisitRelation(
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
     WalkCursor* cursor) {
-    // Every user relation is a btree (BZ-R1); a catalog chain is walked by
-    // the catalog, never here.
+    // A user relation is a btree or a heap (DN); a catalog chain is walked
+    // by the catalog, never here.
+    if (access.clustered_type == catalog::ClusteredType::kHeap) {
+        return WalkHeapPages(access, page_access, fn, cursor);
+    }
     if (access.clustered_type != catalog::ClusteredType::kBtree) {
         return Status::Corruption("relation oid " + std::to_string(access.oid) +
-                                  " is not a btree");
+                                  " is not a btree or a heap");
     }
     return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
+}
+
+Status CommandDispatcher::WalkHeapPages(
+    const catalog::TableAccess& access, storage::PageAccess page_access,
+    const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
+        fn,
+    WalkCursor* cursor) {
+    // **A heap's rows never move** (DN, invariant 13; no page divides or is
+    // compacted), so a resume returns to the page and slot the walk stopped
+    // at: a row it finished is behind that place and one it did not is at
+    // or after it. A row placed while the walk was parked - on a page the
+    // walk passed, or on a slot a release freed behind it - is invisible to
+    // a snapshot minted before the park, as on a btree.
+    const bool resuming = cursor != nullptr && cursor->active;
+    PageId page = resuming ? cursor->page : access.desc_page_id;
+    const std::uint16_t first_slot = resuming ? cursor->slot : 0;
+    bool cut = false;
+    PageId cut_page = kInvalidPageId;
+    std::uint16_t cut_slot = 0;
+    storage::PageChainGuard guard("heap walk");
+    while (page != kInvalidPageId) {
+        if (Status s = guard.Visit(page); !s.ok()) return s;
+        const bool first = resuming && page == cursor->page;
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>
+            guarded = [&](PageId page_id, heap::PageView& view,
+                          std::uint16_t slot) -> StatusOr<storage::VisitControl> {
+            if (first && slot < first_slot) return storage::VisitControl::kContinue;
+            auto outcome = fn(page_id, view, slot);
+            if (outcome.ok() && outcome.value() == storage::VisitControl::kStop) {
+                cut = true;
+                cut_page = page_id;
+                cut_slot = slot;
+            }
+            return outcome;
+        };
+        auto next = btree::BtreeVisitLeafPage(page_store_, page, page_access, guarded);
+        if (!next.ok()) return next.status();
+        if (cut) break;
+        page = next.value();
+    }
+    if (cursor != nullptr) {
+        if (cut) {
+            cursor->page = cut_page;
+            cursor->slot = cut_slot;
+            cursor->active = true;
+        } else {
+            const std::uint32_t done = cursor->rows_done;
+            *cursor = WalkCursor{};
+            cursor->rows_done = done;
+        }
+    }
+    return Status::OK();
 }
 
 namespace {
@@ -9531,7 +9728,7 @@ CommandDispatcher::TupleKeyLookup CommandDispatcher::LocateByTupleKey(
     // allowed precisely because it is not a hint.
     // `leaf` is exclusive for every caller that writes the slot it is
     // handed, and shared for a locking read, which writes none (DC-Q9).
-    auto found = btree::BtreeLookup(page_store_, access.desc_page_id, tuple_key, leaf);
+    auto found = exec::LocateRow(page_store_, access, tuple_key, leaf);
     if (found.ok()) {
         return TupleKeyLookup{TupleKeyLookup::Kind::kAt, std::move(found.value())};
     }
@@ -11622,7 +11819,7 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     for (std::uint64_t key : keys) {
         // The slot holds this statement's version: an INSERT's and an
         // UPDATE's after-image, and a DELETE's before-image under its mark.
-        if (auto read = ReadRowByKey(page_store_, ta.desc_page_id, key, payload); !read.ok()) {
+        if (auto read = ReadRowByKey(page_store_, ta, key, payload); !read.ok()) {
             return Refused(read.status());
         }
         spills.clear();
@@ -12615,9 +12812,15 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         // what keeps an index from growing by an entry per write forever.
         std::vector<exec::IndexWrite> index_writes;
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
-        if (Status s = exec::MaintainIndexes(catalog_, page_store_, ta, row,
-                                              /*first_col_pos=*/0, encoded.value(), id,
-                                              previous, log_index ? &log_index : nullptr);
+        // A heap's entry carries the row's rowid, which an in-place
+        // overwrite keeps (DN, IX1).
+        if (Status s = exec::MaintainIndexes(
+                catalog_, page_store_, ta, row,
+                /*first_col_pos=*/0, encoded.value(), id, previous,
+                log_index ? &log_index : nullptr,
+                ta.clustered_type == catalog::ClusteredType::kHeap
+                    ? heap::EncodeRowid(heap::Rowid{page_id, slot})
+                    : 0);
             !s.ok()) {
             return s;
         }
@@ -12994,7 +13197,7 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     }
     std::string row_scratch;
     for (const std::uint64_t key : claimed) {
-        auto read = ReadRowByKey(page_store_, ta.desc_page_id, key, walk.payload_copy);
+        auto read = ReadRowByKey(page_store_, ta, key, walk.payload_copy);
         // **DC-R1, asked of the bytes about to leave**: the row is there,
         // and the version on its page is the one the claim admitted - this
         // transaction's, or one its view sees - because nothing else may
@@ -14048,7 +14251,9 @@ CommandDispatcher::UniqueKeysOfRow CommandDispatcher::UniqueKeysOf(
     std::uint16_t first_col_pos, std::span<const parser::AstValue> previous) {
     UniqueKeysOfRow out;
     for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
-        if (!ix.unique) continue;
+        // A heap's Keystone index is unique by its key's own placement
+        // check, under the row's unit (DN), never by this one's.
+        if (!ix.unique || ix.keystone) continue;
         auto key = exec::EncodeUniqueKey(ta, ix, values, first_col_pos, previous);
         // **A key that does not encode is not checked**: the row cannot be
         // written with it - the row's own encode refuses a NULL in a NOT NULL
@@ -14411,7 +14616,11 @@ Status VisitKeyedSlotsFrom(
     storage::PageStore& store, const catalog::TableAccess& ta, std::uint64_t from,
     FunctionRef<StatusOr<storage::VisitControl>(std::uint64_t, const heap::PageView::Tuple&)>
         visit) {
-    auto first = btree::BtreeSeekLeaf(store, ta.desc_page_id, from);
+    // A heap's rows are in no key order (DN): every page is walked, and the
+    // keys below `from` passed over where they lie.
+    auto first = ta.clustered_type == catalog::ClusteredType::kHeap
+                     ? StatusOr<PageId>(ta.desc_page_id)
+                     : btree::BtreeSeekLeaf(store, ta.desc_page_id, from);
     if (!first.ok()) return first.status();
     return btree::BtreeVisitFrom(
         store, first.value(), storage::PageAccess::kRead,
@@ -15347,11 +15556,18 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     const catalog::TableAccess& ta = *access.value();
     // BZ-R4: a heap's tuple key is hidden, and PURGE's window is written
     // in tuple key comparisons, so there is no window a statement can name.
-    if (ta.schema.heap()) {
+    if (ta.schema.hidden_keystone()) {
         return Refused(Status::Unsupported("'" + stmt.table_name +
                                           "' is a heap, whose tuple key is hidden; PURGE's "
                                           "window names tuple keys, so it frees none on a heap" +
                                           at_name));
+    }
+    // DN-Q6 (a): a heap whose Keystone is its declared primary key is purged
+    // by Keystone - DN-S3's, not yet built.
+    if (ta.clustered_type == catalog::ClusteredType::kHeap) {
+        return Refused(Status::NotImplemented("'" + stmt.table_name +
+                                              "' is a heap; PURGE by its Keystone is not built" +
+                                              at_name));
     }
     // BV-Q4 (a): a freed key could be inserted again in an initial state,
     // restarting a row's history under its old identity - the one way past
@@ -15633,7 +15849,10 @@ DispatchOutcome CommandDispatcher::HandlePurgeDroppedColumns(const parser::Purge
                     if (exec::DroppedCellsClean(ta, targets, tuple.payload)) {
                         return storage::VisitControl::kContinue;
                     }
-                    if (dirty.size() == kCleanBatch) {
+                    // A heap's walk is in no key order, so a key is no place
+                    // to resume from (DN): its dirty rows are taken in one walk.
+                    if (dirty.size() == kCleanBatch &&
+                        ta.clustered_type != catalog::ClusteredType::kHeap) {
                         resume = tuple_key;
                         return storage::VisitControl::kStop;
                     }

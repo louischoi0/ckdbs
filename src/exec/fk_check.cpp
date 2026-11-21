@@ -1,4 +1,5 @@
 #include "kds/exec/fk_check.hpp"
+#include "kds/exec/heap_store.hpp"
 
 #include "kds/storage/keystone.hpp"
 
@@ -97,7 +98,7 @@ StatusOr<FkVerdict> CheckParentPresent(storage::PageStore& store,
     // relation: a hit is where the row lives, and a miss means there is
     // no such row - the same property that lets a point SELECT skip the
     // scan.
-    auto found = btree::BtreeLookup(store, parent.desc_page_id, parent_tuple_key);
+    auto found = exec::LocateRow(store, parent, parent_tuple_key);
     if (!found.ok()) {
         if (found.status().code() == StatusCode::kNotFound) return FkVerdict::kViolation;
         return found.status();
@@ -183,7 +184,7 @@ StatusOr<FkReverseOutcome> CheckNoChildReferences(storage::PageStore& store,
                     }
                 }
                 if (at_page == kInvalidPageId) {
-                    auto found = btree::BtreeLookup(store, child.desc_page_id, entry.tuple_key);
+                    auto found = exec::LocateRow(store, child, entry.tuple_key);
                     if (!found.ok()) {
                         // Dangling: the tuple key names no row now - a skip, not an
                         // error. A committed key names another row only

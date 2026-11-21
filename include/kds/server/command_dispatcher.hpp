@@ -18,6 +18,7 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/heap_store.hpp"
 #include "kds/exec/query_layer.hpp"
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
@@ -2095,6 +2096,13 @@ public:
     // drop is reclaimed at the next mount (BF-R8). Both must outlive this.
     void SetStatementEpochs(StatementEpochs* epochs) noexcept { epochs_ = epochs; }
     void SetReclaimQueue(PageReclaimer* reclaimer) noexcept { reclaim_queue_ = reclaimer; }
+    // **The instance's heap placement hints** (DN, `exec::HeapSpace`): every
+    // core's dispatcher is handed the one the instance owns; one never handed
+    // any keeps its own, which is what a single-dispatcher test runs on.
+    void SetHeapSpace(exec::HeapSpace* space) noexcept { heap_space_ = space; }
+    exec::HeapSpace& heap_space() noexcept {
+        return heap_space_ != nullptr ? *heap_space_ : own_heap_space_;
+    }
 
     // **A statement head** (BF-R9): publishes `kEntering` in this core's
     // slot, revalidates the catalog, then publishes the word the cache was
@@ -2619,6 +2627,13 @@ private:
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
         WalkCursor* cursor);
+    // A heap's walk (DN): its data pages from the head in page order, a
+    // resume at the page and slot it stopped at.
+    Status WalkHeapPages(
+        const catalog::TableAccess& access, storage::PageAccess page_access,
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>& fn,
+        WalkCursor* cursor);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
     // `wal.md` §8-1), released here once the row's record is stamped - and
@@ -2644,7 +2659,7 @@ private:
                      std::uint64_t owner_oid, PageId anchor_page_id,
                      const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
-                     bool own_txn = true);
+                     bool own_txn = true, bool heap_rel = false);
 
     // A clustered split's one BTREE_SPLIT record and, when it grew the tree
     // a level, the root's publication **inside that record**: the anchor's
@@ -2984,6 +2999,8 @@ private:
     // BF-R9's two, null outside an assembled instance.
     StatementEpochs* epochs_ = nullptr;
     PageReclaimer* reclaim_queue_ = nullptr;
+    exec::HeapSpace* heap_space_ = nullptr;
+    exec::HeapSpace own_heap_space_;
     // Statement heads open on this core: only the outermost publishes.
     int epoch_depth_ = 0;
     // Whether a DDL was open anywhere when the last statement head read the

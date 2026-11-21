@@ -52,6 +52,7 @@ add_executable(kds_tests
     read_only_txn_test.cpp
     heap_chain_test.cpp
     heap_hidden_key_test.cpp
+    heap_rowid_test.cpp
     btree_test.cpp
     btree_lookup_statement_test.cpp
     catalog_read_failure_test.cpp

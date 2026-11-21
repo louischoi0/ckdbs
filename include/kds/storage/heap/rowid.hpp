@@ -35,6 +35,12 @@ inline constexpr Rowid DecodeRowid(std::uint64_t word) noexcept {
                  static_cast<std::uint16_t>(word & kRowidSlotMask)};
 }
 
+// A heap's head data page's `min_key` (DN-Q16 (a)): the lowest valid
+// Keystone id, since the page is created with the relation and before any
+// row could name one. Every other data page takes the Keystone of the row it
+// is opened for (DN-Q11 (a)).
+inline constexpr std::uint64_t kHeapHeadMinKey = 1;
+
 static_assert(DecodeRowid(EncodeRowid(Rowid{0xFFFFFFFEu, 0xFFFFu})) ==
               Rowid{0xFFFFFFFEu, 0xFFFFu});
 static_assert(EncodeRowid(Rowid{0xFFFFFFFFu, 0xFFFFu}) < (std::uint64_t{1} << 48));
