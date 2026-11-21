@@ -105,6 +105,31 @@ TEST(InRunReclaimTest, ADropCommittedInTheRunIsFreedInTheRun) {
     for (const PageId id : pages) EXPECT_FALSE(rig.store().IsAllocated(id)) << "page " << id;
 }
 
+// DN: a heap's rows are `kHeapData` pages chained from its head, which the
+// anchor names as its clustered root. The walk took only btree pages, so a
+// dropped heap's every data page was skipped as "not the tree page its
+// parent names" and leaked.
+TEST(InRunReclaimTest, ADroppedHeapsDataPagesAreFreedInTheRun) {
+    InRunReclaimRig rig;
+    CurrentCoreGuard as(0);
+    Ok(rig.d(0), "CREATE TABLE h (v varchar) HEAP");
+    Fill(rig.d(0), "h", 1000);
+    const std::uint64_t oid = OidOf(rig.d(0), "h");
+    const std::set<PageId> pages = rig.PagesOf(oid);
+    std::size_t data_pages = 0;
+    for (const PageId id : pages) {
+        auto page = rig.store().GetForRead(id);
+        ASSERT_TRUE(page.ok());
+        data_pages += storage::RawPageType(page.value().bytes()) ==
+                      static_cast<std::uint8_t>(PageType::kHeapData);
+    }
+    ASSERT_GT(data_pages, 1u) << "the cell needs a grown heap";
+    Ok(rig.d(0), "DROP TABLE h");
+    rig.Settle();
+    EXPECT_EQ(rig.counters().pending.load(), 0u);
+    for (const PageId id : pages) EXPECT_FALSE(rig.store().IsAllocated(id)) << "page " << id;
+}
+
 TEST(InRunReclaimTest, ADropRolledBackWithItsReclaimQueuedFreesNothing) {
     // Only the commit arm queues (BF-R9): a rollback leaves nothing behind,
     // and the restored relation's pages are its own.

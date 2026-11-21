@@ -29,6 +29,7 @@ std::uint8_t MaxSupportedFormatVersion(PageType type) noexcept {
         // reads as Corruption.
         case PageType::kCabinBound:
         case PageType::kAnchor:
+        case PageType::kHeapData:
             return 1;
         case PageType::kInvalid:
             break;

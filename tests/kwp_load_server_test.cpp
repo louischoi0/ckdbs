@@ -596,9 +596,10 @@ TEST_F(KwpLoadServerTest, ATupleKeyOnlyRelationLoadsIssuedAndNamedKeys) {
 
 // **A heap's hidden key is the load's field 0** (BZ-R3's exemption, BZ-R4,
 // W2 of `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): `S_LOAD_READY`
-// describes it, a NULL takes an issued id, and a named key below the mark -
-// 3 after 50 and 51 were placed - is placed where it sorts, not refused by
-// any mark. `SELECT *` then shows the declared column alone, in key order.
+// describes it and a NULL takes an issued id. **A named key below the mark -
+// 3 after 50 and 51 were placed - is refused** (DN-Q14 (a), marked
+// 2026-11-21): a hidden-Keystone heap names keys only above every key it
+// placed, so a deleted key is never named again. The rows before it stay.
 TEST_F(KwpLoadServerTest, AHeapLoadNamesItsHiddenKeyBelowTheMark) {
     constexpr std::uint16_t kTextPort = 25741;
     constexpr std::uint16_t kKwpPort = 25742;
@@ -622,7 +623,7 @@ TEST_F(KwpLoadServerTest, AHeapLoadNamesItsHiddenKeyBelowTheMark) {
         ASSERT_TRUE(ready.has_value());
         EXPECT_EQ(ready->second, 2u);
         const auto chunk = Chunk(ready->first, 0, schema,
-                                 {{Int(50), Int(1)}, {Null(), Int(2)}, {Int(3), Int(3)}});
+                                 {{Int(50), Int(1)}, {Null(), Int(2)}, {Int(60), Int(3)}});
         SendFrame(fd, wire::ClientFrameType::kLoadChunk, chunk);
         auto ack = ReadFrame(fd, decoder);
         ASSERT_TRUE(ack.has_value());
@@ -633,7 +634,16 @@ TEST_F(KwpLoadServerTest, AHeapLoadNamesItsHiddenKeyBelowTheMark) {
 
         int text_fd = ConnectToLoopback(kTextPort);
         ASSERT_GE(text_fd, 0);
-        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT * FROM h"), "v\\n3\\n1\\n2");
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT v FROM h ORDER BY keyidentity"),
+                  "v\\n1\\n2\\n3");
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT keyidentity FROM h ORDER BY keyidentity"),
+                  "keyidentity\\n50\\n51\\n60");
+        // 3 is below the mark: refused, and nothing placed.
+        const std::string below =
+            SendAndReceiveLine(text_fd, "INSERT INTO h (keyidentity, v) VALUES (3, 4)");
+        EXPECT_EQ(below.rfind("ERR", 0), 0u) << below;
+        EXPECT_NE(below.find("issue mark"), std::string::npos) << below;
+        EXPECT_EQ(SendAndReceiveLine(text_fd, "SELECT v FROM h WHERE v = 4"), "v");
         ::close(text_fd);
     });
 

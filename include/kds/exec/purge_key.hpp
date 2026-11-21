@@ -12,7 +12,8 @@
 //
 // Protocol, in order, and the order is the correctness:
 //
-//   1. `btree::BtreeHoldTombstone` holds the key's leaf exclusive and hands
+//   1. `HoldTombstone` holds the key's page exclusive - a btree's leaf, a
+//      heap's data page through its Keystone index (DN-Q6 (a)) - and hands
 //      its slot back if it is still the tombstone `deleter_trx_id` stamped -
 //      otherwise the key is skipped (PU12). The version's spills are read
 //      from its bytes before anything is written.

@@ -135,7 +135,15 @@ namespace {
 // record's format changes.
 // **The value is the two together**: each re-pin above moved the stream, and
 // this is the stream with both, pinned at the merge that joined them.
-constexpr std::uint32_t kGoldenLogCrc = 0x8fd5ae2cu;
+// **Re-pinned at DN-S2** (on `dn-dd-s4-into-dn-s2`,
+// `instructions/v3.2.0/workorder-dn-heap-rowid.md`, superblock 39):
+// `golden_heap` is a heap of data pages now - its root is a `kHeapData`
+// page's PAGE_INIT with `min_key` 1, its Keystone index is created with it
+// (an image of the index root, a `sys.indexes` row, an anchor slot), each
+// row is a HEAP_INSERT at its slot and carries an INDEX_INSERT into the
+// Keystone index, and every later LSN moves. No record kind changes its
+// framing.
+constexpr std::uint32_t kGoldenLogCrc = 0x8d66d145u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

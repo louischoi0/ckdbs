@@ -18,6 +18,8 @@
 #include "kds/base/log.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
+#include "kds/exec/heap_release.hpp"
+#include "kds/exec/heap_store.hpp"
 #include "kds/exec/query_layer.hpp"
 #include "kds/exec/sort.hpp"
 #include "kds/exec/assertion_check.hpp"
@@ -601,6 +603,7 @@ public:
                 return exec::LoadExprCabins(catalog, page_store, access);
             });
         ArmAssertionRecordBudget();
+        WatchHeapRollbacks();
     }
 
     // Parses and executes one line. Never fails outward: a malformed or
@@ -2095,6 +2098,39 @@ public:
     // drop is reclaimed at the next mount (BF-R8). Both must outlive this.
     void SetStatementEpochs(StatementEpochs* epochs) noexcept { epochs_ = epochs; }
     void SetReclaimQueue(PageReclaimer* reclaimer) noexcept { reclaim_queue_ = reclaimer; }
+    // **The instance's heap placement hints** (DN, `exec::HeapSpace`): every
+    // core's dispatcher is handed the one the instance owns; one never handed
+    // any keeps its own, which is what a single-dispatcher test runs on.
+    void SetHeapSpace(exec::HeapSpace* space) {
+        heap_space_ = space;
+        WatchHeapRollbacks();
+    }
+    // The manager's report of a rolled-back heap insert goes to this
+    // dispatcher's heap space (DN-R2); withdrawn when it goes.
+    void WatchHeapRollbacks() {
+        if (txn_ == nullptr) return;
+        exec::HeapSpace* space = &heap_space();
+        txn_->SetHeapRetireObserver([space](std::uint32_t oid) { space->NoteDead(oid); });
+    }
+    ~CommandDispatcher() {
+        if (txn_ != nullptr) txn_->SetHeapRetireObserver({});
+    }
+
+    // **One step of the heap slot release, unasked** (DN-R2; DD-S4's driver,
+    // ruled into DN-S2): the relation a delete or a taken-back insert queued
+    // (`HeapSpace::NoteDead`), `budget` pages or leaves of its job
+    // (`exec::HeapSlotRelease`) under the relation's `IX` as a read holder,
+    // never waiting. Core 0's `system` task calls it on a tick; a test calls
+    // it until it answers false. Returns whether a job is still owed - the
+    // running one or one queued. A refused `IX` skips the step.
+    StatusOr<bool> StepHeapRelease(std::uint32_t budget);
+    // The last finished job's counts, for a test and `ANALYZE`-free checks.
+    const exec::HeapReleaseCounts& last_heap_release() const noexcept {
+        return last_heap_release_;
+    }
+    exec::HeapSpace& heap_space() noexcept {
+        return heap_space_ != nullptr ? *heap_space_ : own_heap_space_;
+    }
 
     // **A statement head** (BF-R9): publishes `kEntering` in this core's
     // slot, revalidates the catalog, then publishes the word the cache was
@@ -2619,6 +2655,13 @@ private:
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
         WalkCursor* cursor);
+    // A heap's walk (DN): its data pages from the head in page order, a
+    // resume at the page and slot it stopped at.
+    Status WalkHeapPages(
+        const catalog::TableAccess& access, storage::PageAccess page_access,
+        const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                            std::uint16_t)>& fn,
+        WalkCursor* cursor);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
     // `wal.md` §8-1), released here once the row's record is stamped - and
@@ -2644,7 +2687,7 @@ private:
                      std::uint64_t owner_oid, PageId anchor_page_id,
                      const std::vector<exec::AppendedSpill>& spills,
                      const std::vector<exec::IndexWrite>& index_writes = {},
-                     bool own_txn = true);
+                     bool own_txn = true, bool heap_rel = false);
 
     // A clustered split's one BTREE_SPLIT record and, when it grew the tree
     // a level, the root's publication **inside that record**: the anchor's
@@ -2984,6 +3027,10 @@ private:
     // BF-R9's two, null outside an assembled instance.
     StatementEpochs* epochs_ = nullptr;
     PageReclaimer* reclaim_queue_ = nullptr;
+    exec::HeapSpace* heap_space_ = nullptr;
+    exec::HeapSpace own_heap_space_;
+    std::optional<exec::HeapSlotRelease> heap_release_;
+    exec::HeapReleaseCounts last_heap_release_;
     // Statement heads open on this core: only the outermost publishes.
     int epoch_depth_ = 0;
     // Whether a DDL was open anywhere when the last statement head read the

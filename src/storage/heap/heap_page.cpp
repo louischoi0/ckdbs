@@ -47,8 +47,9 @@ StatusOr<PageView> PageView::CreateEmpty(std::span<std::byte, kPageSize> page,
 StatusOr<PageView> PageView::CreateEmptyAs(std::span<std::byte, kPageSize> page,
                                             std::uint64_t min_key, PageType type,
                                             std::uint64_t owner_oid) {
-    if (type != PageType::kHeap && type != PageType::kBtreeLeaf) {
-        return Status::InvalidArgument("only kHeap and kBtreeLeaf pages carry a heap page body");
+    if (type != PageType::kHeap && type != PageType::kBtreeLeaf && type != PageType::kHeapData) {
+        return Status::InvalidArgument(
+            "only kHeap, kBtreeLeaf and kHeapData pages carry a heap page body");
     }
     // The one Keystone constant the page layer reads (BK-R2): a min_key is an
     // id, and an id's ceiling is spelt in keystone.hpp alone.
@@ -138,6 +139,13 @@ StatusOr<std::uint16_t> PageView::InsertTupleAt(std::uint16_t at,
                                        " on a page holding " + std::to_string(h.nr_slots) +
                                        "; slots are dense");
     }
+    // **A heap data page's slots never shift** (DN): a slot is a rowid an
+    // index entry names, so a data page only appends.
+    if (at < h.nr_slots &&
+        storage::RawPageType(page_) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+        return Status::InvalidArgument("a heap data page only appends a slot; slot " +
+                                       std::to_string(at) + " is a rowid already");
+    }
     std::size_t avail = h.upper > h.lower ? (h.upper - h.lower) : 0;
     if (avail < needed) {
         return Status::OutOfSpace("heap page has no room for this tuple");
@@ -151,17 +159,7 @@ StatusOr<std::uint16_t> PageView::InsertTupleAt(std::uint16_t at,
                  page_.data() + SlotOffset(at),
                  static_cast<std::size_t>(h.nr_slots - at) * kSlotOnDiskSize);
 
-    std::byte* tuple_base = page_.data() + new_upper;
-    std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
-    std::memcpy(tuple_base + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
-    std::memcpy(tuple_base + kTupleDataLenOffset, &payload_len, sizeof(payload_len));
-    std::uint8_t tuple_flags = 0;
-    std::uint8_t tuple_reserved = 0;
-    std::memcpy(tuple_base + kTupleFlagsOffset, &tuple_flags, sizeof(tuple_flags));
-    std::memcpy(tuple_base + kTupleReservedOffset, &tuple_reserved, sizeof(tuple_reserved));
-    if (payload_len > 0) {
-        std::memcpy(tuple_base + kTupleHeaderOnDiskSize, payload.data(), payload_len);
-    }
+    WriteNewTuple(new_upper, payload, trx_id, undo_ptr);
 
     HeapSlotFields slot{};
     slot.offset = new_upper;
@@ -189,6 +187,12 @@ Status PageView::UnInsertTuple(std::uint16_t slot_idx) {
     if (slot.offset != h.upper || slot.flags != 0 || slot.length == 0) {
         return Status::InvalidArgument("UnInsertTuple: slot " + std::to_string(slot_idx) +
                                        " is not a tuple InsertTupleAt just placed");
+    }
+    // On a heap data page only the last slot, which shifts no rowid (DN).
+    if (slot_idx + 1 != h.nr_slots &&
+        storage::RawPageType(page_) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+        return Status::InvalidArgument("UnInsertTuple: slot " + std::to_string(slot_idx) +
+                                       " is not a heap data page's last");
     }
     // The entries after it move back down - the shift InsertTupleAt made.
     std::memmove(page_.data() + SlotOffset(slot_idx),
@@ -370,6 +374,106 @@ Status PageView::RetireSlot(std::uint16_t slot_idx) {
     return Status::OK();
 }
 
+namespace {
+
+Status RefuseOffDataPage(std::span<const std::byte, kPageSize> page, const char* what) {
+    if (storage::RawPageType(page) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+        return Status::OK();
+    }
+    return Status::InvalidArgument(std::string(what) +
+                                      " is a heap data page's, and this page is of type " +
+                                      std::to_string(storage::RawPageType(page)));
+}
+
+}  // namespace
+
+void PageView::WriteNewTuple(std::uint16_t offset, std::span<const std::byte> payload,
+                             std::uint64_t trx_id, std::uint64_t undo_ptr) {
+    const auto payload_len = static_cast<std::uint16_t>(payload.size());
+    std::byte* tuple_base = page_.data() + offset;
+    std::memcpy(tuple_base + kTupleTrxIdOffset, &trx_id, sizeof(trx_id));
+    std::memcpy(tuple_base + kTupleUndoPtrOffset, &undo_ptr, sizeof(undo_ptr));
+    std::memcpy(tuple_base + kTupleDataLenOffset, &payload_len, sizeof(payload_len));
+    const std::uint8_t zero = 0;
+    std::memcpy(tuple_base + kTupleFlagsOffset, &zero, sizeof(zero));
+    std::memcpy(tuple_base + kTupleReservedOffset, &zero, sizeof(zero));
+    if (payload_len > 0) {
+        std::memcpy(tuple_base + kTupleHeaderOnDiskSize, payload.data(), payload_len);
+    }
+}
+
+Status PageView::FreeSlot(std::uint16_t slot_idx) {
+    if (Status s = RefuseOffDataPage(page_, "a slot release"); !s.ok()) return s;
+    const HeapPageHeaderFields h = ReadHeader();
+    if (slot_idx >= h.nr_slots) return Status::NotFound("slot index out of range");
+    HeapSlotFields slot = ReadSlot(slot_idx);
+    if ((slot.flags & kSlotFlagFree) != 0) return Status::OK();
+    if ((slot.flags & kSlotFlagDead) == 0) {
+        return Status::InvalidArgument("slot " + std::to_string(slot_idx) +
+                                          " holds a tuple; only a retired slot is freed");
+    }
+    // The reservation: from this tuple's offset to the nearest tuple above
+    // it, or to the tail reservation. A retired slot keeps its offset.
+    if (slot.offset < h.upper || slot.offset >= kNextPageIdOffset) {
+        return Status::Corruption("retired slot " + std::to_string(slot_idx) +
+                                  " carries offset " + std::to_string(slot.offset) +
+                                  ", outside the page's tuple area");
+    }
+    std::size_t end = kNextPageIdOffset;
+    for (std::uint16_t i = 0; i < h.nr_slots; ++i) {
+        const std::uint16_t other = ReadSlot(i).offset;
+        if (other > slot.offset && other < end) end = other;
+    }
+    if (end - slot.offset < kTupleHeaderOnDiskSize) {
+        return Status::Corruption("retired slot " + std::to_string(slot_idx) +
+                                  " reserves fewer bytes than a tuple header");
+    }
+    slot.flags = static_cast<std::uint8_t>(kSlotFlagDead | kSlotFlagFree);
+    slot.length = static_cast<std::uint16_t>(end - slot.offset);
+    WriteSlot(slot_idx, slot);
+    return Status::OK();
+}
+
+std::optional<std::uint16_t> PageView::FindFreeSlot(std::size_t payload_size) const {
+    const std::uint16_t n = slot_count();
+    for (std::uint16_t i = 0; i < n; ++i) {
+        const HeapSlotFields s = ReadSlot(i);
+        if ((s.flags & kSlotFlagFree) != 0 &&
+            static_cast<std::size_t>(s.length) >= kTupleHeaderOnDiskSize + payload_size) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
+Status PageView::ReuseSlot(std::uint16_t slot_idx, std::span<const std::byte> payload,
+                           std::uint64_t trx_id, std::uint64_t undo_ptr) {
+    if (Status s = RefuseOffDataPage(page_, "a slot reuse"); !s.ok()) return s;
+    if (trx_id > kMaxTrxId) return Status::InvalidArgument("trx_id exceeds 48 bits");
+    const HeapPageHeaderFields h = ReadHeader();
+    if (slot_idx >= h.nr_slots) return Status::NotFound("slot index out of range");
+    HeapSlotFields slot = ReadSlot(slot_idx);
+    if ((slot.flags & kSlotFlagFree) == 0) {
+        return Status::InvalidArgument("slot " + std::to_string(slot_idx) + " is not free");
+    }
+    const std::size_t need = kTupleHeaderOnDiskSize + payload.size();
+    if (need > slot.length) {
+        return Status::OutOfSpace("payload does not fit the free slot's reservation");
+    }
+    // The reservation `FreeSlot` set, checked as a read checks a slot
+    // (BF-R10): one that leaves the tuple area is damage.
+    if (slot.offset < h.upper ||
+        static_cast<std::size_t>(slot.offset) + slot.length > kNextPageIdOffset) {
+        return Status::Corruption("free slot " + std::to_string(slot_idx) +
+                                  " reserves bytes outside the page's tuple area");
+    }
+    WriteNewTuple(slot.offset, payload, trx_id, undo_ptr);
+    slot.flags = 0;
+    slot.length = static_cast<std::uint16_t>(need);
+    WriteSlot(slot_idx, slot);
+    return Status::OK();
+}
+
 Status PageView::RedoWriteTuple(std::uint16_t slot_idx, std::span<const std::byte> payload,
                                 std::uint64_t trx_id, std::uint64_t undo_ptr) {
     if (payload.size() > kPageSize) {
@@ -394,6 +498,10 @@ Status PageView::RedoWriteTuple(std::uint16_t slot_idx, std::span<const std::byt
     // the same place. Idempotent by construction - no header field moves.
     if (slot_idx < h.nr_slots) {
         HeapSlotFields existing = ReadSlot(slot_idx);
+        if ((existing.flags & kSlotFlagFree) != 0 &&
+            storage::RawPageType(page_) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+            return ReuseSlot(slot_idx, payload, trx_id, undo_ptr);
+        }
         if ((existing.flags & kSlotFlagDead) != 0 || existing.length == 0) {
             return Status::Corruption("redo names retired slot " + std::to_string(slot_idx) +
                                       "; retirement follows its insert in LSN order");

@@ -246,10 +246,13 @@ TEST(HeapHiddenKeyCrashTest, AHeapSurvivesACrashWithItsColumnsAndItsRows) {
     const auto described = testing_view::ReadViewText(instance->Execute("DESCRIBE h"));
     EXPECT_EQ(described.Column("name"), (std::vector<std::string>{"a", "b"}));
     EXPECT_EQ(instance->Execute("SELECT * FROM h WHERE a = 999"), "a,b");
-    // The issue cursor survived too: the next row lands after every one.
+    // The issue cursor survived too: the next row's Keystone is above every
+    // one (DN: a heap's walk is in no key order, so it is asked by
+    // `keyidentity`, which reads the hidden Keystone).
     ASSERT_EQ(instance->Execute("INSERT INTO h VALUES (1000, 0)").substr(0, 8), "INSERTED");
-    const auto all = testing_view::ReadViewText(instance->Execute("SELECT a FROM h"));
-    ASSERT_FALSE(all.rows.empty());
+    const auto all = testing_view::ReadViewText(
+        instance->Execute("SELECT a FROM h ORDER BY keyidentity"));
+    ASSERT_EQ(all.rows.size(), 301u);
     EXPECT_EQ(all.rows.back()[0], "1000");
 }
 

@@ -442,9 +442,16 @@ public:
     // write order, so a transactional caller can register them for
     // rollback (DT3a). Filled even when the create fails partway: rows
     // already on the page are rows a rollback must still retire.
+    //
+    // `clustered` is `kBtree` or `kHeap` (DN): a heap's storage is one empty
+    // `kHeapData` page, `desc_page_id`, `min_key` 1 (DN-Q16 (a)), and its
+    // Keystone index is the caller's to create in the same transaction
+    // (`exec::CreateKeystoneIndex`), since the catalog does not know the
+    // index page format.
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                std::uint64_t trx_id = kBootstrapXid,
-                               std::vector<CatalogRowRef>* written = nullptr);
+                               std::vector<CatalogRowRef>* written = nullptr,
+                               ClusteredType clustered = ClusteredType::kBtree);
 
     // ---- Namespaces (AF-T1) ---------------------------------------------
     //
@@ -811,7 +818,12 @@ public:
     // BB-R3 the borrow precedes the admission entirely - a refused borrow
     // advanced nothing - so the hook's reason is gone, and with it the
     // partition latch taken under page 7 (BA-R8's last bullet).
-    Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id);
+    //
+    // **`above_mark`: a hidden-Keystone heap's admission** (DN-Q14 (a)): an
+    // id below the mark - one that could have been placed, and so a deleted
+    // row's - is refused `OutOfRange` under the same hold that would move
+    // it, so no deleted key of such a heap is ever named again.
+    Status AdmitExplicitRowId(Oid table_oid, std::uint64_t id, bool above_mark = false);
 
     // ---- sys.patterns (docs/spec/waystone-concpets.md section 4) --------------
 

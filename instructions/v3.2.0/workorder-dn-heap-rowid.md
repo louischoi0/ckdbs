@@ -1,6 +1,10 @@
 # Work order DN - the heap redefined again: an Oracle-style heap, rows in data pages addressed by a computed rowid, every key served through an index that names the rowid, a full scan that reads the data pages and no index
 
-Status: **OPENED 2026-11-20 on the operator's standing go-ahead
+Status: **CLOSED 2026-11-21 and landed on `main` on the operator's word "push no verify"** (`raft-marks-2026-11-21.md` §11), untagged (DN-S2, DN-S3
+and DN-S4 on the standing go-ahead; the close
+`bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`: DN-R7 met as
+measured, a 1,000-row heap index range 27-32 % cheaper, a heap's INSERT
+about 15 % dearer than a btree twin's; §7, "DN-S4"). **OPENED 2026-11-20 on the operator's standing go-ahead
 (go-ahead-achieving-milestone), linked from DD** (`raft-marks-2026-11-20.md` §28), on
 worktree `dn-heap-rowid` at `34958393`. **DN-S0 and DN-S1 done; stopped at DN-S1's gate,
 the operator's mark on the amended invariants (§8)**. DN-Q0..Q14 adopted on that
@@ -8,7 +12,10 @@ go-ahead, none the operator's own mark, DN-Q1, DN-Q9 and DN-Q13 revised against 
 DN-Q12, DN-Q13 and DN-Q14 added at DN-S0 (§7). **DD-S4, the unasked
 driver, ruled into DN-S2 by the operator on 2026-11-21** (`$!b`,
 `raft-marks-2026-11-21.md` §6); taken up again on the standing go-ahead the
-same day and stopped at the same gate. **Written 2026-11-20.** Written in the main checkout on
+same day and stopped at the same gate. **DN-S1's gate passed on 2026-11-21**:
+the operator marked §8 as staged, DN-Q13 (c) and DN-Q14 (a) with it
+(`raft-marks-2026-11-21.md` §10), and DN-S2 onward runs on the standing
+go-ahead of that day. **Written 2026-11-20.** Written in the main checkout on
 `main` at `d091d096` (`v3.4.15-19-gd091d096`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §13). The letter DN is CLA's
 proposal. **Exploratory by CLA's proposal** (DN-Q0): the operator's words
@@ -249,7 +256,9 @@ Binding once DN opens.
 
 ## 4. Items for the operator (DN-Q)
 
-(a) is CLA's proposal in each. **Marked by the operator: DN-D1..D7 (§0).**
+(a) is CLA's proposal in each. **Marked by the operator: DN-D1..D7 (§0);
+§8 as staged, with DN-Q13 (c) and DN-Q14 (a), on 2026-11-21**
+(`raft-marks-2026-11-21.md` §10).
 Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 
 | | item | (a) | other |
@@ -268,7 +277,16 @@ Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 | DN-Q10 | Cabin and Waystone over a heap. | **their entries keep the Keystone (C2) and their location hint becomes the rowid**, verified as today | (b) neither serves a heap in DN |
 | DN-Q12 | **Where the amended invariants are written before the heap exists** (raised at DN-S0: DN-R9 writes them into `heap-and-tuple.md` §8 and `CLAUDE.md` before DN-S2, and both files state only what is built). | **staged in this order** (§8), word for word as they will read, marked there by the operator, and moved into the two files with DN-S2's code - so neither file states an invariant no code holds, and the text the code is written against is fixed first | (b) written into the two files at DN-S1, as DN-R9 reads, each marked "binds from DN-S2" |
 | DN-Q13 `[quiet-wrong]` | **Where a declared single `int64` PK that is not the first column sits** (raised at DN-S0: column 0 is the tuple key at every site that checks one - `CheckKeystoneColumn`, `DecodeShapeHolds`, the not-null, Cabin and drop checks, and some nine readers that take `columns.front()`). | **the Keystone is column 0 of the stored row on every relation**: a PK declared elsewhere is placed at position 0, and the declared order is a presentation order `*`, `DESCRIBE` and a positional `INSERT` follow - one map, kept beside the schema - so no reader of column 0 changes | (b) the Keystone at its declared position, every column-0 site generalized; (c) a PK that is the Keystone must be declared first, as today |
-| DN-Q14 `[quiet-wrong]` | **How a deleted row's Keystone stays bound once its slot is reused** (raised by DN-S0's review). On a btree relation a delete-marked slot keeps its key bound until `PURGE` (K1). On a heap, DN-D1 reuses the slot once DD has removed every entry naming it - the Keystone index's included - and a key named again then passes that index's uniqueness check: one Keystone bound to two committed rows, DN-R1 broken with no error. | **by how the heap gets its keys.** A heap whose Keystone is a declared `int64` PK - keys a user names - keeps a deleted row's **Keystone-index entry** until a row `PURGE` frees the key (DD's judge owes it, DD-Q1 (a) for that one index), so its slot waits for the `PURGE` (DN-R2). A heap with the hidden Keystone - keys the engine issues - refuses a named key at or below `sys.tables.next_id` (the KWP load is the one door that names one), so no deleted key can be named again and its slot is reused as soon as DD has cleared it | (b) every heap keeps the Keystone entry until `PURGE`, and a hidden-Keystone heap admits `PURGE` by `keyidentity` - one rule, slot reuse waiting on a statement everywhere; (c) a Keystone tombstone outside every index (a per-relation set of retired keys) - a new persisted structure |
+| DN-Q14 `[quiet-wrong]` | **How a deleted row's Keystone stays bound once its slot is reused** (raised by DN-S0's review). On a btree relation a delete-marked slot keeps its key bound until `PURGE` (K1). On a heap, DN-D1 reuses the slot once DD has removed every entry naming it - the Keystone index's included - and a key named again then passes that index's uniqueness check: one Keystone bound to two committed rows, DN-R1 broken with no error. | **by how the heap gets its keys.** A heap whose Keystone is a declared `int64` PK - keys a user names - keeps a deleted row's **Keystone-index entry** until a row `PURGE` frees the key (DD's judge owes it, DD-Q1 (a) for that one index), so its slot waits for the `PURGE` (DN-R2). A heap with the hidden Keystone - keys the engine issues - refuses a named key at or below `sys.tables.next_id` (the KWP load is the one door that names one), so no deleted key can be named again and its slot is reused as soon as DD has cleared it. **The cost, stated at the mark**: the mark is above every key placed (invariant 11), so a KWP load into a hidden-Keystone heap names its keys in ascending order - a key below one already placed is refused | (b) every heap keeps the Keystone entry until `PURGE`, and a hidden-Keystone heap admits `PURGE` by `keyidentity` - one rule, slot reuse waiting on a statement everywhere; (c) a Keystone tombstone outside every index (a per-relation set of retired keys) - a new persisted structure |
+| DN-Q15 | **A data page's type** (raised at DN-S2). | **a new `PageType::kHeapData` (15)**: the slotted body, logged and imaged as a btree leaf is; slot release and reuse are its alone | (b) `kHeap`, the catalog chain's: its pages only append, and a catalog page's checks would read a user row |
+| DN-Q16 | **The head data page's `min_key`** (raised at DN-S2: the head is created with the relation, before any row). | **1, the lowest valid key**, so invariant 3 admits every row on it; every other page takes the Keystone of the row it is opened for (DN-Q11 (a)) | (b) no head page until the first insert, `desc_page_id` set then: a root that changes after CREATE, which `catalog_cache.hpp` forbids |
+| DN-Q17 | **Where a grown page is linked, and how it is logged** (raised at DN-S2). | **after the page that filled** - one core's rows walked in the order it wrote them, no order promised (DN-D4) - **logged as a split is**: one BTREE_SPLIT imaging the new page and the page that links to it, so the page and the link replay whole or not at all | (b) after the head: every growth images the head; (c) a PAGE_INIT and a link record: a new record kind for what an existing one does |
+| DN-Q18 | **The unasked driver's shape** (DD-S4 under the operator's `$!b`, raised at DN-S2). | **a job per relation in four phases** - collect retired slots (retiring a hidden-Keystone heap's resolved tombstones), purge every index (DD's attempt), verify no entry names a candidate, free - **stepped by core 0's `system` tick every 50 ms**, `analytic`'s slice a step, under the relation's `IX` as a read holder; the queue is noted by a heap `DELETE` and a taken-back insert | (b) every heap walked every period: an insert-only heap pays a walk a period for nothing; (c) a per-slot record of which indexes still name it: a new persisted structure |
+| DN-Q19 | **How `keyidentity` is reserved** (DN-Q1 (a) revised, raised at DN-S2). | **refused by name at each declaring production** - a relation, a column (CREATE TABLE, ADD COLUMN, RENAME), an index, a namespace, an alias - **and resolved at every column reference** by the catalog's one resolver (`Schema::FindColumn`). Not a lexer keyword: a keyword is refused by `ParseIdent` at every reference too, the one place the word must be read | (b) a lexer keyword, every reference site taught to admit it |
+| DN-Q20 `[quiet-wrong]` | **What "at or below its issue mark" reads** (DN-Q14 (a)'s text, raised at DN-S2). | **below `next_id`**: the mark is above every key placed (invariant 11), so a key below it is one that could have been placed and deleted; `next_id` itself was never placed. This is what the marked cost, an ascending load, requires | (b) at or below `next_id`, literally: an ascending load is then refused at its second key |
+| DN-Q21 | **The `PRIMARY KEY` grammar** (DN-D3, DN-D5, raised at DN-S2: the tree had none). | **a column's `PRIMARY KEY` suffix, after the nullability, or one `PRIMARY KEY (<col>, ...)` in the column list**, both words unreserved; **a heap's alone**, refused `NotImplemented` on a btree, whose key is its first column with no keyword; a primary key column is never NULL | (b) accepted on a btree as a no-op on its first column: a spelling that enforces nothing new |
+| DN-Q22 | **What the engine's indexes are named** (raised at DN-S2). | **`$keystone_<oid>` and `$pkey_<oid>`**: a parameter's spelling, which no statement writes, so neither is dropped, rebuilt or shadowed by name | (b) `<table>_pkey`: a name a user index can take first, refusing the CREATE TABLE |
+| DN-Q23 | **Placement hints across a restart** (raised at DN-S2). | **memory only** (`HeapSpace`): a restart forgets each core's page and the free slots, a core with no page fills from the head, and a release finds the free slots again; up to `cores` partly filled pages wait for a release to be taken again | (b) persisted per relation: a catalog write per growth |
 
 ## 5. Stages
 
@@ -612,3 +630,164 @@ both `[quiet-wrong]`) amends hard invariants, which only a recorded mark of
 the operator's does. Owed before DN-S2, besides the mark: DN-Q11's
 descending named load, measured. No item was adopted at this entry.
 
+### DN-S1's gate passed, 2026-11-21
+
+The operator's word, *"For now follow the proposal, and for what remains
+/go-ahead-achieving-milestone"* (given in Korean; recorded in English),
+given after CLA's account of §8 item by item. **The operator's own mark**:
+§8 as staged - invariant 4 (under DN-D7), 9, 11's restatement, §3.1b,
+IX1, F1, K3 and §4.1c - with **DN-Q13 (c)** and **DN-Q14 (a)**. CLA's
+account named one cost of DN-Q14 (a) the order had not written: a KWP load
+into a hidden-Keystone heap names its keys in ascending order, since the
+mark is above every key placed; it is written into DN-Q14's row as a cost
+of the marked option. "For now" is recorded as said: the mark stands until
+the operator moves it. DN-S2, DN-S3 and DN-S4 run on the standing go-ahead
+of 2026-11-21 (go-ahead-achieving-milestone), on worktree
+`dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, from `3a07ad49`.
+
+### DN-S2 - the heap, 2026-11-21
+
+On worktree `dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, from
+`b7262f9b` (`v3.5.0-41-gb7262f9b`), on the operator's standing go-ahead of
+2026-11-21 (go-ahead-achieving-milestone). Three steps, each reviewed by
+`critics-developer` and gated by the full suite.
+
+- **S2a, `e0c34e20`: the page.** `PageType::kHeapData` (15, DN-Q15), a free
+  slot (`kSlotFlagFree`) released by `PageView::FreeSlot` and taken again by
+  `ReuseSlot`, SLOT_FREE (36), the rowid codec (`storage/heap/rowid.hpp`),
+  superblock 39. **Review**: redo replayed a HEAP_OVERWRITE onto a free slot
+  as a reuse - refused `Corruption` now; DN-R10 checked again at redo; a
+  data page's slots never shift (`InsertTupleAt` mid-directory and
+  `UnInsertTuple` but the last refused there); `ReuseSlot` bounds-checked;
+  one tuple writer (`WriteNewTuple`), one slot-record logger. Rejected: none.
+- **S2b, `9a69c21d`: the heap.** `ClusteredType::kHeap`, `CREATE TABLE ...
+  HEAP` with its head page (`min_key` 1, DN-Q16) and Keystone index
+  (DN-Q2 (a), named per DN-Q22), every index entry carrying the rowid
+  (`IndexLayout::rowid_width`) and resolved at it with the Keystone check
+  (DN-R3), `exec::LocateRow` for every key access, placement by space with a
+  growth logged as a split (DN-Q17), the btree's walk reading a heap's chain
+  while every descent refuses a data page, the compiler giving a heap no
+  tuple key range, no `ORDER BY <tuple key>` elision and a build prefix by
+  place, `PRIMARY KEY` (DN-Q21), `keyidentity` (DN-Q19), DN-Q14 (a)'s mark
+  (DN-Q20). **Review**: an online `CREATE INDEX` over a heap was refused, and
+  past that its A2 bound (a chain ordered by `min_key`) would have left older
+  rows unindexed - fixed (the high water over the whole chain, a page past it
+  skipped, not ending the walk); `DROP TABLE` of a heap leaked its data
+  pages; `GATHER STATISTICS` and `sys.relation_stats` read no data page; a
+  refusal named `$tuple_key`. Adopted from its proposals: a rowid naming
+  another relation's page is a miss, not `Corruption` (a crash can leave an
+  entry whose growth redo never created, and `Corruption` would refuse every
+  judge that could remove it); a rowid on page 0 refused (`PutIndexRowid`);
+  `TableAccess::heap()`; `HeapSpace::Forget`. Not applied: folding
+  `WalkHeapPages`' cursor epilogue into `WalkBtreeLeaves`' (two shapes of
+  resume), dropping `IndexRef::rowid` (it keeps `IndexLayoutOf` free of the
+  access). The design questions it raised are `known-gaps.md`'s DN section.
+- **S2c, `7ae0f800` and `bc8c9d97`: the slot release, unasked** (DD-S4 under
+  the operator's `$!b`, DN-Q18): `exec::HeapSlotRelease`, stepped by
+  `CommandDispatcher::StepHeapRelease` from core 0's `system` tick, queued by
+  `HeapSpace::NoteDead`. **Review**: **`7ae0f800` did not compile** - a
+  rename onto `SysTableRow` - and the suite CLA reported for it had run an
+  older binary, CLA's build filter having missed GCC's `error:` lines; the
+  build and the suite were re-run at `bc8c9d97`. **A stale catalog memo let
+  the release free slots an index built afterwards still named** (DN-R2,
+  `[quiet-wrong]`) - each step revalidates the catalog now; an online build's
+  index can append behind the verify, so a job meeting one frees nothing and
+  re-queues; a tombstone the job deferred was never asked again; the free
+  was unbounded (DD-R10). Adopted from its proposals: a rollback's
+  compensation queues the relation (`TransactionManager`'s heap-retire
+  observer), so does every mount, and the queue is taken in arrival order.
+  The PURGE INDEX judge groups a leaf's entries by `(tuple key, rowid)`.
+
+**Gate**: the full suite 0 failed of 5090 at `bc8c9d97`; `scripts/sim.sh`
+280 runs, 0 failures, at `7ae0f800` before heaps were drawn and at
+`bc8c9d97` with them (DN-S3). Overhead not measured; measured at the
+milestone's close. **Adopted on the standing go-ahead**, none the
+operator's own mark: DN-Q15 to DN-Q23 (§4), DN-Q20 `[quiet-wrong]` among
+them - "at or below its issue mark" read as below `next_id`, which the
+marked cost, an ascending load, requires. **Moved into the owning documents
+with the code** (DN-Q12 (a)): §8's text into `heap-and-tuple.md` §3.1b,
+§4.1c and §8 and `CLAUDE.md`'s invariants 4 and 11, IX1, F1 and K3 - with
+one sentence §8 did not stage, invariant 11's "no relation refuses a named
+key for being below the mark", which DN-Q14 (a) makes false and which now
+names the hidden-Keystone heap.
+
+### DN-S3 - the consumers, 2026-11-21
+
+On worktree `dn-dd-s4-into-dn-s2`, on the same standing go-ahead. §1.3's
+paths under DN-Q2, Q5, Q6 and Q10:
+
+- **DN-Q2 (a)**: every path that finds a row by its Keystone - a point
+  read or write, `FOR UPDATE`, `RETURNING`, a foreign key's checks, an
+  insert's uniqueness, `ON CONFLICT`'s arbiter, `PURGE`'s tombstone,
+  `CleanDroppedCells`, the unique check, the backfill's re-read, the Cabin
+  and Waystone fallbacks - goes through `exec::LocateRow`, the Keystone
+  index on a heap (DN-S2). An index step and the ordered index walk resolve
+  at the entry's rowid first (`ResolveIndexedRow`).
+- **DN-Q5 (a)**: a declared-Keystone heap is a foreign key parent; a hidden
+  Keystone's is refused `Unsupported` as before.
+- **DN-Q6 (a)**: `PURGE` by Keystone on a declared-Keystone heap - the window
+  walked in page order, every key judged, the tombstone held through the
+  Keystone index (`exec::PurgeKey`'s one `HoldTombstone`, which replaced
+  `btree::BtreeHoldTombstone`), the purged slots queued for the release.
+- **DN-Q10 (a)**: no change was needed - a Cabin's and a Waystone's location
+  hint is a `(page, slot)`, which on a heap is the rowid and never moves,
+  verified against the Keystone at the slot (`VerifyTupleAt`), and the
+  fallback is `LocateRow`.
+- **The simulator draws heaps** (a declared-Keystone heap per table and as
+  the foreign key parent, by its own stream) and steps the slot release
+  beside the reclaim, so a slot freed and reused runs under its crashes.
+
+**Review** (of `bc8c9d97`): no correctness defect; four regression cells
+added (a window purged whatever the page order, a purged key named again
+across the release, a heap parent under the foreign key's rules, a
+Cabin-served reverse check over a heap child). Adopted: the two tombstone
+holds merged; the simulator steps the release and draws the parent as a
+heap; a stale comment, a long line, an include's order, an implicit
+default. **Rejected**: an owner token on the heap-retire observer - two
+dispatchers over one manager are a test fixture's shape, not production's,
+and no cell trips it; `PURGE` served by the Keystone index's window - a
+performance change, stated in `known-gaps.md`.
+
+**Gate**: the full suite 0 failed of 5094; `scripts/sim.sh` 280 runs, 0
+failures, heaps drawn and the release stepped. Overhead not measured;
+measured at the milestone's close.
+
+### DN-S4 - the close, 2026-11-21
+
+**Measured** (`bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`, by
+`ck-tester`, A = `b7262f9b` (`v3.5.0-43-gb7262f9b`) against B = `9c061907`
+(`v3.5.0-48-g9c061907`), an in-run control A2 = A, `build-release`,
+`cores = 1`, `relaxed`, every page resident, two interleaved runs pooled,
+about 25 minutes of the hour).
+
+- **DN-R7, a btree relation pays nothing: met as measured.** No btree cell -
+  a tuple key read, a secondary point read, an index range of 20 and of
+  1,000 rows, a scan, a one-row INSERT and UPDATE, at 200 to 100K rows - is
+  slower than A outside the control's range; 22 of 24 medians within 5.5 %.
+  **The limit is resolution**: for the 20-50 us statements the control's own
+  range is -20 % to +45 %, so a few percent there is not excluded; the 0.8
+  to 2.4 ms cells, whose control is -3 % to +5 %, show none. The 100K-row
+  INSERT read B 11 % cheaper in both runs, inside the control, not cleared.
+- **DN's premise holds where DN-S0 said it would**: a 1,000-row index range
+  over a heap costs 27 % (10K rows) to 32 % (100K) less server CPU than A's
+  heap, B faster in 26 of 26 rounds, 0.22-0.34 us a resolved row; a 20-row
+  range 11-22 % less, inside the control; a one-row secondary read at the
+  floor, as DN-S0's spike found.
+- **The cost DN adds, said**: a heap's one-row INSERT costs about 3.7 us of
+  server CPU (+15 %) more than its btree twin's on B, 16 of 16 rounds at 1K
+  rows - the Keystone index every heap maintains; A's heap, a btree, had no
+  such gap. A key read through the Keystone index is +5-10 %, an UPDATE by
+  key +4 %, a full scan level.
+- **Space is reused unasked on a hidden-Keystone heap**: 20,000 rows, a
+  quarter deleted and re-inserted twice - a btree 121, 151, 181 pages; the
+  hidden-Keystone heap 141, 142, 142; a declared-Keystone heap 121, 121, 122
+  with a `PURGE` after each delete, and 121, 151, 181 without one, its
+  tombstones being kept until a `PURGE` (DN-Q14 (a)). One un-interleaved run.
+- **Cut**: `cores > 1`, `group` and `strict`, a cold read, a PostgreSQL twin,
+  a hidden-Keystone heap in the interleaved matrix, the write cells at 200
+  rows. The drivers derive from DN-S0's and are not in `tools/`.
+
+**DN is closed on the work branch, not landed**: worktree
+`dn-dd-s4-into-dn-s2`, branch `worktree-dn-heap-s2`, synced with
+`origin/main` at `55b61512` (documents only) in `39b227b0`. A push, a merge
+to `main`, a tag and a version wait for the operator's word.

@@ -1,4 +1,5 @@
 #include "kds/exec/index_maintain.hpp"
+#include "kds/exec/heap_store.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,7 +29,16 @@ namespace {
 // coercion path.
 StatusOr<parser::AstValue> ValueFor(const catalog::TableAccess& access,
                                     std::span<const parser::AstValue> values,
-                                    std::uint16_t first_col_pos, std::uint16_t col) {
+                                    std::uint16_t first_col_pos, std::uint16_t col,
+                                    std::optional<std::uint64_t> tuple_key = std::nullopt) {
+    // An INSERT's values start after the tuple key, which the caller holds:
+    // what a heap's Keystone index is keyed on (DN-Q2 (a)).
+    if (col == 0 && first_col_pos > 0 && tuple_key.has_value()) {
+        parser::AstValue keystone;
+        keystone.type = parser::ValueType::kInt;
+        keystone.int_val = static_cast<std::int64_t>(*tuple_key);
+        return keystone;
+    }
     if (col < first_col_pos) {
         return Status::InvalidArgument("index maintenance has no value for column " +
                                        std::to_string(col));
@@ -103,11 +113,12 @@ StatusOr<bool> EncodeKeyInto(const catalog::TableAccess& access,
                              std::span<const parser::AstValue> values,
                              std::uint16_t first_col_pos,
                              std::span<const parser::AstValue> previous, std::span<std::byte> out,
-                             std::vector<parser::AstValue>* coerced) {
+                             std::vector<parser::AstValue>* coerced,
+                             std::optional<std::uint64_t> tuple_key = std::nullopt) {
     bool moved = previous.empty();
     std::size_t at = 0;
     for (std::uint16_t col : ix.keys()) {
-        auto value = ValueFor(access, values, first_col_pos, col);
+        auto value = ValueFor(access, values, first_col_pos, col, tuple_key);
         if (!value.ok()) return value.status();
 
         auto width = IndexKeyColumnWidth(access.schema.columns[col]);
@@ -159,7 +170,8 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint16_t first_col_pos, std::span<const std::byte> row,
                                   std::uint64_t tuple_key,
                                   std::span<const parser::AstValue> previous,
-                                  const IndexWriteLog* log, catalog::Catalog* publish) {
+                                  const IndexWriteLog* log, catalog::Catalog* publish,
+                                  std::uint64_t rowid) {
     const bool is_update = !previous.empty();
     const index::IndexLayout layout = IndexLayoutOf(ix);
 
@@ -174,7 +186,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
     // path and costs no allocation; testing first would coerce every
     // value twice on the path that does append.
     auto key_moved = EncodeKeyInto(access, ix, values, first_col_pos, previous, key,
-                                   /*coerced=*/nullptr);
+                                   /*coerced=*/nullptr, tuple_key);
     if (!key_moved.ok()) return key_moved.status();
     bool touched = key_moved.value();
 
@@ -202,7 +214,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         log != nullptr || publish != nullptr ? access.anchor_page_id : kInvalidPageId;
     PageId root = ix.root_page_id;
     auto placed = index::IndexInsert(store, root, layout, key, tuple_key, covered, ix.index_oid,
-                                     anchor);
+                                     anchor, rowid);
     // CI-Q11 (b): a root another core grew past this one's memo - an online
     // build's backfill, or a writer - refuses the descent with nothing
     // written; the slot names the tree's root now.
@@ -214,7 +226,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         if (!current.ok() || current.value() == root) break;
         root = current.value();
         placed = index::IndexInsert(store, root, layout, key, tuple_key, covered, ix.index_oid,
-                                    anchor);
+                                    anchor, rowid);
     }
     if (!placed.ok()) {
         // Failed shut. An index missing an entry is a row lost to every
@@ -273,7 +285,7 @@ StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& ac
                                                   const catalog::TableAccess::IndexRef& ix,
                                                   std::span<const parser::AstValue> values,
                                                   std::span<const std::byte> row,
-                                                  std::uint64_t tuple_key) {
+                                                  std::uint64_t tuple_key, std::uint64_t rowid) {
     const index::IndexLayout layout = IndexLayoutOf(ix);
     std::array<std::byte, index::kMaxIndexEntryWidth> key_buf;
     std::span<std::byte> key(key_buf.data(), layout.key_width);
@@ -286,8 +298,10 @@ StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& ac
     std::vector<std::byte> entry(layout.leaf_entry_width());
     const std::span<std::byte> out(entry);
     if (Status s = index::EncodeIndexSortKey(layout, key, tuple_key, out); !s.ok()) return s;
-    if (Status s = CopyCoveredInto(access, ix, row,
-                                   out.subspan(layout.key_width + index::kIndexTupleKeyWidth));
+    if (layout.rowid_width != 0) {
+        if (Status s = index::PutIndexRowid(layout, out, rowid); !s.ok()) return s;
+    }
+    if (Status s = CopyCoveredInto(access, ix, row, out.subspan(layout.covered_offset()));
         !s.ok()) {
         return s;
     }
@@ -297,7 +311,9 @@ StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& ac
 bool SameOwedEntry(const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
                    std::span<const std::byte> stored, std::span<const std::byte> owed) {
     if (stored.size() != owed.size()) return false;
-    std::size_t at = ix.key_width + index::kIndexTupleKeyWidth;
+    // Key, tuple key and a heap's rowid compared whole; the covered cells
+    // one by one.
+    std::size_t at = IndexLayoutOf(ix).covered_offset();
     if (std::memcmp(stored.data(), owed.data(), at) != 0) return false;
     for (std::uint16_t col : ix.covered()) {
         const catalog::SysColumnRow& column = access.schema.columns[col];
@@ -413,7 +429,7 @@ StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
     std::vector<PendingSpill> spills;
     for (std::uint64_t tuple_key : named) {
         if (tuple_key == self) continue;
-        auto at = btree::BtreeLookup(store, access.desc_page_id, tuple_key);
+        auto at = exec::LocateRow(store, access, tuple_key);
         if (!at.ok()) {
             // Rolled back, purged, or never placed: it holds nothing.
             if (at.status().code() == StatusCode::kNotFound) continue;
@@ -475,7 +491,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t tuple_key,
                        std::span<const parser::AstValue> previous,
-                       const IndexWriteLog* log) {
+                       const IndexWriteLog* log, std::uint64_t rowid) {
     // The one test a relation with no index pays.
     if (access.indexes.empty()) return Status::OK();
 
@@ -483,7 +499,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
         // With a log the root rides in the split's record
         // (`IndexWrite::new_root`); without one it is published inside.
         auto moved = AppendIndexEntry(store, access, ix, values, first_col_pos, row, tuple_key,
-                                      previous, log, &catalog);
+                                      previous, log, &catalog, rowid);
         if (!moved.ok()) return moved.status();
     }
     return Status::OK();

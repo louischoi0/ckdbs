@@ -1,4 +1,5 @@
 #include "kds/storage/page_header.hpp"
+#include "kds/exec/heap_store.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/exec/cabin_expr.hpp"
 
@@ -177,6 +178,9 @@ Status RunToCompletionAtWalkBoundary(sched::Coro coro) {
 struct WalkMark {
     PageId page = kInvalidPageId;
     std::uint64_t last_tuple_key = 0;  // 0 is below every id (kFirstRowId)
+    // A heap's mark is a place (DN): its rows are in no key order and never
+    // move, so what a walk covered on `page` is its slots up to this one.
+    std::uint16_t last_slot = 0;
 };
 
 // What a resumable walk reads and writes: where to start, how far it got,
@@ -774,7 +778,7 @@ private:
 
         NoteFetch();
         ++stats_.For(step.step_id).pages_fetched;
-        auto found = btree::BtreeLookup(store_, access.desc_page_id, key);
+        auto found = exec::LocateRow(store_, access, key);
         if (found.ok()) {
             memo_valid_ = true;
             memo_step_ = step.step_id;
@@ -1425,7 +1429,7 @@ private:
                 continue;
             }
             verified = {};
-            auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.tuple_key);
+            auto found = exec::LocateRow(store_, access, entry.tuple_key);
             if (!found.ok()) {
                 // Absent: the row the walk bucketed is gone from the
                 // relation, which the walk would not emit either.
@@ -1537,6 +1541,7 @@ private:
 
         StepStats& step_stats = stats_.For(step.step_id);
         index_scratch_.clear();
+        index_rowids_.clear();
         seen_tuple_keys_.clear();
         filtered_tuple_keys_.clear();
 
@@ -1602,6 +1607,9 @@ private:
                 }
 
                 index_scratch_.push_back(tuple_key);
+                if (layout.rowid_width != 0) {
+                    index_rowids_.emplace(tuple_key, index::GetIndexRowid(layout, entry.value()));
+                }
                 return storage::VisitControl::kContinue;
             });
         };
@@ -1659,9 +1667,11 @@ private:
         // after the loop so a single index step reuses one allocation.
         std::vector<std::uint64_t> tuple_keys;
         tuple_keys.swap(index_scratch_);
+        std::unordered_map<std::uint64_t, std::uint64_t> rowids;
+        rowids.swap(index_rowids_);
 
         // Phase 2. Every tuple key resolves through the clustered tree (spec
-        // IX3).
+        // IX3), or on a heap at the rowid its entry carries (IX1).
         for (const std::uint64_t collected : tuple_keys) {
             if (stopped_) break;
             // A key set's keys carry the leaf of the value that found them.
@@ -1679,7 +1689,9 @@ private:
             // report work not done - the exact number the quota exists to
             // save, and the one ANALYZE prices covering with.
             ++step_stats.index_rows_resolved;
-            auto found = btree::BtreeLookup(store_, access.desc_page_id, tuple_key);
+            const auto named = rowids.find(tuple_key);
+            auto found =
+                ResolveIndexedRow(access, tuple_key, named != rowids.end() ? named->second : 0);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) {
                     // Dangling: the tuple key names no row now - a skip, never an
@@ -1703,7 +1715,24 @@ private:
         }
         tuple_keys.clear();
         tuple_keys.swap(index_scratch_);
+        rowids.clear();
+        rowids.swap(index_rowids_);
         co_return Status::OK();
+    }
+
+    // The row an index entry named: on a heap at the entry's rowid, checked
+    // to hold `tuple_key` (DN-R3), and through the Keystone index where it
+    // does not - an entry left by a key a `PURGE` freed and an insert
+    // placed again names the old slot, and the key's row is elsewhere. On
+    // a btree, the descent.
+    // `rowid` 0: none named (a btree, or an entry without one).
+    StatusOr<btree::Location> ResolveIndexedRow(const catalog::TableAccess& access,
+                                                std::uint64_t tuple_key, std::uint64_t rowid) {
+        if (rowid != 0) {
+            auto row = FetchHeapRow(store_, access, rowid, tuple_key);
+            if (row.ok() || row.status().code() != StatusCode::kNotFound) return row;
+        }
+        return exec::LocateRow(store_, access, tuple_key);
     }
 
     // Whether an entry's covered columns already disqualify its row.
@@ -2017,8 +2046,11 @@ private:
             const std::uint64_t tuple_key =
                 index::GetIndexTupleKey(e.subspan(ix.key_width, index::kIndexTupleKeyWidth));
             if (emitted.contains(tuple_key)) continue;
+            // A heap's entry carries its row's rowid (DN, IX1).
+            const std::uint64_t rowid =
+                ix.rowid ? index::GetIndexRowid(IndexLayoutOf(ix), e) : 0;
             auto matched = ResolveOrdered(steps, index, step, access, e.first(ix.key_width),
-                                          tuple_key);
+                                          tuple_key, rowid);
             if (!matched.ok()) return matched.status();
             if (matched.value()) emitted.insert(tuple_key);
         }
@@ -2031,12 +2063,13 @@ private:
     // skip (IX1's dangling entry), as in `RunIndexStep`.
     StatusOr<bool> ResolveOrdered(const std::vector<Step>& steps, std::size_t index,
                                   const Step& step, const catalog::TableAccess& access,
-                                  std::span<const std::byte> key, std::uint64_t tuple_key) {
+                                  std::span<const std::byte> key, std::uint64_t tuple_key,
+                                  std::uint64_t rowid) {
         StepStats& step_stats = stats_.For(step.step_id);
         NoteFetch();
         ++step_stats.pages_fetched;
         ++step_stats.index_rows_resolved;
-        auto found = btree::BtreeLookup(store_, access.desc_page_id, tuple_key);
+        auto found = ResolveIndexedRow(access, tuple_key, rowid);
         if (!found.ok()) {
             if (found.status().code() == StatusCode::kNotFound) return false;
             return found.status();
@@ -2075,7 +2108,8 @@ private:
         }
         for (const OrderedRecord& record : collected) {
             if (stopped_) break;
-            auto matched = ResolveOrdered(steps, index, step, access, record.first, record.second);
+            auto matched = ResolveOrdered(steps, index, step, access, record.first, record.second,
+                                          /*rowid=*/0);
             if (!matched.ok()) co_return matched.status();
         }
         co_return Status::OK();
@@ -2172,7 +2206,7 @@ private:
 
                 NoteFetch();
                 ++step_stats.pages_fetched;
-                auto found = btree::BtreeLookup(store_, access.desc_page_id, entry.tuple_key);
+                auto found = exec::LocateRow(store_, access, entry.tuple_key);
                 if (!found.ok()) {
                     if (found.status().code() == StatusCode::kNotFound) {
                         // Dangling: the tuple key names no row now - a **skip**, never
@@ -2255,7 +2289,7 @@ private:
             ++step_stats.cabin_hint_misses;
             NoteFetch();
             ++step_stats.pages_fetched;
-            auto found = btree::BtreeLookup(store_, access.desc_page_id, at.tuple_key);
+            auto found = exec::LocateRow(store_, access, at.tuple_key);
             if (!found.ok()) {
                 if (found.status().code() == StatusCode::kNotFound) continue;
                 co_return found.status();
@@ -2288,6 +2322,8 @@ private:
         const bool prefixed = prefix != nullptr;
         const PageId resume_page = prefixed ? prefix->resume.page : kInvalidPageId;
         const std::uint64_t resume_tuple_key = prefixed ? prefix->resume.last_tuple_key : 0;
+        const std::uint16_t resume_slot = prefixed ? prefix->resume.last_slot : 0;
+        const bool heap_walk = access.heap();
         if (prefixed) prefix->mark = prefix->resume;
         // The build this walk extends, when it is this step's own: read
         // after each accepted row, because the cap trips inside one - and
@@ -2316,7 +2352,10 @@ private:
         // cannot change the answer even if the pruning were wrong.
         const std::uint64_t range_high =
             step.range.has_value() ? step.range->high : 0;
-        const bool pruning = step.range.has_value();
+        // Never a heap's (DN): its pages are in no key order. The compiler
+        // gives a heap's step no range; this keeps a hand-built one honest.
+        const bool pruning =
+            step.range.has_value() && !access.heap();
 
         // The page the visitor is on: the tuple's address, which a trail
         // records rather than re-derives by searching (workplan P09).
@@ -2412,9 +2451,12 @@ private:
                 }
                 // Covered by an earlier walk of this step: the map holds
                 // whatever it qualified for, and re-examining it is the
-                // double visit spec §6's economics forbids.
-                const bool covered = resume_page != kInvalidPageId && tuple_key != 0 &&
-                                     tuple_key <= resume_tuple_key;
+                // double visit spec §6's economics forbids. On a heap by
+                // place, since its keys are in no order (DN).
+                const bool covered =
+                    heap_walk ? page_id == resume_page && tuple_key != 0 && at <= resume_slot
+                              : resume_page != kInvalidPageId && tuple_key != 0 &&
+                                    tuple_key <= resume_tuple_key;
                 if (covered) return Status::OK();
                 Status s =
                     AcceptTupleAt(steps, index, step, *live_access, page_id, page, at, nr_slots);
@@ -2428,7 +2470,7 @@ private:
                     mark_frozen = true;
                     return s;
                 }
-                if (tuple_key != 0) prefix->mark = WalkMark{page_id, tuple_key};
+                if (tuple_key != 0) prefix->mark = WalkMark{page_id, tuple_key, at};
                 return s;
             };
 
@@ -3381,6 +3423,9 @@ private:
     // on the runner rather than built per step, for TrailCollector's reason:
     // a per-statement allocation on the read path is measurable.
     std::vector<std::uint64_t> index_scratch_;
+    // A heap's index step (DN, IX1): the rowid of the entry that claimed
+    // each tuple key, which phase 2 fetches instead of descending.
+    std::unordered_map<std::uint64_t, std::uint64_t> index_rowids_;
     parser::AstValue covered_scratch_;
     // The tuple keys every entry of which the covering filter has rejected so far:
     // a tuple key leaves when a later entry keeps its row, so what remains after

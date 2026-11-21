@@ -392,7 +392,8 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
                                         const IndexLayout& layout,
                                         std::span<const std::byte> key, std::uint64_t tuple_key,
                                         std::span<const std::byte> covered,
-                                        std::uint64_t owner_oid, PageId anchor_page) {
+                                        std::uint64_t owner_oid, PageId anchor_page,
+                                        std::uint64_t rowid) {
     if (Status s = CheckIndexLayout(layout); !s.ok()) return s;
     if (key.size() != layout.key_width || covered.size() != layout.covered_width) {
         return Status::InvalidArgument(
@@ -408,6 +409,9 @@ StatusOr<IndexInsertResult> IndexInsert(storage::PageStore& store, PageId root,
     const std::size_t sort_key_len = layout.sort_key_width();
     std::span<std::byte> entry(entry_buf.data(), sort_key_len);
     if (Status s = EncodeIndexSortKey(layout, key, tuple_key, entry); !s.ok()) return s;
+    if (layout.rowid_width != 0) {
+        if (Status s = PutIndexRowid(layout, entry, rowid); !s.ok()) return s;
+    }
     if (!covered.empty()) {
         std::memcpy(entry.data() + layout.covered_offset(), covered.data(), covered.size());
     }

@@ -77,6 +77,8 @@ public:
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
     StatusOr<ColumnDef> ParseColumnDef();
+    // The column definition after its name, which the caller has read.
+    StatusOr<ColumnDef> ParseColumnDefNamed(std::string name, std::uint32_t name_byte_offset);
     StatusOr<InsertStmt> ParseInsert();
     StatusOr<UpdateStmt> ParseUpdate();
     StatusOr<DeleteStmt> ParseDelete();

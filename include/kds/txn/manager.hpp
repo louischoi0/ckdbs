@@ -357,6 +357,14 @@ public:
     // moves nothing; the DDL path's own bump after the decide still runs.
     void SetSchemaWord(std::atomic<std::uint64_t>* word) noexcept { schema_word_ = word; }
 
+    // **A rolled-back heap insert, reported** (DN-R2): called with the
+    // relation's oid each time a compensation retires a slot on a heap data
+    // page, so the slot release learns of a slot only a rollback left. The
+    // dispatcher installs it (`HeapSpace::NoteDead`); empty, nothing is told.
+    void SetHeapRetireObserver(std::function<void(std::uint32_t)> observer) {
+        heap_retired_ = std::move(observer);
+    }
+
     // How many `Transaction` objects this manager still holds, active or
     // not - a decided one leaves only at `Release`. A cell's reading: a
     // statement that begins a transaction of its own and never releases it
@@ -819,6 +827,7 @@ private:
     LockTable* locks_ = nullptr;
     void MoveSchemaWordIfCatalogWriter(const Transaction& txn) noexcept;
     std::atomic<std::uint64_t>* schema_word_ = nullptr;  // AT-S5e
+    std::function<void(std::uint32_t)> heap_retired_;   // DN-R2
 
     // `ids_.peek()` as `MaybeBurnIdleBlock` last saw it. Equal on two
     // consecutive ticks means this core issued nothing between them, which

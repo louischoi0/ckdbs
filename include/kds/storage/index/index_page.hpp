@@ -106,6 +106,13 @@ namespace kds::index {
 // tracks a C++ type is a format that changes when a type does.
 inline constexpr std::uint32_t kIndexTupleKeyWidth = 8;
 
+// **The rowid a heap's index entry carries** (DN, `index.md` IX1): the row's
+// `heap::EncodeRowid` word, big-endian, directly after the tuple key, so a
+// probe fetches the row's page instead of descending. Part of the sort key
+// like every entry byte; a row's rowid never changes while it lives, so an
+// entry's order is still its key's and its Keystone's.
+inline constexpr std::uint32_t kIndexRowidWidth = 8;
+
 // The shape of one index's entries - its schema constant, in the sense
 // `catalog::RowLayout::row_size` is a relation's.
 struct IndexLayout {
@@ -114,11 +121,15 @@ struct IndexLayout {
     // The covered columns' inline cells, concatenated. 0 for an index with
     // no COVERING clause.
     std::uint16_t covered_width = 0;
+    // `kIndexRowidWidth` on a heap's index, 0 on a btree relation's.
+    std::uint16_t rowid_width = 0;
 
-    // `key || tuple key`: where an entry's covered bytes start.
-    constexpr std::uint32_t covered_offset() const {
+    // `key || tuple key`: where a heap entry's rowid starts.
+    constexpr std::uint32_t rowid_offset() const {
         return static_cast<std::uint32_t>(key_width) + kIndexTupleKeyWidth;
     }
+    // `key || tuple key [|| rowid]`: where an entry's covered bytes start.
+    constexpr std::uint32_t covered_offset() const { return rowid_offset() + rowid_width; }
     constexpr std::uint32_t leaf_entry_width() const {
         return covered_offset() + covered_width;
     }
@@ -251,6 +262,13 @@ constexpr std::uint16_t MaxInternalEntries(const IndexLayout& layout) {
 // can disagree about it.
 void PutIndexTupleKey(std::span<std::byte> out, std::uint64_t tuple_key);
 std::uint64_t GetIndexTupleKey(std::span<const std::byte> in);
+// A heap entry's rowid word, at `layout.rowid_offset()` of a whole entry
+// (big-endian, the tuple key's spelling). `layout.rowid_width` must be
+// `kIndexRowidWidth`.
+std::uint64_t GetIndexRowid(const IndexLayout& layout, std::span<const std::byte> entry);
+// Writes it there; `InvalidArgument` for a rowid on page 0, which no data
+// page is - the mark of a caller that handed none.
+Status PutIndexRowid(const IndexLayout& layout, std::span<std::byte> entry, std::uint64_t rowid);
 
 // Composes `key || tuple key` into the front of `out`, which must be exactly
 // `layout.sort_key_width()` bytes, and zeroes the covered bytes after it:

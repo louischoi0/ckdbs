@@ -1002,6 +1002,9 @@ private:
     // pending, collected after the completion checkpoint, and the counters
     // every core's `SHOW META` prints.
     ReclaimCounters reclaim_counters_;
+    // The instance's heap placement hints and slot release queue (DN): one
+    // for every core's dispatcher (`WireInstanceServices`).
+    exec::HeapSpace heap_space_;
     std::optional<PageReclaimer> reclaimer_;
     // The instance's backup control (BR): its pin bounds the recycler and
     // the reclaim gate, and every core's dispatcher runs BACKUP through it.

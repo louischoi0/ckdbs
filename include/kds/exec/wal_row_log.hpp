@@ -48,6 +48,11 @@ Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
 Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_txn,
                      PageId page_id, std::uint16_t slot);
 
+// One released heap data page slot (SLOT_FREE, DN-R2), at `kNoTxnId`,
+// stamped.
+Status LogSlotFree(wal::WalManager* wal, storage::PageStore& store, PageId page_id,
+                   std::uint16_t slot);
+
 // One slot's bytes as a `HEAP_INSERT` or `HEAP_OVERWRITE`, stamped: the
 // header's writer and undo pointer in the payload, which is what redo
 // applies, and `env_txn` in the envelope, which only analysis reads.

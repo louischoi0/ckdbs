@@ -131,10 +131,20 @@ enum class PageType : std::uint8_t {
     // own stream. Headered, checksummed and authoritative: losing it
     // loses the relation's entry points, kVarHeap's argument exactly.
     kAnchor = 14,
+
+    // A heap relation's data page (DN, `docs/spec/heap-and-tuple.md` §3.1b):
+    // the slotted `heap::PageView` body, its rows in no key order, each
+    // addressed by a rowid (`storage/heap/rowid.hpp`) and reached by key
+    // only through an index. **Not kHeap**: kHeap is a catalog chain's
+    // page, which only appends and never takes a slot again, and the slot
+    // release and reuse (`PageView::FreeSlot`, `ReuseSlot`) and redo's
+    // reuse arm are this type's alone. Headered,
+    // checksummed, logged and authoritative, as a btree leaf is.
+    kHeapData = 15,
 };
 
 // Highest value currently assigned above; anything greater read off disk
 // was written by a newer build. Bump when appending to the enum.
-inline constexpr std::uint8_t kMaxAssignedPageType = 14;
+inline constexpr std::uint8_t kMaxAssignedPageType = 15;
 
 }  // namespace kds

@@ -76,7 +76,7 @@ Status ApplyPageInit(std::span<std::byte, kPageSize> page, const DecodedRecord& 
     // decodes as owner 0, so replaying old log leaves old pages exactly as
     // unattributed as the build that wrote them did.
     const std::uint64_t owner_oid = fields.value().owner_oid;
-    if (type == PageType::kHeap || type == PageType::kBtreeLeaf) {
+    if (type == PageType::kHeap || type == PageType::kBtreeLeaf || type == PageType::kHeapData) {
         auto view = heap::PageView::CreateEmptyAs(page, fields.value().min_key, type, owner_oid);
         if (!view.ok()) {
             return view.status();
@@ -117,8 +117,31 @@ Status ApplyHeapWrite(std::span<std::byte, kPageSize> page, const DecodedRecord&
         return decoded.status();
     }
     heap::PageView view(page);
-    return view.RedoWriteTuple(decoded.value().fields.slot, decoded.value().tuple,
-                               decoded.value().fields.trx_id, decoded.value().fields.undo_ptr);
+    const std::uint16_t slot = decoded.value().fields.slot;
+    // RedoWriteTuple takes a heap data page's free slot as a reused insert
+    // (DN-R2). An overwrite names a live row, so one meeting a free slot is
+    // not this page's record - Corruption, as a dead slot is.
+    if (record.type() == RecordType::kHeapOverwrite) {
+        auto info = view.DebugSlotInfo(slot);
+        if (info.ok() && (info.value().flags & heap::kSlotFlagFree) != 0) {
+            return Status::Corruption("HEAP_OVERWRITE names free slot " + std::to_string(slot) +
+                                      "; only a reused insert takes a free slot");
+        }
+    }
+    // **DN-R10 again at redo**: a heap data page holds no row below its
+    // `min_key` (invariant 3), whichever slot the row took.
+    if (record.type() == RecordType::kHeapInsert &&
+        storage::RawPageType(page) == static_cast<std::uint8_t>(PageType::kHeapData)) {
+        auto id = KeystoneIdOfPayload(decoded.value().tuple);
+        if (!id.ok()) return id.status();
+        if (id.value() < view.min_key()) {
+            return Status::Corruption("HEAP_INSERT places Keystone " + std::to_string(id.value()) +
+                                      " on a data page whose min_key is " +
+                                      std::to_string(view.min_key()));
+        }
+    }
+    return view.RedoWriteTuple(slot, decoded.value().tuple, decoded.value().fields.trx_id,
+                               decoded.value().fields.undo_ptr);
 }
 
 Status ApplyDeleteMark(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
@@ -145,6 +168,16 @@ Status ApplyDeleteUnmark(std::span<std::byte, kPageSize> page, const DecodedReco
     // byte.
     return view.ClearDeleteMark(fields.value().slot, fields.value().trx_id,
                                 fields.value().undo_ptr);
+}
+
+Status ApplySlotFree(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
+    auto fields = DecodeSlotRetire(record.payload);
+    if (!fields.ok()) {
+        return fields.status();
+    }
+    heap::PageView view(page);
+    // Idempotent: FreeSlot answers OK on a slot already free.
+    return view.FreeSlot(fields.value().slot);
 }
 
 Status ApplySlotRetire(std::span<std::byte, kPageSize> page, const DecodedRecord& record) {
@@ -335,6 +368,7 @@ Applier ApplierFor(RecordType type) noexcept {
         case RecordType::kHeapDeleteMark: return ApplyDeleteMark;
         case RecordType::kHeapDeleteUnmark: return ApplyDeleteUnmark;
         case RecordType::kSlotRetire: return ApplySlotRetire;
+        case RecordType::kSlotFree: return ApplySlotFree;
         case RecordType::kUndoWrite: return ApplyUndoWrite;
         case RecordType::kVarHeapAppend: return ApplyVarHeapAppend;
         case RecordType::kVarHeapRelease: return ApplyVarHeapRelease;

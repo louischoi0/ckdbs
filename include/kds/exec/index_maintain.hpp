@@ -132,12 +132,15 @@ using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 // caller holding the pointer across this call keeps a valid one and sees the
 // new root. That is what makes calling this from inside a per-row lambda
 // safe.
+//
+// `rowid` is the row's `heap::EncodeRowid` word on a heap (DN, IX1) - every
+// entry of a heap's index carries it - and ignored on a btree relation.
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        const catalog::TableAccess& access,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t tuple_key,
                        std::span<const parser::AstValue> previous = {},
-                       const IndexWriteLog* log = nullptr);
+                       const IndexWriteLog* log = nullptr, std::uint64_t rowid = 0);
 
 // The same append, for **one** index and with no catalog.
 //
@@ -169,14 +172,17 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint64_t tuple_key,
                                   std::span<const parser::AstValue> previous = {},
                                   const IndexWriteLog* log = nullptr,
-                                  catalog::Catalog* publish = nullptr);
+                                  catalog::Catalog* publish = nullptr,
+                                  std::uint64_t rowid = 0);
 
 // `ix`'s layout: the widths its pages are checked against.
 inline index::IndexLayout IndexLayoutOf(const catalog::TableAccess::IndexRef& ix) {
     index::IndexLayout layout;
     layout.key_width = ix.key_width;
-    layout.covered_width =
-        static_cast<std::uint16_t>(ix.entry_width - ix.key_width - index::kIndexTupleKeyWidth);
+    layout.rowid_width = ix.rowid ? static_cast<std::uint16_t>(index::kIndexRowidWidth) : 0;
+    layout.covered_width = static_cast<std::uint16_t>(ix.entry_width - ix.key_width -
+                                                      index::kIndexTupleKeyWidth -
+                                                      layout.rowid_width);
     return layout;
 }
 
@@ -188,7 +194,8 @@ StatusOr<std::vector<std::byte>> EncodeIndexEntry(const catalog::TableAccess& ac
                                                   const catalog::TableAccess::IndexRef& ix,
                                                   std::span<const parser::AstValue> values,
                                                   std::span<const std::byte> row,
-                                                  std::uint64_t tuple_key);
+                                                  std::uint64_t tuple_key,
+                                                  std::uint64_t rowid = 0);
 
 // Whether the tree's entry `stored` serves the version that is owed `owed`
 // (DD-R1 as DD-S0 found it): the same key, tuple key and covered bytes, but

@@ -178,7 +178,10 @@ private:
         pending_undo_.clear();
         pending_spills_.clear();
 
-        SweepBtreeInternals(access, name);
+        // A heap is one level of data pages (DN): no internal node to
+        // check, and no slot order to hold.
+        const bool heap_rel = access.heap();
+        if (!heap_rel) SweepBtreeInternals(access, name);
         SweepTuples(access, name);
         SweepVarHeap(access, name);
         ResolveUndo(name);
@@ -187,6 +190,9 @@ private:
     // Walks the btree's leaves checking invariants 2/3/5/7/13 and collecting
     // the cross-page facts.
     void SweepTuples(const catalog::TableAccess& access, const std::string& name) {
+        // A heap's pages and slots are in no key order (DN, invariant 4);
+        // invariant 3, a row at or above its page's `min_key`, still holds.
+        const bool heap_rel = access.heap();
         PageId current_page = kInvalidPageId;
         std::uint64_t current_min_key = 0;
         std::uint64_t prev_pages_max_id = 0;
@@ -209,7 +215,7 @@ private:
             current_max_id = 0;
             current_has_tuples = false;
             ++report_.pages_swept;
-            if (have_prev_pages && prev_pages_max_id >= current_min_key) {
+            if (!heap_rel && have_prev_pages && prev_pages_max_id >= current_min_key) {
                 Add(CheckKind::kChainOrder, page_id,
                     "relation '" + name + "': min_key " + std::to_string(current_min_key) +
                         " does not exceed a predecessor page's max id " +
@@ -254,7 +260,7 @@ private:
             }
             const std::uint64_t id = id_or.value();
             current_max_id = std::max(current_max_id, id);
-            if (!first_on_page && id <= current_last_id) {
+            if (!heap_rel && !first_on_page && id <= current_last_id) {
                 Add(CheckKind::kSlotOrder, page_id,
                     "relation '" + name + "' slot " + std::to_string(slot) + ": id " +
                         std::to_string(id) + " follows id " + std::to_string(current_last_id) +

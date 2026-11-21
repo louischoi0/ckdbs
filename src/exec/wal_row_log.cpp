@@ -102,15 +102,31 @@ Status LogChainInsert(wal::WalManager* wal, storage::PageStore& store,
                         placed.slot, tuple, hdr_trx, /*hdr_undo=*/0);
 }
 
-Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_txn,
-                     PageId page_id, std::uint16_t slot) {
+namespace {
+
+// A record whose payload is one slot - SLOT_RETIRE's or SLOT_FREE's -
+// appended and stamped.
+Status LogSlotRecord(wal::WalManager* wal, storage::PageStore& store, wal::RecordType type,
+                     std::uint64_t env_txn, PageId page_id, std::uint16_t slot) {
     if (wal == nullptr) return Status::OK();
     std::array<std::byte, wal::kSlotRetirePayloadSize> buf{};
     const wal::SlotRetirePayload fields{slot};
     if (auto n = wal::EncodeSlotRetire(buf, fields); !n.ok()) return n.status();
-    auto rec = wal->Append(wal::RecordSpec{wal::RecordType::kSlotRetire, env_txn, page_id}, buf);
+    auto rec = wal->Append(wal::RecordSpec{type, env_txn, page_id}, buf);
     if (!rec.ok()) return rec.status();
     return store.StampPageLsn(page_id, rec.value());
+}
+
+}  // namespace
+
+Status LogSlotRetire(wal::WalManager* wal, storage::PageStore& store, std::uint64_t env_txn,
+                     PageId page_id, std::uint16_t slot) {
+    return LogSlotRecord(wal, store, wal::RecordType::kSlotRetire, env_txn, page_id, slot);
+}
+
+Status LogSlotFree(wal::WalManager* wal, storage::PageStore& store, PageId page_id,
+                   std::uint16_t slot) {
+    return LogSlotRecord(wal, store, wal::RecordType::kSlotFree, wal::kNoTxnId, page_id, slot);
 }
 
 Status LogHeapWrite(wal::WalManager* wal, storage::PageStore& store, wal::RecordType type,

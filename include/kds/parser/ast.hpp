@@ -355,6 +355,12 @@ struct ColumnDef {
     // (invariant 11) to point at. 0 when nothing was said.
     std::uint32_t null_byte_offset = 0;
 
+    // `PRIMARY KEY` written after the nullability (DN-D3, DN-D5): the
+    // column is its relation's primary key. A heap's only, decided by the
+    // dispatcher: a single `int64` declared first is the heap's Keystone,
+    // any other is a unique index beside its hidden one. 0 when not said.
+    std::uint32_t primary_key_byte_offset = 0;
+
     // The column's cabin policy (docs/spec/cabin.md), one of
     // `catalog::kCabinPolicy*`. Written as an optional suffix on the column:
     //
@@ -461,6 +467,14 @@ struct CreateTableStmt {
     // `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`): the
     // relation's reserved 16-byte column slots, 0 when the word is absent.
     std::uint16_t spare_slots = 0;
+
+    // A `PRIMARY KEY (<col>, ...)` constraint in the column list (DN-D3):
+    // its column names in written order, and where `PRIMARY` was written;
+    // empty when the list has none. One primary key a relation, whether
+    // spelt here or as a column's suffix.
+    std::vector<std::string> primary_key_columns;
+    std::vector<std::uint32_t> primary_key_column_offsets;
+    std::uint32_t primary_key_byte_offset = 0;
 };
 
 // The per-statement row cap for a multi-row INSERT (docs/spec/bulkinsert.md

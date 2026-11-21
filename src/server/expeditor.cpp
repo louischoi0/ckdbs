@@ -1395,6 +1395,18 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
         !s.ok()) {
         return s;
     }
+    // **Every heap is queued for its slot release once** (DN-R2): the queue
+    // and the free-slot hints are memory only, so the slots a crash loser's
+    // undo retired, and those the last run freed, are found again by a
+    // release - core 0's system tick drives it after the listener opens.
+    if (auto tables = expeditor->database_->catalog.ListTables(); tables.ok()) {
+        for (const catalog::SysObjectRow& object : tables.value()) {
+            auto access = expeditor->database_->catalog.InitTableAccess(object.oid);
+            if (access.ok() && access.value()->heap()) {
+                expeditor->heap_space_.NoteDead(object.oid);
+            }
+        }
+    }
     // Reclaim within the run (BF-R9): every core publishes its statement
     // epoch, and a committed drop is queued from whichever core committed it.
     expeditor->statement_epochs_.emplace(expeditor->config_.cores);
@@ -2272,6 +2284,18 @@ Status Expeditor::Start() {
         }
     });
 
+    // **The heap slot release** (DN-R2; DD-S4's driver, ruled into DN-S2 on
+    // 2026-11-21): one bounded step per tick on core 0's `system` group, a
+    // predicate and a return when no heap is queued - `analytic`'s slice of
+    // pages or leaves, behind OLTP as `PURGE INDEX`'s slices are.
+    constexpr sched::MonoTimeNs kHeapReleaseIntervalNs = 50'000'000;  // 50 ms, the reclaim's
+    scheduler.SubmitEvery(kHeapReleaseIntervalNs, [this] {
+        auto stepped = dispatcher_->StepHeapRelease(PagesPerSlice(Priority::kAnalytic));
+        if (!stepped.ok() && logger_->enabled(LogLevel::kWarn)) {
+            logger_->Warn("heap", "heap slot release step failed: " + stepped.status().message());
+        }
+    });
+
     // **The join planner's steward** (docs/spec/plan-stats.md PS4): one
     // bounded step a second on core 0's `system` group - merge the cores'
     // parts, fold, seed priors within a 16-page budget, publish on a change.
@@ -2376,6 +2400,7 @@ void Expeditor::WireInstanceServices(CommandDispatcher& dispatcher) {
     dispatcher.set_archiver(archiver());
     dispatcher.SetStatementEpochs(&*statement_epochs_);
     dispatcher.SetReclaimQueue(&*reclaimer_);
+    dispatcher.SetHeapSpace(&heap_space_);
 }
 
 void Expeditor::StopDataSync() {

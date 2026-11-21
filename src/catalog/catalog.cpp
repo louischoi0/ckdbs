@@ -17,6 +17,7 @@
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/heap/rowid.hpp"
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/visit.hpp"
 #include "kds/storage/keystone.hpp"
@@ -1352,7 +1353,11 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 }
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
-                                    std::uint64_t trx_id, std::vector<CatalogRowRef>* written) {
+                                    std::uint64_t trx_id, std::vector<CatalogRowRef>* written,
+                                    ClusteredType clustered) {
+    if (clustered != ClusteredType::kBtree && clustered != ClusteredType::kHeap) {
+        return Status::InvalidArgument("catalog: a user relation is a btree or a heap");
+    }
     // The name first, before anything is asked of the schema: the
     // dispatcher refuses a name too long at its byte, and this is the
     // door's own defence for any other caller.
@@ -1411,18 +1416,33 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         root_id = created.value().first;
         const std::span<std::byte, kPageSize> root_bytes = created.value().second.bytes();
 
-        // Every user relation is a clustered B+ tree (BZ-R1), rooted at
-        // `desc_page_id` as one leaf. It grows its first internal level only
-        // when that leaf splits, so a small table costs one page.
-        const Status formatted = btree::FormatRoot(root_bytes, new_oid);
-        if (!formatted.ok()) return formatted;
-        // RV3: the relation's root must exist in the log or a crash that
-        // loses the unflushed page makes the first HEAP_INSERT irreplayable -
-        // redo refuses a record naming a page nothing creates. The root is
-        // one leaf, which is exactly what a PAGE_INIT rebuilds.
-        if (Status s = LogCatPageInit(wal_, trx_id, root_id, PageType::kBtreeLeaf, new_oid);
-            !s.ok()) {
-            return s;
+        if (clustered == ClusteredType::kHeap) {
+            // A heap (DN): one empty data page heads the chain its rows are
+            // written to, never moved and never freed while the relation
+            // lives. Its `min_key` is the lowest valid key (DN-Q16 (a)), so
+            // invariant 3 admits every row on it.
+            auto formatted = heap::PageView::CreateEmptyAs(root_bytes, heap::kHeapHeadMinKey,
+                                                           PageType::kHeapData, new_oid);
+            if (!formatted.ok()) return formatted.status();
+            const std::uint64_t env = trx_id == kBootstrapXid ? wal::kNoTxnId : trx_id;
+            auto rec = wal::LogPageInit(wal_, env, root_id, PageType::kHeapData,
+                                        heap::kHeapHeadMinKey, new_oid);
+            if (!rec.ok()) return rec.status();
+        } else {
+            // A btree relation is a clustered B+ tree (BZ-R1), rooted at
+            // `desc_page_id` as one leaf. It grows its first internal level
+            // only when that leaf splits, so a small table costs one page.
+            const Status formatted = btree::FormatRoot(root_bytes, new_oid);
+            if (!formatted.ok()) return formatted;
+            // RV3: the relation's root must exist in the log or a crash that
+            // loses the unflushed page makes the first HEAP_INSERT
+            // irreplayable - redo refuses a record naming a page nothing
+            // creates. The root is one leaf, which is exactly what a
+            // PAGE_INIT rebuilds.
+            if (Status s = LogCatPageInit(wal_, trx_id, root_id, PageType::kBtreeLeaf, new_oid);
+                !s.ok()) {
+                return s;
+            }
         }
     }
 
@@ -1513,7 +1533,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     }
     ref.oid = new_oid;
     note(ref);
-    if (Status s = InsertRelationRow(new_oid, namespace_oid, root_id, ClusteredType::kBtree,
+    if (Status s = InsertRelationRow(new_oid, namespace_oid, root_id, clustered,
                                       varheap_root, anchor_id, trx_id,
                                       &ref, schema.spare_slots);
         !s.ok()) {
@@ -2830,6 +2850,8 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
         ref.ncovered = row.ncovered;
         ref.unique = (row.flags & kIndexFlagUnique) != 0;
         ref.building = (row.flags & kIndexFlagBuilding) != 0;
+        ref.keystone = (row.flags & kIndexFlagKeystone) != 0;
+        ref.rowid = access.clustered_type == ClusteredType::kHeap;
         ref.name = NameView(row.name);
         ref.key_cols = row.key_cols;
         ref.covered_cols = row.covered_cols;
@@ -2931,7 +2953,7 @@ Status CheckNamedRowIdSpellable(std::uint64_t id) {
     return Status::OK();
 }
 
-Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
+Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id, bool above_mark) {
     // Spellability first, before the catalog page is touched at all: an id
     // outside the Keystone field cannot be stored by any path, so there is
     // nothing to check a relation for. The insert path judged its literal
@@ -2949,7 +2971,15 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id) {
             // `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`;
             // W2 of BZ): a leaf places the key where it sorts, so the mark
             // gates nothing and is left where it is - advance or nothing.
-            if (id < row.next_id) return true;
+            // But a hidden-Keystone heap's (DN-Q14 (a)).
+            if (id < row.next_id) {
+                if (!above_mark) return true;
+                return Status::OutOfRange(
+                    "tuple key " + std::to_string(id) +
+                    " is below this heap's issue mark " + std::to_string(row.next_id) +
+                    ": a heap whose Keystone is hidden takes a named key only above every key "
+                    "it has placed, so a deleted key is never named again");
+            }
 
             // At or above: the mark moves past it, persisted before the
             // caller places anything. Same ordering as AllocateRowId and the
@@ -4023,13 +4053,25 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
     if (!access.ok()) return access.status();
     const Schema& schema = access.value()->schema;
     // A secondary index resolves an entry through the clustered tree's
-    // descent (docs/spec/index.md IX3), which a system relation's catalog
-    // chain has none of. Every user relation is a btree (BZ-R1).
-    if (access.value()->clustered_type != ClusteredType::kBtree) {
+    // descent (docs/spec/index.md IX3), or on a heap through the rowid the
+    // entry carries (IX1), which a system relation's catalog chain has
+    // neither of.
+    const bool heap = access.value()->clustered_type == ClusteredType::kHeap;
+    if (access.value()->clustered_type != ClusteredType::kBtree && !heap) {
         return Status::InvalidArgument(
             "catalog: relation oid " + std::to_string(def.table_oid) +
             " is a system relation; a secondary index resolves an entry through the tuple key "
             "descent (docs/spec/index.md IX3)");
+    }
+    // The Keystone index is a heap's and is keyed on its Keystone alone
+    // (DN-Q2 (a)); it is what makes an index on column 0 admissible there.
+    const bool keystone = (def.flags & kIndexFlagKeystone) != 0;
+    if (keystone && (!heap || def.key_cols.size() != 1 || def.key_cols[0] != 0 ||
+                     !def.covered_cols.empty() || (def.flags & kIndexFlagUnique) == 0 ||
+                     (def.flags & kIndexFlagBuilding) != 0)) {
+        return Status::InvalidArgument(
+            "catalog: a Keystone index is a heap's unique index on column 0 alone, built "
+            "with the relation");
     }
 
     const auto check_column = [&](std::uint16_t pos, const char* role) -> Status {
@@ -4049,9 +4091,10 @@ Status Catalog::CheckIndexDef(const IndexDef& def, std::uint64_t own_trx_id) {
         // The tuple key is carried only by the Keystone word and the clustered tree
         // already indexes it; a second copy would be maintained forever to
         // answer questions the descent answers faster.
-        if (def.key_cols[i] == 0) {
+        if (def.key_cols[i] == 0 && !keystone) {
             return Status::InvalidArgument(
-                "catalog: the tuple key already has an index - the clustered tree is it");
+                heap ? "catalog: a heap's Keystone already has an index - its Keystone index"
+                     : "catalog: the tuple key already has an index - the clustered tree is it");
         }
         // D2 (`docs/workplan-null.md`): a nullable key column is refused in
         // v1, so the entry format, maintenance and backfill keep the

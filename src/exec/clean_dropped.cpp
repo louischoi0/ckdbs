@@ -1,4 +1,5 @@
 #include "kds/exec/clean_dropped.hpp"
+#include "kds/exec/heap_store.hpp"
 
 #include <algorithm>
 #include <string>
@@ -44,7 +45,7 @@ StatusOr<CleanResult> CleanDroppedCells(storage::PageStore& store, wal::WalManag
                                         const catalog::TableAccess& access,
                                         std::span<const std::uint16_t> targets, std::uint64_t id,
                                         FunctionRef<bool(std::uint64_t)> resolved) {
-    auto at = btree::BtreeLookup(store, access.desc_page_id, id, storage::PageAccess::kWrite);
+    auto at = exec::LocateRow(store, access, id, storage::PageAccess::kWrite);
     if (!at.ok()) {
         if (at.status().code() == StatusCode::kNotFound) return CleanResult{};
         return at.status();

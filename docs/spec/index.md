@@ -43,6 +43,13 @@ precondition struck out.
 > subtracted at read time by verification — MVCC visibility, plus a re-check
 > of the key predicate against the resolved version.
 
+On a heap an entry maps an index key to a **rowid and the Keystone**
+(DN-Q3): the rowid is fetched, and the Keystone at the slot is checked
+against the entry's before the key re-check, so an entry that outlived its
+slot (DN-R2's defect) is a miss, never another row. An entry naming a page
+that is not the heap's - one a crash left before its growth's record - is a
+miss too (`heap-and-tuple.md` §3.1b).
+
 *Complete* because maintenance runs on every write, with no threshold and no
 cap that could decline. *Superset* because entries are appended per version
 and removed only by `PURGE INDEX` (§2.2), once no reader can reach the
@@ -89,7 +96,8 @@ Two rules ride along, and both are load-bearing rather than tidy:
   third row, and the index carries the same contract test.
 - **Nothing on the write path reclaims.** A superseded entry costs memory,
   a page, and a read-time skip until an administrator's `PURGE INDEX`
-  takes it out (§2.2); nothing runs one unasked.
+  takes it out (§2.2); on a btree relation nothing runs one unasked, and a
+  heap's indexes are purged by its slot release (`heap-and-tuple.md` §3.1b).
 
 ### 2.1 Failure on the write path
 
@@ -1272,8 +1280,8 @@ off is a catalog act: `DROP INDEX`.
 
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
 split point and fill factor, the column caps, reclamation of superseded
-entries unasked (`PURGE INDEX`, §2.2, is the administrator's; nothing
-drives one), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
+entries unasked on a btree relation (`PURGE INDEX`, §2.2, is the
+administrator's there; a heap's slot release drives one), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
 stays refused, BX-Q5 (a)), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

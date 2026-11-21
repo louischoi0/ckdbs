@@ -140,6 +140,21 @@ Status Parser::ExpectToken(TokenType type, std::string_view desc) {
     return Status::OK();
 }
 
+// **`keyidentity`, the one word the operator's mark reserves** (DN-D6,
+// DN-R5, DN-Q1 (a)): it reads a relation's Keystone by name on every
+// relation, the hidden one included, so no relation, column, index,
+// namespace or alias may be declared with it. Refused at each declaring
+// production, ignoring case as every name compares, and admitted wherever
+// a column is referenced - the catalog resolves it (`Schema::FindColumn`).
+// Not a lexer keyword: a keyword is refused by `ParseIdent` at every
+// reference too, which is the one place this word must be read.
+Status RefuseReservedName(std::string_view name, std::uint32_t at, const char* what) {
+    if (!catalog::IsKeyIdentity(name)) return Status::OK();
+    return Status::InvalidArgument(std::string("'") + std::string(name) +
+                                   "' is reserved - it reads a relation's Keystone - and "
+                                   "names no " + what + " (byte " + std::to_string(at) + ")");
+}
+
 StatusOr<std::string> Parser::ParseIdent() {
     Token tok = lexer_.Next();
     if (tok.type != TokenType::kIdent) {
@@ -1642,12 +1657,18 @@ StatusOr<BoolExpr> Parser::ParseValueList(ColumnName col, bool negated, std::uin
 // COLUMN`'s (BW-R1): a name, a type with its arguments, then the suffixes
 // in their fixed order - nullability, `REFERENCES`, the cabin policy.
 StatusOr<ColumnDef> Parser::ParseColumnDef() {
-    ColumnDef col;
-
-    col.name_byte_offset = lexer_.Peek().byte_offset;
+    const std::uint32_t at = lexer_.Peek().byte_offset;
     auto col_name = ParseIdent();
     if (!col_name.ok()) return col_name.status();
-    col.name = std::move(col_name.value());
+    return ParseColumnDefNamed(std::move(col_name.value()), at);
+}
+
+StatusOr<ColumnDef> Parser::ParseColumnDefNamed(std::string name,
+                                                std::uint32_t name_byte_offset) {
+    if (Status s = RefuseReservedName(name, name_byte_offset, "column"); !s.ok()) return s;
+    ColumnDef col;
+    col.name_byte_offset = name_byte_offset;
+    col.name = std::move(name);
 
     // The type, with its arguments: `DECIMAL(p, s)` takes two
     // (docs/spec/types.md §2), `CHAR(n)` and `VARCHAR(n)` one
@@ -1693,6 +1714,16 @@ StatusOr<ColumnDef> Parser::ParseColumnDef() {
         }
         lexer_.Next();
         col.notnull = true;  // the default, said out loud
+    }
+
+    // Optional `PRIMARY KEY` (DN-D3), after the nullability and before
+    // REFERENCES. Both words unreserved, matched as identifiers.
+    if (const Token& pk = lexer_.Peek(); pk.type == TokenType::kIdent && IEquals(pk.text, "PRIMARY")) {
+        col.primary_key_byte_offset = pk.byte_offset;
+        lexer_.Next();
+        if (Status s = ExpectKeyword("KEY"); !s.ok()) {
+            return s.WithContext("a column's primary key is written `PRIMARY KEY`");
+        }
     }
 
     // Optional `REFERENCES <table>` (docs/spec/foreign-keys.md §1).
@@ -1766,10 +1797,52 @@ StatusOr<CreateTableStmt> Parser::ParseCreateTable() {
         !s.ok()) {
         return s;
     }
+    if (Status s = RefuseReservedName(stmt.table_name, stmt.table_byte_offset, "relation");
+        !s.ok()) {
+        return s;
+    }
 
     if (Status s = ExpectToken(TokenType::kLParen, "'('"); !s.ok()) return s;
 
     for (;;) {
+        // `PRIMARY KEY (<col>, ...)`, a constraint in the list (DN-D3).
+        // `PRIMARY` is unreserved: one not followed by `KEY` is a column's
+        // name, its definition read on from there.
+        const Token first = lexer_.Peek();
+        if (first.type == TokenType::kIdent && IEquals(first.text, "PRIMARY")) {
+            lexer_.Next();
+            if (const Token& key = lexer_.Peek();
+                key.type == TokenType::kIdent && IEquals(key.text, "KEY")) {
+                if (stmt.primary_key_byte_offset != 0) {
+                    return Status::InvalidArgument(
+                        "CREATE TABLE takes one PRIMARY KEY constraint and this is the second "
+                        "(byte " + std::to_string(first.byte_offset) + ")");
+                }
+                lexer_.Next();
+                stmt.primary_key_byte_offset = first.byte_offset;
+                if (Status s = ExpectToken(TokenType::kLParen, "'(' after PRIMARY KEY"); !s.ok()) {
+                    return s;
+                }
+                for (;;) {
+                    stmt.primary_key_column_offsets.push_back(lexer_.Peek().byte_offset);
+                    auto name = ParseIdent();
+                    if (!name.ok()) return name.status();
+                    stmt.primary_key_columns.push_back(std::move(name.value()));
+                    if (lexer_.Peek().type != TokenType::kComma) break;
+                    lexer_.Next();
+                }
+                if (Status s = ExpectToken(TokenType::kRParen, "')'"); !s.ok()) return s;
+            } else {
+                auto col = ParseColumnDefNamed(std::string(first.text), first.byte_offset);
+                if (!col.ok()) return col.status();
+                stmt.columns.push_back(std::move(col.value()));
+            }
+            if (lexer_.Peek().type == TokenType::kComma) {
+                lexer_.Next();
+                continue;
+            }
+            break;
+        }
         auto col = ParseColumnDef();
         if (!col.ok()) return col.status();
         stmt.columns.push_back(std::move(col.value()));
@@ -1997,6 +2070,11 @@ StatusOr<IndexStmt> Parser::ParseIndex(bool drop) {
     stmt.byte_offset = lexer_.Peek().byte_offset;
     auto name = ParseIdent();
     if (!name.ok()) return name.status();
+    if (!drop) {
+        if (Status s = RefuseReservedName(name.value(), stmt.byte_offset, "index"); !s.ok()) {
+            return s;
+        }
+    }
     stmt.index_name = std::move(name.value());
 
     // An index's name is unique instance-wide, so DROP names nothing else.
@@ -2064,6 +2142,11 @@ StatusOr<NamespaceStmt> Parser::ParseNamespace(bool drop) {
     stmt.byte_offset = lexer_.Peek().byte_offset;
     auto name = ParseIdent();
     if (!name.ok()) return name.status();
+    if (!drop) {
+        if (Status s = RefuseReservedName(name.value(), stmt.byte_offset, "namespace"); !s.ok()) {
+            return s;
+        }
+    }
     stmt.name = std::move(name.value());
 
     // A namespace is not in a namespace - its own row says so by carrying
@@ -2711,8 +2794,10 @@ StatusOr<RelationRef> Parser::ParseRelationRef() {
     const Token& peek = lexer_.Peek();
     if (peek.type == TokenType::kKeyword && peek.kw == Keyword::kAs) {
         lexer_.Next();
+        const std::uint32_t at = lexer_.Peek().byte_offset;
         auto alias = ParseIdent();
         if (!alias.ok()) return alias.status();
+        if (Status s = RefuseReservedName(alias.value(), at, "alias"); !s.ok()) return s;
         rel.alias = std::move(alias.value());
     }
     return rel;
@@ -4016,6 +4101,11 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
     stmt.new_name_byte_offset = lexer_.Peek().byte_offset;
     auto new_name = ParseIdent();
     if (!new_name.ok()) return new_name.status();
+    if (Status s = RefuseReservedName(new_name.value(), stmt.new_name_byte_offset,
+                                      "relation or column");
+        !s.ok()) {
+        return s;
+    }
     stmt.new_name = std::move(new_name.value());
 
     ConsumeOptionalSemicolon();
@@ -4200,8 +4290,12 @@ Status Parser::ParseOutputItems(std::vector<OutputItem>& items) {
                 item.text = std::string(text);
                 if (lexer_.Peek().type == TokenType::kKeyword && lexer_.Peek().kw == Keyword::kAs) {
                     lexer_.Next();
+                    const std::uint32_t at = lexer_.Peek().byte_offset;
                     auto alias = ParseIdent();
                     if (!alias.ok()) return alias.status();
+                    if (Status s = RefuseReservedName(alias.value(), at, "alias"); !s.ok()) {
+                        return s;
+                    }
                     item.alias = std::move(alias.value());
                 }
             }
@@ -4323,8 +4417,10 @@ StatusOr<FromItem> Parser::ParseFromItem() {
                                            At(lexer_.Peek().byte_offset));
         }
         lexer_.Next();
+        const std::uint32_t at = lexer_.Peek().byte_offset;
         auto alias = ParseIdent();
         if (!alias.ok()) return alias.status();
+        if (Status s = RefuseReservedName(alias.value(), at, "alias"); !s.ok()) return s;
         item.rel.alias = std::move(alias.value());
         item.rel.byte_offset = open.byte_offset;
         return item;

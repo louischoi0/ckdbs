@@ -172,6 +172,9 @@ public:
 private:
     struct Table {
         std::string name;
+        // A heap (DN) whose `id` is its declared Keystone, so the oracle
+        // reconciles it by key as it does a btree; drawn per table.
+        bool heap = false;
         std::uint64_t inserted = 0;  // the id-guessing counter, not truth
         // Keys a named INSERT reuses (BD-R9): ones a DELETE by tuple key named,
         // and ones a rolled-back transaction named - a deleted key is a
@@ -300,6 +303,9 @@ private:
     // claims' release at the transaction's decide or at a crash. Its own
     // stream, drawn after the read drew, for `key_list_rng_`'s reason.
     Rng lock_rng_;
+    // Which tables are heaps (DN-S3): its own stream, so drawing it moves no
+    // other stream's draws.
+    Rng storage_rng_;
     void MaybeLock(Op& op);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;

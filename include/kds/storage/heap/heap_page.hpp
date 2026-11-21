@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 
 #include "kds/base/common.hpp"
@@ -96,8 +97,12 @@ inline constexpr std::uint16_t kHeaderFlagGrownOver = 0x2;
 // ---- Slot directory entry ---------------------------------------------
 
 struct HeapSlotFields {
-    std::uint16_t offset;  // absolute page offset of the tuple, 0 if dead
-    std::uint16_t length;  // total tuple size (header + payload), 0 if dead
+    // Absolute page offset of the tuple. **Kept when the slot is retired**:
+    // FreeSlot reads a retired slot's reservation off the offsets.
+    std::uint16_t offset;
+    // Total tuple size (header + payload); 0 if dead, but for a free slot,
+    // where it is the reservation (kSlotFlagFree).
+    std::uint16_t length;
     std::uint8_t flags;
 };
 
@@ -125,6 +130,17 @@ inline constexpr std::uint8_t kSlotFlagDead = 0x1;
 // xmax field. Logged as HEAP_DELETE_MARK, which is a different record from
 // SLOT_RETIRE above.
 inline constexpr std::uint8_t kSlotFlagDeleted = 0x2;
+
+// **Free: a dead slot no index entry names** (DN-R2, a heap data page
+// only). Set with kSlotFlagDead, never alone, by the slot release
+// (`PageView::FreeSlot`, logged as SLOT_FREE) once every index of the
+// relation has been swept clean of the slot's rowid; cleared when an insert
+// takes the slot again (`PageView::ReuseSlot`). While it is set the slot's
+// `length` is its tuple reservation - the bytes its retired tuple occupied,
+// which nothing reclaims - so a reader, which tests kSlotFlagDead first,
+// still reads it retired. A dead slot without it is one an entry may still
+// name, and no insert takes it.
+inline constexpr std::uint8_t kSlotFlagFree = 0x4;
 
 // ---- Tuple (MVCC) header ------------------------------------------------
 //
@@ -411,6 +427,27 @@ public:
     // if `slot` is already out of range/dead.
     Status RetireSlot(std::uint16_t slot);
 
+    // **Slot release and reuse, a heap data page's** (DN-D1, DN-R2;
+    // `docs/spec/heap-and-tuple.md` §3.1b). A kHeapData page alone: on any
+    // other page type each refuses `InvalidArgument`, since a btree leaf
+    // places by key and a chain only appends.
+    //
+    // FreeSlot marks a retired slot free, its `length` set to the tuple
+    // reservation it still occupies - from its offset up to the next tuple
+    // above it, or to the tail reservation, since a data page's tuples are
+    // written downward with no gap and never compacted. Freeing a free slot
+    // is OK (redo's re-application); a live or delete-marked slot is
+    // `InvalidArgument`, an out-of-range one `NotFound`.
+    Status FreeSlot(std::uint16_t slot);
+    // The lowest free slot whose reservation holds a tuple of
+    // `payload_size` payload bytes, or nullopt.
+    std::optional<std::uint16_t> FindFreeSlot(std::size_t payload_size) const;
+    // Writes a tuple into a free slot and clears its dead and free flags.
+    // `InvalidArgument` if the slot is not free, `OutOfSpace` if the
+    // payload exceeds its reservation.
+    Status ReuseSlot(std::uint16_t slot, std::span<const std::byte> payload,
+                     std::uint64_t trx_id, std::uint64_t undo_ptr);
+
     // Writes a tuple at a **named** slot, for redo. The counterpart of
     // txn::UndoPageWriteAt, and it exists for the same reason: replay must
     // reproduce the exact position the original write chose, because that
@@ -437,7 +474,9 @@ public:
     //
     // A dead slot is also Corruption rather than a resurrection: retirement
     // follows its insert in LSN order, so redo reaching a dead slot means
-    // the page is not the page the record was written against.
+    // the page is not the page the record was written against - **except a
+    // free slot on a heap data page**, which a reused insert names: the
+    // record is replayed through ReuseSlot (DN-R2).
     //
     // Fails with OutOfSpace if the payload does not fit the existing slot's
     // capacity (an append that does not fit fails the same way InsertTuple
@@ -460,6 +499,10 @@ public:
     StatusOr<SlotInfo> DebugSlotInfo(std::uint16_t slot_idx) const;
 
 private:
+    // The one writer of a new tuple's header and payload at `offset`: an
+    // append's and a reused slot's (an overwrite keeps the tuple flags).
+    void WriteNewTuple(std::uint16_t offset, std::span<const std::byte> payload,
+                       std::uint64_t trx_id, std::uint64_t undo_ptr);
     HeapPageHeaderFields ReadHeader() const;
     void WriteHeader(const HeapPageHeaderFields& header);
     // Inline for TryReadTupleIn(); the slot directory starts after the header.

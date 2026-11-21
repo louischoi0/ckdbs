@@ -34,15 +34,21 @@ struct Schema {
     // schema alone (RowLayout below).
     std::uint16_t spare_slots = 0;
 
-    // A heap (BZ-R1 of `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`):
-    // column 0 is the engine's hidden tuple key, and the declared columns
-    // start at position 1.
-    bool heap() const noexcept { return !columns.empty() && columns.front().hidden(); }
+    // A hidden Keystone (DN-D3; BZ-R1 before it): column 0 is the engine's
+    // own `int64`, no statement names it but by `keyidentity`, and the
+    // declared columns start at position 1. A heap with no single `int64`
+    // primary key has one; a heap whose primary key is that column, and
+    // every btree relation, has none. Whether a relation is a heap is its
+    // storage's fact, `TableAccess::clustered_type`, not this one.
+    bool hidden_keystone() const noexcept {
+        return !columns.empty() && columns.front().hidden();
+    }
 
     // The live column whose name equals `name` ignoring case
     // (`ColumnNamesCollide`), or nullptr when there is none; a dropped
-    // column has no name a statement can reach (BW-R6), nor has a heap's
-    // hidden tuple key (BZ-R3). The one resolver of
+    // column has no name a statement can reach (BW-R6), nor has a hidden
+    // Keystone (BZ-R3) but by `keyidentity`, which names column 0 - the
+    // Keystone - on every relation (DN-D6, `IsKeyIdentity`). The one resolver of
     // a column name a statement writes - a read, a SET target, an INSERT
     // column list, DROP and RENAME COLUMN's old name, and the column CREATE
     // INDEX, CABIN, ASSERTION or TRANSITION names, a stored assertion canon
@@ -62,6 +68,13 @@ struct Schema {
 // statement spells it and no declared column can collide with it.
 inline constexpr std::string_view kHiddenTupleKeyName = "$tuple_key";
 SysColumnRow HiddenTupleKeyColumn();
+
+// **The reserved word that reads a relation's Keystone** (DN-D6, DN-R5,
+// DN-Q1 (a)): column 0 on every relation, hidden or declared. No relation,
+// column, index, namespace or alias is declared with it (the parser's
+// `RefuseReservedName`); every column reference resolves it.
+inline constexpr std::string_view kKeyIdentityName = "keyidentity";
+bool IsKeyIdentity(std::string_view name) noexcept;
 
 // The one rule deciding whether two column names are the same name:
 // equal ignoring ASCII case. A relation's live column names are unique
@@ -347,6 +360,8 @@ struct TableAccess {
     Schema schema;
     PageId desc_page_id;
     ClusteredType clustered_type;
+    // A heap of data pages addressed by rowid (DN), not a clustered tree.
+    bool heap() const noexcept { return clustered_type == ClusteredType::kHeap; }
 
     // Root of this relation's var-heap chain, or kInvalidPageId when the
     // schema has nothing that could spill. Cacheable for the reason
@@ -514,6 +529,12 @@ struct TableAccess {
         // write maintains it; no path that chooses an index for a read may
         // choose it, because its entries are not yet complete.
         bool building = false;
+        // `kIndexFlagKeystone`: the heap's Keystone index (DN-Q2 (a)).
+        bool keystone = false;
+        // Every entry carries the row's rowid after its tuple key
+        // (`index::IndexLayout::rowid_width`): an index of a `kHeap`
+        // relation (DN, IX1).
+        bool rowid = false;
         // For a unique index's refusal, which names it.
         std::string name;
         // In **declared index order**, which is the order the key encoding

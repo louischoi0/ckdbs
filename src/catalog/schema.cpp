@@ -40,8 +40,15 @@ std::vector<std::uint16_t> MatchColumns(const Schema& schema, std::string_view n
 
 }  // namespace
 
+bool IsKeyIdentity(std::string_view name) noexcept {
+    return ColumnNamesCollide(name, kKeyIdentityName);
+}
+
 StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
                                                 std::uint32_t byte_offset) const {
+    // No declared column carries the word (it is refused at declaration),
+    // so it names the Keystone and nothing else.
+    if (IsKeyIdentity(name) && !columns.empty()) return &columns.front();
     const std::vector<std::uint16_t> matches = MatchColumns(*this, name);
     if (matches.empty()) return static_cast<const SysColumnRow*>(nullptr);
     if (matches.size() > 1) return AmbiguousColumnName(*this, name, matches, byte_offset);

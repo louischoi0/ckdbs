@@ -918,7 +918,10 @@ Status RelationGather::Step(storage::PageStore& store, std::uint32_t leaves) {
         if (Status s = chain_.Visit(next_); !s.ok()) return s;
         auto page = store.GetForRead(next_);
         if (!page.ok()) return page.status();
-        if (!CheckOwned(page.value().bytes(), PageType::kBtreeLeaf, oid_).ok()) {
+        // A btree's leaf, or a heap's data page (DN): the walk is either's
+        // one chain of row pages.
+        if (!CheckOwned(page.value().bytes(), PageType::kBtreeLeaf, oid_).ok() &&
+            !CheckOwned(page.value().bytes(), PageType::kHeapData, oid_).ok()) {
             return Status::TxnConflict(
                 "page " + std::to_string(next_) + " is no longer a leaf of relation oid " +
                 std::to_string(oid_) + "; the gather stopped and published nothing");
