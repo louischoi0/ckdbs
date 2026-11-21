@@ -1,6 +1,6 @@
 # Work order DN - the heap redefined again: an Oracle-style heap, rows in data pages addressed by a computed rowid, every key served through an index that names the rowid, a full scan that reads the data pages and no index
 
-Status: **CLOSED 2026-11-21 on the work branch, not landed** (DN-S2, DN-S3
+Status: **CLOSED 2026-11-21 and landed on `main` on the operator's word "push no verify"** (`raft-marks-2026-11-21.md` §11), untagged (DN-S2, DN-S3
 and DN-S4 on the standing go-ahead; the close
 `bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`: DN-R7 met as
 measured, a 1,000-row heap index range 27-32 % cheaper, a heap's INSERT

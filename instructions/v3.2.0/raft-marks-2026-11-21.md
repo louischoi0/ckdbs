@@ -99,3 +99,13 @@ Numbered §6 because §5 is held by DG's close record on the work branch
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file (numbered §8 on the work branch, §10 at its merge behind DO's §8 and §9); the DN order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` |
 
+## 11. DN landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given at DN's push gate, after the report that DN closed on its work branch |
+| **Mark** | **DN lands on `main`**: the work branch `worktree-dn-heap-s2` (worktree `dn-dd-s4-into-dn-s2`, DN-S1's record to DN-S4's close at `f20ca0e2`, synced with `origin/main` at `55b61512` in `39b227b0`) merged `--no-ff` and pushed with `--no-verify`. The full suite ran 0 failed of 5094 at `9c061907`, and nothing after it changed a build input - the merge of `origin/main` and DN-S4 are documents and bench only - so the hook was not run again; `scripts/sim.sh` 280 runs, 0 failures, there. The close: `bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`. **Superblock 39**: a volume made by an earlier build does not mount |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | a tag or a version; the gaps in `known-gaps.md`'s DN section |
+| **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
