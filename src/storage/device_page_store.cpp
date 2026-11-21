@@ -2540,13 +2540,24 @@ Status DevicePageStore::FlushPages(std::span<const PageId> page_ids) {
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId page_id, PinMode mode,
                                                                       bool for_read,
                                                                       FetchHeat heat) {
-    auto bytes = FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr);
+    // Armed, the debt is taken in the exclusive grant's own hold (DO's E4a,
+    // `AcquirePageLatch`); unarmed there is no hold, and `LogOwedImage`
+    // looks it up.
+    // A write fetch is an exclusive one (`Get`); an armed fetch's debt is
+    // taken only by an exclusive grant.
+    assert((for_read || mode == PinMode::kExclusive) && "a write fetch that is not exclusive");
+    bool owed = false;
+    auto bytes = FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr,
+                             for_read ? nullptr : &owed);
     if (!bytes.ok() || for_read) return bytes;
     // **The write fetch pays the image its frame owes** (DB-R1, the
     // header's "The write fetch's image"), holding the page exclusive and
     // pinned, before its caller has changed a byte. A refusal gives both
     // back and is the fetch's.
-    if (Status s = LogOwedImage(page_id, bytes.value()); !s.ok()) {
+    const Status s = latch_armed_
+                         ? (owed ? LogTakenImage(page_id, bytes.value()) : Status::OK())
+                         : LogOwedImage(page_id, bytes.value());
+    if (!s.ok()) {
         UnpinFrame(page_id);
         return s;
     }
@@ -2564,6 +2575,11 @@ Status DevicePageStore::LogOwedImage(PageId page_id, std::span<const std::byte, 
         if (it == frames_.end() || !it->second.owes_image) return Status::OK();
         it->second.owes_image = false;
     }
+    return LogTakenImage(page_id, bytes);
+}
+
+Status DevicePageStore::LogTakenImage(PageId page_id,
+                                      std::span<const std::byte, kPageSize> bytes) {
     // A class no record describes owes nothing: its debt is dropped, and
     // the next copy sets it again for nothing.
     if (!ImagedClass(page_id, bytes)) return Status::OK();
@@ -2650,7 +2666,8 @@ bool DevicePageStore::IsUnlogged(std::uint64_t word) const noexcept {
 StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId page_id, PinMode mode,
                                                                       bool for_read,
                                                                       FetchHeat heat,
-                                                                      bool* faulted) {
+                                                                      bool* faulted,
+                                                                      bool* owed) {
     if (faulted != nullptr) *faulted = false;
     // **AM-S2: the fetch and the pin are one operation** (`page_store.hpp`
     // records the obligation). Between a separate fetch and pin a frame can
@@ -2705,7 +2722,7 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
             // is held continuously from the `resident` test, and the only
             // eraser the raw fetch can reach runs on its miss branch - and is
             // kept as defence. The span the tail returns is the same frame's.
-            auto pinned = PinResidentAndRelease(page_id, mode, hold);
+            auto pinned = PinResidentAndRelease(page_id, mode, hold, owed);
             if (!pinned.has_value()) continue;
             return *pinned;
         }
@@ -2763,14 +2780,14 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchAndPin(PageId pa
         // abandons rather than drops it (or cold from a `kScan` fault, and
         // dropping it is harmless).
         if (faulted != nullptr) *faulted = true;
-        auto pinned = PinResidentAndRelease(page_id, mode, hold);
+        auto pinned = PinResidentAndRelease(page_id, mode, hold, owed);
         if (!pinned.has_value()) continue;
         return *pinned;
     }
 }
 
 std::optional<std::span<std::byte, kPageSize>> DevicePageStore::PinResidentAndRelease(
-    PageId page_id, PinMode mode, std::unique_lock<Latch>& hold) noexcept {
+    PageId page_id, PinMode mode, std::unique_lock<Latch>& hold, bool* owed) noexcept {
     auto found = frames_.find(page_id);
     // Gone under us. `hold` is untouched, so the caller rounds its loop with
     // the latch it already had.
@@ -2787,7 +2804,7 @@ std::optional<std::span<std::byte, kPageSize>> DevicePageStore::PinResidentAndRe
     hold.unlock();
     // Pin first, then wait for the page latch, with the structure latch
     // released - `PinFrame`'s order, for `PinFrame`'s reason.
-    AcquirePageLatch(page_id, frame, mode);
+    AcquirePageLatch(page_id, frame, mode, owed);
     return view;
 }
 
@@ -2842,14 +2859,15 @@ StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> DevicePageStore::Cr
         // Pin first, page latch after, with the structure latch released -
         // `PinFrame`'s order - and through `AcquirePageLatch`, which carries
         // AM-S1's never-upgrade census.
-        AcquirePageLatch(id, *frame, PinMode::kExclusive);
+        //
         // A writeback can copy the just-created frame between the raw create
         // and this latch and set its debt. The creator writes it first and a
         // nested write fetch of its own held page would log the image
         // mid-mutation, behind changes it holds; the bytes the copy took are
-        // the creation's, which its PAGE_INIT heals, so the debt is dropped.
-        LatchGuard structure(latch);
-        frame->owes_image = false;
+        // the creation's, which its PAGE_INIT heals, so the debt is dropped -
+        // in the grant's own hold (DO's E4a), its taken answer unread.
+        bool dropped = false;
+        AcquirePageLatch(id, *frame, PinMode::kExclusive, &dropped, /*drop_always=*/true);
         return made;
     }
 
@@ -2948,7 +2966,8 @@ std::unordered_multiset<PageId>& SharedHoldsHere() {
 // The page-latch half of taking a pin, with **no** latch held: the pin is
 // already counted, and a frame with pins > 0 is never an eviction victim
 // (eviction.md §3), so it is this frame that is waited for.
-void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept {
+void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode, bool* owed,
+                                       bool drop_always) noexcept {
     if (mode == PinMode::kUnlatched) return;  // a pin and no latch (`UnlatchedPin`)
 #ifdef NDEBUG
     // Read only by the never-upgrade detector below, which is debug-only.
@@ -3016,9 +3035,21 @@ void DevicePageStore::AcquirePageLatch(PageId page_id, Frame& frame, PinMode mod
         // this mark and the write. Every exclusive hold is a write fetch
         // (`Get`, the creates), so this adds no dirtiness of its own; its
         // cost is one structure-latch hold per exclusive fetch, armed only.
+        //
+        // **The same hold takes the frame's image debt** for a caller that
+        // passes `owed` (DO's E4a, H39): the exclusive hold excludes every
+        // copy from here, so the bit read now reflects every copy before
+        // it, as `LogOwedImage`'s hold does unarmed. Taken only while images are
+        // on, or the bit is left for a later write fetch, as before; a
+        // create drops it whatever the switch says (`drop_always`).
         if (mode == PinMode::kExclusive) {
             LatchGuard structure(structure_latch());
             frame.MarkDirty(++dirty_gens_);
+            if (owed != nullptr && frame.owes_image &&
+                (drop_always || fetch_images_.load(std::memory_order_acquire))) {
+                frame.owes_image = false;
+                *owed = true;
+            }
         }
     }
 }

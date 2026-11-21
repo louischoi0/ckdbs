@@ -1331,10 +1331,12 @@ private:
     // be stale. `faulted` may be null (`FetchPinned` passes null).
     // **Meaningful only on the ok arm**: an error on a later turn of the
     // loop leaves it true. It also says true when another core loaded the
-    // page while this call was outside the latch.
+    // page while this call was outside the latch. `owed`, when given, is
+    // `AcquirePageLatch`'s: set when an armed exclusive grant took the
+    // frame's image debt (DO's E4a).
     StatusOr<std::span<std::byte, kPageSize>> FetchAndPin(PageId page_id, PinMode mode,
                                                           bool for_read, FetchHeat heat,
-                                                          bool* faulted);
+                                                          bool* faulted, bool* owed = nullptr);
 
     // The create half of the same pair. See the definition for why its
     // window is narrower than `Get`'s and why it can still close.
@@ -1355,7 +1357,12 @@ private:
     // **outside** it - the order that keeps neither latch held across the
     // other (PinFrame's comment says why).
     void CountPin(Frame& frame) noexcept;
-    void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode) noexcept;
+    // An armed exclusive grant given `owed` also takes the frame's image
+    // debt in the hold it already takes for the dirty mark, setting
+    // `*owed` (DO's E4a): only while images are on, or whatever the switch
+    // says with `drop_always` (a create, which drops it).
+    void AcquirePageLatch(PageId page_id, Frame& frame, PinMode mode, bool* owed = nullptr,
+                          bool drop_always = false) noexcept;
     // `CountPin`'s mirror, under the structure latch, for a pin that holds
     // no page latch (a writeback that met a held frame and skipped it).
     void UncountPin(Frame& frame) noexcept;
@@ -1376,7 +1383,7 @@ private:
     // would drop a `Get`'s write, and what makes that unreachable is the
     // loading set: every fault publishes its id there first.
     std::optional<std::span<std::byte, kPageSize>> PinResidentAndRelease(
-        PageId page_id, PinMode mode, std::unique_lock<Latch>& hold) noexcept;
+        PageId page_id, PinMode mode, std::unique_lock<Latch>& hold, bool* owed) noexcept;
     static PageLatchMode LatchModeFor(PinMode mode) noexcept {
         return mode == PinMode::kShared ? PageLatchMode::kShared : PageLatchMode::kExclusive;
     }
@@ -1824,6 +1831,8 @@ private:
     // The write fetch's image (the public section). The registry: 0 an
     // empty slot, an owner oid as itself, a page id with `kUnloggedPageTag`.
     Status LogOwedImage(PageId page_id, std::span<const std::byte, kPageSize> bytes);
+    // `LogOwedImage` past its test: the debt is taken, and this logs it.
+    Status LogTakenImage(PageId page_id, std::span<const std::byte, kPageSize> bytes);
     Status AddUnlogged(std::uint64_t word);
     void RemoveUnlogged(std::uint64_t word) noexcept;
     bool IsUnlogged(std::uint64_t word) const noexcept;

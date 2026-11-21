@@ -227,6 +227,30 @@ int main(int argc, char** argv) {
                     static_cast<double>(after.hold_longest_ns[i]) / 1e3);
 #endif
     }
+#ifdef KDS_LATCH_HOLD_CENSUS
+    // ---- count (census build) ---------------------------------------------
+    // Structure-latch holds a fetch, exactly, on one thread with images on
+    // (the server's state after its mount): a read hit, then a write hit.
+    {
+        store.EnableFetchImages(true);
+        const auto i = static_cast<std::size_t>(LatchKind::kFrameTable);
+        constexpr std::size_t kFetches = 100'000;
+        const auto count = [&](const char* name, bool write) {
+            const auto before = Contention::Read();
+            for (std::size_t k = 0; k < kFetches; ++k) {
+                const PageId id = ids[k % ids.size()];
+                auto ref = write ? store.Get(id) : store.GetForRead(id);
+                if (!ref.ok()) std::abort();
+            }
+            const auto after = Contention::Read();
+            std::printf("count %s holds_per_fetch=%.3f\n", name,
+                        static_cast<double>(after.holds[i] - before.holds[i]) /
+                            static_cast<double>(kFetches));
+        };
+        count("read_hit", false);
+        count("write_hit", true);
+    }
+#endif
     const auto end_state = Contention::Read();
     std::printf("walk_longest_us=%.1f walks=%llu over_100us=%llu over_1ms=%llu over_10ms=%llu\n",
                 static_cast<double>(end_state.of(Longest::kFrameTableWalkNs)) / 1e3,

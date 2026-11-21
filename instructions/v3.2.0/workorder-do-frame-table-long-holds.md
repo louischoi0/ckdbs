@@ -337,6 +337,110 @@ Binding from DO-S1 on.
 - **DO-S4 - the close.** One results file. CW §1.1 and §2 amended
   (DO-Q8). `known-gaps.md` updated with what was not built.
 
+## 5a. DO-S3: E2's proof under DO-R1 (CLA, for the operator's mark)
+
+`[design]`, written at DO-S3 on the worktree `dg-wal-segment-body` at
+`b8759946`, read against `src/wal/checkpointer.cpp` (`Start`, the paced
+publish), `wal/analysis.hpp` (`RedoStartFrom`) and
+`src/server/superblock_checkpoint_anchor.cpp` (the fold). **Nothing of E2
+is built**; DO-Q3 (a) builds it only on the operator's own mark on this
+proof.
+
+**What E2 is, exactly.** H1 (`DirtyPagesWithRecLsn`) and H2
+(`DirtyPageIds`) walk the slot array a chunk (`kFrameChunk`, 1,024 slots,
+DO-Q2 (a)) per hold of the structure latch, taking each resident slot's
+frame - its page id, `dirty`, `rec_lsn` - under that chunk's hold, and
+releasing the latch between chunks with nothing held across the gap. The
+checkpoint's task does not suspend in the walk (no `co_await` between the
+first chunk and `CHECKPOINT_BEGIN`'s append), so CZ-R3 stands. The result
+is sorted by page id and **deduplicated, keeping each page's lowest
+recLSN** (a page evicted clean from a chunk not yet walked and faulted
+back into a slot already walked cannot appear twice, but one evicted from
+a walked chunk and re-faulted into a later one can; the minimum is the
+conservative entry).
+
+**What redo needs of the table.** The anchor's redo start `R` is the
+minimum, over every core's last contribution to the fold, of
+`RedoStartFrom(begin_lsn, table)` - the table's lowest non-zero recLSN,
+floored at the run's `begin_lsn`. Recovery is correct iff **every record
+with LSN below `R` is in the image of its page that the device holds when
+the anchor lands**. Call a record *exposed* if it is below this run's own
+`RedoStartFrom` and its page's device image lacks it when the anchor lands.
+
+**Claim.** E2 exposes no record the whole-table snapshot of today does not
+already expose to the same two covers; and the covers hold for it.
+
+**Proof.** Take a record `r` on page `P` with `lsn(r) < RedoStartFrom(begin_lsn, table)`.
+Since the result is floored at `begin_lsn`, `lsn(r) < begin_lsn`: `r` was
+appended before `CHECKPOINT_BEGIN`. Let `v` be the instant P's slot was
+visited (its chunk's hold), if P was resident then.
+
+1. *P resident and dirty at `v`, with `rec_lsn(P) != 0` and
+   `rec_lsn(P) <= lsn(r)`.* Then the table holds an entry `<= lsn(r)`, so
+   `RedoStartFrom <= lsn(r)`: contradiction. Not exposed.
+2. *P resident and dirty at `v` with `rec_lsn(P) > lsn(r)`, or `0`.* A
+   frame's `rec_lsn` is the minimum stamp since its last clean
+   (`StampPageLsn`, `WriteBack`), so `r` is either already on the device
+   (written by a copy before the clean that started this dirty span) or
+   not yet stamped at `v` - appended, or stamped, after `v`. The first is
+   not exposed. The second is case 4.
+3. *P not resident, or resident and clean, at `v`.* Every record stamped
+   on P before its last clean is on the device. A record `r` not on the
+   device was therefore stamped after `v`. Case 4.
+4. *`r` stamped on P after `v` and appended before `CHECKPOINT_BEGIN`.*
+   This is exactly the window the whole-table snapshot already has
+   between its one hold and the append (`checkpointer.cpp`'s comment at
+   the redo start, CZ-S0's census), widened from "after the snapshot's
+   hold" to "after P's chunk's hold". Two covers, both unchanged by E2:
+   - **The publish.** The run's anchor is encoded only after H2's walk,
+     which starts after `CHECKPOINT_END` and so after `CHECKPOINT_BEGIN`.
+     `r` was stamped before `BEGIN` (the stamp precedes the append's
+     return on the appending core's reactor, which does not yield between
+     an append and its stamp - the premise the code already names), so P
+     was dirty with `r` before H2's walk began. At P's visit in H2 - under
+     any chunking - P is either still dirty, and the publish writes it
+     before the anchor's page, or was cleaned by a writeback copy that
+     carried `r`. Either way `r` is on the device when the anchor lands.
+     Chunking H2 changes nothing here: every chunk of it is after `BEGIN`.
+   - **The fold**, for the anchor of a *later* run that does not re-walk
+     P: the appending core `C`'s own contribution stays at its last run's
+     redo start, which is `<=` that run's `begin_lsn`, which precedes `r`
+     unless `C`'s last run began after `r` - in which case `C`'s run walked
+     P with `r` stamped (case 1) or found it on the device. The
+     checkpointing core itself appends nothing inside its own walk, since
+     its task does not suspend there, so `C` is never the core whose
+     contribution this run replaces in the window.
+5. *Duplicates.* Deduplication by minimum recLSN keeps case 1's
+   inequality for every entry, and `RedoStartFrom` takes a minimum, so a
+   duplicate can only lower `R`.
+
+So the only records E2 adds to the window are of case 4's kind, which the
+publish covers within the run and the fold across runs, exactly as for
+today's window. **Where the premise would fail**: a core that yields
+between an append and its stamp (already named in the code as the
+premise of both covers), and a checkpoint task that suspends inside the
+walk (E2 must not add one: `Start` calls the two snapshots and the
+append as plain functions today, and E2 keeps the chunk loop inside
+`DirtyPagesWithRecLsn`, a non-coroutine, so no suspension point can enter
+it without changing its signature).
+
+**The crash cells DO-R1 asks for** (built with E2, not before):
+`DirtyTableChunkedWalkTest` with a test seam after a chunk's hold
+(`SetAfterDirtyTableChunkForTest`): (i) a page in an already-walked
+chunk dirtied, logged and stamped from a second core below `begin_lsn`,
+then a crash before the anchor lands - recovery from the previous anchor
+replays it; (ii) the same, crash after the anchor lands - the publish
+wrote it, and the page reads back whole; (iii) a page evicted from an
+unwalked chunk and re-faulted into a walked one, dirtied - one entry, the
+lower recLSN; (iv) the same cells at `cores = 1`, where the store is
+unarmed and E2 is the one-hold walk it is today (DO-R2).
+
+**What it buys** (DO-S1's numbers): the hold falls from the whole walk,
+15 ms (H1) and 9 ms (H2) at 1 Mi frames, to one chunk's, about
+`15 ms / 1,024` - some 15 us plus a chunk's frame lookups - well under
+DO-Q9 (a)'s 1 ms. Its cost: one `frames_.find` per resident slot, the
+slot array naming a page and not a frame; DO-S3's build would measure it.
+
 ## 6. What DO does not do
 
 It partitions no latch and makes no pin atomic. It reads no page without
@@ -429,3 +533,30 @@ insert asserting it does not rehash (DO-R6).
 - **Suite**: 0 failed of 5094 on E1 and E3 before the review's cuts; the
   cuts are covered by DO-S2's first run. Overhead not measured; measured
   at the milestone's close.
+
+### DO-S2 - E4a (H39), done 2026-11-21
+
+The write fetch's image debt taken in the hold the exclusive grant already
+takes for its dirty mark (`AcquirePageLatch`'s `owed`), armed only; the
+unarmed fetch still asks `LogOwedImage` (DO-R2). `CreatePinned`'s separate
+clear folded into the same hold. **A write hit is four structure-latch
+holds in place of five, exactly** (`build-census`'s count phase of
+`bench/frame_table_hold_bench.cpp`, 100,000 write hits on one thread with
+images on: 5.000 at `b8759946`, 4.000 here); a read hit stays three.
+
+- **Reviewed by `critics-developer`**: no bug; the bit read at the same
+  point of the protocol (after the exclusive grant, under the structure
+  latch), the debt never taken on a pin that is then lost, `drop_always`
+  the old clear exactly, the unarmed path unchanged. Applied: the test gap
+  it found - `FetchImageTest` never ran armed, so the new path had no
+  direct cell; it is now parameterised over unarmed and armed (14 cells,
+  all pass) - an assertion that a write fetch is exclusive, and a comment
+  in the past tense. Not taken: an enum for `owed`/`drop_always` (it would
+  save nothing, the pointer still has to travel), a helper for the "owed
+  and images on" test (two sites), and deleting `LogOwedImage` by taking
+  the debt from the unarmed `PinFrame`'s frame (H39's own suggestion, but
+  it changes the unarmed path, which DO-R2 keeps untouched).
+- **Suite**: 0 failed of 5094 on E4a before the review's additions;
+  `FetchImageTest`'s 14 cells and the eviction and frame-table suites pass
+  on the commit. The full suite runs again at E4b. Overhead not measured;
+  measured at the milestone's close.
