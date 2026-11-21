@@ -5,7 +5,7 @@ Status: **OPENED 2026-11-21 on the operator's standing go-ahead
 worktree `dg-wal-segment-body` (branch `worktree-do-frame-table-long-holds`)
 from `48a3276c` (`v3.5.0-55-g48a3276c`). **DO-Q0..Q8 adopted (a) and DO-Q9
 (a) added and adopted, as CLA proposed, on that go-ahead; none is the
-operator's own per-item mark** (§4). DO-S0 done (§7). Written on `main` at
+operator's own per-item mark** (§4). **DO-S0, DO-S1 and DO-S2 built on the work branch** (`47f7016c` to `7116b668`) **and measured at the close** (§7, DO-S4); **DO-S3's proof is written (§5a) and E2 waits for the operator's own mark** (DO-Q3 (a)) - the one thing between DO and its close. Written on `main` at
 `3a07ad49` on the operator's word of 2026-11-21 (`raft-marks-2026-11-21.md`
 §8); that DO is an order of its own, cut out of CW's C1 rather than written
 into CW, is CLA's proposal and the operator's yes to it. Every
@@ -649,3 +649,35 @@ time a read hit 121.7 to 80.7 ns (`build-census`) and one reader 3.84 to
   the store's 231 cells pass under `KDS_TEST_PAGE_LATCH=1`, and the full
   suite runs again on the merged tree at the close. Overhead not measured
   here; measured at the milestone's close.
+
+### DO-S4 - the close measured, 2026-11-21; DO not closed: DO-S3 waits for the operator
+
+`bench/v3.5.0/results-do-close-v3.5.0-61-g7116b668.md`, run by `ck-tester`:
+interleaved A/B, A `48a3276c` (`v3.5.0-55-g48a3276c`, the commit DO opened
+from) against B `7116b668` (`v3.5.0-61-g7116b668`), `tools/ba_census.py`,
+`point`, `insert1` and `pkmix` at `cores = 1, 2, 4`, `relaxed`, three
+runs an arm a cell, 54 runs; release copies, `/dev/nvme0n1p1`; another
+session's workload on the host throughout (its load recorded per run).
+
+- **DO-Q6 (a)'s E4 clause is met in all nine cells**: no throughput or p99
+  regression beyond the host's spread; `pkmix` at `cores = 2` +5.4 % and
+  `insert1` at `cores = 4` +2.2 % with the ranges disjoint; `insert1` at
+  `cores = 2` -5.3 %, inside A's own three-run spread and unresolved;
+  `cores = 1` level (+0.2 to +0.9 %, DO-R2).
+- **The frame table's wait a statement fell 26-46 % in every row above
+  one core**, the arms' ranges disjoint. Three readers on one store (the
+  microbenchmark, added by CLA): +27 % fetches a second, p99 -13 %.
+- **H1-H3**: DO-Q9 (a)'s bar is not met by what is built (H1 15 ms, H2
+  9 ms at 1 Mi frames); E2 is what would meet it.
+- **DO-Q8 (a) done**: the results entered in CW §1.1 and C1 amended to
+  read "after DO" (`workorder-cw-optimistic-page-read.md`).
+- **Documents moved**: `page.md` §3 (the handle's frame), §8 (the dirty
+  table's hold), §12 (two holds a read hit, three a write hit); `CLAUDE.md`'s
+  buffer-pool row; `known-gaps.md` "The frame table's structure latch
+  (DO)"; `client-manual.md` (the `contention_frame_table_walk*` fields).
+  No SQL surface changed, so the manual is untouched.
+- **Synced**: `origin/main` has not moved since `48a3276c`; the merge is
+  a no-op.
+- **What holds DO**: E2 (§5a). If the operator marks the proof, E2 is
+  built with its crash cells and measured like E1, and DO closes; if not,
+  DO closes as it stands, with H1 and H2 over the bar in `known-gaps.md`.

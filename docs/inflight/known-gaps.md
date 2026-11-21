@@ -1487,6 +1487,30 @@ closed 2026-10-11 at `ec827a19`).
   had the same window before BI; BI-Q12 closed the step's, which was a
   whole run long. Not measured.
 
+## The frame table's structure latch (DO)
+
+Verified at `7116b668` (DO-S2's last stage) on the worktree
+`dg-wal-segment-body`. Owned by `docs/spec/page.md` §8 and §12 and
+`instructions/v3.2.0/workorder-do-frame-table-long-holds.md`.
+
+- **A checkpoint's dirty tables still hold the latch for a walk of every
+  resident frame**, and every core's fetch waits it out: H1 15 ms and H2
+  9 ms at 1 Mi dirty frames (0.5 ms and 0.2 ms at 64 Ki) on DO's host, over
+  DO-Q9 (a)'s 1 ms bar from 256 Ki frames. The walk chunked (DO's E2) is
+  written as a proof (the order's §5a) and **not built: it waits for the
+  operator's own mark** (DO-Q3 (a)). `Flush`'s collection (H6, through
+  `DirtyPageIds`) is the same walk, under `Sync`.
+- **The per-fetch holds are still the instance's one latch**: two a read
+  hit, three a write hit, each a cache line moving between cores above one
+  core. DO measured one reader on one thread; what the holds cost under
+  contention is CW's C1, priced against DO's tree (DO-Q8 (a)).
+- **The scan ring's and the writeback's unpins, and `PageRef::MarkDirty`,
+  still look the frame up by page id**, two holds an unpin (outside E4d).
+- **A stale fetch of a claimed id given back unpublished** would now be
+  served in a release build where the armed hit used to answer `NotFound`
+  (E4b's comment in `FetchAndPin`): a defect class `InsertFrame`'s create
+  refusal guards, with no known path into it.
+
 ## Per-core structures kept (BP)
 
 Verified at `ccf9cfc1` (`v2.7.0-909-gccf9cfc1`; the census,
