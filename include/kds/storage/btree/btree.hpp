@@ -95,11 +95,13 @@
 // let go before its child is asked for.
 //
 // A write runs where the session is (AT-S5), so two cores reach one
-// relation's leaves, and one place in this file depends on that: **a
-// write descent's re-fetch**,
-// which must drop the leaf's shared hold before asking for it exclusive
-// because the page latch is never upgraded. `DescendTo` carries the
-// window's whole account; what closes it is that a leaf's coverage
+// relation's leaves, and one place in this file depends on that: **the
+// window between a parent's read and its leaf's fetch**, which a write
+// descent crosses holding nothing - it takes the leaf exclusive at once
+// below a level-1 node, and at a root leaf drops its shared hold before
+// asking for it exclusive, because the page latch is never upgraded.
+// `DescendTo` carries the window's whole account; what closes it is that a
+// leaf's coverage
 // interval can shrink in exactly one way, and that way rewrites the leaf's
 // own `next_page_id`.
 //

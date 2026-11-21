@@ -287,6 +287,8 @@ Binding from DK-S1 on, if the order reaches it.
 | DK-Q7 | D4. | rejected on paper, recorded in §2 | (b) spiked as an upper bound only, never landed (CW-S1 already prices that ceiling) |
 | DK-Q8 | `BtreeSeekLeaf`. | unchanged: it asks no coverage and needs none | (b) given D2's move for symmetry |
 | DK-Q9 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file | (b) lifted for DK-S0 |
+| DK-Q10 `[quiet-wrong]` | A write hop from the named root (added at DK-S2). | none: a write descent hops only from a leaf below `path[0]`; a read lookup hops at any depth. `SecureParents` reads "no parent" as "the leaf is the root", and `PromoteSeparator` grows the new root over `path[0]`, so a write that hopped from a root leaf would grow a level over a non-root leaf | (b) a write hop at the root too |
+| DK-Q11 | A counter for hops (added at DK-S2). | `descent_hops`, a `Contention` tally counted once per hop on the failed-check path only | (b) none |
 
 ## 5. Stages
 
@@ -365,7 +367,10 @@ Results: `bench/v3.5.0/dk-s0-premise-v3.5.0-13-g187ff9b1.md`; driver
 
 - **Census, callers.** The clustered `DescendTo` is reached by
   `BtreeInsert` (write), `BtreeLookup` (read, or write under
-  `PageAccess::kWrite`: `clean_dropped.cpp:47`, `BtreeHoldTombstone`) and
+  `PageAccess::kWrite`: `CommandDispatcher::LocateByTupleKey`
+  (`command_dispatcher.cpp:9491`, `kWrite` by default,
+  `command_dispatcher.hpp:2675` - a point `UPDATE`/`DELETE` and rollback's
+  relocation), `clean_dropped.cpp:47`, `BtreeHoldTombstone`) and
   `BtreeSeekLeaf` (read, no coverage; `BtreeFetchLeafAtOrBelow` walks right
   from it). `BtreeLookup` has 17 callers in `src/` outside `src/storage/btree/`
   (`step_vm.cpp` 6, `command_dispatcher.cpp` 5, `fk_check.cpp` 2,
@@ -373,33 +378,44 @@ Results: `bench/v3.5.0/dk-s0-premise-v3.5.0-13-g187ff9b1.md`; driver
   `clean_dropped.cpp` 1 each), `BtreeSeekLeaf` 4
   (`step_vm.cpp:2484`, `index_ddl.cpp:539`, `command_dispatcher.cpp:8969`,
   `:14364`). The secondary `DescendTo` is reached by `IndexInsert` (write,
-  `index_tree.cpp:365`), the batch insert (write, `:642`), the probe
-  (read, `:578`) and `IndexFetchLeafAtOrBelow` (read, `:604`).
+  `index_tree.cpp:365`), DD's `IndexRemoveEntries` (write, `:642`),
+  `IndexSeekLeaf` (read, `:578`) and `IndexFetchLeafAtOrBelow` (read,
+  `:604`) - line numbers at `424c8d0d`.
 - **Census, writers of what D1 and D2 lean on.** `min_key`: written only at
   a page's creation (`heap_page.cpp`'s init, a split's new leaf); never by
   a division of the old page or a compaction. `next_page_id`: a split's
   splice (`btree.cpp`'s two split paths and the append split), the
   compaction's rebuild that copies it, the catalog chain and the heap chain
   (no btree leaf). `right_sibling`: only the index divide's splice
-  (`index_tree.cpp:469-470`). A leaf's first entry: never removed - DD's
-  `PURGE INDEX` keeps it (`src/exec/index_purge.cpp:136`). **`level`**:
+  (`index_tree.cpp:463-464` at `424c8d0d`). A leaf's first entry: never
+  removed - DD's `PURGE INDEX` keeps it, enforced at
+  `src/storage/index/index_page.cpp:180`. **`level`**:
   every internal node is created through `CreateEmpty(level)` - a divide
   and a right-split copy the node's own level, a root growth writes the old
-  root's plus one - and every load checks it is in `[1, kMaxBtreeDepth)`;
-  a leaf is level 0, an internal node over leaves level 1, in both trees.
+  root's plus one; the index checks it is in `[1, kMaxBtreeDepth)` on every
+  load (`IndexInternalView::CheckAgainst`, `index_page.cpp:523`), the
+  clustered descent reads it unchecked (only `BtreeHeight` checks it). A
+  leaf is level 0, an internal node over leaves level 1, in both trees.
   So `level == 1` at a node names a leaf child for the life of the page,
   which is D1's premise.
-- **M1.** Every write descent fetched its leaf twice, in every write shape
-  and both trees: 1.00 second fetches a write descent.
+- **M1.** Every write descent fetched its leaf twice, in every insert
+  shape and both trees: 1.00 second fetches a write descent. No update or
+  delete shape was run; `LocateByTupleKey`'s write lookup is the same
+  descent by the code, and DK-S4 measures one.
 - **M2, M3.** No restart at `cores = 1` or on a relation of its own. On a
   shared relation 0.005-0.039 % of clustered descents restarted, and in
   five of twelve multi-core cells over two runs one descent exhausted the
-  bound (`refused_btree_descend` 4, `refused_index_descend` 1), each in the
-  cell's first second, when the relation's root grows a level - the stale
-  root. The index refusal was answered by `index_maintain.cpp`'s retry,
-  which re-reads the root, so it was a stale root by construction.
+  bound (`refused_btree_descend` 4, `refused_index_descend` 1), four in the
+  cell's first second, when the relation's root grows a level, and one
+  later, when a larger cell grows a third. That is the stale root's shape;
+  the run does not attribute each refusal to a cause. The index refusal
+  was answered by `index_maintain.cpp`'s retry, which inserts again only if
+  the root slot moved, so for that one the root had moved.
 - **M4 not taken**: no sampling profiler on this host. D1's price is
-  measured at the close instead.
+  measured at the close instead. **Also not done**: §1's re-reading of
+  CW §1.2's fetch-cost count (three structure-latch holds and two
+  compare-and-swaps a resident page) at this stage's commit; it is CW's
+  input, and CW is not open.
 
 Adopted on the operator's standing go-ahead of 2026-11-21
 (go-ahead-achieving-milestone): **DK-Q1 (a)** (D3 is CW's C3a; CW is not
@@ -408,3 +424,141 @@ open, so D3 does not build in DK and DK-S3 closes with nothing built),
 **DK-Q3 (a)** (D2 built: its second clause, a refusal in the standard
 cells, is met; its first, 0.1 % restarts, is not), **DK-Q7 (a)** (D4 stays
 rejected), **DK-Q9 (a)** (the standing budget: about 8 minutes of 20 spent).
+
+**DK-S0's review** (`critics-developer`, 2026-11-21, on `424c8d0d`): seven
+findings, every one applied to the record above and to the results file -
+the census missed `LocateByTupleKey`'s write lookup (so D1 also reaches a
+point `UPDATE`/`DELETE`, measured at DK-S4); a refusal is four restarts, not
+five; one of the five refusals fell outside its cell's first second; the
+stale-root cause was stated as fact where the run cannot attribute it; an
+unsupported "later restarts are single"; the clustered tree does not check
+`level` on every load; and five citation and labelling errors, with the
+re-reading of CW §1.2 not done and now listed as a cut. None rejected.
+
+### DK-S1 - D1, 2026-11-21
+
+On worktree `dk-descent-low-key` over `424c8d0d`. **A write descent takes
+its leaf exclusive at once**, in both trees (`btree.cpp` and
+`index_tree.cpp` `DescendTo`): at an internal node whose stored `level` is
+1 the child is fetched with `Get`, never shared first; a child that is not
+a leaf where `level` named one is `Corruption`; a root that is itself a
+leaf keeps the shared read, the release and the exclusive re-fetch. Reach:
+`BtreeInsert`, every `kWrite` `BtreeLookup` (`LocateByTupleKey`'s point
+`UPDATE`/`DELETE` and rollback relocation, `clean_dropped.cpp`,
+`BtreeHoldTombstone`), `IndexInsert`, `IndexRemoveEntries`. Amended:
+`btree.hpp`'s concurrency account, both `DescendTo` window comments,
+`heap-and-tuple.md` §5, `index.md` IX14, `page.md` §6.
+
+- **Tests.** `BtreeTest.AWriteDescentTakesItsLeafExclusiveInOneFetch` and
+  `IndexTreeTest.AWriteDescentTakesItsLeafExclusiveInOneFetch` (the
+  index cell replaces the one that drove the re-fetch window D1 removes)
+  pin the leaf's fetches as exactly one exclusive one, through a mode log
+  added to `tests/act_on_fetch_store.hpp`;
+  `BtreeTest.AWriteDescentRefusesAChildThatIsNotTheLeafItsParentsLevelNamed`
+  pins the `Corruption` branch; and
+  `BtreeTest.ALeafDividedBeforeTheWriteDescentReadsItIsNotWrittenPast` is
+  the clustered outrun cell the index tree already had.
+- **The armed rigs under D1** (the stage's "armed two-core rigs beside
+  it"). The coverage arm dropped from the clustered `DescendTo`: killed 10
+  runs in 10 by `btree_race_test.cpp`'s
+  `TwoCoresPromotingIntoOneParentLeaveEverySeparatorOverItsSubtree` alone -
+  the three cells that killed it before D1 no longer do, because their
+  interleaving (one writer's share, another queued exclusive) is gone - and
+  by no single-thread cell until the outrun cell above was added, which
+  kills it. The arm dropped from the index `DescendTo`: killed 10 in 10 by
+  `index_race_test.cpp`'s first cell, and by two `index_tree_test.cpp`
+  cells. Both rigs' headers now say so.
+- **Review** (`critics-developer`): no correctness defect in D1 (latch
+  order, `level`'s writers in both trees, the dirty flag, the owed page
+  image, the miss-refusal arm and the heat all checked equivalent). Applied:
+  the tests now pin *exclusive*, not only one fetch; the `Corruption`
+  branch got its cell; a dead action and an inlined helper in the index
+  cell; the race rigs' mutants re-run; the stale comments and spec lines
+  rewritten; the root leaf's type check moved inside the re-fetch branch,
+  where it is the only one; history removed from test comments.
+  **Rejected**: extracting one helper for the two trees' D1 blocks - the
+  reviewer advised against it too; the trees keep parallel descents on
+  purpose.
+- Overhead not measured; measured at the milestone's close.
+
+### DK-S2 - D2 on paper, 2026-11-21
+
+Written before any D2 code, on worktree `dk-descent-low-key` over DK-S1.
+
+**The hop.** Where a coverage check fails at a leaf L held in mode M, the
+descent reads `right = L.next_page_id()` (the secondary tree:
+`right_sibling()`) **under L's hold** (DK-R2), releases L, fetches `right`
+in mode M, checks its type, and asks coverage again under the new hold. A
+failed check proved `key >= right.min_key` (the secondary tree: `key >=`
+the right leaf's first entry); that bound is immutable, so it still holds
+once L is released and the new leaf satisfies `min_key <= key` without
+asking. The upper end is asked under the new leaf's own hold, so the leaf
+returned satisfies DK-R1 exactly as a leaf reached from the root does.
+`right` is never `kInvalidPageId` at a failed check: the rightmost leaf
+covers every key above its low key.
+
+- **Where it runs.** A write descent's leaf, in both trees (`DescendTo`,
+  `leaf_for_write`), and a read lookup's miss in the clustered tree
+  (`BtreeLookup`'s `!covered` branch), which then searches the new leaf for
+  the row. The secondary tree's read descent asks no coverage (its probe
+  walks forward), and neither does `BtreeSeekLeaf` (DK-Q8 (a)).
+- **The budget** (DK-Q4 (a)): 8 hops a descent attempt. Past it the
+  descent restarts from the root as today, and past `kMaxDescentRestarts`
+  is refused as today. A walk right cannot loop: each hop strictly raises
+  the low key and nothing removes a leaf.
+- **Not from the named root** (DK-Q10 (a), `[quiet-wrong]`, below). A
+  write descent whose leaf *is* `path[0]` - a root that is a leaf, which
+  is the stale-root case when the root has since been grown over - does
+  not hop; it restarts as today. A read lookup hops at any depth.
+- **The path.** A hop rewrites `path[depth]` to the leaf it ends at and
+  leaves `path[0..depth-1]` as routed. That is a stale parent where the
+  hop crossed into another parent's subtree, and `SecureParents` already
+  treats a recorded parent as a guess: `FetchParent` asks it whether it
+  still routes the key to `path[depth]` and re-descends from `path[0]` if
+  not. Under a stale root that re-descent cannot reach the new leaf's
+  parent, so **a split from a hopped-to leaf under a stale root is still
+  refused `TxnConflict` with nothing written** (`kRefusalBtreeParent`,
+  `kRefusalIndexParent`); an insert that needs no split is answered.
+
+**The latch order** against `page.md` §6 and `SecureParents`.
+
+- A hop holds nothing while it asks for the next page (DK-R3): L is
+  released before `right` is fetched, so no two leaves are held by the
+  hop. The coverage read inside each check keeps its leaf-then-right order.
+- `SecureParents` takes parents bottom-up while it holds the leaf, and
+  re-descends reading only above what it holds; it runs after the hop,
+  with the hop's one leaf held, so it meets the same state as after a
+  descent that reached that leaf from the root.
+- A splitter holds the old leaf exclusive across its `PromoteSeparator`;
+  a hop that waits on a leaf being split is granted it once the split has
+  spliced the new right page in, and then reads the new link. So a hop
+  never reads a link a split is still writing.
+- No page is asked for to the left or below while one is held: a hop goes
+  right only.
+
+**Amendments owed with the code**: `btree.hpp`'s concurrency account
+(a descent moves right along the leaf chain before it restarts);
+`heap-and-tuple.md` §5 (the descent and its coverage check, D1 and D2,
+DK-R5's sentence); `index.md` (the secondary tree's descent, DK-R5's
+sentence for the first entry); the refusal texts, whose "each leaf it
+reached had already given the key away" stays true.
+
+**Items added, adopted on the operator's standing go-ahead of 2026-11-21
+(go-ahead-achieving-milestone)**:
+
+- **DK-Q10 `[quiet-wrong]` - a write hop from the named root.** (a) none:
+  a write descent hops only from a leaf below `path[0]`, and a read lookup
+  hops at any depth; (b) a write hop at the root too. **(a) adopted.** Why:
+  `SecureParents` reads "no parent" as "the leaf is the root" - its
+  `count == 0` branch asks the leaf's own `grown_over` mark - and
+  `PromoteSeparator` grows the new root over `path[0]`
+  (`btree.cpp:590`, `index_tree.cpp:549`). A write that hopped from a root
+  leaf would hold an unmarked non-root leaf as `path[0]`, and its split
+  would grow a level over it: a second root, rows no descent from the
+  real one reaches, and no error. Premise re-read against the tree at
+  DK-S1 before it was adopted.
+- **DK-Q11 - a counter for hops.** (a) `descent_hops`, a `Contention`
+  tally counted once per hop on the failed-check path only, in
+  `sys.meta`'s contention block beside the refusal tallies; (b) none.
+  **(a) adopted**: DK-S4 compares restarts and refusals before and after,
+  and without it the close cannot say how often D2 answered.

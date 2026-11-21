@@ -100,16 +100,17 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
 // ---- The window, and what closes it (AT-S15) ----------------------------
 //
 // btree.cpp's `DescendTo` states it for the clustered tree, and every word
-// of it holds here: a write descent drops the leaf's shared hold before it
-// asks for the exclusive one (a page latch is never upgraded), and it
-// releases each parent before it reads the child (no latch coupling). Since
-// AT-S5 a write runs where its session is, so another core's divide can
-// land in either gap - and on a secondary index, whose keys are not a
+// of it holds here: a write descent releases each parent before it reads
+// the child (no latch coupling), takes its leaf exclusive at once below a
+// level-1 node (DK's D1), and only at a root leaf drops a shared hold
+// before it asks for the exclusive one (a page latch is never upgraded).
+// Since AT-S5 a write runs where its session is, so another core's divide
+// can land in either gap - and on a secondary index, whose keys are not a
 // sequence, a divide is the ordinary insert, not the rare one.
 //
 // **What is checked is coverage itself** (`LeafStillCoversKey`), once the
-// leaf is held exclusive - not the leaf across this descent's own two
-// fetches, which misses the second gap. Every divide must write this leaf,
+// leaf is held exclusive - not the leaf across this descent's own fetches,
+// which misses the parent-to-leaf gap. Every divide must write this leaf,
 // so the answer cannot go stale under the `Descent` that holds it.
 //
 // **Progress** is btree.cpp's argument, and it holds here for the same
@@ -125,6 +126,10 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
     for (int attempt = 0; attempt <= storage::kMaxDescentRestarts; ++attempt) {
         Descent d;
         PageId current = root;
+        // DK's D1, as btree.cpp's `DescendTo` states it: at a level-1 node
+        // the child is a leaf, so a write descent fetches it exclusive at
+        // once; only a root leaf is read shared and fetched again.
+        bool child_is_leaf = false;
         // Every path out of this loop returns, except the one `break` below
         // - the leaf gave the key away and the descent starts over.
         for (;;) {
@@ -135,7 +140,8 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
             }
             d.path[d.depth] = current;
 
-            auto bytes = store.GetForRead(current);
+            const bool exclusive_now = leaf_for_write && child_is_leaf;
+            auto bytes = exclusive_now ? store.Get(current) : store.GetForRead(current);
             if (!bytes.ok()) return bytes.status();
 
             if (IsLeafPage(bytes.value().bytes())) {
@@ -148,21 +154,32 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
                     d.leaf = std::move(bytes.value());
                     return d;
                 }
-                // Re-fetch for write: the frame is already resident, so this
-                // is a hash lookup that flips the dirty flag. The read handle
-                // is dropped **first**: it holds the page's latch shared, and
-                // a page latch is never upgraded (AM-S1, page_latch.hpp).
-                bytes.value().Release();
-                auto writable = store.Get(current);
-                if (!writable.ok()) return writable.status();
-                const IndexLeafView relatched(writable.value().bytes());
+                storage::PageRef leaf = std::move(bytes.value());
+                if (!exclusive_now) {
+                    // A root leaf: re-fetch for write. The frame is already
+                    // resident, so this is a hash lookup that flips the dirty
+                    // flag. The read handle is dropped **first**: it holds
+                    // the page's latch shared, and a page latch is never
+                    // upgraded (AM-S1, page_latch.hpp). Nothing turns a leaf
+                    // into an internal node, so the check above still holds.
+                    leaf.Release();
+                    auto writable = store.Get(current);
+                    if (!writable.ok()) return writable.status();
+                    leaf = std::move(writable.value());
+                }
+                const IndexLeafView relatched(leaf.bytes());
                 auto covers = LeafStillCoversKey(store, relatched, layout, sort_key);
                 if (!covers.ok()) return covers.status();
                 if (!covers.value()) {
                     break;  // a divide took the key's place to the right; start over
                 }
-                d.leaf = std::move(writable.value());
+                d.leaf = std::move(leaf);
                 return d;
+            }
+
+            if (exclusive_now) {
+                return Status::Corruption("index page " + std::to_string(current) +
+                                          " is not a leaf, yet its parent's level is 1");
             }
 
             if (Status s =
@@ -173,6 +190,7 @@ StatusOr<Descent> DescendTo(storage::PageStore& store, PageId root, const IndexL
             IndexInternalView node(bytes.value().bytes());
             if (Status s = node.CheckAgainst(layout, current); !s.ok()) return s;
 
+            child_is_leaf = node.level() == 1;
             current = node.ChildFor(sort_key);
             if (current == kInvalidPageId) {
                 return Status::Corruption("index node " + std::to_string(d.path[d.depth]) +

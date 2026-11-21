@@ -1673,6 +1673,87 @@ void ExpectEveryIdFound(storage::PageStore& store, PageId root,
     }
 }
 
+// **DK's D1: a write descent takes its leaf exclusive in one fetch.** The
+// root over the leaves is level 1, so the descent asks for the leaf with
+// `Get` at once and never takes it shared first. A mutant that restores the
+// shared read and the re-fetch reads "SX"; one that keeps the shared read
+// for the write reads "S".
+TEST(BtreeTest, AWriteDescentTakesItsLeafExclusiveInOneFetch) {
+    storage::InMemoryPageStore backing(64);
+    testing_race::ActOnFetchStore store(backing);
+    Tree tree(store);
+    auto ids = FillOnePerLeaf(tree, 4);  // a level-1 root over four leaves
+    auto leaf = BtreeSeekLeaf(store, tree.root, 20);
+    ASSERT_TRUE(leaf.ok()) << leaf.status().message();
+
+    store.OnFetch(leaf.value(), /*nth=*/1, [] {});  // records the leaf's fetches from here
+    // 25 sorts inside 20's leaf, and a small row fits beside 20's.
+    auto placed = tree.Insert(25, /*filler=*/64);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    EXPECT_EQ(leaf.value(), placed.value().page_id) << "25 belongs in 20's leaf";
+    EXPECT_EQ("X", store.watched_modes())
+        << "the write descent's fetches of its leaf, S shared and X exclusive";
+    ids.push_back(25);
+    ExpectEveryIdFound(store, tree.root, ids);
+}
+
+// **The outrun: a leaf divided before the write descent reads it.** The
+// root is read and released before the leaf is asked for, so another
+// core's divide can run before A has touched the leaf at all (its one
+// fetch, under D1). Only a question of coverage, asked under the leaf's
+// exclusive hold, sees that A's key has moved right.
+//
+// **Mutation**: drop the coverage arm from `DescendTo` (the `break` on a
+// leaf that no longer covers the key) and 65 lands in the left leaf, under
+// a separator that routes it elsewhere.
+TEST(BtreeTest, ALeafDividedBeforeTheWriteDescentReadsItIsNotWrittenPast) {
+    storage::InMemoryPageStore backing(64);
+    testing_race::ActOnFetchStore store(backing);
+    Tree tree(store);
+    constexpr std::size_t kFiller = 1016;  // seven to a leaf
+    for (std::uint64_t id = 10; id <= 80; id += 10) {
+        ASSERT_TRUE(tree.Insert(id, kFiller).ok()) << id;
+    }
+    auto left = BtreeSeekLeaf(store, tree.root, 10);
+    ASSERT_TRUE(left.ok()) << left.status().message();
+    auto right = BtreeSeekLeaf(store, tree.root, 80);
+    ASSERT_TRUE(right.ok()) << right.status().message();
+    ASSERT_NE(left.value(), right.value()) << "the fill must leave a full left leaf beside 80's";
+
+    // B's 15 divides the full left leaf, moving its upper half - 65's
+    // place - to a new page, before A's descent fetches the leaf.
+    store.OnFetch(left.value(), /*nth=*/1,
+                  [&] { ASSERT_TRUE(tree.Insert(15, kFiller).ok()) << "B's divide must land"; });
+    auto placed = tree.Insert(65, kFiller);
+    ASSERT_TRUE(placed.ok()) << placed.status().message();
+    ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
+    EXPECT_NE(left.value(), placed.value().page_id)
+        << "65 landed in the leaf that had already given its key away";
+    testing_race::ExpectBtreeSeparatorsBoundTheirSubtrees(store, tree.root);
+    ExpectEveryIdFound(store, tree.root, {10, 15, 20, 30, 40, 50, 60, 65, 70, 80});
+}
+
+// **A `level` that lies is Corruption, never a write into an internal
+// node.** A two-level root is poked to say level 1, so a write descent
+// takes its internal child exclusive as though it were a leaf; it must
+// refuse there rather than parse the node as a slot directory.
+TEST(BtreeTest, AWriteDescentRefusesAChildThatIsNotTheLeafItsParentsLevelNamed) {
+    storage::InMemoryPageStore backing(128);
+    Tree tree(backing);
+    FillOnePerLeaf(tree, kInternalMaxEntries + 2);  // the 680th grows a second level
+    {
+        auto root = backing.Get(tree.root);
+        ASSERT_TRUE(root.ok()) << root.status().message();
+        ASSERT_EQ(InternalView(root.value().bytes()).level(), 2u);
+        const std::uint16_t lie = 1;
+        std::memcpy(root.value().bytes().data() + kInternalHeaderOffset + kInternalLevelOffset,
+                    &lie, sizeof(lie));
+    }
+    auto placed = tree.Insert(5, kOnePerLeafFiller);
+    ASSERT_FALSE(placed.ok()) << "a write descent placed a row under a lying level";
+    EXPECT_EQ(placed.status().code(), StatusCode::kCorruption) << placed.status().message();
+}
+
 TEST(BtreeTest, APromotionIntoAParentAnotherCoreDividedLandsInTheHalfHoldingItsLeaf) {
     // **Window 2.** 686 leaves: the root's leftmost child P is full (678
     // separators), and its last leaf holds 6790. A's 6795 appends a leaf

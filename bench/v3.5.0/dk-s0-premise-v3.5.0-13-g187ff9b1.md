@@ -3,14 +3,17 @@
 **Thesis.** On the census spike `worktree-dk-s0-spike` at `187ff9b1`
 (`v3.5.0-13-g187ff9b1`; the engine at `2c2639df` plus thirteen counters,
 never landed), **every write descent of both trees fetched its leaf twice**
-(1.00 second fetches a write descent, in every write shape), so DK-Q2's bar
-for D1 is met. **Restarts are rare but they reach the bound**: 0.005-0.039 %
+(1.00 second fetches a write descent, in every insert shape measured), so
+DK-Q2's bar for D1 is met. A point `UPDATE` or `DELETE` takes the same write
+descent (`LocateByTupleKey`'s `kWrite` lookup) and was not measured here; it
+holds for them by the code. **Restarts are rare but they reach the bound**: 0.005-0.039 %
 of clustered descents at `cores` 2 and 4 on a shared relation, and in 4 of
 the 6 multi-core cells of the second run and 1 of 6 in the first, one
 descent exhausted all five attempts and was refused `TxnConflict`
-(`refused_btree_descend` 4 times, `refused_index_descend` once). The
-restarts cluster in each cell's first second, the window where the empty
-relation's root grows a level under load (M3). DK-Q3's bar for D2 is met by
+(`refused_btree_descend` 4 times, `refused_index_descend` once). Four of the
+five fell in the cell's first second, the window where the empty relation's
+root grows a level under load (M3); the fifth fell later, in a cell large
+enough to grow a third level mid-cell. DK-Q3's bar for D2 is met by
 its second clause (any refusal in the standard cells), not its first (no
 cell reached 0.1 % restarts).
 
@@ -30,7 +33,11 @@ cell reached 0.1 % restarts).
 ## 1. M1 - what a descent fetches, per statement (`cores = 1`)
 
 50,000 rows, ids even, trees two levels deep (a root over leaves);
-5,000 statements a shape; no error in any shape. Counts per statement.
+5,000 statements a shape; no error in any shape. Counts per statement, from
+run 1 (run 2 repeated M1 with 500 statements a shape and read the same
+counts, but `ixinsert`'s index sibling fetches were 0.088 there against
+0.74: where a new entry lands depends on the random keys drawn). No update
+or delete shape was run.
 
 | shape | bt descents | bt fetches | bt write descents | bt second fetches | bt sibling fetches | ix descents | ix fetches | ix second fetches | ix sibling fetches |
 |---|---|---|---|---|---|---|---|---|---|
@@ -45,7 +52,10 @@ is the exclusive `Get` of the same leaf after the shared one is released,
 and the sibling fetch is the coverage check's read of the right neighbour.
 **A write descent is three page fetches where two would do** on a two-level
 tree (four with a mid-chain sibling), on every write shape: D1 removes one.
-A named key mid-chain and a secondary insert also pay the sibling fetch
+The same descent serves a point `UPDATE` and `DELETE` and rollback's
+relocation (`CommandDispatcher::LocateByTupleKey`, `kWrite` by default),
+so D1 reaches them too; DK-S4 measures one. A named key mid-chain and a
+secondary insert also pay the sibling fetch
 DM prices (`workorder-dm-leaf-upper-bound.md`).
 
 ## 2. M2 and M3 - restarts and refusals
@@ -53,7 +63,7 @@ DM prices (`workorder-dm-leaf-upper-bound.md`).
 Four writer sessions a core, 8 s a cell, every cell from an empty relation.
 `named_ix` adds one reader a core doing point reads of random keys (lookup
 misses). "restarts" is attempts after the first; a refusal is five failed
-attempts. "first s" is restarts in the cell's first second. No client saw
+attempts, so four restarts. "first s" is restarts in the cell's first second. No client saw
 an error in any cell. Each clustered refusal has one dispatcher structural
 re-run (`structural_reruns`) beside it; the `refused_index_descend` of run 2
 has none (the index descent's refusal does not call
@@ -88,15 +98,16 @@ How to read it.
 - **Issued keys restart most.** Every `ins1_shared` writer descends to the
   rightmost leaf, which is the one being split; a descent routed there
   before the split's separator lands finds the key past it.
-- **A refusal costs exactly five restarts, and they come at the start.** The
-  refused cells' first-second counts (4-11) hold the refusal's five; the
-  later restarts are single. That is the shape the stale root predicts
-  (`btree.cpp`'s refusal text, M3): a descent from the root read before the
-  tree grew a level fails every attempt alike, and here the relation grows
-  from one leaf to two levels inside the first second. A split racing a
-  descent fails once and the second attempt succeeds. The run does not
-  separate the two causes per refusal: no counter says which root a failed
-  attempt started from.
+- **A refusal is four restarts, and four of the five came at the start.**
+  Four refusals fall in their cell's first second, whose restart counts
+  (4-11) hold each refusal's four; the fifth (run 2, `cores = 2`,
+  `ins1_shared`) is in the cell's total and not its first second - with
+  about 165 rows a leaf and 678 separators a root, that cell's 184,000 rows
+  grow a third level near 112,000. Both timings are the shape the stale
+  root predicts (`btree.cpp`'s refusal text, M3): a descent from the root
+  read before the tree grew a level fails every attempt alike. **The run
+  does not separate the causes per refusal**: no counter says which root a
+  failed attempt started from, nor how many attempts each descent took.
 - **The secondary tree restarts too** (run 2, `cores = 2`, `named_ix`: four
   restarts and one refusal), so DK-Q5's "both trees" has a case.
 
@@ -124,7 +135,8 @@ needs M4 for D3, does not open with this stage.
 Both runs together took about 4 minutes, the spike's build about 4 more,
 inside DK-S0's 20 minutes. Cut: M4 (no profiler); `cores` above 4 (eight
 CPUs shared with other sessions' builds); separate per-refusal cause
-attribution (no counter). The JSON of both runs is in
+attribution (no counter); an update and a delete shape in M1; the order's
+re-reading of CW §1.2's fetch-cost count. The JSON of both runs is in
 `bench/v3.5.0/archive/dk-s0-v3.5.0-13-g187ff9b1/`.
 
 Reproduce: `python3 -I tools/dk_s0_premise.py --bin <spike copy> --workdir <dir on a block device> --out <json> [--cores 2,4]`.

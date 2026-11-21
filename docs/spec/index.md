@@ -1179,10 +1179,12 @@ is the code it always was. Redo of these records is `docs/spec/wal.md`'s.
 An index hangs off its relation's catalog row; a write runs where its
 session is, and `CREATE INDEX` does too (AT-S5e), so two cores maintain one index concurrently. The pages carry the
 page latch (`page.md` §6). A descent is not latch-coupled - it releases a
-parent before reading the child, and a write descent drops the leaf's shared
-hold before taking it exclusive - so another core's divide can run inside
-either gap and leave the descent holding a leaf that has given the key to a
-new right sibling.
+parent before reading the child - so another core's divide can run inside
+that gap and leave the descent holding a leaf that has given the key to a
+new right sibling. A write descent takes its leaf exclusive at once below a
+level-1 node (DK's D1, as `heap-and-tuple.md` §5 states it); only at a root
+leaf does it drop a shared hold before taking it exclusive, a second gap of
+the same kind.
 
 - **The write side checks coverage.** Once the leaf is held exclusive,
   `IndexInsert` asks whether the key still sorts below the right sibling's

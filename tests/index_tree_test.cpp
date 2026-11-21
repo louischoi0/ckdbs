@@ -580,19 +580,20 @@ TEST(IndexTreeTest, AGrowthWhoseAnchorCannotBeReadWritesNothing) {
 // ---- Two cores in one index (AT-S15) ------------------------------------
 //
 // Since AT-S5 a write runs where its session is, so two cores maintain one
-// index. A write descent cannot hold what it found: the leaf's shared hold
-// goes before the exclusive one is asked for (a page latch is never
-// upgraded), and there is no latch coupling, so the parent is released
-// before the leaf is read at all. Another core's divide can run in either
-// gap. These cells put it there by hand, on the one fetch each gap ends
-// with; `index_race_test.cpp` asks the same question with real threads.
+// index. A write descent cannot hold what it found: there is no latch
+// coupling, so the parent is released before the leaf is read at all, and
+// another core's divide can run in that gap. Below a level-1 node the leaf
+// is then fetched exclusive at once (DK's D1), so there is no second gap
+// between a shared read and an exclusive one; the first cell pins that.
+// The others put a divide in the gap that remains, by hand, on the fetch it
+// ends with; `index_race_test.cpp` asks the same question with real
+// threads.
 //
 // **Mutation**: drop the coverage arm from `DescendTo` (the `break` on a
-// leaf that no longer covers the key) and the first two cells misplace
-// the entry; the third admits it into a subtree the root no longer
-// reaches - each killed 20 runs in 20. A check that compared the leaf's
-// right link across the re-fetch alone - the first draft AT-S5c rejected -
-// passes the first cell every run and fails the second and third every run.
+// leaf that no longer covers the key) and the outrun cell misplaces the
+// entry, and the stale-root cell admits it into a subtree the root no
+// longer reaches. Restore the shared read and the re-fetch and the first
+// cell fails.
 
 using DivideOnFetchStore = testing_race::ActOnFetchStore;
 
@@ -653,20 +654,20 @@ void ExpectAsEntryReachable(Fixture& f) {
     ExpectSortKeysAscend(f);
 }
 
-TEST(IndexTreeTest, ALeafDividedBetweenTheSharedReadAndTheExclusiveRefetchIsNotWrittenPast) {
-    // **The re-fetch window.** A's descent reads the leaf shared, drops it,
-    // and asks for it exclusive (fetches 1 and 2 of the leaf). B's divide
-    // runs between the two.
+TEST(IndexTreeTest, AWriteDescentTakesItsLeafExclusiveInOneFetch) {
+    // **DK's D1.** The root's stored `level` says its child is a leaf, so
+    // A's descent asks for the leaf exclusive, once, and never holds it
+    // shared: there is no window between a shared read and an exclusive
+    // re-fetch for another core's divide to land in.
     Fixture f;
     const PageId left = BuildFullLeftLeaf(f);
     DivideOnFetchStore store(f.store);
-    store.OnFetch(left, /*nth=*/2, [&] { ASSERT_TRUE(f.Insert(kKeyB, kTupleKeyNew).ok()); });
+    store.OnFetch(left, /*nth=*/1, [] {});  // records the leaf's fetches from here
 
     auto placed = IndexInsert(store, f.root, f.layout, Key(kKeyA), kTupleKeyNew, {}, /*owner_oid=*/0);
     ASSERT_TRUE(placed.ok()) << placed.status().message();
-    ASSERT_TRUE(store.fired()) << "the divide never ran; the cell tested nothing";
-    EXPECT_NE(left, placed.value().page_id)
-        << "A's entry landed in the leaf that had already given its key away";
+    EXPECT_EQ("X", store.watched_modes())
+        << "the write descent's fetches of its leaf, S shared and X exclusive";
     ExpectAsEntryReachable(f);
 }
 
