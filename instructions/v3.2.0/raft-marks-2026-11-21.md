@@ -34,3 +34,13 @@ The operator's words of 2026-11-21, recorded in English.
 | **DG-S0** | Done on the same word (the order's §7, "DG-S0"). The driver's `--insert-rate` is at `e9952d64`; the measurement is `bench/v3.5.0/results-dg-s0-premise-v3.5.0-36-ge9952d64.md`, and its §1 is V0's table. It ran 23.9 minutes against the standing 20 and states the cut. **The milestone stops at V0** |
 | **Does not settle** | V0, V1, the candidate, a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the DG order's header, §4 and §7; the DG row in `instructions/v3.2.0/index.md` |
+
+## 4. DG-S0 pushed with `--no-verify`
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given at DG's V0 stop |
+| **Mark** | **DG-S0 lands on `main`**: the work branch `worktree-dg-wal-segment-body` (`2c2ed8dd`, `e9952d64`, `ea8fd59d` and this record), merged `--no-ff` onto `origin/main` `46ee8a6e` and pushed. The branch changes no build input (bench, `tools/`, documents only), so no suite was run for it and none was run by the hook |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | V0, V1, the candidate (DG-Q2), a tag or a version |
+| **Recorded at** | this file |
