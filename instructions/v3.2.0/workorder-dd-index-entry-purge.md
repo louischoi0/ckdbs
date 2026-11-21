@@ -6,6 +6,10 @@ Status: **OPENED 2026-11-20 on the operator's standing go-ahead
 (`v3.4.17-1-g054dbc5e`). **DD-S0's verdict is build**; DD-Q0..Q7 are
 adopted on that go-ahead, none is the operator's own mark, and DD-Q1 and
 DD-Q6 were revised against the tree before adoption (§7, "DD-S0").
+**Closed 2026-11-20 and landed on `main` at `2c2639df`**
+(`raft-marks-2026-11-20.md` §29). **DD-S4 ruled (b) by the operator on
+2026-11-21** (`raft-marks-2026-11-21.md` §6): the unasked driver is
+designed and built in DN-S2, after DN-S1's mark, not here.
 **Written 2026-11-18.** Written on worktree
 `db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
 the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §24): *"Write
@@ -421,7 +425,7 @@ None is marked. (a) is CLA's proposal in each.
 | **DD-S1 - the judge and the leaf primitive** | The collecting sink on `IndexStagedRow`; the leaf removal; the tree-level remove with its re-find. Reached by tests only. **A dry run on every contract-suite relation: every entry the judge owes is present in the tree** | review, the full suite |
 | **DD-S2 - the statement** | `PURGE INDEX`: the parse, the role, the refusals, the attempts, the three phases, the units, the record, the count; the longest attempt (DD-R10) | review, the full suite, the cells below |
 | **DD-S3 - the close** | DD-Q7's measurement; the documents below; the milestone row | closed, or S4 put to the operator |
-| **DD-S4 - a driver** (only on a **build** verdict and the operator's word) | DD-Q4 (b), specified then | its own review and suite |
+| **DD-S4 - a driver** (only on a **build** verdict and the operator's word) | **Moved to DN-S2 by the operator's `$!b` of 2026-11-21** (`raft-marks-2026-11-21.md` §6): designed there with DN's record of which slots no index entry names. Not built in DD | - |
 
 **DD-S0's measurement.** Three relations of one history a cell: `x_a`
 takes a `REINDEX`, `x_b` and `x_c` are never touched. **The control pair
@@ -815,3 +819,15 @@ showed a 254 ms stall the run could not place; a quiet-host repeat is owed.
 
 
 **Synced** with `origin/main` at `49327ef9` (DJ merged; the marks file's section renumbered §24 behind DJ's §22 and §23, §26 at DN's merge behind DJ's landing (§24) and `v3.4.18` (§25), and §27 at the landing behind `v3.5.0` (§26)); suite on the merged tree 0 failed of 5010. **DD is closed on the work branch, not landed**: a push, a merge to `main`, a tag and DD-S4 wait for the operator's word.
+
+### DD-S4 ruled (b), 2026-11-21
+
+DD landed on `main` at `2c2639df` on the operator's "push no verify"
+(`raft-marks-2026-11-20.md` §29), untagged; the line above is the close as
+it stood on the work branch. On 2026-11-21 the operator marked **DD-S4
+option (b)** (`raft-marks-2026-11-21.md` §6): the driver that runs unasked
+is DN-S2's, designed after DN-S1's mark and with DN-R2's relation-wide
+slot record, since `PURGE INDEX` judges one index and a DN slot is free
+only when no index of the relation names it. DD builds no driver; on a
+btree relation entry removal stays `PURGE INDEX`, run by an administrator
+(DD-Q4 (a)).

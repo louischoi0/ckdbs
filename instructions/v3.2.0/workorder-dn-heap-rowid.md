@@ -5,7 +5,10 @@ Status: **OPENED 2026-11-20 on the operator's standing go-ahead
 worktree `dn-heap-rowid` at `34958393`. **DN-S0 and DN-S1 done; stopped at DN-S1's gate,
 the operator's mark on the amended invariants (§8)**. DN-Q0..Q14 adopted on that
 go-ahead, none the operator's own mark, DN-Q1, DN-Q9 and DN-Q13 revised against the tree;
-DN-Q12, DN-Q13 and DN-Q14 added at DN-S0 (§7). **Written 2026-11-20.** Written in the main checkout on
+DN-Q12, DN-Q13 and DN-Q14 added at DN-S0 (§7). **DD-S4, the unasked
+driver, ruled into DN-S2 by the operator on 2026-11-21** (`$!b`,
+`raft-marks-2026-11-21.md` §6); taken up again on the standing go-ahead the
+same day and stopped at the same gate. **Written 2026-11-20.** Written in the main checkout on
 `main` at `d091d096` (`v3.4.15-19-gd091d096`) on the operator's words of
 2026-11-20 (`raft-marks-2026-11-20.md` §13). The letter DN is CLA's
 proposal. **Exploratory by CLA's proposal** (DN-Q0): the operator's words
@@ -273,7 +276,7 @@ Every item below is unmarked but the half of DN-Q1 that DN-D6 settles.
 |---|---|---|
 | **DN-S0 - census and premise** | No engine code. **Read**: every path that finds a row by its Keystone (§1.3 completed); every path that assumes a relation's rows are a clustered tree - a walk, a key range, an `UPDATE`'s and `DELETE`'s locate, `ON CONFLICT`, the KWP load, recovery's redo of a tuple, backup's page classes, the sim; every site that reads invariants 2-4 and 11; what DD must provide for DN-R2, against DD's §4. **Measure**, `build-release`, inside the stage budget: a secondary index point read and an index range of 20 and 1,000 rows over a btree relation, against the same with the clustered descent replaced by a page fetch in a spike never committed - the most DN's address can save. | the census, the results file, DN-Q0..Q10 restated, and DD's re-read premise back to the operator |
 | **DN-S1 - the rules written** | `heap-and-tuple.md` §3.1b and §8, `CLAUDE.md`'s invariants, `index.md`, `foreign-keys.md`, `keystoneid-invariant.md` amended under the marks (DN-R9). Documents only. | the operator's mark on the amended invariants |
-| **DN-S2 - the heap** | After DD :>> DN-S2. The data pages, the rowid, the indexes naming it, the insert, the delete, the scan, the slot reuse under DN-R2; the superblock. | review, the full suite, `scripts/sim.sh` |
+| **DN-S2 - the heap** | After DD :>> DN-S2 and the mark at DN-S1's gate. The data pages, the rowid, the indexes naming it, the insert, the delete, the scan, the slot reuse under DN-R2; **the driver that removes index entries unasked and the record that no entry of any index names a slot** (DD-S4, moved here by the operator's `$!b` of 2026-11-21); the superblock. | review, the full suite, `scripts/sim.sh` |
 | **DN-S3 - the consumers** | §1.3's paths under DN-Q2, Q5, Q6, Q10. | review, the full suite |
 | **DN-S4 - the close** | DN-S0's cells against the build; the btree standard cells (DN-R7); a heap against its btree twin on insert, point read, secondary-index read and scan. | closed |
 
@@ -590,3 +593,22 @@ duplicate clause restated for a heap; the order's read-at line names both
 commits; this entry cut to its gate. **Rejected**: none. It recommended
 DN-Q13 go back to the operator unmarked; it goes to the operator with §8,
 adopted as (c) and open to the mark.
+
+### DD-S4 ruled into DN-S2, 2026-11-21
+
+On worktree `dn-dd-s4-into-dn-s2` from `dcab41e5` (`v3.5.0-39-gdcab41e5`),
+documents only. The operator marked **DD-S4 option (b)**
+(`raft-marks-2026-11-21.md` §6): the unasked driver is built in DN-S2, after
+this order's DN-S1 mark, and is designed with DN-R2's record that no entry
+of any index of the relation names a slot - DD's `PURGE INDEX` judges one
+index (DD's §0a item 5), so the driver's unit is the relation, not an
+index. §5's DN-S2 row now carries it. The design is DN-S2's and is not
+written here.
+
+Taken up on the operator's standing go-ahead of 2026-11-21
+(go-ahead-achieving-milestone), and **stopped at once at DN-S1's gate**:
+the mark on §8 (invariant 4, 9, 11's restatement; DN-Q13 (c), DN-Q14 (a),
+both `[quiet-wrong]`) amends hard invariants, which only a recorded mark of
+the operator's does. Owed before DN-S2, besides the mark: DN-Q11's
+descending named load, measured. No item was adopted at this entry.
+
