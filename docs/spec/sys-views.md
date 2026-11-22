@@ -483,8 +483,9 @@ order reads 0 however many leaves it has. An index leaf has no append
 shape, so every split of one is a division, a build's and a rebuild's
 included. A compaction is the rebuild in place of a full clustered leaf
 over slots a rollback or a `PURGE` retired, taken in place of a division
-(`heap-and-tuple.md` §5); an index leaf is never compacted, no index entry
-being removed, and `sys.indexes` has no such column. A mount's replay
+(`heap-and-tuple.md` §5); an index leaf is never compacted - `PURGE
+INDEX` takes entries out of one in place (`index.md` §2.2) - and
+`sys.indexes` has no such column. A mount's replay
 counts nothing. The store is the process's, as §6's are but §6.2b's -
 the storage layer has no instance to ask - bounded at 8192 trees a core,
 relations and indexes together; past it a new tree's counts are dropped and

@@ -27,7 +27,9 @@ operator's own. **The operator's second word of 2026-11-17 opened CU-S4**
 (`raft-marks-2026-11-17.md` §4): the close is measured (§7,
 `bench/v3.4.11/results-cu-close-v3.4.11-40-g70a307ea.md`).
 The work branch is merged to `main` with `--no-ff` and pushed with
-`--no-verify` (§5 of that file); no version is taken.
+`--no-verify` (§5 of that file); no version was taken with it. **`v3.4.12`
+was then tagged at that merge, `a0672010`, on the operator's word**
+(`raft-marks-2026-11-17.md` §6).
 Written
 on `main` at `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15
 (`raft-marks-2026-11-15.md` §6). Every `[source-read]` claim in §1 was

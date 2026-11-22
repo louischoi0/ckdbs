@@ -55,6 +55,13 @@ clause from an absolute rule into the option `join_order`, and W4-W5 give
 its off value a meaning: the first plan is captured and fixed. Where W0 and
 W3 disagree, W3 is the later word and stands.
 
+**The close measured 2026-11-18 and landed on `main` with `--no-verify` on
+the operator's word, the regression standing** (§8; `raft-marks-2026-11-18.md`
+§47, §49): the merge `828899f6` dropped CY's change and was fixed forward at
+`8dc37b80` (the full Debug suite 0 failed of 4732 there), **carried by
+`v3.4.13` at `8dc37b80`** (`raft-marks-2026-11-19.md` §1). The regression
+was bisected to DF-S1, no CX stage carrying any (§8, the last entry).
+
 **Claim tags**: `[source-read]` with `path:line` at `286889cc`; `[design]`
 for reasoning about code not yet written; `[measured]` with its commit;
 `[quiet-wrong]` where a wrong choice turns a correct answer into a wrong

@@ -3,7 +3,9 @@
 Status: **CLOSED 2026-11-20, landed on `main` at `56d57f16` on the
 operator's word "push no verify" (hook skipped, suite 0 failed of 4,997 on
 that tree) and tagged `v3.4.18` there on "tag 3.4.18"**
-(`raft-marks-2026-11-20.md` §24, §25). Every
+(`raft-marks-2026-11-20.md` §24, §25); **`v3.4.18` and `v3.5.0`
+(`07f4552a`, which carries DJ too) are local tags, not pushed**
+(`raft-marks-2026-11-20.md` §26). Every
 stage done (§7: DJ-S1 `69d754ae`, DJ-S2 `56855c48`, DJ-S3 `1fc21809`,
 DJ-S4 `5333fbb2`, the close
 `bench/v3.4.17/results-dj-close-v3.4.17-6-g5333fbb2.md`: no delta resolved).
@@ -14,8 +16,8 @@ worktree `dj-connections-sessions-cursors` from `054dbc5e`
 the premise (`bench/v3.4.17/results-dj-s0-premise-v3.4.17-1-g054dbc5e.md`),
 and the two settings at `69d754ae`. **Every DJ-Q item is adopted (a) on that
 standing word, DJ-Q2 and DJ-Q3 as revised at DJ-S1, and none is the
-operator's own mark**; DJ-Q13..Q16 were raised at DJ-S1. Not landed: no
-push, merge, tag or version.
+operator's own mark**; DJ-Q13..Q16 were raised at DJ-S1. At DJ-S1 not
+landed: no push, merge, tag or version (landed since, above).
 
 Written in the main checkout on
 `main` at `4d72be11` (`v3.4.15-3-g4d72be11`) on the operator's words of

@@ -1,6 +1,6 @@
 # Work order DL - statistics queue no statement, and a switched-off consumer collects nothing: the two rules established over every recording path, every statistics read a statement makes and every collection task, and checked
 
-Status: **CLOSED 2026-11-20; landed on `main` 2026-11-21 on the operator's
+Status: **CLOSED 2026-11-20; landed on `main` 2026-11-21 at `f0c95a09` on the operator's
 word, push no verify, not tagged** (`raft-marks-2026-11-21.md` §1; §7, DL-S6):
 every stage built, the close measured
 (`bench/v3.4.17/results-dl-close-v3.4.17-11-g30e169df.md`: no cell

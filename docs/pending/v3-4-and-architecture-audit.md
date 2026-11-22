@@ -1,8 +1,14 @@
-# Pending: the v3.4.* and architecture audit - 29 slices and 7 interaction hunts read, 117 findings, nothing fixed
+# Pending: the v3.4.* and architecture audit - 29 slices and 7 interaction hunts read, 117 findings, the contained ones applied
 
 Status: **PENDING** - recorded 2026-11-20. It decides nothing, opens no stage
 and licenses no code; each finding waits for the operator's word to be taken
-up, deferred or dropped.
+up, deferred or dropped. **The contained defects and dead code were applied
+on 2026-11-20** (section 10; on `main` at `d436b7b1`), and later milestones
+closed three more: **H33** by DL-S2 (`f511df53`, merged at `f0c95a09`: the
+session registry takes no latch) and **H36** and **H39** by DO-S2's E4a
+(`a97bd952`, merged at `bf289a82`: the write fetch's image debt taken in
+the exclusive grant's own hold). The rest of section 6 is not re-read
+against DK, DL, DN or DO.
 Raised: 2026-11-20, in conversation with the operator.
 Read at: `fba5529f` (`v3.4.17`), on worktree `audit-v3-4-and-architecture`.
 Every `path:line` below is at that commit.

@@ -18,7 +18,9 @@ decay that was due is lost at every touch, not deferred.
 plus DL-S1's working tree, by a probe over `decay.hpp` alone (the code is
 unchanged since before DL; DL-S1's `MergeDecay` restamps the same way and
 inherits it, no worse: a fold restamps the folded pair only when a part
-noted the shape). Found by DL-S1's review, 2026-11-20.
+noted the shape). Found by DL-S1's review, 2026-11-20. **Re-read at
+`bf289a82`**: `decay.hpp` last changed at `18664808` (DL-S1), and
+`Accumulate` still restamps `last_bump = now`.
 
 **Smallest reproduction.** A `ManualClock`, a 600 s half-life:
 

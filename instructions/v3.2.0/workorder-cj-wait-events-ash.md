@@ -14,7 +14,9 @@ operator chose "work order" as their form (the session's question of
 proposed, and CJ-Q8 (below) was added when WE03 found a premise false; none
 is the operator's own per-item mark. **Stages WE01-WE13 and gates G1, G2 landed
 2026-11-01 on `worktree-cj-wait-events-ash` (closing commit `f17bdf81`,
-`v3.4.6-16-gf17bdf81`); WE14 stays reserved. Not merged, not pushed. Close
+`v3.4.6-16-gf17bdf81`); WE14 stays reserved. Merged to `main` at `175deeac`
+the same day with the hook skipped (the suite 4388/4388 on the CK-merged
+tree, Debug), and carried by `v3.4.7` at `6c4b9a6d`. Close
 measurement and its reading: stage log §8, "The close".** CJ-Q13, CJ-Q14 and
 CJ-Q15 were added and adopted on the standing go-ahead
 (`raft-marks-2026-11-01.md` §2).

@@ -30,7 +30,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   hot set of half a 16,384-frame pool, read once or three times, is 92 %
   re-faulted after a scan four times the pool. The scan drives about eight
   laps of the hand, and each lap lowers every hot counter. BE-Q7 names this
-  the case for the scan ring's own order, which is not written. Owned by
+  the case for the scan ring's own order: `workorder-bg-scan-queue.md`,
+  written 2026-10-07 and stopped after BG-S1 (2026-10-08). Owned by
   `docs/spec/eviction.md` (EV6, §3.1).
 
 - **The executor does not scan through EV6's ring, by decision.** Re-read
@@ -92,7 +93,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   known for the five cells in the file and for no other. **The tree
   that merged DH with `origin/main` at `18f2e339` (CV, the audit's
   dead-code removals) was not suite-run before it was pushed**; DH's own
-  tree ran 0 failed of 4,883 before that merge. **Owner: none.**
+  tree ran 0 failed of 4,883 before that merge. A later tree holding that
+  merge, `ca49f418`, ran 0 failed of 4,965 (landed at `d436b7b1`). **Owner: none.**
 - **No cell crashes a multi-core instance under the rotated checkpoint
   gate and mounts it.** On `dh-page-image-volume` over `76fe6777`
   (DH-S2), 2026-11-20. Since DH-S1a a core's own checkpoint comes every
@@ -308,14 +310,6 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## WAL
 
-- **The server manual still says WAL recovery is not implemented.**
-  `manual/server/server.md` §6 ("What a restart loses") reads "WAL recovery
-  is not implemented" and "`enforcing=0` after a restart until recovery
-  exists", against §5 of the same file, `wal.md` §8 and `assertion.md`:
-  recovery runs at every mount and assertions enforce immediately after a
-  restart. Read on `de-page-read-off-the-reactor` at `1942cb9a`,
-  2026-11-19; DE's close corrected the same claim in §5 ("Durability
-  points") and left §6 as found - it is not DE's.
 - **A log this build wrote is not one a pre-DH build of the same
   superblock can always replay.** Since DH-S1b (on `dh-page-image-volume`
   over `8fc41252`) the write fetch's image is record kind 35,
@@ -422,7 +416,7 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     **Since `fix-redirtied-page-rec-lsn` (`0e88060a`) the recLSN moves up to the lowest
     LSN stamped since the copy** (`wal.md` §11-2); the relaxed cell has not
     been re-measured, and the gate's rotation - each core one run about
-    every `cores × (period + period / cores)`, 25 s there - still bounds how
+    `cores` periods since DH-S1a (`wal.md` §11), and one more per turn it loses - still bounds how
     often the fold can move.
   - Syncing only the segments *written* since the last sync would be
     enough: the previous tail plus any segment created since. Nothing
@@ -474,7 +468,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     its samples of 10 ms or more at `group` (76 % at `strict`) are due
     inside that `fsync`.
   - Without the fill, the commit's median rises 76-94 % instead.
-  - Which body to build is DG's, opened and stopped at its V0. Owner:
+  - DG was closed on 2026-11-21, abandoned with nothing built, and no order
+    owns the stall. The body stays reserved, zero-filled and synced ahead. Owner:
     `docs/spec/wal.md` §6.
 
 ## Multi-core state
@@ -667,7 +662,10 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   no longer reaches the client; not re-measured. No cell isolates which
   cause fires (a grown-over root carries a mark `SecureParents` reads and
   `DescendTo` does not). The cited results files are not in the working
-  tree. Constant and message re-verified at `7dd9b789`. Owner:
+  tree. Constant and message re-verified at `bf289a82`: since DK (`46ee8a6e`)
+  a descent moves right up to `storage::kMaxLeafHops` leaves before a
+  restart, `DescendTo` still reads no grown-over mark, and the message
+  names both causes (the stale-root-leaf entry above). Owner:
   `docs/spec/heap-and-tuple.md` §5.
 
 - **No cell drives a stale writeback against a re-faulted frame.** AT-S8
@@ -685,8 +683,11 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `26766699` (BH-S3). A committed key stays bound because its delete-marked
   row stays in its leaf - the tombstone BD-R4 rests on - until the operator's
   `PURGE` retires it (`heap-and-tuple.md` §4.1c), K1's one named exception.
-  Nothing else retires a delete-marked user row (`Catalog::RetireDeleteMarks`
-  walks catalog chains only). **What an engine-internal purge would owe**: a
+  Nothing else retires a delete-marked row of a btree relation or a
+  declared-Keystone heap (`Catalog::RetireDeleteMarks` walks catalog chains
+  only); since DN (`48a3276c`) a hidden-Keystone heap's slot release retires
+  its tombstones unasked, owing none because such a heap refuses a named key
+  below its issue mark (`heap-and-tuple.md` §3.1b; `exec::HeapSlotRelease`). **What an engine-internal purge would owe**: a
   keyed, never-visible tombstone in the row's key position, which the
   duplicate check and the placement order read and every walk and
   `VerifyTupleAt` treat as absent - or it reclaims nothing. Owner:
@@ -727,16 +728,6 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     may retire a row it is entitled to read, a wrong answer with no error
     (`heap-and-tuple.md` §4.1c; BH-S1's Census A).
   Owner: `heap-and-tuple.md` §4.1c.
-
-- **`DELETE` refuses a system relation only by accident.** Verified at
-  `80a0c223` (BH-S1, Census D). `DELETE FROM sys.tables` resolves the name,
-  and `InitTableAccess` answers `NotFound` *"no columns for this rel_id"*,
-  because a bootstrap relation has no `sys.columns` rows (`catalog.cpp`).
-  The refusal would change the day the catalog learns its own columns, and
-  `NotFound` says the relation is absent when it is not. `PURGE` refuses one
-  explicitly, `Unsupported` (BH-Q17); `DELETE` and `UPDATE` do not.
-  `PurgeKeyTest.CensusDADeleteOfASystemRelationIsRefusedOnlyByAccident`
-  pins the accident. Owner: `heap-and-tuple.md` §4.
 
 - **An omitted tuple key on a btree can be refused `AlreadyExists`.** Verified at
   `91c998a3` (BD-S5), by reading `CommandDispatcher::InsertOneRow`. The id
@@ -978,7 +969,9 @@ pages and the cases it does not reach.
 - **A drop committed during a run is freed at the next checkpoints, not at
   once.** Its gate is the durable redo start past its commit, which takes
   a checkpoint that finds the dropped relation's dirty frames written back
-  - about two cadence intervals.
+  - about two cadence intervals at `cores = 1`, and up to about `cores + 1`
+    above one (DH: a core's own run comes every `cores` intervals, `wal.md`
+    §11).
 - **A refused reclaim stays pending.** A reclaim refused - a page reached
   twice by the walk, an unreadable page, a failed free or map sync - leaves
   the tombstone owing for the rest of the run. It is driven again at the
@@ -1030,12 +1023,14 @@ pages and the cases it does not reach.
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 `docs/spec/protocol.md` §10.
 
-- **Only a `SELECT`'s outermost walk and a relation-`X` build (or an online `CREATE INDEX`) yield.**
+- **Only a `SELECT`'s outermost walk, a relation-`X` build (or an online `CREATE INDEX`), a `GATHER STATISTICS` and a `PURGE INDEX` yield.**
   The walk yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a
   `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` or `CREATE
   TRANSITION` build every 64 relation leaves (`CREATE ASSERTION` and
-  `CREATE TRANSITION` since A1 stage 2b, `IndexBuildSliceRigTest`).
-  Nothing else running gives its core back:
+  `CREATE TRANSITION` since A1 stage 2b, `IndexBuildSliceRigTest`). A
+  `GATHER STATISTICS` (CY) and a `PURGE INDEX` (DD) give it back every 16
+  leaves (`GatherRun`, `PurgeIndexRun`, each a `BuildRun`; re-read at
+  `bf289a82`). Nothing else running gives its core back:
   - a write;
   - a tuple key descent, run inline by design, and a key set's descents
     (CU-Q8; "Key sets (CU)" below states the bound);
@@ -1147,7 +1142,8 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   yield with a checkpoint between its slices: `AssertionPublishRigTest`'s
   relations fit one slice, so its publish seam runs in a tail that never
   yielded.
-- **A cancel is observed only where a walk or a relation-`X` build
+- **A cancel is observed only where a walk or a build run (a relation-`X`
+  build, `GATHER STATISTICS`, `PURGE INDEX`)
   yields, or at the next frame.** A write that `C_CANCEL` or a closing connection asks to stop
   runs to its end, and the cancel then refuses the session's next frame.
   So a dropped connection can still find its write applied.
@@ -1311,11 +1307,13 @@ Written at BJ's close on `worktree-bj-expression-update`. Owned by
   `LIKE`, `EXISTS`, `IS TRUE` and `IS DISTINCT FROM`; a boolean literal
   (`TRUE`/`FALSE`); `<>` (inequality is `!=`); a correlated subquery; a
   subquery over a catalog view; the row form `SET (a, b) = (SELECT ...)`;
-  `DEFAULT` and `UPDATE ... FROM`; timestamp arithmetic (there is no
+  `DEFAULT`; timestamp arithmetic (there is no
   `INTERVAL`); a negative count of places in `ROUND`/`TRUNC`; an expression
   that reads a column or the clock assigned to a foreign-key column.
-- **An expression in `INSERT ... VALUES`, a select list or a WHERE** is not
-  built (BJ-Q8): each is its own order on the same grammar.
+- **An expression in `INSERT ... VALUES`, a select list or a WHERE** was
+  not built by BJ (BJ-Q8); since BU an `INSERT` value is a SET value
+  (`parser-v2.md` I20) and a `SELECT`'s select list and WHERE operands are
+  the query layer's (I19).
 - **Where it differs from the reference dialect, on purpose:**
   - **Exact types** (BJ-Q2 (b)): `int32 + int64` needs a `CAST`. The one
     departure is a scaled decimal (`ROUND`/`TRUNC`/`CEIL`/`FLOOR` over a
@@ -1331,7 +1329,8 @@ Written at BJ's close on `worktree-bj-expression-update`. Owned by
   - **A scalar subquery is run once, before the walk, wherever it is
     written**, so one in a `CASE` branch no row takes still runs and its
     error stands; and a WHERE-position subquery in the same statement is
-    re-run per row and sees the statement's earlier rows.
+    re-run per row of the read walk that collects the targets, before any
+    row is written (`parser-v2.md` R2).
   - A simple `CASE x WHEN a` is the searched form with `x` repeated, so a
     nested one multiplies its operand's size; the parser bounds an
     expression at 4,096 nodes counting a shared child per reference. Holding
@@ -1531,7 +1530,10 @@ Owned by `instructions/v3.0.0/workorder-bp-per-core-residue.md` §7.
   are 1 / 2 / 3.9 at cores 1 / 2 / 4, and pages written per 1,000 rows rise
   11-18 % from one core to four. Under BP-R2's throughput and p99 terms;
   one instance-wide run would need every live transaction's undo head
-  published, a recovery-correctness change (BP-Q5 (b), not taken).
+  published, a recovery-correctness change (BP-Q5 (b), not taken). Since
+  DH-S1a (`8fc41252`, merged at `799a767d`) the cadence is one run a
+  period for the instance, the cores in turn (`wal.md` §11), so these
+  figures are of the per-core cadence DH replaced; not re-measured.
 - **A whole catalog memo drops when the schema word moves for a root a
   level grew over** (BP-H6): at most 2.7e-4 drops per statement, 0.08 % of
   statement CPU at worst.
@@ -1627,14 +1629,13 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
   for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
   interleaving state moves with transactions, rollbacks and faults is not
   generated.
-- **The sim harness generates no heap relation.** Verified at
-  `0205444b` (`sim/workload.cpp`): every relation the workload creates is a
-  btree with a declared tuple key, because the oracle reconciles rows by
-  tuple key and a heap's is hidden (`heap-and-tuple.md` §3.1b). A heap's
-  storage is the btree's, which the corpus exercises; its surface - the
-  hidden column skipped by `*`, `RETURNING *`, `DESCRIBE`, positional
-  `INSERT` - and its crash recovery are covered at unit level only
-  (`tests/heap_hidden_key_test.cpp`), never by a seeded crash workload.
+- **The sim harness generates no hidden-Keystone heap.** Verified at
+  `bf289a82` (`sim/workload.cpp:87-95`): since DN-S3 (`bc8c9d97`) a table
+  is a heap one time in two, always with its `id` the declared Keystone,
+  because the oracle reconciles rows by tuple key. A hidden-Keystone heap's
+  surface - the hidden column skipped by `*`, `RETURNING *`, `DESCRIBE`,
+  positional `INSERT` - and its crash recovery are covered at unit level
+  only (`tests/heap_hidden_key_test.cpp`), never by a seeded crash workload.
 - **`CREATE`/`DROP TRANSITION` inside an explicit transaction commit at the
   statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
   them.
@@ -1951,7 +1952,8 @@ the claim's deepening trap, the leak per mount); these are what it leaves.
 
 ## Catalog chains past the old ceiling
 
-Verified on `worktree-fix-catalog-page-ceiling` at `0e539d46`, 2026-10-18.
+Verified on `worktree-fix-catalog-page-ceiling` at `0e539d46`, 2026-10-18;
+every entry re-read at `bf289a82`.
 Since superblock 31 every page a catalog chain grows onto comes from the
 general supply and the reserved range 17..127 is deleted (`catalog.md` CT5,
 `crosscore.md` CC12 CR3). The operator ruled "$!recommended" on 2026-10-18,
@@ -1962,7 +1964,7 @@ change's stages found and left.
 - **A cold `sys.tables` walk can spend an `INSERT`'s no-refuse window.**
   (D4.) A grown catalog page is an ordinary evictable frame (`eviction.md`
   EV3). An `INSERT` opens its `NoRefuseWindow` (`command_dispatcher.cpp`
-  :5804) before `AdmitExplicitRowId` (:5842) or `AllocateRowId` (:5864)
+  :8830) before `AdmitExplicitRowId` (:8895) or `AllocateRowId` (:8922)
   walks `sys.tables` from its root to the relation's row, so every cold page
   of that walk faults inside the window and spends one frame of its
   64-frame share (`page_store.hpp`'s `kWindowFrames`), which is never
@@ -1976,7 +1978,9 @@ change's stages found and left.
   the O(chain) walk per `INSERT`), would close it; the second was CLA's
   proposed follow-up. **No owner.**
 - **`WAYSTONE ON` scans the whole of `sys.patterns` under page 9's
-  exclusive hold.** Restated on `cf-waystone-premise` at `46c632aa`; the
+  exclusive hold.** Restated on `cf-waystone-premise` at `46c632aa`, re-read
+  at `bf289a82` (a committed `DROP TABLE`'s `Catalog::EndPatternsNaming`,
+  DI-S3 `6bedc13f`, walks it whole under the same hold too); the
   statement-path registration scan this entry named (D9.) is gone with
   `Catalog::RegisterPattern` (CF-S1b), so no `SELECT` scans or writes the
   chain. `Catalog::SetPatternWaystone` holds the root exclusive across the
@@ -2054,7 +2058,9 @@ change's stages found and left.
 
 - **The planner prices a relation at `kAssumedRelationRows` until its prior
   is published.** Since CC-S3 a relation's prior replaces the constant
-  (`docs/spec/plan-stats.md`), but a mount or a restore starts empty: until
+  (`docs/spec/plan-stats.md`), but a mount after a crash, or a restore,
+  starts empty (a clean shutdown's priors are kept, CY-S1a `59dcf2af`,
+  `plan-stats.md` §8): until
   the steward's first publish - a second after a planned statement first
   meets the relation - the plan is data-free. Owned by `plan-stats.md`.
 
@@ -2179,7 +2185,7 @@ Verified on `da-q8-memory-bound-key` (branch
   anything at `cores` above 1.
 - **`sys.statement_stats` and `sys.statement_histogram` copy every shape
   under each part's latch**, and a shape is 624 bytes, from 184: the delay
-  a read puts on a part's writer (above) grew with it, unmeasured.
+  the records a read's copy drops (above) grew with it, unmeasured.
 - **`sys.refusal_stats` assumes one writer a core** and checks nothing: two
   threads recording as one core lose counts. Its bound, 64 codes, is
   asserted against the wire registry's last entry as it stands, not against
@@ -2284,11 +2290,9 @@ Owned by `docs/spec/sys-views.md` §6.2c and `docs/spec/plan-stats.md` §6.
   and ones clustered in a sampled leaf read many times their number.
 - **An append is counted nowhere**, so `leaf_divisions` says nothing of how
   fast a tree grows; `leaves` does.
-- **The count is taken under the divided leaf's exclusive hold**: a latch
-  of the store's and, at a tree's first division on a core, an allocation
-  (DF-Q22 (a)). A reader of the view holds that latch for its copy of the
-  part, which allocates, and a division on that core waits for it. Not
-  measured.
+- **The count is taken under the divided leaf's exclusive hold**: no latch
+  since DL-S2 (`f511df53`), but a core's first division of any tree
+  allocates under that hold (DF-Q22 (a)). Not measured.
 - **`est_delete_marked` can be older than the relation's last seed**: a
   seed that read no leaf keeps the estimate the one before it made.
 - **`leaf_divisions` and `leaf_compactions` are the process's**, not the
@@ -2356,13 +2360,9 @@ DI-S2's commit. Owned by `docs/spec/cabin-controller.md` PO7c.
   plus one for its executions with no candidacy, under the same 4,096
   cap** (`kMaxTrackedFingerprints`, `[PROPOSED]`, unmeasured): 41 texts
   under 100 namespaces pass it where 41 entries stood before. Past the cap
-  every new signal evicts the coldest - commonly another newcomer, so
-  neither builds a count - and pays the 4,096-entry scan under the
-  collector's latch, on the success path of every `SELECT`. The eviction
-  rule is unchanged; its reach is what moved.
-- **The execution feed runs with the controller off**, under its latch
-  above one core (`RecordOptimizerSignals`): only `Tick` and the wait
-  samples follow the switch. Unchanged by DI.
+  the fold evicts the coldest to admit a hotter newcomer, in one pass a
+  part on the controller's tick (DL-S1, `18664808`), not on a statement's
+  path. The eviction rule is unchanged; its reach is what moved.
 - **A dropped relation's signals are not forgotten at the drop**: they
   name an oid no statement can bind again, decay, and are evicted when the
   table is full.
@@ -2603,7 +2603,9 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   block's compile on every core probes the administrator's table - one
   partition latch - a tuple key chain's included, which the captured table
   is never asked of (CX-R6 as amended in the stage log). Neither is
-  measured; the overhead measurement is owed at CX's close. Owned by
+  measured on its own; CX's close found an enabled join plan's probe miss
+  unresolvable (`a32528a4`,
+  `bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`, P1). Owned by
   `exec/admin_plans.hpp`.
 
 - **A block run in an order other than its written one compiles twice,
@@ -2632,8 +2634,8 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   turn a hot filter scan into a Cabin probe on its own now builds the
   Cabin and leaves the scan: someone - a DBA, an agent - has to issue
   `CREATE PLAN ... ACCESS <relation> CABIN (<column>)` for each shape that
-  should read through it, and nothing proposes that plan (`ADVISE PLAN`
-  is CX-S7). An unnamed Cabin is probed by no statement's step, so it
+  should read through it, and nothing proposes that plan (`ADVISE PLAN`,
+  CX-S7, proposes an order alone). An unnamed Cabin is probed by no statement's step, so it
   observes no value, HEAL never fires for it, and an EXTEND - which a
   foreign key reverse check's misses on a child's Cabin can still
   trigger - finds nothing sighted to seed; it holds
@@ -2661,15 +2663,16 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   nothing resolvable. Owned by `exec/admin_plans.hpp`.
 
 - **Point statements are 1.2 % to 2.0 % slower at CX's close than where
-  CX opened, and the cause is not attributed.** Measured at `a32528a4` on
+  CX opened, and the cost is DF-S1's.** Measured at `a32528a4` on
   `cx-plan-change-option` against `8b584cf6`, `cores = 1`
   (`bench/v3.4.12/results-cx-close-v3.4.12-115-ga32528a4.md`): a point
   read and a two- and three-relation tuple key join spend +0.4 to +0.8 µs
   more server CPU, under `fixed` and `planned` alike, above the noise
-  floor in two runs; join blocks are unchanged. CX-S0..S3a are within the
-  floor; DF-S1's statement statistics, inside the same span, carry part;
-  the rest falls in CX-S3b..S7, whose point-path additions read as
-  nanoseconds. A bisect of `ee89842e..a32528a4` is owed. Owned by
+  floor in two runs; join blocks are unchanged. Bisected at `25aaa62a`
+  (`bench/v3.4.13/results-cx-close-bisect-v3.4.13-1-g11f72ce9.md`,
+  `raft-marks-2026-11-19.md` §3): it enters at DF-S1 (`58d258a3..ee89842e`),
+  CX-S0..S3a at zero, CX-S3b to the close and CY summing to nothing; DF-S1
+  kept with its cost (`raft-marks-2026-11-19.md` §4). Owned by
   `instructions/v3.2.0/workorder-cx-managed-plans.md`.
 
 - **A named Cabin pin is by the column's name, and its drop RESTRICT has
@@ -3336,7 +3339,8 @@ the thirteen fixes leave, each `[source-read]` unless marked.
 - **`IsPinnedClassFrame` takes the map latch for every Bound Cabin frame it
   is asked about, on a volume with a Waystone directory** (G34): once per
   frame per sweep visit, under the frame table's latch, for frames the sweep
-  never evicts. Free where no pattern is opted in. Not measured.
+  never evicts. Free where no pattern is opted in. Not measured. Re-read
+  at `bf289a82`, after DO.
 - **`FindIndexByName` has no caller in the engine**: the statements ask
   `LookupIndexByName`, and the `NotFound`-shaped form is kept for the cells
   that open an index by its name (about 25 call sites in 9 test files).
@@ -3364,8 +3368,14 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
 - **The query layer refuses `keyidentity`.** A statement the native path
   declines (a set operation, a derived table, an outer join) answers
   `unknown column 'keyidentity'`: the layer's walk emits no hidden column.
-  A refusal, never a wrong answer; `ON CONFLICT (keyidentity)` on a
-  hidden-Keystone heap is refused too.
+  A refusal, never a wrong answer.
+- **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is admitted,
+  against `heap-and-tuple.md` §3.1b** ("`ON CONFLICT (<column>)` cannot name
+  a hidden Keystone"): `ResolveConflictArbiter` resolves the name through
+  `Schema::FindColumn` to column 0 and takes the tuple key as the arbiter
+  (`src/server/command_dispatcher.cpp:8263`); no test covers it. Whether the
+  code refuses it or the spec admits it is not decided. Read at `2403b86d`,
+  2026-11-22.
 - **Partly filled pages are abandoned at each restart.** The placement hints
   are memory only (DN-Q23): after a restart a core fills from the head and
   up to `cores` partly filled pages wait for a release to find their free
@@ -3393,7 +3403,8 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
 
 ## Index entry purge (DD)
 
-Verified on worktree `dd-index-entry-purge` (DD-S2, 2026-11-20).
+Verified on worktree `dd-index-entry-purge` at `b8880f9b` (DD-S2,
+2026-11-20); re-read at `bf289a82`, after DN-S2's slot release.
 
 - **Nothing drives it on a btree**: there `PURGE INDEX` runs when an
   administrator runs it (DD-Q4 (a)). A heap's indexes are purged unasked by

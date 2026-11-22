@@ -8,6 +8,9 @@ work on one core waits for work on another, and PostgreSQL 18.6's work does
 not. **Opened 2026-10-09** (below). It cuts no tag. Like AS and AZ it sits outside AR0 §8's chain: it depends on no open
 order and gates none.
 
+**Closed 2026-10-10 at BA-S17** (§6, "BA-S17 - the close"), merged into
+`main` at `836b9551` the same day.
+
 **Paused 2026-10-06 for its sub-milestone BB** (`raft-marks-2026-10-06.md`
 §4): BA-Q14 is marked (b), and `workorder-bb-issue-under-the-leaf.md` takes
 defect A in BA-S1b's place. BA resumes at BB's close (BB-S5).

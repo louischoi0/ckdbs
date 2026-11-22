@@ -7,7 +7,10 @@ recovery of 0.19 s to 0.72 s."* DH-S0, S1a, S1b and S2 are built; the close's
 measurement was stopped part-way on that word (§7, DH-S3: five A/B cells and
 one recovery round measured, the controls not), the two costs it found are
 the operator's to accept and are accepted, and the close step was not
-reviewed and the merged tree not suite-run. Written on `main` at `673f025d`
+reviewed and the merged tree not suite-run. **Landed on `main` at
+`799a767d` the same day on that word, the hook skipped; tagged `v3.4.17`
+at `fba5529f`**; a later tree carrying it, `ca49f418` (merged as
+`d436b7b1`), ran the suite 0 failed of 4965. Written on `main` at `673f025d`
 (`v3.4.14-30-g673f025d`) on the operator's word of 2026-11-20
 (`raft-marks-2026-11-20.md` §1). The letter DH is CLA's proposal.
 **Opened on the operator's standing go-ahead of 2026-11-20

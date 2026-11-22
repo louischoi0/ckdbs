@@ -1,6 +1,6 @@
 # Work order DN - the heap redefined again: an Oracle-style heap, rows in data pages addressed by a computed rowid, every key served through an index that names the rowid, a full scan that reads the data pages and no index
 
-Status: **CLOSED 2026-11-21 and landed on `main` on the operator's word "push no verify"** (`raft-marks-2026-11-21.md` §11), untagged (DN-S2, DN-S3
+Status: **CLOSED 2026-11-21 and landed on `main` at `48a3276c` on the operator's word "push no verify"** (`raft-marks-2026-11-21.md` §11; the suite 0 failed of 5094 at `9c061907`, the same build inputs; superblock 39), untagged (DN-S2, DN-S3
 and DN-S4 on the standing go-ahead; the close
 `bench/v3.5.0/results-dn-close-v3.5.0-48-g9c061907.md`: DN-R7 met as
 measured, a 1,000-row heap index range 27-32 % cheaper, a heap's INSERT
@@ -30,8 +30,9 @@ revised, DN-R10).
 **DN rests on DD.** The operator's mark DN-D1 is that a slot is reused only
 once every index entry naming it is removed, and DD
 (`workorder-dd-index-entry-purge.md`) is the order that would remove one.
-DD is written, not opened, exploratory, and may close with nothing built
-(its own §0); DN gives it a consumer it did not have (§1.4). **Order:
+DD was written, not opened, exploratory, and could close with nothing built
+(its own §0); DN gives it a consumer it did not have (§1.4). **DD has since
+closed with `PURGE INDEX` built, landed at `2c2639df`.** **Order:
 DD :>> DN-S2.** DN-S0 and DN-S1 do not wait for it.
 
 Every `[source-read]` claim in §1-§3 was read at `d091d096`; DN-S0's

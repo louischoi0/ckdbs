@@ -11,7 +11,7 @@ Related: `bench/v3.0.0/results-multicore-scaling-census-v3.2.0-64-g9b7d53d7.md`
 reading); `bench/v3.0.0/results-bp-bq-close-v2.7.0-924-g3e77e7d1.md`
 (`cores = 4` only); `instructions/v3.0.0/workorder-ba-parallelism.md`;
 `instructions/v3.0.0/workorder-bl-session-balancer-priority-affinity.md`
-(BL, paused); `docs/spec/crosscore.md`; `docs/spec/sched.md`.
+(BL, closed 2026-10-22, `raft-marks-2026-10-21.md` §17); `docs/spec/crosscore.md`; `docs/spec/sched.md`.
 
 ## 1. What prompted it
 

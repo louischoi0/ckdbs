@@ -1,8 +1,11 @@
 # Work order CV - `ORDER BY ... LIMIT` served by the order a structure already holds: the ordered index walk and the reverse walk
 
-Status: **CLOSED 2026-11-20 at CV-S4, not landed** - every stage on the
-work branch, the close measured (§7, CV-S4); landing waits for the
-operator's word. **Opened 2026-11-20 on the operator's standing go-ahead
+Status: **CLOSED 2026-11-20 at CV-S4, and landed on `main` the same day at
+`fda024cf`** - every stage on the work branch, the close measured (§7,
+CV-S4); the merge pushed with `--no-verify` on the operator's word "push
+no verify", the full suite 0 failed of 4,897 at `7d11ba44` (same build
+inputs), and **carried by `v3.4.16` at `0078e149`**
+(`raft-marks-2026-11-20.md` §8). **Opened 2026-11-20 on the operator's standing go-ahead
 (go-ahead-achieving-milestone)**, on worktree `cv-ordered-index-walk` from
 `f4138860` (`v3.4.15-1-gf4138860`). Written 2026-11-15 on `main` at
 `a61ab905` (`v3.4.11`) on the operator's word of 2026-11-15

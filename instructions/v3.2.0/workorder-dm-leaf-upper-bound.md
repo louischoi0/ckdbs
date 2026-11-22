@@ -8,7 +8,10 @@ candidates. The letter DM, that it is an order of its own beside DK
 (DM-Q1), the candidates' shapes, the rules and the stages are CLA's
 proposals. No DM-Q item but DM-Q0 is marked. No stage is started. Every
 `[source-read]` claim below was read at `b0a824db`. No suite was run: the
-order changes no build input.
+order changes no build input. **Moved under it since**: the superblock is
+39, not 37 (DI-S3's 38 at `fba5529f` carried DA-S3, so nothing waits for a
+bump for DA; DN's 39 at `48a3276c`), so §1's superblock line and DM-R6's
+bundle with DA-S3 are of `b0a824db`.
 
 **Exploratory, and the measurement comes first.** DM-S0 and DM-S1 can each
 close the order with nothing built, and that is a result, not a failure.

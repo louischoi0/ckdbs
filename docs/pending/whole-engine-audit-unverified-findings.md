@@ -1,6 +1,9 @@
 # Pending: a whole-engine audit, stopped after 6 of 33 slices - what is fixed, and what waits
 
-Status: **PENDING** - F4 ruled (a) on 2026-11-15 and fixed; 27 slices are unread.
+Status: **PENDING** - F4 ruled (a) on 2026-11-15 and fixed (on `main` at
+`61917b0f`); of the 27 slices this run left unread, the second run
+(`whole-engine-audit-second-run-twelve-slices.md`) read twelve, so 15 are
+unread.
 Decides nothing, opens no stage, licenses no code.
 Raised: 2026-11-12, in conversation with the operator.
 Read at: `ce5347e6` (`v3.4.8-2-gce5347e6`), on worktree `audit-lean-and-correct`.
@@ -316,5 +319,5 @@ returns.
 2. **Section 4's `kVarHeapAppend` arm**, if wanted.
 3. **The overhead of F26**, if wanted: an interleaved A/B of UPDATE and
    DELETE walks in `build-release`, `bf3bc936` against `3f8c499c`.
-4. **The other 27 slices**, or the decision that the audit stops at the
-   dispatcher and the expeditor.
+4. **The other 15 slices** (27 less the second run's twelve), or the
+   decision that the audit stops there.

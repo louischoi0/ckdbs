@@ -33,7 +33,7 @@ session, translated into English, and recorded in `raft-marks-2026-10-07.md` §7
 - **W15:** *"mark Q10, Q11, Q12 as proposed"*
 - **W16:** *"open BD-Q0, with the worktree named keep-btree-leaf-slots"*
 
-**Status: closed 2026-10-07 at BD-S6 (W16, §19 of `raft-marks-2026-10-07.md`); not pushed.**
+**Status: closed 2026-10-07 at BD-S6 (W16, §19 of `raft-marks-2026-10-07.md`); pushed to `main` the same day** (`e4b107af..bc144dbf`, §20 there).
 
 - §4's mark column says which items the words settle; every item is marked.
 - BD runs on `worktree-keep-btree-leaf-slots`, from `50d35916`.

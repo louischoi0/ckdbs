@@ -104,11 +104,12 @@ the relation is created, so a refusable declaration writes nothing
 foreign key comes through — the argument `CreateCabin` already makes
 about `NO CABIN`.
 
-**A heap parent is refused, `Unsupported`** at `REFERENCES`
-(`catalog::CheckForeignKeyDeclaration`). F1 puts the reference on the
-parent's Keystone id, and a heap's tuple key is hidden
-(`heap-and-tuple.md` §3.1b): no statement reads or names it, so no client
-could write a child value the constraint would accept. **A heap child is
+**A heap parent whose Keystone is hidden is refused, `Unsupported`** at
+`REFERENCES` (`catalog::CheckForeignKeyDeclaration`). F1 puts the
+reference on the parent's Keystone id, and that heap's Keystone is the
+engine's hidden column (`heap-and-tuple.md` §3.1b). **A heap whose
+Keystone is its declared single `int64` primary key is a parent as a btree
+relation is** (DN-Q5 (a)), its row found through its Keystone index. **A heap child is
 admitted**: its foreign-key column is a declared column like any other.
 A system relation as parent is refused `InvalidArgument`.
 

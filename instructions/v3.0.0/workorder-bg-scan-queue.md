@@ -13,6 +13,10 @@ marked as proposed, so BG-R1..R5 are rulings and BG-S1 is the next stage.
 floor under the queue, with §5's repeated-probe cell as the gate. Every item
 is marked.
 
+**BG-S1 done 2026-10-08** (§6, `b27916f3`, on `main`): the gate passed.
+**BG-S2..S4 have not started**, and no word since closes, drops or resumes
+BG (none in either `instructions/` directory, checked at `bf289a82`).
+
 **Why this order exists.** BE closed on 2026-10-07 with two findings, and
 this order answers the second:
 - `bench/v3.0.0/results-be-close-v2.7.0-665-geef442cf.md` §3 measured a

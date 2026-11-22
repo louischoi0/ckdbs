@@ -5,7 +5,7 @@ Status: **OPENED 2026-11-21 on the operator's standing go-ahead
 worktree `dg-wal-segment-body` (branch `worktree-do-frame-table-long-holds`)
 from `48a3276c` (`v3.5.0-55-g48a3276c`). **DO-Q0..Q8 adopted (a) and DO-Q9
 (a) added and adopted, as CLA proposed, on that go-ahead; none is the
-operator's own per-item mark** (§4). **CLOSED 2026-11-22 on the work branch**: DO-S0 to DO-S2 built (`47f7016c` to `7116b668`) and landed on `main` at `bf289a82` (`raft-marks-2026-11-21.md` §13); **E2 built on the operator's own mark on §5a** (`raft-marks-2026-11-22.md` §1, DO-S3, §7); the close measured (DO-S4, and E2's own A/B). E2 is not landed: a push waits for the operator's word. Written on `main` at
+operator's own per-item mark** (§4). **CLOSED 2026-11-22 on the work branch, and landed on `main` at `c22a1a95` the same day on "push no verify"** (`raft-marks-2026-11-22.md` §2), untagged: DO-S0 to DO-S2 built (`47f7016c` to `7116b668`) and landed on `main` at `bf289a82` (`raft-marks-2026-11-21.md` §13); **E2 built on the operator's own mark on §5a** (`raft-marks-2026-11-22.md` §1, DO-S3, §7); the close measured (DO-S4, and E2's own A/B). E2 is not landed: a push waits for the operator's word. Written on `main` at
 `3a07ad49` on the operator's word of 2026-11-21 (`raft-marks-2026-11-21.md`
 §8); that DO is an order of its own, cut out of CW's C1 rather than written
 into CW, is CLA's proposal and the operator's yes to it. Every
