@@ -10,7 +10,9 @@ its own corrections were wrong** (AT-8); they are fixed above the line and
 recorded below it, because a survey that corrects a draft is not thereby
 exempt from being checked.
 
-**Status: AT-S0 lands now; no code stage starts before the operator's
+**Status: CLOSED 2026-09-28 at AT-S20** (AT-9, the close and the place to
+start; `8627f0d`). *(The line below is what this header said at the
+writing.)* **AT-S0 lands now; no code stage starts before the operator's
 word.** M2 closed on 2026-09-09 (`workorder-ao-m2-lock-family.md` AO-8) and
 its closing section states the absence this document fills: *"AR0 §8 step 6
 is M3, renamed 'Uniformity' and lettered AT by `ar0-5-amendment-uniformity.md`

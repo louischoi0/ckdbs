@@ -1,6 +1,6 @@
 # Work order CY - managed statistics: persisted, per column, per column group, and operated by a DBA or an agent
 
-**Closed 2026-11-18 on the operator's standing go-ahead (go-ahead-achieving-milestone), not landed**: CY-S1b, CY-S4's relation-object surface and CY-S5 on worktree `cy-managed-statistics` (§8), CY-Q24..Q31 adopted as CLA proposed (`raft-marks-2026-11-18.md` §48); S2 and S3 not built (W13). A push, a tag or a version waits for the operator's word.
+**Closed 2026-11-18 on the operator's standing go-ahead (go-ahead-achieving-milestone)**: CY-S1b, CY-S4's relation-object surface and CY-S5 on worktree `cy-managed-statistics` (§8), CY-Q24..Q31 adopted as CLA proposed (`raft-marks-2026-11-18.md` §48); S2 and S3 not built (W13). **Landed on `main` at `647ad6d4` on 2026-11-19**, pushed with the hook skipped on the operator's word (the suite 0 failed of 4728 at `cd20ee70`; the merge's message); **dropped by CX's merge `828899f6` and restored at `8dc37b80`** (`raft-marks-2026-11-18.md` §49), **carried by `v3.4.13` at `8dc37b80`** (`raft-marks-2026-11-19.md` §1).
 
 **Written 2026-11-18 and opened the same day on W9** (CY-S0 started), on worktree `cx-plan-change-option`
 from `d4bda61f` (`v3.4.12-16-gd4bda61f`), on the operator's word, recorded

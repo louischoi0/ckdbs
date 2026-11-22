@@ -4,7 +4,8 @@ Status: **CLOSED 2026-11-19 on worktree `dc-select-for-update`, its code
 at `7e18598d` (`v3.4.13-16-g7e18598d`), and landed on `main` the same day
 on the operator's word "push no verify" (`raft-marks-2026-11-19.md` §6) -
 a `--no-ff` merge pushed with `--no-verify`, the suite 0 failed of 4794 on
-those build inputs: every stage is done (§7) and the close is measured
+those build inputs; **tagged `v3.4.14` at that merge, `35086008`**
+(`raft-marks-2026-11-19.md` §7): every stage is done (§7) and the close is measured
 (`bench/v3.4.13/results-dc-close-v3.4.13-14-gcd80d31d.md`,
 `bench/v3.4.13/results-dc-close-v3.4.13-16-g7e18598d.md`). Opened the same
 day on the operator's standing go-ahead (go-ahead-achieving-milestone,

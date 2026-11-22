@@ -24,7 +24,9 @@ the operator's words, recorded in English (`raft-marks-2026-10-31.md` §1):
 adopted as CLA proposed. The adoption is CLA's under that word, not the
 operator's per-item mark. CK-Q0 (a) reserved S0's verdict to the operator,
 who marked it **build** on 2026-11-01 ("build, go ahead with S1"); **closed on
-the work branch 2026-11-01** (§7, "CK close"), unmerged. **Exploratory and verifying since W2** (§3): CK-S0
+the work branch 2026-11-01** (§7, "CK close"); **on `main` since
+`a59f9a2e` the same day** (CL was written on `main` there), **carried by
+`v3.4.7` at `6c4b9a6d`**. **Exploratory and verifying since W2** (§3): CK-S0
 verifies the premise and measures the settle before anything is built,
 and its verdict is build, narrow or drop.
 

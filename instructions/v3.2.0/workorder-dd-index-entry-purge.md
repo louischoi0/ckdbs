@@ -7,9 +7,11 @@ Status: **OPENED 2026-11-20 on the operator's standing go-ahead
 adopted on that go-ahead, none is the operator's own mark, and DD-Q1 and
 DD-Q6 were revised against the tree before adoption (§7, "DD-S0").
 **Closed 2026-11-20 and landed on `main` at `2c2639df`**
-(`raft-marks-2026-11-20.md` §29). **DD-S4 ruled (b) by the operator on
+(`raft-marks-2026-11-20.md` §29; push no verify, the suite 0 failed of
+5010 at `49327ef9`, the same build inputs), untagged. **DD-S4 ruled (b) by the operator on
 2026-11-21** (`raft-marks-2026-11-21.md` §6): the unasked driver is
-designed and built in DN-S2, after DN-S1's mark, not here.
+designed and built in DN-S2, after DN-S1's mark, not here; **DN-S2 landed
+with DN at `48a3276c`** (`raft-marks-2026-11-21.md` §11).
 **Written 2026-11-18.** Written on worktree
 `db-fpi-cadence-dc-for-update` from `a4d2fb3b` (`v3.4.12-42-ga4d2fb3b`) on
 the operator's word of 2026-11-18 (`raft-marks-2026-11-18.md` §24): *"Write

@@ -13,8 +13,11 @@ Written 2026-10-07 on `worktree-pool-budget-required` from `e352eac0`
 stage built the same day**, BE-S1 through BE-S6 (§6). **Its close carries a
 measured regression on resident scans (+2.5-3.7 %) and a partial scan
 resistance**, both stated in BE-S6's row and in `known-gaps.md`; the merge
-waits on the operator's reading of them. The ruling itself is marked (`raft-marks-2026-10-07.md` §14) and
-recorded in `eviction.md` §6 as not built.
+waited on the operator's reading of them. **On `main` since 2026-10-07**
+(`cd8ca91e`, on `main`'s first-parent line); no reading of the two findings
+is recorded in `raft-marks-2026-10-07.md`. The ruling itself is marked
+(`raft-marks-2026-10-07.md` §14), and BE-S6 restated `eviction.md` §6 as
+built.
 
 **BE is not part of AR0 §8's chain.** It answers an incident outside the
 engine. On 2026-10-07 an xrock bulk load ran against an 11.3 GB volume

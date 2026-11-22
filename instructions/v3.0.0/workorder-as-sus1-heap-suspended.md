@@ -1,10 +1,13 @@
 # AS — SUS-1: heap relations suspended
 
 > **Lifted by BZ (2026-10-17)**
-> (`instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): `HEAP` creates a
+> (`instructions/v3.2.0/workorder-bz-heap-hidden-key.md`): `HEAP` created a
 > btree relation with a hidden tuple key, the suspension's refusal and test
 > seam and the `heap-suspended` label are deleted, and the chain-stored user
-> heap this order suspended is deleted with them. What follows is the order
+> heap this order suspended is deleted with them. **The heap was redefined
+> again by DN** (`instructions/v3.2.0/workorder-dn-heap-rowid.md`, on `main`
+> at `48a3276c`, 2026-11-21): rows in data pages addressed by a rowid, every
+> key served through an index. What follows is the order
 > as it stood; `docs/spec/heap-and-tuple.md` §3.1b owns the current
 > contract.
 

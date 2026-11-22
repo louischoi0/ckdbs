@@ -18,7 +18,9 @@ cross-owner participant contexts only, and a plain local `BEGIN` is
 reached by nothing — §11.2 sizes the instance-wide half and says it is
 its own letter, since it lands in `txn/` rather than in AM or AN. It is
 **unlettered and unordered**, and M1's close carries it forward rather
-than closing it.
+than closing it. **That half was built 2026-10-12, still unlettered, at
+`c9e0435c`**: every listener rolls back an explicit transaction at
+`txn_lifetime_ceiling_ms` (`docs/spec/txn.md` §1).
 
 *(The line below is what this header said until the close.)* **AW-S0, S1,
 S1b, S2, S6 done, and AM-S4's slice (d) with them

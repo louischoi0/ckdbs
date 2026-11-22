@@ -21,7 +21,7 @@ this directory holds what a plan is not:
   blocker named and the unblocking condition stated as a test. A block on
   an *operator decision* goes in the work order's ruling table instead.
 
-**Not here:** open work orders (`instructions/v3.0.0/`), closed workplans
+**Not here:** open work orders (`instructions/<version>/`), closed workplans
 (deleted; the owning spec carries what is durable), and anything a spec
 should say. A gap that turns out to be a rule moves into the owning spec
 and leaves `known-gaps.md` in the same change.

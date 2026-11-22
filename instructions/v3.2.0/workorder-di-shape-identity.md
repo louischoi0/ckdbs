@@ -3,8 +3,9 @@
 Status: **CLOSED 2026-11-20** - every stage built, the close measured
 (DI-Q8's bar met as written, a lean on the write path not resolved),
 `origin/main` merged - **and landed the same day on the operator's word,
-"push no verify"** (`raft-marks-2026-11-20.md` §20; §7, DI-S5). Not
-tagged: a tag and a version wait for the operator's word. **Opened 2026-11-20 on the
+"push no verify"**, at the merge `fba5529f` (`raft-marks-2026-11-20.md` §20; §7, DI-S5);
+**tagged `v3.4.17` at `fba5529f` on the operator's "tag 3.4.17"**
+(`raft-marks-2026-11-20.md` §21). **Opened 2026-11-20 on the
 operator's standing go-ahead**
 (go-ahead-achieving-milestone, `raft-marks-2026-11-20.md` §19), on worktree
 `di-shape-identity` from `1c7bb774` (`v3.4.15-4-g1c7bb774`). Every item the

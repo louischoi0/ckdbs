@@ -19,6 +19,11 @@ backward compatibility), which postdates AQ-Q1's mark: superblock 26 refuses
 every older volume, and no 28-byte row is read. AQ-Q7..Q16 (§4) are CLA's
 proposals adopted on the standing go-ahead, not the operator's marks.
 
+**Closed 2026-10-15 at AQ-S5** (§6, "AQ-S5 - the close") **and on `main`
+the same day**: `87d2893c` is on `main`'s first-parent line, so §6's "not
+merged to `main`, not pushed, not tagged" is true of the close only. First
+in a tag at `v3.3.0`.
+
 ## 0. What AQ is
 
 AR1 §14 gives AQ this content and these dependencies:

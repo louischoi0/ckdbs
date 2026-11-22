@@ -4,7 +4,8 @@ Status: **CLOSED 2026-11-19 on the operator's word**
 (`raft-marks-2026-11-19.md` §10), with the cost its close measured and no
 part reverted: a tuple key read about +0.51 us of server CPU for all of DF
 at `cores = 1`, DF-Q10 (a)'s 0.5 us bar not declared met (§7, DF-S5).
-Every stage is on `main`. **Opened 2026-11-18** on the operator's word
+Every stage is on `main` (DF-S1 at `3adf8810`, DF-S2..S5 at the merge
+`135d2570`, 2026-11-19); **tagged `v3.4.15` at `1eeab8ce`**. **Opened 2026-11-18** on the operator's word
 (`raft-marks-2026-11-18.md` §36), from `57d7c67f`
 (`v3.4.12-67-g57d7c67f`). **DF-S0 is done** (§7): the census, the spike's price, and four items
 it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
@@ -15,8 +16,8 @@ measured, pushed with the hook skipped on the operator's word (§40).
 **DF-S2 is done** (§7): part B, started on the operator's word
 (`raft-marks-2026-11-19.md` §8), reviewed, the full suite 0 failed of 4766,
 overhead not measured, not pushed. **DF-S3 is done** (§7): part C - index
-usage and a relation's lock waits; the access shape's two columns owed to
-DA - reviewed, the full suite 0 failed of 4773, overhead not measured, not
+usage and a relation's lock waits; the access shape's two columns then owed to
+DA, which closed without them (`known-gaps.md`: no owner) - reviewed, the full suite 0 failed of 4773, overhead not measured, not
 pushed. **DF-S4 is done** (§7): part D - a relation's delete-marked
 estimate and its leaf divisions and compactions - reviewed, the full suite
 0 failed of 4777, overhead not measured, not pushed. **DF-S5 ran** (§7), and stopped short of the close: the close measured DF-S2..S4 at +0.07 us of server

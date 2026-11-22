@@ -73,9 +73,10 @@ meets an older table reads its heading, as that table's own commit intended.
 
 The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`):
 **every relation a driver creates is `BTREE`, and a delta is taken only
-against a BTREE baseline of the same driver** — a driver still emitting
-`HEAP` is refused at `CREATE TABLE` and produces no v3 number until AS-S3
-changes it. Heap relations are suspended (SUS-1).
+against a BTREE baseline of the same driver**. The suspension that rule was
+marked under (SUS-1) was lifted by BZ (`instructions/v3.2.0/raft-marks-2026-10-17.md`
+§1): `CREATE TABLE ... HEAP` is admitted, and since DN (superblock 39) a heap
+is a storage of its own (`docs/spec/heap-and-tuple.md` §3.1b).
 
 A heap number beside a btree number is two workloads. Where one commit has
 both series, the `-btree-` in the benchmark name keeps them apart, and **a

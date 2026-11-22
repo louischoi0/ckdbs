@@ -6,7 +6,7 @@
 a green suite, and anti-kdbs F004 answers every case as PostgreSQL does but
 P07, which BU-Q13 refuses. **The overhead is not measured**: the close's
 A/B was stopped by the operator before it ran (`instructions/v3.2.0/raft-marks-2026-10-15.md`
-§4). Not tagged.
+§4). Not tagged at the close; first in a tag at `v3.3.0`.
 
 Written 2026-10-13 on `worktree-bu-basic-query-surface` from `eeb88f47`
 (`v2.7.0-992-geeb88f47`). It follows the operator's words of 2026-10-13,

@@ -1,6 +1,8 @@
 # Work order DK - a btree descent that leans on the immutable low key: one fetch fewer for a write, a leaf that moves right instead of restarting, and the internal levels read optimistically only under CW's protocol
 
-Status: **CLOSED NARROW 2026-11-21 on the work branch, not landed** - D1
+Status: **CLOSED NARROW 2026-11-21, and landed on `main` the same day at
+`46ee8a6e`** (a `--no-ff` merge of the work branch, synced with
+`origin/main` at `4ea36488`), untagged - D1
 and D2 built (DK-S1 `7622d619`, DK-S2 `9a551ddd`), D3 closed with nothing
 built (CW's), the close measured level with the opening commit in every
 cell (`bench/v3.5.0/results-dk-close-v3.5.0-15-g9a551ddd.md`), and **D2's
@@ -8,8 +10,8 @@ aim not met by its measure**: the stale-descent refusals did not fall (§7,
 DK-S4). Opened 2026-11-21 on the operator's standing go-ahead of
 2026-11-21 (go-ahead-achieving-milestone), on worktree
 `dk-descent-low-key` from `2c2639df` (`v3.5.0-12-g2c2639df`). DK was taken
-as the highest-priority written order: DN, the one opened order not closed,
-waits at its own gate for the operator's mark (`raft-marks-2026-11-21.md`
+as the highest-priority written order: DN, then the one opened order not closed,
+waited at its own gate for the operator's mark (`raft-marks-2026-11-21.md`
 §2). **DK-S0 done**: D1 go, D2 go, D3 handed to CW (§7). Written in the
 main checkout on `main` at `1c7bb774` (`v3.4.15-4-g1c7bb774`) on the
 operator's words of 2026-11-20 (`raft-marks-2026-11-20.md` §7).

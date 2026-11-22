@@ -9,8 +9,9 @@ change. **Opened 2026-10-12** on the operator's word (BR-Q0 (a), §10) on
 `br-backup-restore`; BR-Q1..Q6 adopted on the operator's standing go-ahead
 of 2026-10-12 (go-ahead-achieving-milestone), §10. BR-S0's census is
 `br-s0-census.md`; where it restates a rule of §2, the census governs.
-**Built to its close on 2026-10-12** (§11) on `br-backup-restore`; merge, push
-and any tag wait for the operator's word.
+**Built to its close on 2026-10-12** (§11) on `br-backup-restore`, and **on
+`main` the same day** (`fe47814c`, on `main`'s first-parent line); first in
+a tag at `v3.1.0`.
 
 The operator's words, translated:
 

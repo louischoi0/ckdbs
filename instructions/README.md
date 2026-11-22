@@ -2,9 +2,12 @@
 
 - **`v3.0.0/`** holds the big-bang change's own instructions: AR0, the
   governing draft with its verification record, and one work order per
-  milestone, starting with AL (`v3.0.0/index.md`).
+  milestone, AL through BU (`v3.0.0/index.md`). No `v3.0.0` tag was taken;
+  the first v3 tag is `v3.1.0`.
 - **`v3.2.0/`** opened 2026-10-14 on the operator's naming of that version,
-  with BV (`v3.2.0/index.md`).
+  with BV, and holds every work order written since - BV through DO -
+  whatever tag it landed under (`v3.2.0/index.md`). These two are the only
+  version directories.
 
 **Nothing from `v2.x` returns here.** The operator's work orders,
 ratifications and blueprints for `v2.3.0` through `v2.8.0` left ahead of

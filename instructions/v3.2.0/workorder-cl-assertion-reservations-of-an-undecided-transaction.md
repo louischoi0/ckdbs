@@ -16,7 +16,10 @@ on the operator's standing go-ahead** (go-ahead-achieving-milestone,
 proposed - not the operator's per-item marks - and the operator's **CL-Q3 (a)**
 kept, CL-S0's revised (b) withdrawn (§3). **Resumed again 2026-11-06 on the standing
 go-ahead and closed on the work branch** (`raft-marks-2026-11-06.md` §1): CL-S3 and CL-S4
-landed, no item adopted (§6). The letter CL is CLA's
+landed, no item adopted (§6). **Merged to `main` at `6c4b9a6d` on 2026-11-07
+with the hook skipped (the suite 4403/4403 on the merged tree `9724cc9f`,
+Debug), and tagged `v3.4.7` there** (the merge's message, the tag's
+message). The letter CL is CLA's
 proposal: CA..CK are taken (CJ by another session). The operator may reletter
 it.
 

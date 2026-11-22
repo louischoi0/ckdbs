@@ -6,7 +6,8 @@ CZ-S4 opened on the operator's W29 (§50 there), every later item to CLA's
 proposal and a gate not met stopping the order; CZ-S3 built; CZ-S4 done,
 every gate met - CLOSED 2026-11-18 with C1 built** (§7, "CZ-S3" and
 "CZ-S4"), **landed on `main` 2026-11-19 with the hook skipped on the
-operator's word, the merged tree not suite-run**
+operator's word, the merged tree not suite-run at the push; its full
+suite ran 0 failed of 4751 two minutes after it**
 (`raft-marks-2026-11-19.md` §2; §7, "Landed"), on
 worktree `cz-checkpoint-roll-wait` from `a4d2fb3b`
 (`v3.4.12-42-ga4d2fb3b`), on the operator's word of 2026-11-18
@@ -893,7 +894,11 @@ and that tree was pushed to `main` with `--no-verify`.
   Debug build of `44de9abc` was about half done when the operator asked
   for the push at once. No review of the merge was run. The overhead is
   the close's, on `74861601` against `9712f5f0`.
-- **Owed**: the full suite at `44de9abc`'s build inputs.
+- **Run after the push**: the full Debug suite at `44de9abc`'s build
+  inputs (`ctest --test-dir build -LE bs-nightly`, 2026-11-19 04:26 to
+  04:29 UTC, two minutes after the push): 0 failed, 4751 passed, read
+  from the run's `LastTest.log` in the CZ worktree's build. The pushed
+  tree differs from `44de9abc` in documents only.
 
 ## 8. The model for C1 (CZ-S2) `[design]`
 

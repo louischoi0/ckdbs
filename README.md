@@ -64,10 +64,10 @@ Errors are built to be acted on: a refusal caused by a token names that token's 
 | | |
 |---|---|
 | **Step chains and a join planner** | A statement the native grammar reads compiles at parse time into a *step chain* — lookups, probes, ranges, scans, sub-chains — with no general plan search; the rest of the supported SQL is answered by a query layer over native single-relation walks. The one choice the engine makes is the order of an inner-join block's relations, priced from the catalog and from row counts it learns as statements run; `ANALYZE` shows when it moved, and `join_order = written` keeps the written order. Without `ORDER BY`, the order rows arrive in is not a contract. |
-| **Keystone** | Every row carries a 48-bit tuple key — its identity for the life of the relation, never updated — so any structure can name a row by value instead of by address. Relations are clustered B+ trees on that key. |
+| **Keystone** | Every row carries a 48-bit tuple key — its identity for the life of the relation, never updated — so any structure can name a row by value instead of by address. A relation is a clustered B+ tree on that key, or a heap (`CREATE TABLE ... HEAP`): rows in data pages at a rowid, found by key through a Keystone index. |
 | **Waystone** | For a query shape an operator opts in (`WAYSTONE ON <select>`), the engine records where the last execution found its rows and looks there first. A wrong or missing trail costs time, never a result; a shape nobody opted never records or writes, and pays one memory load per `SELECT` while nothing is opted. |
 | **Cabin** | A lookup structure on a column or an expression such as `DATE(ts)`, covering only the values queries actually asked for — complete for each value it observed (a superset the reader filters), with no index-style write cost for the rest. Dropping a value's set returns its queries to the tree walk, so no result changes. A secondary index is a Cabin that has observed everything. |
-| **Cabin controller** | On columns declared `CABIN AUTO` or left undeclared (an undeclared column reads as `AUTO`), an opt-in controller (`cabin_optimizer`, off by default, experimental) can create Cabins from access statistics and drop the ones it created. It never moves a row. |
+| **Cabin controller** | On columns declared `CABIN AUTO` or left undeclared (an undeclared column reads as `AUTO`), an opt-in controller (`cabin_optimizer`, off by default, experimental) can create Cabins from the executions it observes and drop the ones it created; a statement reads through one only where an administrator's plan names it. It never moves a row. |
 | **Fixed-length tuples** | An `UPDATE` rewrites a row in place; long values spill to an immutable side store. |
 | **Thread-per-core** | One cooperative reactor per core over a shared buffer pool and one write-ahead log. Recovery runs at mount. The storage, WAL, recovery and statement paths run under a deterministic crash-simulation harness: one instance on in-memory devices, driven through the command dispatcher. |
 
@@ -125,7 +125,7 @@ Not a data warehouse, not a general-purpose SQL database and not a dialect-compa
 
 Under active development. Read the [known gaps](docs/inflight/known-gaps.md) before relying on any behaviour; the [manual](manual/README.md) is maintained against the code, and the known gaps list what it does not yet cover. The engine's binaries, settings and source still carry the `kds` prefix (`kds_server`, `kds.conf`).
 
-**Terminology.** The 48-bit row identity is called the **tuple key**, never the *primary key*: it is a row's identity, not a business key.
+**Terminology.** The 48-bit row identity is called the **tuple key**, never the *primary key*: it is a row's identity, not a business key. On a heap a single `int64 PRIMARY KEY` declared first is the tuple key, and any other primary key is a unique index beside it.
 
 ---
 
