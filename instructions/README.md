@@ -8,6 +8,9 @@
   with BV, and holds every work order written since - BV through DO -
   whatever tag it landed under (`v3.2.0/index.md`). These two are the only
   version directories.
+- **`milestones.md`** is the register across both: one row a milestone,
+  sorted newest first, with the queries that read it by id, status and
+  date. A row moves in the commit that changes its order's status.
 
 **Nothing from `v2.x` returns here.** The operator's work orders,
 ratifications and blueprints for `v2.3.0` through `v2.8.0` left ahead of

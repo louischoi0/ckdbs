@@ -102,7 +102,9 @@ a reopened bucket and a source comment still cites it. `bench/v3.0.0/` is a
 fresh series and carries no delta against any v2.x number, and
 `bench/README.md` states the five rules a run is invalid without. Work
 orders are `instructions/<version>/`, one per milestone, listed in each
-version's `index.md`. Five buckets under `docs/`, one rule each:
+version's `index.md`; `instructions/milestones.md` is every milestone in
+one row - status, dates, landing commit, tag - queryable by id, status or
+recency, updated in the commit that changes an order's status. Five buckets under `docs/`, one rule each:
 
 - **`docs/spec/`** — what is confirmed and implemented. The authoritative
   specifications; when this file and a spec conflict, the spec wins.
