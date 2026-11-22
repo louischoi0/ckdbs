@@ -49,3 +49,12 @@ The operator's words of 2026-11-22, recorded in English.
 | **Mark** | **DP is opened** at `30c47abf` (worktree `sync-stale-records`, branch `worktree-dp-view`). **DP-Q14..Q22, raised by DP-S0's census, are adopted (a) on that standing go-ahead** - CLA's proposals, not the operator's per-item mark: fixed-width `sys.views` rows under the DDL's transaction (Q14), a view's column list naming its columns (Q15), column dependencies by name with `ADD COLUMN` RESTRICTed (Q16 `[quiet-wrong]`), a view list beside the plan key's relations (Q17 `[plan-identity]`), a "view exists" fast-path word (Q18), no `ANALYZE` conjunct mark (Q19), a non-absorbable body compiled at its `CREATE` (Q20), a body's names in the view's namespace (Q21), `DROP VIEW` taking no lock (Q22). **DP-Q1's wording revised** under the same word: the absorbable form's aliases are the view's column list, the native select list carrying none |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the DP order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 6. DP closed on the standing go-ahead, not landed
+
+| | |
+|---|---|
+| **Word** | the same `/go-ahead-achieving-milestone DP` (§5) |
+| **Mark** | **DP is closed**: DP-S0..S3 on `worktree-dp-view` (worktree `sync-stale-records`) at `03242261`, `184b1c2c`, `5e2491fe`, `78a32c4f`, each reviewed and suite-run; the close measured at `v3.5.0-84-g78a32c4f` against `v3.5.0-79-g30c47abf` (`bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`). **Adopted on the standing go-ahead, CLA's proposals**: DP-Q23 (a body's names are its own, raised by DP-S0's review), DP-Q22 revised to (b) (`CREATE VIEW` holds `IS` on what it reads, `DROP VIEW` takes the view's `X`), and DP-R11's `[provisional]` lifted from depth 8 on the measured 3 us a level. **DP-R10 read as met within what the method resolves**, with `pkmix` stated at the edge of its floor (-0.79 %, 6 of 6 paired runs lower), not as level |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DP order's header and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |

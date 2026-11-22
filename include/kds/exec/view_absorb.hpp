@@ -39,7 +39,8 @@
 namespace kds::exec {
 
 // DP-Q8: how deep views may nest, a view's body reading a view counting
-// one. `[provisional]` until DP-S4 measures a compile at this depth (DP-R11).
+// one. Measured at DP-S4 (DP-R11, `bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`):
+// about 3 us a level, a point read through eight 2.1x its hand-written cost.
 inline constexpr std::uint32_t kMaxViewDepth = 8;
 
 // The block with every view its `FROM` names absorbed, or nullopt when it

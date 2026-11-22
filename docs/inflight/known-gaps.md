@@ -3433,3 +3433,36 @@ Verified on worktree `dd-index-entry-purge` at `b8880f9b` (DD-S2,
 - **The simulator draws it on one seed in four with a lock table**; the
   other three answer it with the refusal by name.
 
+
+## Views (DP)
+
+Verified on worktree `sync-stale-records`, branch `worktree-dp-view`, at
+`78a32c4f` (DP-S3, 2026-11-22). The contract is `docs/spec/view.md`.
+
+- **A non-absorbable view folds its whole body on every read** (DP-Q2,
+  DP-R6): nothing of the reader is pushed into it, so a filter on one group
+  of a `GROUP BY` view still folds every group. A product limit, said by the
+  create's warning and `sys.views.absorbable`; not a defect.
+- **`ANALYZE` does not mark which conjuncts came from a view** (DP-Q19 (a)):
+  an absorbed relation's step is named by its view's path (`o AS v.o`), and
+  its conjuncts read as the block's own.
+- **A body's refusal at `CREATE VIEW` carries the body's own byte**, counted
+  from the body's start - the message says so - not the statement's.
+- **A plan made through a view is never judged out of reach by a rename**
+  (`exec::PlanRowCanMatch` establishes nothing for a key with views): such a
+  plan does not read `invalid` after a rename its statement names, and it
+  keeps RESTRICTing - the conservative answer, never a wrong one.
+- **A view's column dependencies are by name, a superset** (DP-Q16): every
+  column of a relation the body reads whose name the body's text writes, as
+  an identifier anywhere - so a column that shares its name with an alias or
+  another relation's column is RESTRICTed too. Refuses more, never less.
+- **The posterior statistics key and the `planned` memo key carry the base
+  relations only**: a statement through a view and its hand-written
+  expansion have distinct fetch ids, so they never share, but a view dropped
+  and created again over the same relations shares the old body's
+  posteriors under its text. Advisory; no plan moves (the captured and
+  administrator's keys carry the view, DP-R4).
+- **Not tested on two cores**: a `CREATE VIEW` racing another core's `DROP
+  TABLE` or `DROP VIEW` of what it reads (the `IS` against the `X`, DP-Q22
+  (b)), and an unfiltered RESTRICT scan meeting another core's half-written
+  view (skipped, DP-S1's C4).

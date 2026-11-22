@@ -1,6 +1,6 @@
 # Work order DP - VIEW: a named, stored SELECT that a statement's block absorbs by text before any plan is chosen, so a statement through a view runs the chain, the plan sources and the access ladder its expansion would run
 
-Status: **OPENED 2026-11-22 on the operator's standing go-ahead (go-ahead-achieving-milestone; `raft-marks-2026-11-22.md` §5); DP-S0 done at `30c47abf`, DP-Q14..Q22 adopted (a) under that word.** Before: **WRITTEN 2026-11-22.** Written in the main checkout on
+Status: **CLOSED 2026-11-22 on the operator's standing go-ahead (go-ahead-achieving-milestone; `raft-marks-2026-11-22.md` §5, §6), not landed.** DP-S0..S3 on `worktree-dp-view` (worktree `sync-stale-records`) at `03242261`, `184b1c2c`, `5e2491fe`, `78a32c4f`; the close measured at `v3.5.0-84-g78a32c4f` (`bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`); DP-Q14..Q23 adopted (a) under that word, DP-Q22 revised to (b), DP-Q1's wording revised, DP-R11's `[provisional]` lifted. The contract is `docs/spec/view.md`. Opened at `30c47abf`; written 2026-11-22. Written in the main checkout on
 `main` at `71013396` (`v3.4.17-94-g71013396f`) on the operator's words of
 2026-11-21 and 2026-11-22 (§0; `raft-marks-2026-11-22.md` §3). The letter
 DP, the shape of §2, the rules, the items and the stages are CLA's
@@ -683,3 +683,45 @@ spuriously (D2); comments and literal ranges that did not match the schema
 Applied by CLA: `ViewDepthOver` memoised by oid and reading relation entries
 only, so a chain is walked once a view (its S1); the unused binding (S2);
 the include order (S3). No finding rejected.
+
+### DP-S4 - the close, 2026-11-22
+
+Measured by `ck-tester` in `build-release` from `git archive` exports, arm A
+`30c47abf` (`v3.5.0-79-g30c47abf`, the commit DP opened from) against arm B
+`78a32c4f` (`v3.5.0-84-g78a32c4f`, DP's closing build input), interleaved,
+with a same-binary control: `bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`
+(archive beside it; the driver `tools/dp_close.py`), about 30 minutes,
+inside the hour.
+
+- **DP-R10, a statement over no view: met within what the method
+  resolves.** Server CPU a statement over 15 cells: B - A +0.25 us on
+  average against an A2 - A control of +0.20 us, no cell outside the
+  control's range. `ba_census` at `cores = 1`, 6 runs an arm: `point`
+  -0.44 %, `insert1` -0.27 %, inside their floors; **`pkmix` -0.79 %, 6 of 6
+  paired runs lower, about 0.3 us of 30 us a statement - the edge of its
+  floor (-0.52..+1.02 %), stated as such and not claimed as level**; a
+  profile of the compile head with and without the view check is what
+  would settle it, and was not taken. At `cores = 2` every cell's own spread
+  (3.5-9.8 %) exceeds any B - A: a bound, not a result.
+- **A view that exists and is not read**: at most +0.4 us a point read,
+  inside its floor (DP-Q18's word costs no lookup until a view exists; it
+  was not measured against its alternative).
+- **Reading through an absorbable view**: a fixed 3.0-3.7 us a statement
+  (a point read +13.8..+14.8 %, a two-relation key join +10..+11 %), flat in
+  rows - the body parsed and absorbed at every compile.
+- **DP-R11, depth 8: measured and affordable**, about 3 us a level, linear:
+  a point read through eight levels is 47.2 us against 22.7 us by hand
+  (2.1x); a chain joining one more relation a level, +32.4 us on a 54.8 us
+  nine-way join (1.6x). **`[provisional]` is lifted from `kMaxViewDepth`**
+  (adopted on the standing go-ahead), on one chain shape; nothing past 8 was
+  measurable.
+- **Cut**: `cores` 4 and 8, `group`/`strict` durability, 100,000 rows, a
+  non-absorbable view's read, a PostgreSQL twin.
+
+**DP is closed** on the operator's standing go-ahead of 2026-11-22
+(go-ahead-achieving-milestone). The durable content is in
+`docs/spec/view.md` (new), `parser-v2.md` I12's inventory row,
+`sys-views.md`, `drop-table.md` DT3, `alter.md` AL4, `namespace.md` NS6,
+`known-gaps.md` ("Views (DP)"), `manual/sql/sql.md` and CLAUDE.md's row. Not
+landed: the push, the merge to `main`, a tag or a version wait for the
+operator's word.

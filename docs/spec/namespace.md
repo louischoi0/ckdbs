@@ -169,6 +169,10 @@ namespace it creates in, `ALTER TABLE ... RENAME TO` in the relation's own.
 The dropped-relation tombstone keeps its `namespace_oid`, so an undecided
 drop holds its name in that namespace only.
 
+**A view's name is a relation name** (`view.md` VW1): a table and a view
+never share one in a namespace, the binding check counts both and both
+tombstones, and `DROP NAMESPACE` is RESTRICTed by a view as by a table.
+
 A namespace's own name, an index's, an assertion's, a Transition's and a
 Cabin's stay **instance-wide**: only relation names are scoped.
 

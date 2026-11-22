@@ -1,0 +1,15 @@
+09:40:41 start
+09:40:51 q2 n=200 done
+09:40:59 q2 n=1000 done
+09:41:08 q2 n=10000 done
+09:41:16 q3 n=200 point done
+09:41:21 q3 n=200 join done
+09:41:22 q3 n=200 range done
+09:41:30 q3 n=1000 point done
+09:41:34 q3 n=1000 join done
+09:41:38 q3 n=1000 range done
+09:41:46 q3 n=10000 point done
+09:41:50 q3 n=10000 join done
+09:41:54 q3 n=10000 range done
+09:42:11 q4 done
+09:42:11 end
