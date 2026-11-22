@@ -5,7 +5,7 @@ Status: **OPENED 2026-11-21 on the operator's standing go-ahead
 worktree `dg-wal-segment-body` (branch `worktree-do-frame-table-long-holds`)
 from `48a3276c` (`v3.5.0-55-g48a3276c`). **DO-Q0..Q8 adopted (a) and DO-Q9
 (a) added and adopted, as CLA proposed, on that go-ahead; none is the
-operator's own per-item mark** (§4). **DO-S0, DO-S1 and DO-S2 built on the work branch** (`47f7016c` to `7116b668`) **and measured at the close** (§7, DO-S4); **DO-S3's proof is written (§5a) and E2 waits for the operator's own mark** (DO-Q3 (a)) - the one thing between DO and its close. Written on `main` at
+operator's own per-item mark** (§4). **CLOSED 2026-11-22 on the work branch, and landed on `main` at `c22a1a95` the same day on "push no verify"** (`raft-marks-2026-11-22.md` §2), untagged: DO-S0 to DO-S2 built (`47f7016c` to `7116b668`) and landed on `main` at `bf289a82` (`raft-marks-2026-11-21.md` §13); **E2 built on the operator's own mark on §5a** (`raft-marks-2026-11-22.md` §1, DO-S3, §7); the close measured (DO-S4, and E2's own A/B). E2 is not landed: a push waits for the operator's word. Written on `main` at
 `3a07ad49` on the operator's word of 2026-11-21 (`raft-marks-2026-11-21.md`
 §8); that DO is an order of its own, cut out of CW's C1 rather than written
 into CW, is CLA's proposal and the operator's yes to it. Every
@@ -339,12 +339,15 @@ Binding from DO-S1 on.
 
 ## 5a. DO-S3: E2's proof under DO-R1 (CLA, for the operator's mark)
 
-`[design]`, written at DO-S3 on the worktree `dg-wal-segment-body` at
-`b8759946`, read against `src/wal/checkpointer.cpp` (`Start`, the paced
+`[design]` when written, **marked by the operator on 2026-11-22**
+(`raft-marks-2026-11-22.md` §1) and built (§7, DO-S3). Written at DO-S3 on
+the worktree `dg-wal-segment-body` at `b8759946`, read against `src/wal/checkpointer.cpp` (`Start`, the paced
 publish), `wal/analysis.hpp` (`RedoStartFrom`) and
-`src/server/superblock_checkpoint_anchor.cpp` (the fold). **Nothing of E2
-is built**; DO-Q3 (a) builds it only on the operator's own mark on this
-proof.
+`src/server/superblock_checkpoint_anchor.cpp` (the fold). Two corrections were
+made in the build and are marked here as CLA's, not the operator's: the
+merge keeps a page's lowest **non-zero** recLSN (a 0 is "nothing to
+replay", so it must not hide a real one), and case 3 below covers a page
+never visited at all.
 
 **What E2 is, exactly.** H1 (`DirtyPagesWithRecLsn`) and H2
 (`DirtyPageIds`) walk the slot array a chunk (`kFrameChunk`, 1,024 slots,
@@ -354,10 +357,10 @@ releasing the latch between chunks with nothing held across the gap. The
 checkpoint's task does not suspend in the walk (no `co_await` between the
 first chunk and `CHECKPOINT_BEGIN`'s append), so CZ-R3 stands. The result
 is sorted by page id and **deduplicated, keeping each page's lowest
-recLSN** (a page evicted clean from a chunk not yet walked and faulted
-back into a slot already walked cannot appear twice, but one evicted from
-a walked chunk and re-faulted into a later one can; the minimum is the
-conservative entry).
+non-zero recLSN** (a page that leaves a slot not yet walked for one
+already walked was clean when it left and is not met at all - case 3; one
+that leaves a walked slot for a later one can be met twice; the minimum is
+the conservative entry).
 
 **What redo needs of the table.** The anchor's redo start `R` is the
 minimum, over every core's last contribution to the fold, of
@@ -384,9 +387,12 @@ visited (its chunk's hold), if P was resident then.
    (written by a copy before the clean that started this dirty span) or
    not yet stamped at `v` - appended, or stamped, after `v`. The first is
    not exposed. The second is case 4.
-3. *P not resident, or resident and clean, at `v`.* Every record stamped
-   on P before its last clean is on the device. A record `r` not on the
-   device was therefore stamped after `v`. Case 4.
+3. *P not resident, or resident and clean, at `v` - or never visited*,
+   having moved from a slot not yet walked to one already walked, which
+   only a clean frame can (only a clean frame is evicted). Every record
+   stamped on P before its last clean is on the device. A record `r` not
+   on the device was therefore stamped after `v`, or after P's move.
+   Case 4.
 4. *`r` stamped on P after `v` and appended before `CHECKPOINT_BEGIN`.*
    This is exactly the window the whole-table snapshot already has
    between its one hold and the append (`checkpointer.cpp`'s comment at
@@ -431,8 +437,8 @@ chunk dirtied, logged and stamped from a second core below `begin_lsn`,
 then a crash before the anchor lands - recovery from the previous anchor
 replays it; (ii) the same, crash after the anchor lands - the publish
 wrote it, and the page reads back whole; (iii) a page evicted from an
-unwalked chunk and re-faulted into a walked one, dirtied - one entry, the
-lower recLSN; (iv) the same cells at `cores = 1`, where the store is
+walked chunk and re-faulted into a later one, dirtied - one entry, the
+lower non-zero recLSN; (iv) the same cells at `cores = 1`, where the store is
 unarmed and E2 is the one-hold walk it is today (DO-R2).
 
 **What it buys** (DO-S1's numbers): the hold falls from the whole walk,
@@ -681,3 +687,56 @@ session's workload on the host throughout (its load recorded per run).
 - **What holds DO**: E2 (§5a). If the operator marks the proof, E2 is
   built with its crash cells and measured like E1, and DO closes; if not,
   DO closes as it stands, with H1 and H2 over the bar in `known-gaps.md`.
+
+### DO-S3 - E2, built on the operator's mark, 2026-11-22; DO closed
+
+The operator's *"go ahead"* after CLA's account of E2 (`raft-marks-2026-11-22.md`
+§1), read as the mark §5a asked for. `bench/v3.5.0/results-do-s3-e2-v3.5.0-62-g1cfe6c0f.md`.
+
+- **Built**: `ForEachDirtyFrame` walks the slot array a `kFrameChunk`
+  (1,024 slots) a structure-latch hold, armed only, and returns after the
+  last chunk; `DirtyPageIds` de-duplicates and `DirtyPagesWithRecLsn` merges
+  to the lowest non-zero recLSN (`MergeDirtyTable`); a slot's frame is
+  asserted to be its owner's (DO-R6). **CLA's addition**: a handover
+  between chunks - `Latch` counts its waiters and the acquisitions that
+  waited, on the contended path only - because E2 alone left a fetch
+  waiting 12.5-12.9 ms at 1 Mi frames with no hold over 224 us (the walker
+  re-took the latch before the waiter it had woken ran); the walker yields
+  until one waiter is in, or 20 us.
+- **The bar met** (DO-Q9 (a)): no hold over about 0.3 ms at 256 Ki and
+  1 Mi frames, 30 us at 64 Ki, none over 1 ms. Against no E2 at 256 Ki and
+  1 Mi: other cores' fetches a second +10-20 %, the longest fetch wait cut
+  4-5 times (15.8-17.7 ms to 4.4 ms at 1 Mi). **The cost**: the walking
+  core's H1 call about doubles (26 to 49 ms at 1 Mi under three readers),
+  a stall of its own reactor, recorded in `known-gaps.md`.
+- **The crash cells** (`tests/dirty_table_chunked_walk_test.cpp`): §5a's
+  (i) and (ii) on `SimInstance`, the window's write run from the seam on
+  the walking thread; (ii) shown to fail under a mutant in which the
+  publish writes no page but page 0 (recovery started at LSN 27,720, past
+  the update, and the row read its old value). (iii) is a unit test of the
+  merge, and (iv) the unarmed walk's gap count: forcing a page to move
+  between particular slots needs eviction control the store does not
+  expose. The fold is exercised by no cell, since the window's writer is
+  the walking thread.
+- **Reviewed by `critics-developer`**: no engine bug; no dirty frame missed
+  beyond case 4 (a slot's owner and its frame's slot written and cleared
+  in one hold; a frame never changes slot; slots only appended), every
+  caller suspension-free, the merge right, one core unchanged. Fixed by
+  the reviewer: the unarmed cell skips under `KDS_TEST_PAGE_LATCH=1`, which
+  arms every store. Applied: the handover waits for one waiter, not none
+  (its finding: a steady stream is never empty, so the walk could spin
+  20 us a chunk); the walk returns after its last chunk; the impossible
+  slot/frame mismatch asserted; the merge one loop; the crash fixture
+  asserts one chunk and its header says what the cells do and do not
+  exercise; §5a's case 3 and cell (iii) wording corrected; `page.md` §8,
+  `client-manual.md` and `known-gaps.md`, which the code now contradicted.
+- **Suite**: 0 failed of 5107 on E2 before the review's changes, and 0
+  failed of 5107 again on the commit's build inputs, after them.
+- **The close**: DO-S4's engine A/B (`48a3276c` against `7116b668`) was not
+  run again for E2. E2 changes only the checkpoint's dirty-table walks,
+  and the census shapes' pools hold under one chunk resident, where the
+  armed walk is one chunk; E2 is measured by its own A/B above.
+
+**DO is closed** on the work branch: every stage built, E2 on the
+operator's mark, the measurements recorded. It is not landed: the E2
+commits wait for the operator's push.
