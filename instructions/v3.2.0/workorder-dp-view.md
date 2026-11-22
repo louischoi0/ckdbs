@@ -4,7 +4,11 @@ Status: **WRITTEN 2026-11-22, not opened.** Written in the main checkout on
 `main` at `71013396` (`v3.4.17-94-g71013396f`) on the operator's words of
 2026-11-21 and 2026-11-22 (§0; `raft-marks-2026-11-22.md` §3). The letter
 DP, the shape of §2, the rules, the items and the stages are CLA's
-proposals. **No DP-Q item is marked.** No stage is started. Every
+proposals. **DP-Q0..Q13 marked (a) by the operator on 2026-11-22**
+(*"mark them as proposed"*, `raft-marks-2026-11-22.md` §4), after CLA's
+account of each item's proposal and reason - **the operator's own mark,
+not the standing go-ahead**, which is what DP-Q1 `[quiet-wrong]` and DP-Q6
+`[plan-identity]` required. No stage is started; DP is not opened. Every
 `[source-read]` claim below was read at `71013396`. No suite was run: the
 order changes no build input.
 
@@ -287,7 +291,8 @@ Binding once DP opens.
 
 ## 4. Items for the operator (DP-Q)
 
-(a) is CLA's proposal in each. None is marked.
+(a) is CLA's proposal in each. **Every item is marked (a) by the
+operator, 2026-11-22** (`raft-marks-2026-11-22.md` §4).
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -339,4 +344,22 @@ Binding once DP opens.
 
 Written at `71013396` on the operator's words of §0. The 2026-11-21
 conversation draft (VW1-VW19) is superseded; its three corrected premises
-are in this order's header. No item is marked and nothing is built.
+are in this order's header. Nothing is built.
+
+### DP-Q0..Q13 marked, 2026-11-22
+
+CLA gave the operator each item's proposal with its reason: DP-Q6 (a new
+body is a new oid, because a body changed under one oid keeps the plan key
+and lets a captured order or an administrator's plan run over a shape it
+was not made for; an enabled administrator's plan RESTRICTs `DROP VIEW`,
+CX-Q4 (a)'s rule), DP-Q1 (the absorbable form is exactly the bodies an
+appended outer conjunct cannot change, a subquery predicate kept in its
+block so its `up` levels do not move), DP-Q2 (refusing a non-absorbable
+body buys no speed, since the same derived table written by hand takes the
+same query-layer path; the cost stated - no `ANALYZE`, no plan, the whole
+body folded), DP-Q4 (a view's name is in `sys.objects` with the tables',
+so a view committed at its statement could outlive a `ROLLBACK` of the
+table it reads; the cost stated - `sys.views` needs a transactional row
+write, not `declaration_relation.hpp`'s `kBootstrapXid` writer), DP-Q13
+(every DDL is `admin`'s and there is no per-relation grant), and the rest
+in one line each. The operator marked all fourteen (a).
