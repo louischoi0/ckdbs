@@ -1,0 +1,213 @@
+diff --git a/include/kds/base/contention.hpp b/include/kds/base/contention.hpp
+index 8fe764e0..a105b15d 100644
+--- a/include/kds/base/contention.hpp
++++ b/include/kds/base/contention.hpp
+@@ -142,6 +142,10 @@ enum class Tally : std::uint8_t {
+     kFrameTableWalksOver100us,
+     kFrameTableWalksOver1ms,
+     kFrameTableWalksOver10ms,
++    // CW-S0's spike (`base/cw_probe.hpp`), never landed.
++    kCwNReadFetch, kCwNWriteFetch, kCwNFtHolds, kCwNPlCas, kCwNPlShared, kCwNPlExcl,
++    kCwTReadFetchCalls, kCwTReadFetchTicks, kCwTWriteFetchCalls, kCwTWriteFetchTicks,
++    kCwTReleaseCalls, kCwTReleaseTicks,
+     kCount,
+ };
+ 
+@@ -163,6 +167,9 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
+     "descent_hops",           "frame_table_walks",      "frame_table_walk_us",
+     "frame_table_walks_over_100us", "frame_table_walks_over_1ms",
+     "frame_table_walks_over_10ms",
++    "cw_n_read_fetch", "cw_n_write_fetch", "cw_n_ft_holds", "cw_n_pl_cas", "cw_n_pl_shared",
++    "cw_n_pl_excl", "cw_t_read_fetch_calls", "cw_t_read_fetch_ticks", "cw_t_write_fetch_calls",
++    "cw_t_write_fetch_ticks", "cw_t_release_calls", "cw_t_release_ticks",
+ };
+ static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
+ 
+diff --git a/include/kds/base/cw_probe.hpp b/include/kds/base/cw_probe.hpp
+new file mode 100644
+index 00000000..c083c71c
+--- /dev/null
++++ b/include/kds/base/cw_probe.hpp
+@@ -0,0 +1,45 @@
++#pragma once
++
++// CW-S0's spike instrument (`instructions/v3.2.0/workorder-cw-optimistic-page-read.md`
++// CW-S0). Never landed: it lives on the unpushed spike branch only.
++//
++// Two switches, read once from the environment at static init, each a
++// predictable branch when off:
++//   KDS_CW_COUNT=1  count fetches by kind, frame-table holds and every
++//                   compare-and-swap attempt on a page-latch word (M1);
++//   KDS_CW_TICKS=1  bracket every fetch and every release with two `rdtsc`
++//                   reads and sum the ticks per core (M3's substitute: this
++//                   host has no PMU and no profiler).
++// With both off the binary differs from the tree only by the branches and by
++// a release build reading `KDS_TEST_PAGE_LATCH` (M5's armed one-core store).
++
++#include <cstdint>
++#include <cstdlib>
++#include <x86intrin.h>
++
++#include "kds/base/contention.hpp"
++
++namespace kds::cw {
++
++inline bool EnvOn(const char* name) noexcept {
++    const char* e = std::getenv(name);
++    return e != nullptr && e[0] == '1';
++}
++
++inline const bool kCount = EnvOn("KDS_CW_COUNT");
++inline const bool kTicks = EnvOn("KDS_CW_TICKS");
++
++inline std::uint64_t Start() noexcept { return kTicks ? __rdtsc() : 0; }
++
++inline void Stop(Tally calls, Tally ticks, std::uint64_t t0) noexcept {
++    if (!kTicks) return;
++    const std::uint64_t t1 = __rdtsc();
++    Contention::Add(calls);
++    Contention::Add(ticks, t1 - t0);
++}
++
++inline void Count(Tally t, std::uint64_t n = 1) noexcept {
++    if (kCount) Contention::Add(t, n);
++}
++
++}  // namespace kds::cw
+diff --git a/include/kds/base/latch.hpp b/include/kds/base/latch.hpp
+index 81edb7ad..705a837e 100644
+--- a/include/kds/base/latch.hpp
++++ b/include/kds/base/latch.hpp
+@@ -6,6 +6,7 @@
+ #include <mutex>
+ 
+ #include "kds/base/contention.hpp"
++#include "kds/base/cw_probe.hpp"
+ #include "kds/base/statistics_scope.hpp"
+ 
+ // The latch AR0's revised G1 admits beside the ring indices
+@@ -75,6 +76,7 @@ public:
+         // held at that instant.
+         AssertNoStatisticsRecord("a blocking latch acquisition");
+         if (mutex_.try_lock()) {
++            if (kind_ == LatchKind::kFrameTable) cw::Count(Tally::kCwNFtHolds);
+             NoteHeld();
+             return 0;
+         }
+@@ -85,6 +87,7 @@ public:
+         handed_.fetch_add(1, std::memory_order_relaxed);
+         const auto acquired = std::chrono::steady_clock::now();
+         NoteHeld(acquired);
++        if (kind_ == LatchKind::kFrameTable) cw::Count(Tally::kCwNFtHolds);
+         const std::uint64_t ns = static_cast<std::uint64_t>(
+             std::chrono::duration_cast<std::chrono::nanoseconds>(acquired - start).count());
+         Contention::LatchWait(kind_, ns);
+@@ -102,6 +105,7 @@ public:
+ 
+     bool try_lock() noexcept {
+         if (!mutex_.try_lock()) return false;
++        if (kind_ == LatchKind::kFrameTable) cw::Count(Tally::kCwNFtHolds);
+         NoteHeld();
+         return true;
+     }
+diff --git a/include/kds/storage/page_latch.hpp b/include/kds/storage/page_latch.hpp
+index 8de775bf..3c420306 100644
+--- a/include/kds/storage/page_latch.hpp
++++ b/include/kds/storage/page_latch.hpp
+@@ -5,6 +5,8 @@
+ #include <cstdint>
+ #include <thread>
+ 
++#include "kds/base/cw_probe.hpp"
++
+ // ---- The page latch word (AM-R3, AR2-R2) ----------------------------------
+ //
+ // One 32-bit word per resident buffer-pool frame, operated on through
+@@ -142,8 +144,10 @@ public:
+         for (;;) {
+             std::uint32_t desired = 0;
+             if (!Next(cur, mode, core, desired)) return PageLatchOutcome::kBusy;
++            cw::Count(Tally::kCwNPlCas);
+             if (ref.compare_exchange_weak(cur, desired, std::memory_order_acq_rel,
+                                           std::memory_order_acquire)) {
++                cw::Count(mode == PageLatchMode::kShared ? Tally::kCwNPlShared : Tally::kCwNPlExcl);
+                 return PageLatchOutcome::kAcquired;
+             }
+             // `cur` now holds the value that beat us; loop with it.
+@@ -183,6 +187,7 @@ public:
+                 if (w.count == 0) return;  // nothing held; a double release is left alone
+                 desired = cur - 1u;
+             }
++            cw::Count(Tally::kCwNPlCas);
+             if (ref.compare_exchange_weak(cur, desired, std::memory_order_acq_rel,
+                                           std::memory_order_relaxed)) {
+                 return;
+diff --git a/include/kds/storage/page_store.hpp b/include/kds/storage/page_store.hpp
+index d1486529..1285dba7 100644
+--- a/include/kds/storage/page_store.hpp
++++ b/include/kds/storage/page_store.hpp
+@@ -11,6 +11,7 @@
+ 
+ #include "kds/base/common.hpp"
+ #include "kds/base/status.hpp"
++#include "kds/base/cw_probe.hpp"
+ #include "kds/base/statistics_scope.hpp"
+ #include "kds/storage/page_header.hpp"
+ 
+@@ -890,11 +891,13 @@ inline PageRef& PageRef::operator=(PageRef&& other) noexcept {
+ 
+ inline void PageRef::Release() noexcept {
+     if (store_ != nullptr) {
++        const std::uint64_t cw_t0 = cw::Start();
+         if (frame_ != nullptr) {
+             store_->UnpinFrameAt(page_id_, std::exchange(frame_, nullptr));
+         } else {
+             store_->UnpinFrame(page_id_);
+         }
++        cw::Stop(Tally::kCwTReleaseCalls, Tally::kCwTReleaseTicks, cw_t0);
+         store_ = nullptr;
+         data_ = nullptr;
+     }
+diff --git a/src/storage/device_page_store.cpp b/src/storage/device_page_store.cpp
+index 0816fe6d..87132127 100644
+--- a/src/storage/device_page_store.cpp
++++ b/src/storage/device_page_store.cpp
+@@ -415,17 +415,15 @@ StatusOr<std::unique_ptr<DevicePageStore>> DevicePageStore::Open(PageDevice& dev
+             store->capacity_ = std::min(store->capacity_, lowered);
+         }
+     }
+-    // AM-S1: `KDS_TEST_PAGE_LATCH=1` arms the page latch on every
+-    // debug-build store, so one `ctest` run checks the nesting rules
+-    // (re-entrancy, never an upgrade) against every access pattern in the
+-    // suite.
++#endif
++    // CW-S0's spike: `KDS_TEST_PAGE_LATCH=1` arms a release build's store
++    // too (M5: one core armed against one core unarmed). Never landed.
+     if (const char* armed = std::getenv("KDS_TEST_PAGE_LATCH"); armed != nullptr) {
+         if (std::strtol(armed, nullptr, 10) > 0) {
+             store->latch_forced_ = true;  // the assembly's SetLatchArmed cannot undo it
+             store->SetLatchArmed(true);
+         }
+     }
+-#endif
+     return store;
+ }
+ 
+@@ -2633,13 +2631,17 @@ StatusOr<std::span<std::byte, kPageSize>> DevicePageStore::FetchPinned(PageId pa
+     assert((for_read || mode == PinMode::kExclusive) && "a write fetch that is not exclusive");
+     bool owed = false;
+     Frame* pinned = nullptr;
++    cw::Count(for_read ? Tally::kCwNReadFetch : Tally::kCwNWriteFetch);
++    const std::uint64_t cw_t0 = cw::Start();
+     auto bytes = FetchAndPin(page_id, mode, for_read, heat, /*faulted=*/nullptr,
+                              for_read ? nullptr : &owed, &pinned);
+     if (!bytes.ok()) return bytes;
+     if (for_read) {
++        cw::Stop(Tally::kCwTReadFetchCalls, Tally::kCwTReadFetchTicks, cw_t0);
+         *frame = pinned;
+         return bytes;
+     }
++    cw::Stop(Tally::kCwTWriteFetchCalls, Tally::kCwTWriteFetchTicks, cw_t0);
+     // **The write fetch pays the image its frame owes** (DB-R1, the
+     // header's "The write fetch's image"), holding the page exclusive and
+     // pinned, before its caller has changed a byte. A refusal gives both

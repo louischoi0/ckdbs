@@ -1,0 +1,5 @@
+[
+ ["fetch-release-self", "chain:^[^<]*(DevicePageStore::(FetchAndPin|PinFrameAndRelease|AcquirePageLatch|UnpinFrameAt|UnpinFrame|HitLocked|CountPin|UncountPin|FetchPinned)|PageLatch::|PageRef::Release)"],
+ ["mutex-under-fetch", "chain:^[^<]*(pthread_mutex|lll_lock|lll_unlock)[^<]*<[^<]*(FetchPinned|FetchAndPin|PinFrameAndRelease|AcquirePageLatch|UnpinFrameAt|UnpinFrame|PageRef::Release|PageStore::Fetch|GetForRead)"],
+ ["mutex-other", "chain:^[^<]*(pthread_mutex|lll_lock|lll_unlock)"]
+]

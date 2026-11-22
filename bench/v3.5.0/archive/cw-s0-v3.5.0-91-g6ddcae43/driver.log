@@ -1,0 +1,54 @@
+kds-point-relaxed-k1-s2-kernel-r0 load 2.34->2.29 stmts=247656 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=30956.8 p50=58.8
+kds-point-relaxed-k2-s4-kernel-r0 load 2.29->2.48 stmts=354141 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44267.3 p50=82.8
+kds-point-relaxed-k3-s6-kernel-r0 load 2.48->2.84 stmts=422390 errors=0 refusals=0 client_bound=False cores=['0.0', '2.0'] stmt/s=52765.3 p50=94.2
+kds-pkmix-relaxed-k1-s2-kernel-r0 load 2.40->2.25 stmts=263882 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32985.1 p50=57.0
+kds-pkmix-relaxed-k2-s4-kernel-r0 load 2.25->2.51 stmts=381420 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=47677.2 p50=80.0
+kds-pkmix-relaxed-k3-s6-kernel-r0 load 2.47->3.17 stmts=432669 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=54079.3 p50=93.1
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.46->2.22 stmts=322533 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40316.5 p50=41.4
+kds-insert1-relaxed-k2-s4-kernel-r0 load 2.22->2.42 stmts=439075 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=54884.0 p50=56.9
+kds-insert1-relaxed-k3-s6-kernel-r0 load 2.42->3.04 stmts=497626 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=62161.0 p50=69.0
+kds-pointN-relaxed-k2-s4-kernel-r0 load 2.36->2.73 stmts=358236 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=44779.1 p50=82.9
+kds-pointN-relaxed-k3-s6-kernel-r0 load 2.39->3.02 stmts=430519 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=53791.4 p50=95.6
+kds-point-relaxed-k1-s2-kernel-r0 load 2.35->2.20 stmts=260420 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32552.3 p50=57.3
+kds-point-relaxed-k1-s2-kernel-r0 load 2.20->2.02 stmts=259225 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32403.1 p50=57.7
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.02->1.88 stmts=325555 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40694.3 p50=41.2
+kds-insert1-relaxed-k1-s2-kernel-r0 load 1.88->2.31 stmts=325068 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40633.4 p50=41.1
+kds-point-relaxed-k1-s2-kernel-r0 load 2.31->2.26 stmts=264475 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=33059.3 p50=56.9
+kds-point-relaxed-k2-s4-kernel-r0 load 2.26->2.28 stmts=360640 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=45079.6 p50=82.7
+kds-point-relaxed-k3-s6-kernel-r0 load 2.28->2.46 stmts=441972 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=55216.2 p50=94.7
+kds-pkmix-relaxed-k1-s2-kernel-r0 load 2.46->2.28 stmts=267159 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=33394.8 p50=56.7
+kds-pkmix-relaxed-k2-s4-kernel-r0 load 2.28->2.31 stmts=380958 errors=0 refusals=0 client_bound=False cores=['1.0'] stmt/s=47619.2 p50=79.3
+kds-pkmix-relaxed-k3-s6-kernel-r0 load 2.31->2.72 stmts=455188 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=56897.6 p50=92.2
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.50->2.39 stmts=322727 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40340.7 p50=41.3
+kds-insert1-relaxed-k2-s4-kernel-r0 load 2.39->2.55 stmts=443240 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=55404.6 p50=57.2
+kds-insert1-relaxed-k3-s6-kernel-r0 load 2.34->2.82 stmts=498073 errors=0 refusals=0 client_bound=False cores=['0.0', '2.0'] stmt/s=62231.0 p50=69.7
+kds-pointN-relaxed-k2-s4-kernel-r0 load 2.39->2.54 stmts=365904 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=45737.6 p50=81.7
+kds-pointN-relaxed-k3-s6-kernel-r0 load 2.34->2.83 stmts=434463 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=54277.5 p50=94.3
+kds-point-relaxed-k1-s2-kernel-r0 load 2.39->2.33 stmts=261320 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32664.9 p50=57.6
+kds-point-relaxed-k1-s2-kernel-r0 load 2.33->2.33 stmts=258449 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32306.0 p50=58.1
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.33->2.20 stmts=323437 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40429.4 p50=41.1
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.20->1.95 stmts=320208 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40026.0 p50=41.5
+kds-point-relaxed-k2-s4-kernel-r0 load 1.95->2.27 stmts=355565 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44445.2 p50=83.5
+kds-insert1-relaxed-k2-s4-kernel-r0 load 2.16->2.37 stmts=437613 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=54701.2 p50=57.2
+kds-pkmix-relaxed-k2-s4-kernel-r0 load 2.37->2.60 stmts=385098 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=48137.0 p50=79.7
+kds-point-relaxed-k1-s2-kernel-r0 load 2.39->2.40 stmts=257060 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32132.4 p50=58.1
+kds-point-relaxed-k1-s2-kernel-r0 load 2.40->2.23 stmts=258394 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=32299.0 p50=58.3
+kds-point-relaxed-k1-s2-kernel-r0 load 2.23->2.04 stmts=255522 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=31940.0 p50=58.4
+kds-point-relaxed-k2-s4-kernel-r0 load 2.04->2.35 stmts=357687 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44710.4 p50=83.2
+kds-point-relaxed-k3-s6-kernel-r0 load 2.35->2.83 stmts=424045 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=52964.9 p50=97.0
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.47->2.31 stmts=319841 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=39980.0 p50=41.6
+kds-insert1-relaxed-k1-s2-kernel-r0 load 2.31->2.18 stmts=322760 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=40344.9 p50=41.7
+kds-insert1-relaxed-k2-s4-kernel-r0 load 2.18->2.60 stmts=443079 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=55371.2 p50=57.4
+kds-insert1-relaxed-k3-s6-kernel-r0 load 2.48->3.02 stmts=506808 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=63324.9 p50=69.8
+kds-pointN-relaxed-k2-s4-kernel-r0 load 2.35->2.45 stmts=361447 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=45180.8 p50=83.2
+kds-pointN-relaxed-k3-s6-kernel-r0 load 2.45->2.83 stmts=439966 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=54967.9 p50=94.5
+kds-point-relaxed-k2-s4-kernel-r0 load 2.48->2.46 stmts=359996 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=44999.3 p50=83.1
+kds-pointN-relaxed-k2-s4-kernel-r0 load 2.46->2.53 stmts=360960 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=45119.8 p50=82.6
+kds-insert1-relaxed-k2-s4-kernel-r0 load 2.33->2.58 stmts=450476 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=56308.2 p50=56.9
+kds-point-relaxed-k3-s6-kernel-r0 load 2.45->3.04 stmts=243715 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=30434.0 p50=190.5
+kds-pointN-relaxed-k3-s6-kernel-r0 load 2.37->2.99 stmts=244744 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=30567.8 p50=189.5
+kds-point-relaxed-k3-s6-kernel-r0 load 2.33->2.89 stmts=243943 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=30463.7 p50=190.2
+kds-pointN-relaxed-k3-s6-kernel-r0 load 2.45->2.90 stmts=244691 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=30549.6 p50=189.8
+kds-point-relaxed-k3-s6-kernel-r0 load 2.46->3.16 stmts=244454 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=30534.2 p50=190.6
+kds-pointN-relaxed-k3-s6-kernel-r0 load 2.46->2.98 stmts=242927 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=30333.8 p50=190.8
+kds-insert1-relaxed-k3-s6-kernel-r0 load 2.45->2.99 stmts=360827 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0', '2.0'] stmt/s=45054.1 p50=115.3

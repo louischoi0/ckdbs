@@ -1,0 +1,113 @@
+14:43:31 start M2-point-c1-r1
+14:44:20 end M2-point-c1-r1 rc=0
+14:44:20 start M2-point-c2-r1
+14:44:34 end M2-point-c2-r1 rc=0
+14:44:34 start M2-point-c3-r1
+14:44:48 end M2-point-c3-r1 rc=0
+14:44:48 start M2-pkmix-c1-r1
+14:45:12 end M2-pkmix-c1-r1 rc=0
+14:45:12 start M2-pkmix-c2-r1
+14:45:26 end M2-pkmix-c2-r1 rc=0
+14:45:26 start M2-pkmix-c3-r1
+14:45:40 end M2-pkmix-c3-r1 rc=0
+14:45:40 start M2-insert1-c1-r1
+14:46:09 end M2-insert1-c1-r1 rc=0
+14:46:09 start M2-insert1-c2-r1
+14:46:23 end M2-insert1-c2-r1 rc=0
+14:46:23 start M2-insert1-c3-r1
+14:46:38 end M2-insert1-c3-r1 rc=0
+14:46:38 start M4-pointN-c2-r1
+14:47:07 end M4-pointN-c2-r1 rc=0
+14:47:07 start M4-pointN-c3-r1
+14:47:31 end M4-pointN-c3-r1 rc=0
+14:47:31 start M5-point-c1u-r1
+14:48:00 end M5-point-c1u-r1 rc=0
+14:48:00 start M5-point-c1a-r1
+14:48:14 end M5-point-c1a-r1 rc=0
+14:48:14 start M5-insert1-c1u-r1
+14:48:28 end M5-insert1-c1u-r1 rc=0
+14:48:28 start M5-insert1-c1a-r1
+14:48:42 end M5-insert1-c1a-r1 rc=0
+14:48:42 start M2-point-c1-r2
+14:48:56 end M2-point-c1-r2 rc=0
+14:48:56 start M2-point-c2-r2
+14:49:10 end M2-point-c2-r2 rc=0
+14:49:10 start M2-point-c3-r2
+14:49:24 end M2-point-c3-r2 rc=0
+14:49:24 start M2-pkmix-c1-r2
+14:49:38 end M2-pkmix-c1-r2 rc=0
+14:49:38 start M2-pkmix-c2-r2
+14:49:52 end M2-pkmix-c2-r2 rc=0
+14:49:52 start M2-pkmix-c3-r2
+14:50:06 end M2-pkmix-c3-r2 rc=0
+14:50:06 start M2-insert1-c1-r2
+14:50:25 end M2-insert1-c1-r2 rc=0
+14:50:25 start M2-insert1-c2-r2
+14:50:39 end M2-insert1-c2-r2 rc=0
+14:50:39 start M2-insert1-c3-r2
+14:50:58 end M2-insert1-c3-r2 rc=0
+14:50:58 start M4-pointN-c2-r2
+14:51:22 end M4-pointN-c2-r2 rc=0
+14:51:22 start M4-pointN-c3-r2
+14:51:42 end M4-pointN-c3-r2 rc=0
+14:51:42 start M5-point-c1u-r2
+14:52:06 end M5-point-c1u-r2 rc=0
+14:52:06 start M5-point-c1a-r2
+14:52:20 end M5-point-c1a-r2 rc=0
+14:52:20 start M5-insert1-c1u-r2
+14:52:34 end M5-insert1-c1u-r2 rc=0
+14:52:34 start M5-insert1-c1a-r2
+14:52:47 end M5-insert1-c1a-r2 rc=0
+14:52:47 start M1-point-c2
+14:53:02 end M1-point-c2 rc=0
+14:53:02 start M1-insert1-c2
+14:53:16 end M1-insert1-c2 rc=0
+14:53:16 start M1-pkmix-c2
+14:53:30 end M1-pkmix-c2 rc=0
+14:53:30 start M1-point-c1a
+14:53:49 end M1-point-c1a rc=0
+14:53:49 start M3-point-c1u
+14:54:02 end M3-point-c1u rc=0
+14:54:02 start M3-point-c1a
+14:54:16 end M3-point-c1a rc=0
+14:54:16 start M3-point-c2
+14:54:30 end M3-point-c2 rc=0
+14:54:30 start M3-point-c3
+14:54:45 end M3-point-c3 rc=0
+14:54:45 start M3-insert1-c1u
+14:55:09 end M3-insert1-c1u rc=0
+14:55:09 start M3-insert1-c1a
+14:55:22 end M3-insert1-c1a rc=0
+14:55:22 start M3-insert1-c2
+14:55:37 end M3-insert1-c2 rc=0
+14:55:37 start M3-insert1-c3
+14:55:51 end M3-insert1-c3 rc=0
+14:55:51 start M3-pointN-c2
+14:56:20 end M3-pointN-c2 rc=0
+14:56:20 start M3-pointN-c3
+14:56:34 end M3-pointN-c3 rc=0
+14:56:34 DONE
+14:56:40 start M3-build
+14:58:05 end M3-build rc=0 wall=84s
+14:58:05 start M3s-point-c2
+14:59:30 end M3s-point-c2 rc=0
+14:59:30 start M3s-pointN-c2
+14:59:45 end M3s-pointN-c2 rc=0
+14:59:45 start M3s-insert1-c2
+15:00:05 end M3s-insert1-c2 rc=0
+15:00:05 M3 DONE
+15:00:06 start C3c-point-r1
+15:00:25 end C3c-point-r1 rc=0
+15:00:25 start C3c-pointN-r1
+15:00:55 end C3c-pointN-r1 rc=0
+15:00:55 start C3c-point-r2
+15:01:24 end C3c-point-r2 rc=0
+15:01:24 start C3c-pointN-r2
+15:01:48 end C3c-pointN-r2 rc=0
+15:01:48 start C3c-M3-point
+15:02:12 end C3c-M3-point rc=0
+15:02:12 start C3c-M3-pointN
+15:02:41 end C3c-M3-pointN rc=0
+15:02:41 start C3c-M3-insert1
+15:03:15 end C3c-M3-insert1 rc=0
+15:03:15 C3c DONE

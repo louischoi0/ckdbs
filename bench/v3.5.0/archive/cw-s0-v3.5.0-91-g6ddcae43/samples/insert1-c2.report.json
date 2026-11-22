@@ -1,0 +1,125 @@
+{
+ "samples": 2034,
+ "parts": {
+  "other": 1835,
+  "mutex-other": 117,
+  "mutex-under-fetch": 23,
+  "fetch-release-self": 59
+ },
+ "self": [
+  [
+   "sem_trywait",
+   776
+  ],
+  [
+   "pthread_mutex_trylock",
+   117
+  ],
+  [
+   "[vdso]+0xc19",
+   61
+  ],
+  [
+   "malloc",
+   45
+  ],
+  [
+   "__default_morecore",
+   39
+  ],
+  [
+   "tolower",
+   38
+  ],
+  [
+   "kds::parser::FingerprintAccumulator::Feed",
+   31
+  ],
+  [
+   "kds::parser::Lexer::ScanToken",
+   30
+  ],
+  [
+   "__libc_free",
+   28
+  ],
+  [
+   "kds::storage::::HardwareExtend",
+   26
+  ],
+  [
+   "timer_settime",
+   21
+  ],
+  [
+   "kds::server::KwpSession::OnBind",
+   21
+  ],
+  [
+   "kds::heap::PageView::PayloadAt const",
+   20
+  ],
+  [
+   "kds::txn::LockTable::AcquireInner",
+   19
+  ]
+ ],
+ "inclusive": [
+  [
+   "kds::sched::Scheduler::Run",
+   1795
+  ],
+  [
+   "kds::sched::Scheduler::RunOnce",
+   1789
+  ],
+  [
+   "kds::sched::Scheduler::RunReadyTasks",
+   1317
+  ],
+  [
+   "kds::sched::CoroTask::Poll",
+   1279
+  ],
+  [
+   "std::error_code::default_error_condition const",
+   953
+  ],
+  [
+   "kds::server::CoreRuntime::Run",
+   909
+  ],
+  [
+   "__libc_init_first",
+   886
+  ],
+  [
+   "kds::server::Expeditor::RunUntilStopped",
+   886
+  ],
+  [
+   "kds::server::Expeditor::Serve",
+   886
+  ],
+  [
+   "main",
+   886
+  ],
+  [
+   "sem_trywait",
+   776
+  ],
+  [
+   "kds::server::CommandDispatcher::DispatchAsync [clone .actor]",
+   727
+  ],
+  [
+   "kds::server::CommandDispatcher::DispatchAndStage",
+   664
+  ],
+  [
+   "kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement",
+   663
+  ]
+ ]
+}

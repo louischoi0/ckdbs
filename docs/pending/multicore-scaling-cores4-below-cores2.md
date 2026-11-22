@@ -84,3 +84,36 @@ that issue in a pending state"*.
 `bench/v3.0.0/archive/census-multicore-v3.2.0-64-g9b7d53d7/` - the run
 JSONs, `census.sh`, `census.log`, `tables.md` (p0-p99 per cell, load per
 run) and the binary's sha256.
+
+## 6. What CW-S0 read for the read shapes (2026-11-22)
+
+`instructions/v3.2.0/workorder-cw-optimistic-page-read.md` CW-Q7 (a), adopted
+on the operator's standing go-ahead: CW-S0 used §4's options 1 and 2 for
+`point` and wrote this here. It decides nothing, and the entry stays the
+operator's. Measured at `6ddcae43` (`v3.5.0-91-g6ddcae43`,
+`bench/v3.5.0/results-cw-s0-premise-v3.5.0-91-g6ddcae43.md`).
+
+- **§3's sibling pairs no longer hold.** `thread_siblings_list` reads
+  (0,4) (1,5) (2,6) (3,7). §3 and option 1 read siblings 0-1, 2-3, 4-5 and
+  6-7, so option 1's "clean" `cores = 3` on 0, 2 and 4 puts two reactors on
+  one physical core.
+- **Option 1, redrawn.** Three reactors on 0, 1 and 2 with the six clients
+  on 3 and 7 is clean, and client-limited at 30.4k stmt/s. There a `point`
+  statement costs 25.8 us of server CPU.
+  - At `cores = 2` (clean) it costs 21.9 us.
+  - With the clients on the reactors' siblings (4, 5, 6) it costs 32.5 us.
+  - **So the unclean `cores = 3` cell's statement costs 6.7 us more than
+    the clean one's, and that is the harness's placement**, but not the SMT
+    sharing alone: the unclean cell also ran its reactors about twice as
+    busy (54-64 % against 23-29 %), and its frame-table wait rose with it
+    (103 against 16 ns).
+- **Option 2.** At those three cells the frame-table wait is 19, 16 and
+  103 ns a `point` statement, and the page latch is never waited for.
+  - The whole page-fetch protocol, its two latches included, is 0.63,
+    0.68 and 1.13 us a statement (rdtsc-bracketed).
+  - Neither the read path's latches nor their waits explain the rise from
+    `cores = 2` to `cores = 3` on a read shape.
+- **Not read:** `cores = 4`, which has no clean map on this host; the
+  `insert1` tail (CW-S0 timed its fetches, 6.0-11.5 % of its server CPU,
+  and did not attribute the rest); the other `contention_*` fields named in
+  option 2.
