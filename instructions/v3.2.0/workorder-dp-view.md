@@ -317,7 +317,7 @@ re-read against the tree at `30c47abf` before its adoption (§7, DP-S0).
 | DP-Q13 | Who may create a view. | **`admin`, as every DDL is** (`docs/spec/protocol.md:142`: ranks, not grant sets, no per-relation `GRANT`); a read through a view is a `SELECT`, `readonly`'s. With no per-relation grant there is nothing a view could hide, so DP gives it no access meaning | (b) `readwrite` may create a view: the first DDL below `admin`, a change to the rank table |
 | DP-Q14 | How `sys.views` stores its rows (raised at DP-S0). | **fixed-width rows, one relation, written by the catalog's transactional typed-row writer** - a header row, the text in 192-byte chunks, one row a column name, one row a dependency - placed under the DDL's transaction (`InsertRow`, `catalog.cpp:475`), delete-marked by the drop as `DropTable`'s sweep marks a relation's rows (`catalog.cpp:2470-2520`), read through `ScanAll`'s view filter (DT3); a body of at most 16,384 bytes | (b) a transactional var-length writer for a declaration-shaped relation: none exists - `InsertDeclaration` writes at `kBootstrapXid` and `ScanDeclarations` filters by no view (`declaration_relation.cpp:82-239`) - so it is a writer and a reader to build for one relation |
 | DP-Q15 | How a view's columns are named (raised at DP-S0). | **`CREATE VIEW v [(c1, ...)] AS <select>`**: the list names the columns; without it a column is named by its item - a column's name, or a query-layer item's alias; two columns of one name are refused `InvalidArgument`, naming the list as the remedy. **The native select list carries no alias** (`ColumnName`, `ast.hpp:147`), so a body that writes `AS` in its select list is not a native block and is non-absorbable: §2's "plain columns with optional aliases" is read as plain columns and the view's column list (a revision of DP-Q1's wording, below) | (b) the native grammar taught select-list aliases: a grammar change to every native SELECT, for a name a column list already gives |
-| DP-Q16 `[quiet-wrong]` | What a view's column dependencies are (raised at DP-S0). | **a dependency on every column of a relation the body reads whose name the body's text names** (every column for a `*` body); `DROP COLUMN` or `RENAME COLUMN` of one is RESTRICT; **and `ADD COLUMN`, or `RENAME COLUMN` to a name the body's text names, on a relation the body reads, is RESTRICT too** - a new column of that name could re-point a bare name in the stored body (a correlated subquery's name resolved outward today would resolve to the new inner column, `step_compiler.cpp:651-662`), which changes a view's answer with no statement naming the change | (b) relation-level: every column change of a relation a view reads refused |
+| DP-Q16 `[quiet-wrong]` | What a view's column dependencies are (raised at DP-S0). | **a dependency on every column of a relation the body reads whose name the body's text names** (every column for a `*` body); `DROP COLUMN` or `RENAME COLUMN` of one is RESTRICT; **and `ADD COLUMN`, or `RENAME COLUMN` to a name the body's text names, on a relation the body reads, is RESTRICT too** - a new column of that name could re-point a bare name in the stored body (a correlated subquery's name resolved outward today would resolve to the new inner column, `step_compiler.cpp:697-728`), which changes a view's answer with no statement naming the change | (b) relation-level: every column change of a relation a view reads refused |
 | DP-Q17 `[plan-identity]` | The plan key's shape with a view (raised at DP-S0). | **`n` and `oids[]` stay the block's base relations**, so every order and pin is measured by them as today (`captured_plans.hpp:70-93`, `admin_plans.cpp:106-120`), **and the key gains a view list**: every view oid the block absorbed, in declaration order, at most 16, compared and hashed with the rest; `sys.plans`' text carries it as `views=`, absent for none, so no stored row changes meaning; a block absorbing more views has no plan | (b) the view oids folded into the key's `fetch_id`: one field, but `PlanRowCanMatch`'s fetch-id comparison (`plan_catalog.cpp:582`) and every display of the key would read a number no parse produces |
 | DP-Q18 | DP-R10's fast path (raised at DP-S0). | **a catalog word "a view exists or has existed since mount"**, set at mount from `sys.objects` and by every `CREATE VIEW`, never cleared: while it is clear a compile asks nothing; once set, each `FROM` name of every block is asked as a view before it binds, measured at DP-S4 | (b) always asked: one name lookup a relation for every statement on every instance |
 | DP-Q19 | `ANALYZE`'s mark on a view's conjuncts (raised at DP-S0; §2's step 3). | **not built**: an absorbed relation's step is named `<table> AS <view>.<inner>` (DP-Q7), which says where it came from; the conjuncts carry no mark, since no reader consumes one and a new chain field would enter the configurations the contract suites compare | (b) a `from_view` flag on each lowered conjunct, printed by `ANALYZE` |
@@ -391,16 +391,27 @@ failed of 5107 there (Debug, before any DP change). No engine code.
 - The native bind is one loop: `CompileBlock`'s step 1
   (`src/exec/step_compiler.cpp:2575-2591`) resolves every relation of the
   `FROM`, every `JOIN` and every subquery block, declares it
-  (`PositionSink::Position`) and reads its schema. `exec::Compile`
-  (`:2290`) is the one entry above it, so absorption at `Compile`'s head
-  reaches every native caller: `SelectBody` (`command_dispatcher.cpp:10753`),
-  an `UPDATE`'s scalar subquery (`:11546`), `ON CONFLICT ... DO UPDATE`'s
-  subqueries (`:7947`), the query layer's `DescribeRelation` (`:11675`),
-  `WAYSTONE ON`/`OFF` (`:14898`, `:14927`), `CREATE PLAN` (`:15193`) and
-  `ADVISE PLAN` (`:15475`).
+  (`PositionSink::Position`) and reads its schema. **`exec::Compile`
+  (`:2290`) is not the one entry above it**: every nested block reaches
+  `CompileBlock` through `LowerSubquery` (`:2201-2226`, called at `:3116`),
+  and `exec::CompileWhere` (`:2408`) lowers an `UPDATE`'s, a `DELETE`'s and
+  a `FOR UPDATE`'s `WHERE` subqueries the same way (`:2428`;
+  `command_dispatcher.cpp:12424`, `:16049`, `:13133`) - `UPDATE ... FROM`
+  and `DELETE ... USING` among them, parsed as an `EXISTS` over the named
+  relation (`parser.cpp:3602-3614`). So absorption stands at
+  `CompileBlock`'s head, before step 1, which every native caller reaches:
+  `SelectBody` (`command_dispatcher.cpp:10753`), an `UPDATE`'s scalar
+  subquery (`:11546`, `:11556`), `ON CONFLICT ... DO UPDATE`'s subqueries
+  (`:7947`), the query layer's `DescribeRelation` (`:11675`), `WAYSTONE
+  ON`/`OFF` (`:14898`, `:14927`), `CREATE PLAN` (`:15193`), `ADVISE PLAN`
+  (`:15475`), and `CompileWhere`'s three callers above.
 - Read off the compiled chain as though one written relation were one
   step, and so to be fixed for an absorbed block: `SELECT *`'s rendering
-  from `steps[0]`'s schema (`:10974-10983`), `CREATE PLAN`'s and
+  from `steps[0]`'s schema (`:10974-10983`), the query layer's
+  `DescribeRelation`, which describes `steps[0].rel_oid`'s columns
+  (`:11678-11695`) while its `WalkRelation` renders the walk's rows, so the
+  two must agree on the view's columns or `SourceRows`' width check
+  (`query_layer.cpp:1296-1302`) refuses, `CREATE PLAN`'s and
   `ADVISE PLAN`'s bindings and key oids by written position (`:15180`,
   `:15206-15210`, `:15463-15487`, `:15538`), and `PlanRowCanMatch`'s
   written-name check (`src/exec/plan_catalog.cpp:570-600`, which answers
@@ -431,9 +442,11 @@ failed of 5107 there (Debug, before any DP change). No engine code.
 under the relation's `X`); `ALTER ... RENAME TO` and `RENAME COLUMN`
 (`HandleAlter`, `:4653-4792`, beside AL4's assertion RESTRICT at `:4724`);
 `DROP COLUMN` (`DropColumnRestriction`, `:4794`); `ADD COLUMN` (DP-Q16);
-`DROP NAMESPACE` (`Catalog::CheckNamespaceEmpty`, `catalog.cpp:1743`, under
-page 6); `DROP VIEW` of a view another view reads. The name checks -
-`CheckNameFree` (`catalog.cpp:1675-1704`), `FindTableOidByName`,
+`DROP NAMESPACE` (`Catalog::CheckNamespaceEmpty`, `catalog.cpp:1743`,
+which counts `kTypeTable` and `kTypeDroppedTable` rows only, `:1754-1756`,
+so it must count a view as an occupant - a name check, not a dependency
+list); `DROP VIEW` of a view another view reads. The name checks -
+`CheckNameFree` (`catalog.cpp:1675-1705`), `FindTableOidByName`,
 `ExistingRelationReply` (`command_dispatcher.cpp:9546`) - test
 `kTypeTable` and so must count a view as a live name and its tombstone as a
 pending drop (NS6, CT7). `HighestIssuedUserOid` scans every `sys.objects`
@@ -442,11 +455,12 @@ is never reissued (DT2, DP-R3).
 
 **Where absorption stands in the compile.** Before `CompileBlock`'s bind
 loop and so before everything in `CompileBound`: the ON and WHERE lowering
-(`step_compiler.cpp:3089-3140`), equality propagation (`:3143`), the
-boolean-tree conjuncts (`:3131`), placement, and every plan source
-(`:2614-2842`). An inner join's ON is one flat conjunct list with the WHERE
-(`:3082-3087`), so a body's ON conjuncts may be appended wherever its
-relations land. **One resolver**: `ResolveColumn` (`:677-760`) - qualified
+(`step_compiler.cpp:3089-3147`), equality propagation (`:3150`), the
+boolean-tree conjuncts (`:3135`), placement, and every plan source
+(`CompileBlock`'s step 1a on, `:2593-3052`). An inner join's ON is one flat
+conjunct list with the WHERE (`:3080-3086`), so a body's ON conjuncts may be
+appended wherever its relations land. **One resolver**: `ResolveColumn`
+(`:677-738`) - qualified
 by binding, unqualified exactly one match at the innermost level that has
 one - is extended rather than paralleled, so an absorbed view's columns are
 resolved by the rule every other column is.
@@ -463,7 +477,7 @@ differently against the tree and are written down here, not re-opened:
 - **DP-Q1 `[quiet-wrong]`, premise re-read**: "an appended outer conjunct
   cannot change the body's answer" holds for exactly the native block -
   inner joins, conjuncts, plain columns - because an inner join's ON and
-  WHERE are one conjunct list (`step_compiler.cpp:3082-3087`). **The
+  WHERE are one conjunct list (`step_compiler.cpp:3080-3086`). **The
   wording "plain columns with optional aliases" is revised**: the native
   select list has no alias (`ast.hpp:147`), so a view's column names come
   from its column list (DP-Q15) and a body writing a select-list `AS` is a
@@ -478,9 +492,55 @@ differently against the tree and are written down here, not re-opened:
 
 **DP-Q14..Q22 raised and adopted (a)** on the standing go-ahead (§4).
 DP-Q16 `[quiet-wrong]`'s premise, re-read: an unqualified name resolves at
-the innermost level that has a match (`step_compiler.cpp:651-662`), so a
+the innermost level that has a match (`step_compiler.cpp:697-728`; the
+query layer's `ResolveIn` by the same rule, `query_layer.cpp:417-456`), so a
 column added to a body's relation can capture a name a body subquery
 resolved outward - hence the `ADD COLUMN` arm. DP-Q17 `[plan-identity]`'s
 premise, re-read: `n` is both the key's width and the count every order and
 pin is measured by (`captured_plans.hpp:93`, `admin_plans.hpp:167-174`), so
 the view oids go beside it, not into it.
+
+**DP-S0's review** (`critics-developer`, on `03242261`). Applied: the false
+claim that `exec::Compile` is the one entry above the bind (corrected above:
+absorption stands at `CompileBlock`'s head, which `LowerSubquery` and
+`CompileWhere` reach too); nine line ranges; the query layer's
+`DescribeRelation` as a one-step site; `DROP NAMESPACE` reframed as a name
+check. Taken into DP-S1 and DP-S2 as design, each adopted on the standing
+go-ahead:
+
+- **Absorption takes no `PlanOptions`** - a block in, a block out - so
+  DP-R2's structural guarantee holds at `CompileBlock`'s head as it would in
+  `CompileBound`; §2's "inside `CompileBound`" is read so.
+- **DP-Q23 `[quiet-wrong]` (raised here): an absorbed body's names are its
+  own.** A view's base relations are bound unreachable from the reader's
+  names - the reader sees the view's columns under its binding and nothing
+  else - and the body's names resolve only among the body's relations, at
+  every level. Without it a reader's bare name could match a base column the
+  view does not project, and a body's bare name a reader's relation, with no
+  DDL at all. (a) one absorption id a view instance, carried by every name
+  and relation of its body, and `ResolveColumn` matching only an equal id;
+  (b) the body's names rewritten to fully qualified ones at absorption, which
+  needs a second resolver over the body's schemas. **(a) adopted.**
+- **DP-Q21's path**: a body's relations resolve in the view's namespace, and
+  are declared with no unqualified namespace (`statement_binding.hpp:96`), so
+  the reader's binding keeps its own.
+- **DP-Q22 revised to (b)**, against the tree: a `CREATE VIEW` takes a
+  blocking `IS` on every relation and view its body reads, held to its
+  decide, as a child's `CREATE TABLE` takes its parent's
+  (`command_dispatcher.cpp:5130-5136`), so a concurrent `DROP TABLE` or `DROP
+  VIEW` (which takes the view oid's `X` under the 1 s fault net) cannot commit
+  under it; and **absorption refuses a body whose names no longer resolve to
+  the dependency oids `sys.views` recorded**, so no path leaves a view
+  re-pointed at a relation created later under an old name. The revision is
+  the operator's standing go-ahead's, recorded in `raft-marks-2026-11-22.md`
+  §5.
+- **DP-Q17**: `CapturedKey::Names` reads the view list, so `EnabledNaming`
+  RESTRICTs `DROP VIEW` (DP-Q6); the posterior statistics key stays the base
+  relations' (advisory only).
+- **DP-Q18**: the word is the instance's (`InstanceWords`), since a catalog
+  is a core's.
+- Rejected: refusing a DDL on a view (`CREATE INDEX`, Cabin, Assertion,
+  Transition, `REFERENCES`) `Unsupported` rather than the gate's one
+  `NotImplemented`. A materialized view (§6) is the order that would make an
+  index or a constraint on a view admissible, so "nobody built it" is the
+  truthful code, and one gate answers every caller alike.
