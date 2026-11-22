@@ -5,7 +5,7 @@ Status: **CLOSED 2026-11-19 on the operator's word**
 part reverted: a tuple key read about +0.51 us of server CPU for all of DF
 at `cores = 1`, DF-Q10 (a)'s 0.5 us bar not declared met (§7, DF-S5).
 Every stage is on `main` (DF-S1 at `3adf8810`, DF-S2..S5 at the merge
-`135d2570`, 2026-11-19); **tagged `v3.4.15` at `1eeab8ce`**. **Opened 2026-11-18** on the operator's word
+`135d2570`, 2026-11-19); **DF-S1 first carried by `v3.4.13`, the rest by `v3.4.15` at `1eeab8ce`**. **Opened 2026-11-18** on the operator's word
 (`raft-marks-2026-11-18.md` §36), from `57d7c67f`
 (`v3.4.12-67-g57d7c67f`). **DF-S0 is done** (§7): the census, the spike's price, and four items
 it took back, DF-Q11..Q14, **each marked (a) on the operator's word**
