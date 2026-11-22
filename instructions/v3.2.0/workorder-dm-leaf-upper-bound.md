@@ -1,6 +1,8 @@
 # Work order DM - a leaf that knows its own upper bound: the right sibling's low key remembered in memory, or kept on the page, measured before either is built
 
-Status: **CLOSED 2026-11-22 on the operator's standing go-ahead, abandoned, with nothing built**
+Status: **CLOSED 2026-11-22 on the operator's standing go-ahead, abandoned, with nothing built**;
+its record **landed on `main` at `e3f6bb8b`** on the operator's "push no verify" (`raft-marks-2026-11-22.md`
+§10; the hook skipped, no suite run, no build input carried), untagged
 (`raft-marks-2026-11-22.md` §9; §7's close): V0 passed, V1 failed at DM-Q7 (a)'s size on the cells the
 order defines, DM-Q10 (a) adopted on the same go-ahead (a regime the order does not define does not count), U0. No engine
 code lands; DM-S2..S5 are not run. Before that: **OPENED 2026-11-22 on the operator's standing go-ahead**
