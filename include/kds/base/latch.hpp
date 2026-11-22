@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -78,7 +79,10 @@ public:
             return 0;
         }
         const auto start = std::chrono::steady_clock::now();
+        waiters_.fetch_add(1, std::memory_order_relaxed);
         mutex_.lock();
+        waiters_.fetch_sub(1, std::memory_order_relaxed);
+        handed_.fetch_add(1, std::memory_order_relaxed);
         const auto acquired = std::chrono::steady_clock::now();
         NoteHeld(acquired);
         const std::uint64_t ns = static_cast<std::uint64_t>(
@@ -86,6 +90,16 @@ public:
         Contention::LatchWait(kind_, ns);
         return ns;
     }
+    // **Whether a blocking acquisition is waiting now, and how many have
+    // taken the latch after waiting** - both counted on the contended path
+    // only, so an uncontended `lock` is still one atomic operation. Read by
+    // a holder that releases and re-takes the latch in a loop (the
+    // dirty-table walk, DO's E2): `std::mutex` is not fair, and a releaser
+    // that re-takes at once beats the waiter it just woke, so it waits for
+    // `handed()` to move - one waiter in - before it takes the latch again.
+    bool has_waiters() const noexcept { return waiters_.load(std::memory_order_relaxed) != 0; }
+    std::uint32_t handed() const noexcept { return handed_.load(std::memory_order_relaxed); }
+
     bool try_lock() noexcept {
         if (!mutex_.try_lock()) return false;
         NoteHeld();
@@ -120,6 +134,8 @@ private:
     }
 
     std::mutex mutex_;
+    std::atomic<std::uint32_t> waiters_{0};
+    std::atomic<std::uint32_t> handed_{0};
     LatchKind kind_ = LatchKind::kOther;
 #ifdef KDS_LATCH_HOLD_CENSUS
     std::chrono::steady_clock::time_point held_since_{};

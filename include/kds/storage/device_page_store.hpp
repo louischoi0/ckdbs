@@ -548,7 +548,9 @@ public:
     // offset 0 is the segment header - record.hpp).
     Status StampPageLsn(PageId page_id, std::uint64_t lsn) override;
 
-    // Page ids currently dirty, in ascending order.
+    // Page ids currently dirty, in ascending order, each once. Armed, the
+    // walk takes the structure latch a slot chunk at a time (DO's E2), so a
+    // frame is read as of its chunk's hold, not of one instant.
     std::vector<PageId> DirtyPageIds() const;
 
     // The same set with each frame's recLSN attached - what a checkpoint
@@ -557,7 +559,14 @@ public:
     // to replay for this page"; that is accurate for the unlogged paths
     // (catalog writes, bootstrap) and wrong for a logged one, which is why
     // every logged mutation must call StampPageLsn().
+    // Collected as `DirtyPageIds` is - a fuzzy table, each frame as of its
+    // chunk's hold - which the order's §5a proves a correct input to
+    // `RedoStartFrom` (DO-R1).
     std::vector<std::pair<PageId, wal::Lsn>> DirtyPagesWithRecLsn() const;
+
+    // Sorts `table` by page and leaves one entry a page, its lowest
+    // non-zero recLSN (0 when every entry is 0). Public for its test.
+    static void MergeDirtyTable(std::vector<std::pair<PageId, wal::Lsn>>& table);
 
     // Writes back exactly these pages and syncs - a checkpoint step. Ids
     // that are not dirty, or not resident, are skipped rather than treated
@@ -784,6 +793,13 @@ public:
     // written back.
     void SetAfterWritebackCopyForTest(std::function<void(PageId)> hook) {
         after_writeback_copy_for_test_ = std::move(hook);
+    }
+
+    // DO-R1's seam: runs after each slot chunk of an armed dirty-table walk,
+    // with the structure latch released, given the chunk's index - where a
+    // test lets another core write a page whose chunk is already walked.
+    void SetAfterDirtyTableChunkForTest(std::function<void(std::size_t)> hook) {
+        after_dirty_table_chunk_for_test_ = std::move(hook);
     }
 
     // **BF-S2's two seams**, set and cleared while nothing they name runs
@@ -1372,6 +1388,11 @@ private:
     // armed fetch's hit, which asks no `IsAllocated` (DO's E4b).
     std::span<std::byte, kPageSize> HitLocked(Frame& frame, bool mark_dirty,
                                               FetchHeat heat) noexcept;
+    // Calls `emit(page_id, rec_lsn)` for every dirty frame: unarmed in one
+    // walk of the table, armed a slot chunk a structure-latch hold (DO's
+    // E2), so a page can be emitted twice. Defined in the .cpp, its callers'.
+    template <typename Emit>
+    void ForEachDirtyFrame(Emit&& emit) const;
     // An armed exclusive grant given `owed` also takes the frame's image
     // debt in the hold it already takes for the dirty mark, setting
     // `*owed` (DO's E4a): only while images are on, or whatever the switch
@@ -1620,6 +1641,8 @@ private:
     bool latch_forced_ = false;
     // SetAfterWritebackCopyForTest's hook; empty outside a test.
     std::function<void(PageId)> after_writeback_copy_for_test_;
+    // SetAfterDirtyTableChunkForTest's; empty outside a test.
+    std::function<void(std::size_t)> after_dirty_table_chunk_for_test_;
     // BF-S2's seams; empty outside a test.
     std::function<void(PageId)> after_fault_published_for_test_;
     std::function<void()> after_map_copy_for_test_;

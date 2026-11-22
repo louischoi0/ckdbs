@@ -196,12 +196,15 @@ int main(int argc, char** argv) {
             });
         }
         std::vector<double> hold_us;
+        std::vector<double> call_us;  // the walking thread's own time: its reactor's stall
         const auto end = Clock::now() + std::chrono::duration<double>(seconds);
         if (every_ms == 0) std::this_thread::sleep_until(end);  // fetches alone
         while (every_ms != 0 && Clock::now() < end) {
             std::this_thread::sleep_for(std::chrono::milliseconds(every_ms));
             const std::uint64_t ns0 = ReadWalks().ns;
+            const auto t0 = Clock::now();
             (void)store.DirtyPagesWithRecLsn();
+            call_us.push_back(std::chrono::duration<double, std::micro>(Clock::now() - t0).count());
             hold_us.push_back(static_cast<double>(ReadWalks().ns - ns0) / 1e3);
         }
         stop.store(true);
@@ -213,6 +216,7 @@ int main(int argc, char** argv) {
         std::printf("contend readers=%zu seconds=%.1f every_ms=%zu fetches=%zu fetches_per_s=%.0f\n",
                     readers, seconds, every_ms, fetches, static_cast<double>(fetches) / seconds);
         Report("contend_h1", hold_us);
+        Report("contend_h1_call", call_us);
         Report("contend_fetch", std::move(all));
         const auto k = LatchKind::kFrameTable;
         std::printf("contend frame_table_waits=%llu frame_table_wait_us=%.1f\n",

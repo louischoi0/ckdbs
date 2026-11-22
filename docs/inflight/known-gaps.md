@@ -1489,17 +1489,26 @@ closed 2026-10-11 at `ec827a19`).
 
 ## The frame table's structure latch (DO)
 
-Verified at `7116b668` (DO-S2's last stage) on the worktree
-`dg-wal-segment-body`. Owned by `docs/spec/page.md` §8 and §12 and
+Verified at DO-S3's commit on the worktree `dg-wal-segment-body` (the
+order's §7 names it). Owned by `docs/spec/page.md` §8 and §12 and
 `instructions/v3.2.0/workorder-do-frame-table-long-holds.md`.
 
-- **A checkpoint's dirty tables still hold the latch for a walk of every
-  resident frame**, and every core's fetch waits it out: H1 15 ms and H2
-  9 ms at 1 Mi dirty frames (0.5 ms and 0.2 ms at 64 Ki) on DO's host, over
-  DO-Q9 (a)'s 1 ms bar from 256 Ki frames. The walk chunked (DO's E2) is
-  written as a proof (the order's §5a) and **not built: it waits for the
-  operator's own mark** (DO-Q3 (a)). `Flush`'s collection (H6, through
-  `DirtyPageIds`) is the same walk, under `Sync`.
+- **The walking core is stalled for the whole of a checkpoint's dirty-table
+  walk**, longer since E2: about 49 ms for H1 at 1 Mi dirty frames under
+  three readers on DO's host (26 ms before E2), and the publish's walk
+  again - the sort, a table lookup a slot and a handover a chunk, all off
+  the latch but on the walker's reactor. No other core waits for it (no
+  hold over about 0.3 ms). A walk budget, or a handover every few chunks,
+  is not built.
+- **A fetch can still wait milliseconds with no long hold**: up to 4.4 ms
+  at 1 Mi frames and 2.3 ms at 64 Ki under three readers - the one mutex's
+  unfairness between fetches (and against the walker's re-take, which the
+  handover bounds but does not remove). CW's C1.
+- **The fuzzy table rests on a premise the code states and does not
+  enforce**: no core yields between an append and its stamp (the one-hold
+  table rested on it too). The crash cells run the window's write on the
+  walking thread, so the fold - the cover across runs - is not exercised
+  by any cell.
 - **The per-fetch holds are still the instance's one latch**: two a read
   hit, three a write hit, each a cache line moving between cores above one
   core. DO measured one reader on one thread; what the holds cost under

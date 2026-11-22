@@ -280,6 +280,7 @@ add_executable(kds_tests
     checkpoint_log_park_test.cpp
     checkpoint_roll_park_test.cpp
     writeback_rec_lsn_test.cpp
+    dirty_table_chunked_walk_test.cpp
     checkpoint_data_sync_test.cpp
     map_write_order_test.cpp
     memory_log_device_test.cpp
