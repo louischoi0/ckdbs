@@ -39,8 +39,8 @@ core may, and a leaf places a row where its key sorts, shifting the rows
 after it. So a probe reads an entry through `VerifyTupleAt` - the
 Keystone id at the slot against the bucketed tuple key - and resolves a miss by a
 tuple key lookup (`step_vm.cpp`'s build probe, `exec::LocateRow`); a
-heap's entry is read bare, since a data page never shifts a row, and its
-lookup goes through its Keystone index (`heap-and-tuple.md` §3.1b).
+heap's entry is verified the same way, and its miss's lookup goes through
+its Keystone index (`heap-and-tuple.md` §3.1b).
 
 **The side it builds is chosen since CB-S2** (`instructions/v3.2.0/workorder-cb-join-planner.md`
 §3.3): the build hashes the inner step of the chain as before, and the join

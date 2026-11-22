@@ -3359,8 +3359,14 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
 - **The query layer refuses `keyidentity`.** A statement the native path
   declines (a set operation, a derived table, an outer join) answers
   `unknown column 'keyidentity'`: the layer's walk emits no hidden column.
-  A refusal, never a wrong answer; `ON CONFLICT (keyidentity)` on a
-  hidden-Keystone heap is refused too.
+  A refusal, never a wrong answer.
+- **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is admitted,
+  against `heap-and-tuple.md` §3.1b** ("`ON CONFLICT (<column>)` cannot name
+  a hidden Keystone"): `ResolveConflictArbiter` resolves the name through
+  `Schema::FindColumn` to column 0 and takes the tuple key as the arbiter
+  (`src/server/command_dispatcher.cpp:8263`); no test covers it. Whether the
+  code refuses it or the spec admits it is not decided. Read at `2403b86d`,
+  2026-11-22.
 - **Partly filled pages are abandoned at each restart.** The placement hints
   are memory only (DN-Q23): after a restart a core fills from the head and
   up to `cores` partly filled pages wait for a release to find their free

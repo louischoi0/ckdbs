@@ -93,7 +93,7 @@ pages, which lifts the old limit of about 800 tables, 32 marks a
 dropped column whose bytes `PURGE DROPPED COLUMNS` has cleaned, 33
 (2026-10-21) makes a `sys.patterns` row a Waystone opt-in rather than a
 shape traffic registered, 34 (2026-10-23) marks an index an online
-`CREATE INDEX` is still building, and 35 (2026-11-02) lets a checkpoint
+`CREATE INDEX` is still building, 35 (2026-11-02) lets a checkpoint
 list the assertion reservations of an undecided transaction, so a crash
 gives them back, 36 (2026-11-18) keeps the join planner's relation
 statistics across a clean shutdown in `sys.statistics`, 37 (2026-11-18)

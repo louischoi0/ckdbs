@@ -174,8 +174,8 @@ CREATE TABLE [<namespace>.]<name>
   row at a fixed place for its life, and every key access goes through an
   index that names that place. A full scan reads the pages, in no promised
   order - write `ORDER BY` for one. Its key, the **Keystone**, is one of two:
-  - **`id int64 PRIMARY KEY` declared first** (a column's suffix, or
-    `PRIMARY KEY (id)` in the list): that column is the key, visible, named
+  - **a single `int64` `PRIMARY KEY` declared first**, under any name
+    (`id int64 PRIMARY KEY`, or `PRIMARY KEY (id)` in the list): that column is the key, visible, named
     by an `INSERT` or issued when omitted, unique, never updated. An `int64`
     primary key declared anywhere but first is refused at its byte.
   - **anything else** - no primary key, or one of several columns or of
@@ -194,7 +194,7 @@ CREATE TABLE [<namespace>.]<name>
   namespace or alias. A deleted row's space is reused once no index names
   it, by a background release. A `HEAP` relation may carry secondary
   indexes, Cabins, assertions and Transitions and be an FK child. A heap
-  whose key is `id int64 PRIMARY KEY` is also an FK parent and is `PURGE`d by
+  whose key is a declared `int64` `PRIMARY KEY` is also an FK parent and is `PURGE`d by
   that key; one with a hidden key is neither. `PRIMARY KEY` is a heap's
   alone: on a `BTREE` the first column is the key and the keyword is refused.
   `sys.tables.clustered_type` reads `HEAP`, `BTREE`, or `CHAIN` for a system
@@ -232,7 +232,7 @@ CREATE TABLE [<namespace>.]<name>
   and a relation with none costs nothing.
 
 **The Keystone contract (tuple key).** On every relation not created
-`HEAP`, the first column *is* the tuple key (a `HEAP`'s is its `id int64 PRIMARY KEY` or a hidden one, above):
+`HEAP`, the first column *is* the tuple key (a `HEAP`'s is its declared `int64` `PRIMARY KEY` or a hidden one, above):
 
 - It must be declared with an integer type (`catalog::CheckKeystoneColumn`,
   checked at CREATE TABLE).
@@ -315,7 +315,7 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
   (`Unsupported`) — it would spell out the only thing it could mean.
 - A `HEAP` parent with a hidden key is refused at declaration (`Unsupported`):
   the child's column holds the parent's tuple key, and that one is hidden.
-  A `HEAP` whose key is `id int64 PRIMARY KEY` is a parent as a `BTREE` is.
+  A `HEAP` whose key is a declared `int64` `PRIMARY KEY` is a parent as a `BTREE` is.
   A `HEAP` child is fine.
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
@@ -1802,7 +1802,7 @@ lose one of the two writes, and nothing refuses either.
   walks the whole relation, whatever index the column has, without
   yielding its core**, and a range on the tuple key also fences every key
   of the range against inserts until the decide. On a `HEAP` relation the
-  key is its `id int64 PRIMARY KEY` or `keyidentity`, found through its
+  key is its declared `int64` `PRIMARY KEY` or `keyidentity`, found through its
   key's index.
   One transaction holds at most 65,536 row claims; a read that needs more
   is refused `RESOURCE_EXHAUSTED` (a range or a `WHERE`-less read takes one).
@@ -2483,7 +2483,7 @@ in §7 below now carries and which both used to reach a client as a bare
 | A column assigned twice in one UPDATE's SET list | `InvalidArgument` — `ERR column '<name>' is assigned more than once at byte <n>` (the second name's byte; refused at compile, so nothing is written) |
 | Unknown statement head | `InvalidArgument` — `ERR unknown SQL keyword '<w>' (supported: CREATE, DROP, ALTER, INSERT, SELECT, UPDATE, DELETE, PURGE, REINDEX) (byte <n>)` |
 | `PURGE` inside a transaction | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE inside a transaction is not implemented; run it in autocommit (byte 0)`; the transaction is not poisoned |
-| `PURGE` of a system relation or a `HEAP` with a hidden key | `Unsupported` — `ERR UNSUPPORTED retryable=0 '<t>' is a system relation; PURGE frees keys of user relations only (byte <n>)`, or `… '<t>' is a heap, whose tuple key is hidden; PURGE's window names tuple keys, so it frees none on a heap (byte <n>)` |
+| `PURGE` of a system relation or a `HEAP` with a hidden key | `Unsupported` — `ERR UNSUPPORTED retryable=0 'sys.<t>' is a catalog relation: read it as a catalog view (SELECT ... FROM sys.<t>); no other statement names one (byte <n>)`, or `… '<t>' is a heap, whose tuple key is hidden; PURGE's window names tuple keys, so it frees none on a heap (byte <n>)` |
 | `PURGE` with no `WHERE`, or a conjunct other than a tuple key comparison with an integer literal | `NotImplemented` — `ERR NOT_IMPLEMENTED retryable=0 PURGE needs a WHERE naming the tuple key; … (byte <n>)`, or `… PURGE admits only comparisons of the tuple key with an integer literal (=, <, <=, >, >=, BETWEEN); this conjunct is not one (byte <n>)` |
 | `PURGE` naming one live key, or a negative tuple key literal | `InvalidArgument` — `ERR tuple key <k> is live; PURGE frees only a key whose row was deleted (byte <n>)`, or `ERR tuple key literal <k> is negative, and no key is below 1 (byte <n>)` |
 | `PURGE` meeting an older snapshot, or an undecided writer, for 1 s | `TxnConflict`, retryable — `ERR TXN_CONFLICT retryable=1 PURGE cannot free tuple key <k> yet: …; nothing was purged, and running it again once that ends will` |
