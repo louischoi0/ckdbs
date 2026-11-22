@@ -8,7 +8,7 @@
 //             [--profile uniform|zipfian|colliding]
 //             [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N[@mount]]
 //             [--power-cut none|log]   (default log: BS-S4's log half, BS-A8)
-//             [--toggles off|on|cabins|waystone] [--pair]
+//             [--toggles off|on|cabins|waystone] [--pair] [--view-diff]
 //             [--minimize [--out FILE]]
 //   ckdbs-sim --replay FILE
 //
@@ -22,6 +22,7 @@
 
 #include "sim/loop.hpp"
 #include "sim/minimize.hpp"
+#include "sim/view_diff.hpp"
 
 namespace {
 
@@ -32,7 +33,7 @@ int Usage(const char* argv0) {
                  "          [--profile uniform|zipfian|colliding]\n"
                  "          [--faults none|io|grow] [--fault-rate N] [--fail-nth KIND:N[@mount]]\n"
                  "          [--power-cut none|log] [--shapes on|off]\n"
-                 "          [--toggles off|on|cabins|waystone] [--pair]\n"
+                 "          [--toggles off|on|cabins|waystone] [--pair] [--view-diff]\n"
                  "          [--minimize [--out FILE] [--max-replays N]] | [--replay FILE]\n"
                  "          [--skip-recovery] [--checkpoint-every N] [--backup]\n",
                  argv0);
@@ -50,6 +51,7 @@ int main(int argc, char** argv) {
     config.shapes = true;
     bool have_seed = false;
     bool pair = false;
+    bool view_diff = false;
     bool minimize = false;
     std::string out_path = "case.sim";
     std::string replay_path;
@@ -132,6 +134,11 @@ int main(int argc, char** argv) {
             }
             config.toggles = pinned;
             ++i;
+        } else if (arg == "--view-diff") {
+            // DP-R1's differential (sim/view_diff.hpp): no crash, no faults,
+            // one instance answering each statement through a view and with
+            // the view's body as a derived table.
+            view_diff = true;
         } else if (arg == "--pair") {
             // The toggle pairing (SIM06): no crash, no faults, two
             // instances differing only in the advisory switches.
@@ -195,7 +202,9 @@ int main(int argc, char** argv) {
     }
 
     const kds::sim::SimVerdict verdict =
-        pair ? kds::sim::RunTogglePairing(config) : kds::sim::RunSimulation(config);
+        view_diff ? kds::sim::RunViewDifferential(config)
+        : pair    ? kds::sim::RunTogglePairing(config)
+                  : kds::sim::RunSimulation(config);
     std::printf("%s\n", verdict.Summary(config).c_str());
     return verdict.ok ? 0 : 1;
 }

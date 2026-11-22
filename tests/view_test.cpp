@@ -489,5 +489,80 @@ TEST_F(ViewLockTest, ALockingReadThroughAViewHoldsEveryRowItReturns) {
     EXPECT_EQ(w.out->response, "UPDATED 1");
 }
 
+// ---- DP-S3: nesting, a non-absorbable body ------------------------------
+
+// DP-Q8: a view over a view absorbs inside out, to depth 8; a ninth level is
+// refused at its create.
+TEST_F(ViewReadTest, ViewsNestToDepthEight) {
+    Ok("CREATE VIEW n1 (oid, amount) AS SELECT id, amount FROM o WHERE amount > 100");
+    for (int k = 2; k <= 8; ++k) {
+        Ok("CREATE VIEW n" + std::to_string(k) + " AS SELECT oid, amount FROM n" +
+           std::to_string(k - 1) + " WHERE oid > " + std::to_string(k - 2));
+    }
+    EXPECT_EQ(Run("SELECT oid FROM n5 ORDER BY oid"), "oid\\n4") << "oid > 3, amount > 100";
+    EXPECT_EQ(Run("SELECT oid FROM n8"), "oid") << "oid > 6: no row";
+    EXPECT_EQ(Run("SELECT oid FROM n3 ORDER BY oid"), "oid\\n2\\n3\\n4");
+    // The query layer derives the eight levels too: its bound is the same.
+    EXPECT_EQ(Run("SELECT DISTINCT oid FROM n5"), "oid\\n4");
+    EXPECT_EQ(Run("SELECT DISTINCT oid FROM n8"), "oid");
+    Refused("CREATE VIEW n9 AS SELECT oid FROM n8", "views nest deeper than 8");
+    Refused("CREATE VIEW n9 (n) AS SELECT COUNT(*) FROM n8", "views nest deeper than 8");
+    // A view read in a subquery or a derived table of the body is a level
+    // too: the query layer counts it wherever it stands.
+    Refused("CREATE VIEW n9 AS SELECT id FROM o WHERE id IN (SELECT oid FROM n8)",
+            "views nest deeper than 8");
+    Refused("CREATE VIEW n9 (x) AS SELECT oid FROM (SELECT oid FROM n8) AS d",
+            "views nest deeper than 8");
+    // The inner view is read by the outer, so it is not dropped under it.
+    Refused("DROP VIEW n1", "view 'n2' reads it");
+    const std::string plan = Run("ANALYZE SELECT oid FROM n2 WHERE oid = 3");
+    EXPECT_NE(plan.find("o AS n2.n1.o"), std::string::npos) << plan;
+    EXPECT_NE(Run("DESCRIBE n3").find(",amount,"), std::string::npos) << Run("DESCRIBE n3");
+}
+
+// A view over a view the same transaction created: the create reads its
+// own transaction's view as a view, and both leave with its rollback.
+TEST_F(ViewReadTest, AViewOverAViewOfTheSameTransaction) {
+    Ok("BEGIN");
+    Ok("CREATE VIEW t1 (oid) AS SELECT id FROM o WHERE id > 1");
+    Ok("CREATE VIEW t2 AS SELECT oid FROM t1 WHERE oid > 2");
+    EXPECT_EQ(Run("SELECT oid FROM t2 ORDER BY oid"), "oid\\n3\\n4");
+    Ok("ROLLBACK");
+    Refused("SELECT oid FROM t2", "no relation named 't2'");
+    Refused("SELECT oid FROM t1", "no relation named 't1'");
+}
+
+// DP-Q2, DP-R6: a non-absorbable body answers as a derived table, whole,
+// whatever the reader's filter.
+TEST_F(ViewReadTest, ANonAbsorbableViewAnswersAsADerivedTable) {
+    Ok("CREATE VIEW per_customer (cid, total, n) AS SELECT cid, SUM(amount), COUNT(*) FROM o "
+       "GROUP BY cid");
+    EXPECT_EQ(Run("SELECT cid, total FROM per_customer WHERE n > 1"), "cid,total\\n1,300");
+    EXPECT_EQ(Run("SELECT c.name, p.total FROM c JOIN per_customer AS p ON c.id = p.cid "
+                  "WHERE p.total >= 300 ORDER BY c.name"),
+              "c.name,p.total\\nann,300\\nbob,300\\ncid,400");
+    Ok("CREATE VIEW top1 AS SELECT id, amount FROM o ORDER BY amount DESC LIMIT 1");
+    // The reader's filter is applied to the body's one row, never pushed
+    // under its LIMIT: no row, not the largest row with amount < 400.
+    EXPECT_EQ(Run("SELECT id FROM top1 WHERE amount < 400"), "id");
+    // A view over a non-absorbable view is itself a query-layer body.
+    const std::string made =
+        Run("CREATE VIEW big_customers (cid) AS SELECT cid FROM per_customer WHERE total > 300");
+    EXPECT_NE(made.find("CREATED VIEW"), std::string::npos) << made;
+    EXPECT_EQ(Run("SELECT cid FROM big_customers"), "cid\\n3");
+}
+
+// VW7: an `INSERT ... SELECT` reads a view as any SELECT does, and a shape
+// through a view is opted into Waystone as its own.
+TEST_F(ViewReadTest, AnInsertSelectAndAnOptInReadAView) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    Ok("CREATE TABLE copy (id int64, cid int64)");
+    Ok("INSERT INTO copy SELECT oid, cid FROM open_orders");
+    EXPECT_EQ(Run("SELECT id FROM copy ORDER BY id"), "id\\n2\\n3\\n4");
+    const std::string opted = Run("WAYSTONE ON SELECT cid FROM open_orders WHERE oid = 2");
+    EXPECT_EQ(opted.rfind("ERR", 0), std::string::npos) << opted;
+    EXPECT_EQ(Run("SELECT cid FROM open_orders WHERE oid = 2"), "cid\\n1");
+}
+
 }  // namespace
 }  // namespace kds::server

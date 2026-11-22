@@ -12131,6 +12131,33 @@ StatusOr<std::vector<exec::LayerColumn>> CommandDispatcher::DescribeView(
     return body;
 }
 
+StatusOr<std::uint32_t> CommandDispatcher::ViewDepthOver(
+    const std::vector<catalog::ViewDef::Dependency>& reads,
+    std::map<catalog::Oid, std::uint32_t>& depths) {
+    std::uint32_t deepest = 0;
+    for (const catalog::ViewDef::Dependency& dep : reads) {
+        // A relation's or a view's own entry; a column's names nothing new.
+        if (dep.column != catalog::kViewNoColumn) continue;
+        if (const auto known = depths.find(dep.oid); known != depths.end()) {
+            deepest = std::max(deepest, known->second);
+            continue;
+        }
+        auto view = catalog_.GetView(dep.oid);
+        if (!view.ok()) {
+            if (view.status().code() != StatusCode::kNotFound) return view.status();
+            depths.emplace(dep.oid, 0);  // a relation
+            continue;
+        }
+        // Bounded: every view below was refused past the bound at its own
+        // create, and each is walked once (`depths`).
+        auto below = ViewDepthOver(view.value().dependencies, depths);
+        if (!below.ok()) return below.status();
+        depths.emplace(dep.oid, below.value() + 1);
+        deepest = std::max(deepest, below.value() + 1);
+    }
+    return deepest;
+}
+
 StatusOr<std::optional<std::string>> CommandDispatcher::ViewDependant(
     catalog::Oid oid, std::optional<std::uint16_t> column, std::string_view new_name) {
     auto readers = catalog_.ViewsReading(oid);
@@ -12379,6 +12406,10 @@ DispatchOutcome CommandDispatcher::HandleView(std::string_view line, Session& se
         const std::set<std::string> written = IdentifiersIn(def.text);
         for (const catalog::Oid oid : settled.value().reads) {
             def.dependencies.push_back(catalog::ViewDef::Dependency{oid, catalog::kViewNoColumn});
+            // A view it reads (DP-Q8) is a dependency on the view alone: its
+            // own rows RESTRICT what its body reads, and its columns change
+            // under no DDL (DP-R3). Asked under the `IS`, as a relation is.
+            if (catalog_.GetView(oid).ok()) continue;
             // A relation dropped before its grant is refused here, `CREATE
             // TABLE`'s parent rule, not recorded as an oid that names nothing.
             auto access = catalog_.InitTableAccess(oid);
@@ -12393,6 +12424,18 @@ DispatchOutcome CommandDispatcher::HandleView(std::string_view line, Session& se
             }
         }
         const char* why_not = settled.value().why_not;
+
+        // DP-Q8: the view's depth is one more than the deepest view it reads,
+        // and a reader absorbs or derives that many levels - so it is refused
+        // here, at its create, rather than at every read.
+        std::map<catalog::Oid, std::uint32_t> depths;
+        auto depth = ViewDepthOver(def.dependencies, depths);
+        if (!depth.ok()) return Refused(depth.status());
+        if (depth.value() + 1 > exec::kMaxViewDepth) {
+            return Refused(Status::Unsupported(
+                "views nest deeper than " + std::to_string(exec::kMaxViewDepth) + at +
+                ": this one would be level " + std::to_string(depth.value() + 1)));
+        }
 
         auto oid = catalog_.CreateView(create_ns.value(), stmt.name, def, ddl.trx_id,
                                        ddl.sink());

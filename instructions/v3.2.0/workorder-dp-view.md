@@ -647,3 +647,39 @@ captured rows asking their views too (F2). Rejected: S7 (move
 `AbsorbedView::Column` onto `catalog::ColumnNamesCollide`) - the parser's
 one case-folded compare keeps `ast.hpp` free of a catalog call for a name
 match. Taken into DP-S3: F1, a view over a view.
+
+### DP-S3 - the rest, 2026-11-22
+
+Built on `worktree-dp-view` over `5e2491fe`. **A view over a view**
+(DP-Q8): `CREATE VIEW` records a view its body reads as a relation-less
+dependency, and refuses `Unsupported` a create whose depth - one more than
+the deepest view it reads, at any position - would pass `kMaxViewDepth`
+(8, `[provisional]` to DP-S4); native absorption and the query layer's
+derived tables each admit exactly eight levels. **A non-absorbable body**
+(DP-Q2) is read by the query layer as a derived table with nothing pushed
+in (built at DP-S2, tested here: a `LIMIT` body under a reader's filter
+answers no row rather than a pushed one). **DP-Q9's refusals** stand from
+DP-S1's gate. **The differential cell** (DP-R1): `sim/view_diff.cpp`,
+`ckdbs-sim --view-diff`, one run a seed in `scripts/sim.sh` - random
+absorbable bodies (one relation, an inner join on a key or on a nullable
+column, subquery conjuncts, a permuting column list, a view over an earlier
+view to depth 3-4) read by random outer statements (plain, a join with a
+relation on either side, a self-join, a fold, `[NOT] IN` and `[NOT] EXISTS`,
+the view inside a subquery), each compared byte for byte with the same
+statement over `(<body>) AS <view>`, which only the query layer answers; an
+`ANALYZE` of each statement proves the view side absorbed natively, and any
+refusal on either side fails the run. A mutation that drops the body's
+conjuncts at absorption fails seed 1 at once. Tests: `tests/view_test.cpp`
+(38). Suite: 0 failed of 5146 (Debug, `-j8`); `scripts/sim.sh` on the
+release build: 290 runs, 0 failures. Overhead not measured; measured at the
+milestone's close.
+
+**DP-S3's review** (`critics-developer`). No engine defect. Fixed by the
+reviewer in the cell: it never proved the view side was absorbed - a native
+decline would have compared the query layer with itself (D1, now an
+`ANALYZE` check); a random chain could reach a ninth level and fail
+spuriously (D2); comments and literal ranges that did not match the schema
+(D3); and its coverage widened as above; one misplaced declaration comment.
+Applied by CLA: `ViewDepthOver` memoised by oid and reading relation entries
+only, so a chain is walked once a view (its S1); the unused binding (S2);
+the include order (S3). No finding rejected.

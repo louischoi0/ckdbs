@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -1549,6 +1550,12 @@ private:
         std::vector<catalog::Oid>* described = nullptr, const parser::Query* parsed = nullptr);
     // The query layer's caps, as every statement of this dispatcher has them.
     exec::LayerLimits LayerLimitsNow() const;
+    // How many views deep `reads` goes: 0 for relations alone, else one more
+    // than the deepest view among them (DP-Q8).
+    // `depths` memoises each oid walked (0 for a relation), so a chain's
+    // shared views are read once.
+    StatusOr<std::uint32_t> ViewDepthOver(const std::vector<catalog::ViewDef::Dependency>& reads,
+                                          std::map<catalog::Oid, std::uint32_t>& depths);
     // **A view a change to relation `oid` would break** (DP-Q16), named for
     // the refusal, or nullopt: with `column`, one naming that schema
     // position; with `new_name`, one whose text names it (an added or renamed
