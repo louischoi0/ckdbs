@@ -45,6 +45,17 @@ The operator's words of 2026-11-21, recorded in English.
 | **Does not settle** | V0, V1, the candidate (DG-Q2), a tag or a version |
 | **Recorded at** | this file |
 
+## 5. DG closed, abandoned, with nothing built
+
+| | |
+|---|---|
+| **Word** | *"Abandon and close the DG milestone. Do not land any code; leave only the record."* (given in Korean; recorded in English) |
+| **Mark** | **DG is closed and abandoned at V0.** V0 is not read, no candidate is chosen (DG-Q2), and DG-S1..S3 are not run. No engine code lands: DG-S0's measurement spike stays a patch in the bench archive and was never in the tree's history. The segment body stays as it is (`wal.md` §4.1). DG-Q0..Q10, adopted on the standing go-ahead and none the operator's own mark, lapse with the order |
+| **Kept as the record** | DG-S0's results file `bench/v3.5.0/results-dg-s0-premise-v3.5.0-36-ge9952d64.md` and its archive; the census (the order's §7); the measured commit stall in `known-gaps.md`'s WAL roll entry, now owned by no order |
+| **Already on `main` before the word** | the driver's `--insert-rate` in `tools/bl_mixed.py` (`e9952d64`, landed at `dcab41e5`): a benchmark driver flag, not engine code. It is left in place, not reverted |
+| **Does not settle** | a push of this record, a tag or a version; the worktree's and branch's deletion |
+| **Recorded at** | this file; the DG order's header and §7; its row in `instructions/v3.2.0/index.md`; `docs/inflight/known-gaps.md` |
+
 ## 6. DD-S4 ruled (b): the driver is DN-S2's; DN taken up on the standing go-ahead
 
 Numbered §6 because §5 is held by DG's close record on the work branch

@@ -1,6 +1,6 @@
 # Work order DG - a WAL segment's body: what the zero fill costs the sessions beside it, and what its absence costs a commit, measured before anything is built
 
-Status: **OPENED 2026-11-21 on the operator's standing go-ahead
+Status: **CLOSED 2026-11-21 on the operator's word, abandoned, with nothing built** (`raft-marks-2026-11-21.md` §5): no candidate is chosen, no engine code lands, and DG-S0's results and census stand as the record. Before that: **OPENED 2026-11-21 on the operator's standing go-ahead
 (go-ahead-achieving-milestone), on worktree `dg-wal-segment-body` from
 `46ee8a6e` (`raft-marks-2026-11-21.md` §3). DG-Q0..Q10 are adopted (a) as CLA
 proposed, and none is the operator's own mark. Under DG-Q1 (a) and DG-Q2
@@ -548,5 +548,22 @@ reading agent and spot-checked at `restore.cpp:507` and `falloc.h`.
   - `bg-pw`'s 285 ms roll, with 9 ms at the gate, is unexplained, and so
     is the cold arm's low walker count.
 
-**Ends at V0, the operator's reading of the results file's §1 (DG-Q1 (a)).**
-DG-S1 waits for the candidate the operator names (DG-Q2 (a)).
+**Ended at V0, the operator's reading of the results file's §1 (DG-Q1 (a)).**
+DG-S1 waited for the candidate the operator would name (DG-Q2 (a)).
+
+Landed on `main` at `dcab41e5` (push no verify, `raft-marks-2026-11-21.md` §4): bench, `tools/` and documents only.
+
+### Closed 2026-11-21 - abandoned, nothing built
+
+On the operator's word (`raft-marks-2026-11-21.md` §5), DG is closed and abandoned at V0. **V0 is not read, and no candidate is chosen** (DG-Q2). DG-S1, DG-S2 and DG-S3 are not run.
+
+- **No engine code lands.** DG-S0's measurement spike stays a patch in the bench archive (`bench/v3.5.0/archive/dg-s0-premise-v3.5.0-36-ge9952d64/dg-s0-spike.patch`). It was never in the tree's history.
+- **The segment body stays as it is**: reserved, zero-filled and synced ahead (`wal.md` §4.1). No spec changes.
+- **What stays, as the record**:
+  - DG-S0's results file, `bench/v3.5.0/results-dg-s0-premise-v3.5.0-36-ge9952d64.md`, and its archive;
+  - the census in the "DG-S0" entry above;
+  - the measured stall, in `known-gaps.md`'s WAL roll entry;
+  - the driver's `--insert-rate`, which landed at `e9952d64` before the close. It is a benchmark driver flag in `tools/`, not engine code, and it is left in place.
+- **Left open, owned by no order**: the commit stall the fill's `fsync` causes under a log that rolls; the roll's tail inside checkpoint runs (DG-Q6); P2 in the commit cells, never measured.
+- The adopted items DG-Q0..Q10 lapse with the order. None was the operator's own mark.
+
