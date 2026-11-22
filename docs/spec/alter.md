@@ -101,6 +101,13 @@ checks column renames against assertion text too — conservatively, by
 relation, not by parsing the text to see whether the column matters. A
 coarser refusal is never wrong.
 
+**A view RESTRICTs too** (`view.md` VW6), by what its text names: a
+rename of a relation it reads, a `RENAME COLUMN` or `DROP COLUMN` of a
+column it names (every column under a `*` body), and an `ADD COLUMN` or a
+`RENAME COLUMN` to a name its text writes - a column of that name could
+capture a name the body resolves elsewhere today - or any `ADD COLUMN`
+under a query-layer `*` body. The refusal names the view.
+
 ## 4a. AL4a — A rename takes the relation `X`
 
 Both renames take the relation's `X` (the operator's ruling of 2026-10-21),

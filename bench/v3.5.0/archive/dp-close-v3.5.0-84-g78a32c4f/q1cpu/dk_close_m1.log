@@ -1,0 +1,17 @@
+09:42:22 start
+09:42:32 m1 n=200 point done
+09:42:33 m1 n=200 insert1 done
+09:42:34 m1 n=200 named done
+09:42:36 m1 n=200 ixinsert done
+09:42:37 m1 n=200 update1 done
+09:42:46 m1 n=1000 point done
+09:42:48 m1 n=1000 insert1 done
+09:42:50 m1 n=1000 named done
+09:42:52 m1 n=1000 ixinsert done
+09:42:55 m1 n=1000 update1 done
+09:43:09 m1 n=10000 point done
+09:43:17 m1 n=10000 insert1 done
+09:43:26 m1 n=10000 named done
+09:43:35 m1 n=10000 ixinsert done
+09:43:43 m1 n=10000 update1 done
+09:43:44 end

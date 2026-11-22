@@ -4703,4 +4703,75 @@ StatusOr<std::shared_ptr<const Expr>> Parser::ParseExprQueryComparison(
 
 StatusOr<Statement> Parse(std::string_view sql) { return Parser(sql).Parse(); }
 
+// `CREATE VIEW` / `DROP VIEW` (DP; `ViewStmt` in ast.hpp).
+StatusOr<ViewStmt> Parser::ParseView() {
+    ViewStmt stmt;
+    const Token verb = lexer_.Next();
+    if (verb.type != TokenType::kIdent ||
+        !(IEquals(verb.text, "CREATE") || IEquals(verb.text, "DROP"))) {
+        return Status::InvalidArgument("expected CREATE VIEW or DROP VIEW" + At(verb.byte_offset));
+    }
+    stmt.drop = IEquals(verb.text, "DROP");
+    if (Status s = ExpectKeyword("VIEW"); !s.ok()) return s;
+    if (Status s = ParseQualifiedName(stmt.schema, stmt.name, &stmt.byte_offset); !s.ok()) {
+        return s;
+    }
+    if (!stmt.drop) {
+        if (Status s = RefuseReservedName(stmt.name, stmt.byte_offset, "view"); !s.ok()) {
+            return s;
+        }
+    }
+    if (stmt.drop) {
+        ConsumeOptionalSemicolon();
+        const Token& end = lexer_.Peek();
+        if (end.type != TokenType::kEof) {
+            return Status::InvalidArgument("unexpected '" + std::string(Describe(end)) +
+                                           "' after DROP VIEW's name" + At(end.byte_offset));
+        }
+        return stmt;
+    }
+
+    // The column list: names only, each the view's (DP-Q15).
+    if (lexer_.Peek().type == TokenType::kLParen) {
+        stmt.columns_offset = lexer_.Next().byte_offset;
+        for (;;) {
+            const std::uint32_t at = lexer_.Peek().byte_offset;
+            auto column = ParseIdent();
+            if (!column.ok()) return column.status();
+            if (Status s = RefuseReservedName(column.value(), at, "view column"); !s.ok()) {
+                return s;
+            }
+            stmt.columns.push_back(std::move(column.value()));
+            const Token sep = lexer_.Next();
+            if (sep.type == TokenType::kRParen) break;
+            if (sep.type != TokenType::kComma) {
+                return Status::InvalidArgument("expected ',' or ')' in a view's column list" +
+                                               At(sep.byte_offset));
+            }
+        }
+    }
+
+    const Token as = lexer_.Next();
+    if (as.type != TokenType::kKeyword || as.kw != Keyword::kAs) {
+        return Status::InvalidArgument("expected AS before a view's SELECT" +
+                                       At(as.byte_offset));
+    }
+    const Token& first = lexer_.Peek();
+    if (first.type != TokenType::kIdent || !IEquals(first.text, "SELECT")) {
+        return Status::InvalidArgument("a view's body is a SELECT" + At(first.byte_offset));
+    }
+    // The rest of the text is the body, verbatim (DP-Q3). Its grammar is
+    // the readers' to ask: the dispatcher parses it natively, then as a
+    // query (DP-Q1, DP-Q2).
+    stmt.body_offset = first.byte_offset;
+    std::string_view body = sql_.substr(first.byte_offset);
+    while (!body.empty() && (body.back() == ';' || body.back() == ' ' || body.back() == '\t' ||
+                             body.back() == '\n' || body.back() == '\r')) {
+        body.remove_suffix(1);
+    }
+    stmt.body = std::string(body);
+    while (lexer_.Peek().type != TokenType::kEof) lexer_.Next();
+    return stmt;
+}
+
 }  // namespace kds::parser

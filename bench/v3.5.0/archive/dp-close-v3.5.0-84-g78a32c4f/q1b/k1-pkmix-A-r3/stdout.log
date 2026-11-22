@@ -1,0 +1,1 @@
+kds-pkmix-relaxed-k1-s2-kernel-r0 load 1.46->1.69 stmts=266256 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=33281.8 p50=57.1

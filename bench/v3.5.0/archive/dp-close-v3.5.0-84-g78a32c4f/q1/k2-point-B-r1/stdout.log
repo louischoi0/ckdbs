@@ -1,0 +1,1 @@
+kds-point-relaxed-k2-s4-kernel-r0 load 2.05->2.35 stmts=361662 errors=0 refusals=0 client_bound=False cores=['0.0', '1.0'] stmt/s=45207.4 p50=85.4

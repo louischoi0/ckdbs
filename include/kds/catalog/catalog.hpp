@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -579,6 +580,46 @@ public:
     // server's command dispatcher (src/server), which needs "what tables
     // exist" without the caller already knowing a name to look up.
     StatusOr<std::vector<SysObjectRow>> ListTables(const txn::ReadView* view = nullptr);
+
+    // ---- Views (instructions/v3.2.0/workorder-dp-view.md) -----------------
+    //
+    // A view is a `kTypeView` row in sys.objects - a name in its namespace's
+    // relation name space (NS6) - and its sys.views rows (DP-Q3, DP-Q14).
+    // Its body never changes under its oid (DP-R3): there is no writer of a
+    // view but `CreateView`, and `DropView` retypes the name to a tombstone,
+    // so a new body is a new oid.
+    //
+    // `CreateView` and `DropView` are transactional as `CreateTable` and
+    // `DropTable` are (DP-Q4): rows placed or delete-marked under `trx_id`,
+    // each appended to `written` for the rollback, the name checked and
+    // taken under page 6's hold (CT7). What a view reads, and whether a
+    // dependency may change, is the caller's to have asked: the catalog
+    // stores the list and answers it (`ViewsReading`).
+    StatusOr<Oid> CreateView(Oid namespace_oid, std::string_view name, const ViewDef& def,
+                             std::uint64_t trx_id, std::vector<CatalogRowRef>* written);
+    Status DropView(Oid view_oid, std::uint64_t trx_id, std::vector<CatalogRowChange>* written);
+
+    // The view `qualifier.name` (or `name` in `default_namespace`) names,
+    // under `view` (DT3) - or nullopt when the name is not a view: a table,
+    // nothing, `sys`, or a namespace that does not resolve, each of which
+    // `ResolveRelation` then answers as it always has. **Asks nothing while
+    // no view has ever existed** (DP-Q18), so a statement over tables pays
+    // one relaxed load.
+    StatusOr<std::optional<Oid>> ResolveView(std::string_view qualifier, std::string_view name,
+                                             Oid default_namespace,
+                                             const txn::ReadView* view = nullptr);
+    // A view's definition, from its rows under `view`; NotFound for an oid
+    // that names no live view for that reader.
+    StatusOr<ViewDef> GetView(Oid view_oid, const txn::ReadView* view = nullptr);
+    StatusOr<std::vector<ViewDef>> ListViews(const txn::ReadView* view = nullptr);
+    // Every live view one of whose dependency rows names `rel_oid` - a
+    // relation or a view - read unfiltered: a RESTRICT counts another
+    // transaction's open `CREATE VIEW` as a dependant, as `DROP TABLE`
+    // counts an open foreign key.
+    StatusOr<std::vector<ViewDef>> ViewsReading(Oid rel_oid);
+    // DP-Q18's word: whether a view row exists or has existed since this
+    // catalog opened (probed once, then moved only by `CreateView`).
+    bool AnyView();
 
     // ALTER TABLE's two catalog writes (docs/spec/alter.md AL2, AL5,
     // workplan ALT02): rewrite one fixed-width Name field in place - same
@@ -1504,6 +1545,22 @@ private:
     // instance-wide and `namespace_oid` is not read.
     Status CheckNameFree(std::string_view name, Oid live_type, Oid namespace_oid,
                          std::uint64_t own_trx_id, bool own_drop_frees);
+
+    // `DropTable`'s sweep, shared with `DropView`: every row of `RowT` under
+    // `root` that `matches` accepts is delete-marked under `trx_id` (retired
+    // at the bootstrap id), each change appended to `written`.
+    template <typename RowT, typename Matches>
+    Status MarkOwnedRows(PageId root, Matches matches, std::uint64_t trx_id,
+                         std::vector<CatalogRowChange>* written);
+
+    // DP-Q18's word for a catalog with no instance words (`InstanceWords::
+    // views_seen` says what it holds); `AnyView` reads the instance's when
+    // one is set. Boxed so the catalog stays movable (`BootstrapResult`).
+    std::unique_ptr<std::atomic<std::uint8_t>> views_seen_ =
+        std::make_unique<std::atomic<std::uint8_t>>(0);
+    std::atomic<std::uint8_t>& ViewsSeenWord() noexcept {
+        return words_ != nullptr ? words_->views_seen : *views_seen_;
+    }
 
     // **A relation's namespace, asked where its membership is written**
     // (AT-S17b, the AT-close order's §7.3): a relation's `sys.objects` row

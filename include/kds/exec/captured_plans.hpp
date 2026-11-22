@@ -71,12 +71,22 @@ struct CapturedKey {
     std::uint64_t fetch_id = 0;
     std::uint8_t n = 0;
     std::array<catalog::Oid, kMaxPlannedRelations> oids{};
+    // **Every view the block absorbed**, in declaration order (DP-R4,
+    // DP-Q17): `n` and `oids` stay the base relations every order and pin is
+    // measured by, and the views beside them keep a plan made through a view
+    // off the hand-written expansion, off another view with the same body,
+    // and off a view created again under the name.
+    std::uint8_t v = 0;
+    std::array<catalog::Oid, kMaxPlannedRelations> views{};
 
     bool operator==(const CapturedKey&) const = default;
-    // Whether the shape binds `oid`.
+    // Whether the shape binds `oid`, a relation or a view.
     bool Names(catalog::Oid oid) const noexcept {
         for (std::size_t i = 0; i < n; ++i) {
             if (oids[i] == oid) return true;
+        }
+        for (std::size_t i = 0; i < v; ++i) {
+            if (views[i] == oid) return true;
         }
         return false;
     }

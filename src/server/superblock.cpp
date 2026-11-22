@@ -73,14 +73,13 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
         // No migration path exists and none is wanted (D14, and the
         // standing order of 2026-10-07): an image this build did not write
         // is refused, not guessed at. Recreate the database instead.
-        // DN-Q9 (a): the latest format event is named, since a heap on an
-        // older volume is the one thing it changed under a user relation.
+        // DN-Q9 (a)'s rule: the latest format event is named.
         return Status::Corruption(
             "superblock version " + std::to_string(f.version) + " is not this build's (" +
             std::to_string(kSuperBlockVersion) + ")" +
             (f.version < kSuperBlockVersion
-                 ? "; since version 39 a heap relation is data pages addressed by rowid (DN), "
-                   "and an older volume's heap is a btree this build does not read"
+                 ? "; since version 40 a view is a catalog object with its own sys.views "
+                   "relation (DP), which an older volume has no page for"
                  : ""));
     }
     std::memcpy(&f.log_topology, base + kLogTopologyOffset, sizeof(f.log_topology));

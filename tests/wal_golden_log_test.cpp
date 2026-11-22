@@ -143,7 +143,13 @@ namespace {
 // row is a HEAP_INSERT at its slot and carries an INDEX_INSERT into the
 // Keystone index, and every later LSN moves. No record kind changes its
 // framing.
-constexpr std::uint32_t kGoldenLogCrc = 0x8d66d145u;
+// **Re-pinned at DP-S1** (on `worktree-dp-view`,
+// `instructions/v3.2.0/workorder-dp-view.md` DP-R8, superblock 40):
+// bootstrap creates `sys.views` (page 19), so its `sys.objects` and
+// `sys.tables` rows join the stream, every later LSN moves, and every later
+// row on those two pages lands one slot later. No record kind changes its
+// framing.
+constexpr std::uint32_t kGoldenLogCrc = 0xbe16c8b1u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",

@@ -167,6 +167,7 @@ add_library(kds
     src/exec/admin_plans.cpp
     src/exec/plan_advice.cpp
     src/exec/captured_plans.cpp
+    src/exec/view_absorb.cpp
     src/exec/plan_catalog.cpp
     src/exec/plan_ddl.cpp
     src/exec/plan_rule.cpp
@@ -289,6 +290,7 @@ if(KDS_BUILD_SIM)
         sim/workload.cpp
         sim/oracle.cpp
         sim/loop.cpp
+        sim/view_diff.cpp
     )
     target_include_directories(kds_sim PUBLIC ${CMAKE_SOURCE_DIR})
     target_link_libraries(kds_sim PUBLIC kds)

@@ -74,6 +74,9 @@ public:
     // blanked outside the term, so every byte reported is the statement's.
     StatusOr<std::vector<Condition>> ParseConditions();
 
+    // `CREATE VIEW ...` or `DROP VIEW ...`, the whole statement (`ViewStmt`).
+    StatusOr<ViewStmt> ParseView();
+
 private:
     StatusOr<CreateTableStmt> ParseCreateTable();
     StatusOr<ColumnDef> ParseColumnDef();

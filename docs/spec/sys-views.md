@@ -96,7 +96,8 @@ returns only what it names, so that conjunct is not compared again.
 | view | filter | key | what a row is |
 |---|---|---|---|
 | `tables` | schema | - | a relation: oid, namespace, name, descriptor and root page ids, `clustered_type` (`HEAP`, `BTREE`, `CHAIN`), `next_id`, spare slots and how many are free |
-| `columns` | schema | `rel_name`, checked | a live, visible column of a relation (no dropped column, no heap's hidden key) |
+| `columns` | schema | `rel_name`, checked | a live, visible column of a relation (no dropped column, no heap's hidden key); for a view named by `rel_name` (`DESCRIBE <view>`), each of the view's columns, named as the view names them and typed as its body returns them (`view.md` VW7) |
+| `views` | schema | - | a view (`view.md` VW8): `oid`, `namespace_oid`, `namespace`, `name`, `absorbable`, `columns` (the view's names, `, `-joined), `reads` (the oids it reads), `source_text` (its body, a native `*` stored expanded) |
 | `objects` | schema | - | a table object of `sys.objects` |
 | `types` | engine | - | a registered type |
 | `patterns` | engine | - | a `sys.patterns` row - a shape ever opted in to Waystone (`waystone-concpets.md` §4): `oid`, `fetch_id` (decimal), `fingerprint_version`, `stmt_class`, `waystone`, `use_count`, `last_seen`, `waystone_root`, `dir_depth`, and what the row's `WAYSTONE ON` bound (DI-S3) - `namespace`, `relation_oids`, `relations`, as §6.1 prints a statistics row's. `waystone` (1 or 0) replaced `origin` and `pinned` at CF-S1b, and is 1 only for a current-version row with the opt-in bit set, so a lapsed row reads 0 and its `fingerprint_version` says why; `use_count`/`last_seen` frozen at 0 since BL-S4; root and depth NULL where the row has no directory |
@@ -131,7 +132,7 @@ returns only what it names, so that conjunct is not compared again.
 | spelling | answers with |
 |---|---|
 | `SHOW META` | `SELECT * FROM sys.meta` |
-| `SHOW TABLES`, `NAMESPACES`, `PATTERNS`, `ACCESS`, `CABINS`, `INDEXES`, `FKEYS`, `ASSERTIONS`, `TRANSITIONS`, `PLANS`, `CABIN_OPTIMIZER` | `SELECT * FROM sys.tables`, `sys.namespaces`, `sys.patterns`, `sys.access_stats`, `sys.cabins`, `sys.indexes`, `sys.fkeys`, `sys.assertions`, `sys.transitions`, `sys.plans`, `sys.cabin_optimizer` |
+| `SHOW TABLES`, `NAMESPACES`, `PATTERNS`, `ACCESS`, `CABINS`, `INDEXES`, `FKEYS`, `ASSERTIONS`, `TRANSITIONS`, `PLANS`, `VIEWS`, `CABIN_OPTIMIZER` | `SELECT * FROM sys.tables`, `sys.namespaces`, `sys.patterns`, `sys.access_stats`, `sys.cabins`, `sys.indexes`, `sys.fkeys`, `sys.assertions`, `sys.transitions`, `sys.plans`, `sys.views`, `sys.cabin_optimizer` |
 | `SHOW BUDGET` | `SELECT oid, namespace, name, next_id, ids_issued, ids_remaining, budget_used_ppm, budget_warning, budget_exhausted FROM sys.relation_stats` |
 | `SHOW PAGE <id>` | the header and slot columns of `sys.page_slots WHERE page_id = <id>`; `SHOW PAGE <id> VALUES` adds `value`, the payload in hex |
 | `DESCRIBE <t>`, `DESC <t>` | `SELECT * FROM sys.columns WHERE rel_name = <t>` |

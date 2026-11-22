@@ -83,6 +83,7 @@ constexpr SysViewSpec kViews[] = {
     {"assertions"},
     {"transitions"},
     {"plans"},
+    {"views"},
     {"plan_advice"},
     {"statistics"},
     {"statistics_history"},
@@ -160,6 +161,14 @@ public:
         if (!tables.ok()) return tables.status();
         for (const catalog::SysObjectRow& row : tables.value()) {
             out.relations_[row.oid] = {row.namespace_oid, std::string(catalog::NameView(row.name))};
+        }
+        // A view is a name a binding and a plan carry too (DP-R4, DP-R5).
+        if (catalog.AnyView()) {
+            auto views = catalog.ListViews(view);
+            if (!views.ok()) return views.status();
+            for (const catalog::ViewDef& def : views.value()) {
+                out.relations_[def.oid] = {def.namespace_oid, def.name};
+            }
         }
         return out;
     }
@@ -339,7 +348,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     return ResolveNames(
         session, [&](const txn::ReadView* view) -> StatusOr<exec::CatalogView> {
             if (n == "tables") return TablesView(view);
-            if (n == "columns") return ColumnsView(view, key, session.default_namespace());
+            if (n == "views") return ViewsView(view);
+            if (n == "columns") return ColumnsView(view, key, session);
             if (n == "objects") return ObjectsView(view);
             if (n == "namespaces") return NamespacesView(view);
             if (n == "indexes") return IndexesView(view);
@@ -404,6 +414,40 @@ StatusOr<exec::CatalogView> CommandDispatcher::TablesView(const txn::ReadView* v
     return view;
 }
 
+// One row a view (DP-Q3): its name, whether a reader absorbs its body
+// (DP-Q2 says so here), its columns, what it reads, and its text verbatim.
+StatusOr<exec::CatalogView> CommandDispatcher::ViewsView(const txn::ReadView* view_of) {
+    exec::CatalogView view;
+    Define(view, {{"oid", kInt},
+                  {"namespace_oid", kInt},
+                  {"namespace", kStr},
+                  {"name", kStr},
+                  {"absorbable", kInt},
+                  {"columns", kStr},
+                  {"reads", kStr},
+                  {"source_text", kStr}});
+    auto views = catalog_.ListViews(view_of);
+    if (!views.ok()) return views.status();
+    auto labels = RelationLabels::Read(catalog_, view_of);
+    if (!labels.ok()) return labels.status();
+    for (const catalog::ViewDef& def : views.value()) {
+        std::string columns;
+        for (const std::string& c : def.columns) columns += (columns.empty() ? "" : ", ") + c;
+        // The relations and views read, by oid, once each.
+        std::string reads;
+        std::vector<catalog::Oid> seen;
+        for (const catalog::ViewDef::Dependency& d : def.dependencies) {
+            if (std::find(seen.begin(), seen.end(), d.oid) != seen.end()) continue;
+            seen.push_back(d.oid);
+            reads += (reads.empty() ? "" : ", ") + std::to_string(d.oid);
+        }
+        view.rows.push_back({Int(def.oid), Int(def.namespace_oid),
+                             labels.value().Spelling(def.namespace_oid), Str(def.name),
+                             Bool(def.absorbable), Str(columns), Str(reads), Str(def.text)});
+    }
+    return view;
+}
+
 StatusOr<PageId> CommandDispatcher::CurrentRootOf(const catalog::SysTableRow& row) {
     // The clustered root the anchor names, where the relation has one; a
     // relation that predates its anchor is rooted at its descriptor page.
@@ -445,7 +489,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ObjectsView(const txn::ReadView* 
 
 StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* view_of,
                                                            const parser::AstValue* rel_name,
-                                                           catalog::Oid default_namespace) {
+                                                           Session& session) {
+    const catalog::Oid default_namespace = session.default_namespace();
     exec::CatalogView view;
     Define(view, {{"rel_id", kInt},
                   {"namespace", kStr},
@@ -466,6 +511,31 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
         // nothing is refused, under the session's view and in its namespace
         // (NS5), never answered with no rows.
         const auto [qualifier, bare] = SplitQualifiedArg(rel_name->str_val);
+        // **A view's columns** (DP-S1): named as the view names them, typed
+        // as its body returns them, `pos` their place in the view.
+        auto as_view = catalog_.ResolveView(qualifier, bare, default_namespace, view_of);
+        if (!as_view.ok()) return as_view.status();
+        if (as_view.value().has_value()) {
+            auto def = catalog_.GetView(*as_view.value(), view_of);
+            if (!def.ok()) return def.status();
+            auto columns = DescribeView(def.value(), session);
+            if (!columns.ok()) return columns.status();
+            auto labels = RelationLabels::Read(catalog_, view_of);
+            if (!labels.ok()) return labels.status();
+            for (std::size_t i = 0; i < columns.value().size(); ++i) {
+                const exec::LayerColumn& c = columns.value()[i];
+                auto type_row = catalog_.ResolveTypeByVal(c.type.type_val);
+                const std::string type =
+                    type_row.ok() ? std::string(catalog::NameView(type_row.value().name))
+                                  : "?type_val=" + std::to_string(c.type.type_val);
+                view.rows.push_back({Int(def.value().oid),
+                                     labels.value().Spelling(def.value().namespace_oid),
+                                     Str(def.value().name), Int(i), Str(c.name),
+                                     Int(c.type.type_val), Str(type), Bool(false),
+                                     Bool(false), Null(), Null(), Null()});
+            }
+            return view;
+        }
         auto oid = catalog_.ResolveRelation(qualifier, bare, default_namespace,
                                             rel_name->byte_offset, view_of);
         if (!oid.ok()) return oid.status();

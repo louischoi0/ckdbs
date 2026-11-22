@@ -271,7 +271,16 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // page type, the record kind nor the clustered type. Refused by the
 // version, naming DN's format event, with no migration, the standing order
 // of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 39;
+//
+// 40 (DP-S1, `instructions/v3.2.0/workorder-dp-view.md` DP-R8): **a view is
+// a catalog object**. `sys.objects` may carry `kTypeView` (36) and its
+// tombstone `kTypeDroppedView` (37), and `sys.views` (oid 168, root page 19)
+// holds each view's text, columns and dependencies. A version-39 volume has
+// no page 19 and no `sys.views` rows for this build's bootstrap check, and a
+// version-39 binary would read a view's name as no relation and drop the
+// relations a view reads with no RESTRICT. Refused by the version, naming
+// DP's format event, with no migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 40;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

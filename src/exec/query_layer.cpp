@@ -1,4 +1,5 @@
 #include "kds/exec/query_layer.hpp"
+#include "kds/exec/view_absorb.hpp"
 
 // The query layer (BU-S4); `query_layer.hpp` states its contract.
 //
@@ -329,7 +330,10 @@ struct CompiledQuery;
 
 struct Source {
     parser::RelationRef rel;
-    std::unique_ptr<CompiledQuery> derived;  // a derived table
+    std::unique_ptr<CompiledQuery> derived;  // a derived table, a view's among them
+    // A view's body, kept for the run: the compiled query points into it.
+    std::shared_ptr<const parser::Query> view_body;
+    std::shared_ptr<const std::string> view_text;
     std::vector<LayerColumn> columns;
     std::size_t offset = 0;
     bool nullable = false;  // on an outer join's nullable side
@@ -471,6 +475,7 @@ auto SameColumnIn(const Scope& scope) {
 
 // ---- The runner ------------------------------------------------------------
 
+
 class Runner {
 public:
     Runner(std::string_view sql, LayerHost& host, const StatementContext& context,
@@ -510,7 +515,14 @@ private:
     Status SortAndCut(CompiledQuery& q, std::vector<Row>& rows);
     Status Cap(std::size_t n, const char* what) const;
 
+    // The text the block being compiled indexes: the statement's, or a
+    // view's body's while that body compiles (its `where_spans` are its own).
     std::string_view sql_;
+    // While a view's body compiles: the namespace its unqualified relation
+    // names mean (DP-Q21), what it was created over, and how deep views nest.
+    std::uint64_t view_namespace_ = 0;
+    std::shared_ptr<const parser::ViewReads> view_reads_;
+    std::uint32_t view_depth_ = 0;
     LayerHost& host_;
     const StatementContext& context_;
     LayerLimits limits_;
@@ -668,17 +680,63 @@ Status Runner::CompileSources(const QueryBlock& b, const Scope* parent, Compiled
     for (const parser::FromItem* item : items) {
         Source s;
         s.rel = item->rel;
+        // A name inside a view's body is resolved as the body's (DP-Q21).
+        if (item->derived == nullptr && s.rel.schema.empty() && view_namespace_ != 0) {
+            s.rel.namespace_oid = view_namespace_;
+        }
+        if (item->derived == nullptr) s.rel.reads = view_reads_;
         std::vector<LayerColumn> columns;
+        Scope barrier;  // see ResolveIn
+        barrier.parent = parent;
+        barrier.barrier = true;
+        std::optional<LayerView> as_view;
+        if (item->derived == nullptr) {
+            auto asked = host_.ViewOf(s.rel);
+            if (!asked.ok()) return asked.status();
+            as_view = std::move(asked.value());
+        }
         if (item->derived != nullptr) {
-            Scope barrier;  // see ResolveIn
-            barrier.parent = parent;
-            barrier.barrier = true;
             auto sub = Compile(*item->derived, parent != nullptr ? &barrier : nullptr);
             if (!sub.ok()) return sub.status();
             s.derived = std::move(sub.value());
             columns = s.derived->columns;
+        } else if (as_view.has_value()) {
+            // **A view is a derived table here** (DP-Q2): its body compiled
+            // over its own text and namespace, nothing pushed into it.
+            if (view_depth_ >= kMaxViewDepth) {
+                return Status::Unsupported("views nest deeper than " +
+                                           std::to_string(kMaxViewDepth) +
+                                           At(item->byte_offset));
+            }
+            const std::string_view outer_sql = sql_;
+            const std::uint64_t outer_namespace = view_namespace_;
+            auto outer_reads = view_reads_;
+            sql_ = *as_view->text;
+            view_namespace_ = as_view->namespace_oid;
+            view_reads_ = as_view->reads;
+            ++view_depth_;
+            auto sub = Compile(*as_view->query, parent != nullptr ? &barrier : nullptr);
+            --view_depth_;
+            sql_ = outer_sql;
+            view_namespace_ = outer_namespace;
+            view_reads_ = std::move(outer_reads);
+            if (!sub.ok()) return sub.status();
+            s.derived = std::move(sub.value());
+            if (s.derived->columns.size() != as_view->columns.size()) {
+                return Status::Corruption("view '" + s.rel.table_name + "' names " +
+                                          std::to_string(as_view->columns.size()) +
+                                          " columns and its body returns " +
+                                          std::to_string(s.derived->columns.size()));
+            }
+            columns = s.derived->columns;
+            for (std::size_t c = 0; c < columns.size(); ++c) {
+                columns[c].name = as_view->columns[c];
+                columns[c].heading.clear();
+            }
+            s.view_body = std::move(as_view->query);
+            s.view_text = std::move(as_view->text);
         } else {
-            auto described = host_.DescribeRelation(item->rel);
+            auto described = host_.DescribeRelation(s.rel);
             if (!described.ok()) return described.status();
             columns = std::move(described.value());
         }
@@ -1287,7 +1345,10 @@ StatusOr<std::vector<Row>> Runner::SourceRows(Source& s) {
         if (!rs.ok()) return rs.status();
         return rs.value().rows;
     }
-    const std::string key = s.rel.schema + "." + s.rel.table_name + "\x1e" + s.pushed_key;
+    // The namespace too: a view's body names its relations in its own
+    // (DP-Q21), so one written name can be two relations in one statement.
+    const std::string key = s.rel.schema + "." + s.rel.table_name + "\x1d" +
+                            std::to_string(s.rel.namespace_oid) + "\x1e" + s.pushed_key;
     if (auto it = walks_.find(key); it != walks_.end()) return it->second;
     auto walked = host_.WalkRelation(s.rel, s.pushed);
     if (!walked.ok()) return walked.status();
@@ -1702,6 +1763,15 @@ StatusOr<RowSet> RunQuery(const parser::Query& query, std::string_view sql, Laye
     auto compiled = runner.Compile(query, nullptr);
     if (!compiled.ok()) return compiled.status();
     return runner.Execute(*compiled.value(), Row{});
+}
+
+StatusOr<std::vector<LayerColumn>> DescribeQuery(const parser::Query& query, std::string_view sql,
+                                                 LayerHost& host, const StatementContext& context,
+                                                 const LayerLimits& limits) {
+    Runner runner(sql, host, context, limits);
+    auto compiled = runner.Compile(query, nullptr);
+    if (!compiled.ok()) return compiled.status();
+    return compiled.value()->columns;
 }
 
 }  // namespace kds::exec

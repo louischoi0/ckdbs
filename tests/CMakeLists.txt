@@ -220,6 +220,7 @@ add_executable(kds_tests
     alter_table_test.cpp
     bulk_insert_test.cpp
     drop_table_test.cpp
+    view_test.cpp
     drop_table_reclaim_test.cpp
     catalog_page_ceiling_test.cpp
     backup_restore_test.cpp

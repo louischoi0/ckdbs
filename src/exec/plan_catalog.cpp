@@ -49,6 +49,10 @@ bool ReadList(std::string_view text, std::vector<std::uint64_t>& out) {
     }
 }
 
+// `TakeField` for a field a row may leave out (`views=`, DP-Q17): `value`
+// is empty when it is absent. Always true.
+bool TakeOptionalField(std::string_view& line, std::string_view field, std::string_view& value);
+
 // `<field>=<value>` at the head of `line`, followed by a space or its end;
 // the value, with `line` moved past it.
 bool TakeField(std::string_view& line, std::string_view field, std::string_view& value) {
@@ -59,6 +63,35 @@ bool TakeField(std::string_view& line, std::string_view field, std::string_view&
     const std::size_t space = line.find(' ');
     value = line.substr(0, space);
     line.remove_prefix(space == std::string_view::npos ? line.size() : space + 1);
+    return true;
+}
+
+// A binding as a plan stores it: a name, or a view's path to one - `v.o`,
+// `v.w.o` (DP-Q7) - each segment a name.
+bool IsBindingPath(std::string_view binding) {
+    while (true) {
+        const std::size_t dot = binding.find('.');
+        if (!parser::IsIdentifier(binding.substr(0, dot))) return false;
+        if (dot == std::string_view::npos) return true;
+        binding.remove_prefix(dot + 1);
+    }
+}
+
+// A row's `views=` (DP-Q17), absent for a block that absorbed none.
+Status ReadViews(std::string_view text, CapturedKey& key) {
+    key.v = 0;
+    key.views = {};
+    if (text.empty()) return Status::OK();
+    std::vector<std::uint64_t> views;
+    if (!ReadList(text, views)) return Status::Corruption("sys.plans: a row's views are not a list");
+    key.v = static_cast<std::uint8_t>(views.size());
+    for (std::size_t i = 0; i < views.size(); ++i) key.views[i] = views[i];
+    return Status::OK();
+}
+
+bool TakeOptionalField(std::string_view& line, std::string_view field, std::string_view& value) {
+    value = {};
+    (void)TakeField(line, field, value);
     return true;
 }
 
@@ -248,6 +281,7 @@ std::string EncodeAdminPlanText(const PlanRow& row, std::int64_t written_at_us) 
     std::string text(kVersion);
     text.append(" fp=").append(std::to_string(parser::kFingerprintVersion));
     AppendList(text, " oids=", row.key.oids, row.key.n);
+    if (row.key.v != 0) AppendList(text, " views=", row.key.views, row.key.v);
     text.append(" bindings=");
     for (std::size_t i = 0; i < row.bindings.size(); ++i) {
         if (i != 0) text.push_back(',');
@@ -302,13 +336,16 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
     std::string_view args_text;
     std::string_view at_text;
     std::string_view variants_text;
+    std::string_view views_text;
     if (head.ends_with(' ') || !TakeField(head, "fp", fp_text) ||
-        !TakeField(head, "oids", oids_text) || !TakeField(head, "bindings", bindings_text) ||
+        !TakeField(head, "oids", oids_text) ||
+        !TakeOptionalField(head, "views", views_text) ||
+        !TakeField(head, "bindings", bindings_text) ||
         !TakeField(head, "args", args_text) || !TakeField(head, "at", at_text) ||
         !TakeField(head, "variants", variants_text) || !head.empty()) {
         return corrupt(
-            "a plan's text does not read fp, oids, bindings, args, at and variants, in that "
-            "order");
+            "a plan's text does not read fp, oids, views (when it has any), bindings, args, at "
+            "and variants, in that order");
     }
     std::vector<std::uint64_t> oids;
     std::uint64_t fp = 0;
@@ -325,7 +362,7 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
     while (true) {
         const std::size_t comma = bindings_text.find(',');
         const std::string_view binding = bindings_text.substr(0, comma);
-        if (!parser::IsIdentifier(binding)) return corrupt("a plan's binding is not a name");
+        if (!IsBindingPath(binding)) return corrupt("a plan's binding is not a name");
         for (const std::string& earlier : bindings) {
             if (SameName(earlier, binding)) {
                 return corrupt("a plan names one binding twice");
@@ -399,9 +436,11 @@ Status DecodeAdminPlanText(std::string_view text, PlanRow& out) {
         }
         variants.push_back(std::move(variant));
     }
+    CapturedKey views;
+    if (Status s = ReadViews(views_text, views); !s.ok()) return s;
     // Nothing of `out` is written before this line: a refused text leaves it.
     out.fingerprint_version = static_cast<std::uint32_t>(fp);
-    out.key = CapturedKey{};
+    out.key = views;
     out.key.n = static_cast<std::uint8_t>(oids.size());
     for (std::size_t i = 0; i < oids.size(); ++i) {
         out.key.oids[i] = static_cast<catalog::Oid>(oids[i]);
@@ -419,6 +458,7 @@ std::string EncodePlanText(const CapturedPlan& plan, std::int64_t written_at_us)
     std::string text(kVersion);
     text.append(" fp=").append(std::to_string(parser::kFingerprintVersion));
     AppendList(text, " oids=", plan.key.oids, plan.key.n);
+    if (plan.key.v != 0) AppendList(text, " views=", plan.key.views, plan.key.v);
     AppendList(text, " order=", plan.order, plan.key.n);
     text.append(" at=").append(std::to_string(written_at_us));
     text.push_back('\n');
@@ -448,10 +488,14 @@ Status DecodePlanText(std::string_view text, PlanRow& out) {
     std::string_view at_text;
     // `TakeField` eats the space after a value, so a line ending in one would
     // read as whole.
+    std::string_view views_text;
     if (head.ends_with(' ') || !TakeField(head, "fp", fp_text) ||
-        !TakeField(head, "oids", oids_text) || !TakeField(head, "order", order_text) ||
+        !TakeField(head, "oids", oids_text) ||
+        !TakeOptionalField(head, "views", views_text) ||
+        !TakeField(head, "order", order_text) ||
         !TakeField(head, "at", at_text) || !head.empty()) {
-        return corrupt("a row's text does not read fp, oids, order and at, in that order");
+        return corrupt("a row's text does not read fp, oids, views (when it has any), order and at, in "
+                       "that order");
     }
     std::vector<std::uint64_t> oids;
     std::vector<std::uint64_t> order;
@@ -462,9 +506,11 @@ Status DecodePlanText(std::string_view text, PlanRow& out) {
     if (!ReadList(order_text, order) || !IsPermutation(order, oids.size())) {
         return corrupt("a row's order is not a permutation of its relations");
     }
+    CapturedKey views;
+    if (Status s = ReadViews(views_text, views); !s.ok()) return s;
     // Nothing of `out` is written before this line: a refused text leaves it.
     out.fingerprint_version = static_cast<std::uint32_t>(fp);
-    out.key = CapturedKey{};
+    out.key = views;
     out.order = CapturedOrder{};
     out.key.n = static_cast<std::uint8_t>(oids.size());
     for (std::size_t i = 0; i < oids.size(); ++i) {
@@ -549,6 +595,11 @@ Status PersistCapturedPlans(catalog::Catalog& catalog, storage::PageStore& store
 bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
                      const std::vector<catalog::SysObjectRow>& tables) {
     if (!row.readable || row.key.n == 0) return true;
+    // **A plan made through a view establishes nothing here** (DP-R4): its
+    // statement names views where its key holds the base relations they
+    // absorbed to, so reference `i` is not position `i`. What a view reads is
+    // not renamed under it (DP-Q16's RESTRICT), and a view is never renamed.
+    if (row.key.v != 0) return true;
 
     // The stored text is the statement's shape (`parser::ShapeText`): every
     // literal a `?`, which the native grammar does not read. Each is read as
@@ -651,6 +702,12 @@ bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row) {
         auto access = catalog.InitTableAccess(row.key.oids[i]);
         if (!access.ok() && access.status().code() == StatusCode::kNotFound) return false;
     }
+    // A view it was made through, dropped (DP-R4): its oid is never
+    // reissued, so the plan matches nothing again.
+    for (std::size_t i = 0; i < row.key.v; ++i) {
+        auto view = catalog.GetView(row.key.views[i]);
+        if (!view.ok() && view.status().code() == StatusCode::kNotFound) return false;
+    }
     return true;
 }
 
@@ -708,6 +765,13 @@ StatusOr<std::size_t> LoadPlans(catalog::Catalog& catalog, storage::PageStore& s
             auto access = catalog.InitTableAccess(plan.key.oids[i]);
             if (access.ok()) continue;
             (access.status().code() == StatusCode::kNotFound ? gone : unknown) = true;
+        }
+        // And a view it was made through (DP-R4): a drop whose row removal a
+        // crash lost leaves a row that can match nothing again.
+        for (std::size_t i = 0; i < plan.key.v; ++i) {
+            auto view = catalog.GetView(plan.key.views[i]);
+            if (view.ok()) continue;
+            (view.status().code() == StatusCode::kNotFound ? gone : unknown) = true;
         }
         if (unknown && !gone) continue;
         // **One row a shape**: a second row for a key the table already

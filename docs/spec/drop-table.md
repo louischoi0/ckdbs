@@ -91,7 +91,9 @@ whole price, and K3 calls a burned oid free.
 
 ## DT3 — RESTRICT in, dependents out
 
-Three things block a drop, each refused naming the blocker:
+Four things block a drop, each refused naming the blocker:
+- a **view reading the relation** (`view.md` VW6) - its text names it,
+  and a body never changes under its view's oid. `DROP VIEW` first.
 - a **foreign key referencing the relation as parent** (`sys.fkeys` by
   `parent_rel_oid`) — declared-level, so an empty child table still
   blocks: the constraint exists whether or not rows do. Drop the child

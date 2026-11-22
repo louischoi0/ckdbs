@@ -1,0 +1,109 @@
+09:44:16 start k=1 point A r1 load=1.54 2.23 3.62 cc1=0
+09:44:29 done k=1 point A r1 rc=0
+09:44:29 start k=1 point A2 r1 load=1.79 2.25 3.60 cc1=0
+09:44:43 done k=1 point A2 r1 rc=0
+09:44:43 start k=1 point B r1 load=1.69 2.20 3.56 cc1=0
+09:44:57 done k=1 point B r1 rc=0
+09:44:57 start k=1 point B r2 load=1.63 2.16 3.53 cc1=0
+09:45:11 done k=1 point B r2 rc=0
+09:45:11 start k=1 point A r2 load=1.69 2.16 3.51 cc1=0
+09:45:25 done k=1 point A r2 rc=0
+09:45:25 start k=1 point A2 r2 load=1.54 2.10 3.47 cc1=0
+09:45:39 done k=1 point A2 r2 rc=0
+09:45:39 start k=1 point A2 r3 load=1.43 2.04 3.43 cc1=0
+09:45:53 done k=1 point A2 r3 rc=0
+09:45:53 start k=1 point B r3 load=1.42 2.01 3.40 cc1=0
+09:46:07 done k=1 point B r3 rc=0
+09:46:07 start k=1 point A r3 load=1.47 1.99 3.37 cc1=0
+09:46:21 done k=1 point A r3 rc=0
+09:46:21 start k=1 point A r4 load=1.87 2.06 3.37 cc1=0
+09:46:34 done k=1 point A r4 rc=0
+09:46:34 start k=1 point A2 r4 load=1.97 2.07 3.36 cc1=0
+09:46:48 done k=1 point A2 r4 rc=0
+09:46:48 start k=1 point B r4 load=2.12 2.10 3.34 cc1=0
+09:47:02 done k=1 point B r4 rc=0
+09:47:02 start k=1 point B r5 load=2.11 2.10 3.32 cc1=0
+09:47:16 done k=1 point B r5 rc=0
+09:47:16 start k=1 point A r5 load=2.10 2.09 3.31 cc1=0
+09:47:30 done k=1 point A r5 rc=0
+09:47:30 start k=1 point A2 r5 load=2.07 2.09 3.29 cc1=0
+09:47:44 done k=1 point A2 r5 rc=0
+09:47:44 start k=1 point A2 r6 load=1.92 2.05 3.25 cc1=0
+09:47:58 done k=1 point A2 r6 rc=0
+09:47:58 start k=1 point B r6 load=1.80 2.02 3.22 cc1=0
+09:48:12 done k=1 point B r6 rc=0
+09:48:12 start k=1 point A r6 load=1.77 2.00 3.20 cc1=0
+09:48:26 done k=1 point A r6 rc=0
+09:48:26 start k=1 insert1 A r1 load=1.88 2.02 3.19 cc1=0
+09:48:40 done k=1 insert1 A r1 rc=0
+09:48:40 start k=1 insert1 A2 r1 load=1.70 1.97 3.15 cc1=0
+09:48:54 done k=1 insert1 A2 r1 rc=0
+09:48:54 start k=1 insert1 B r1 load=1.63 1.94 3.12 cc1=0
+09:49:08 done k=1 insert1 B r1 rc=0
+09:49:08 start k=1 insert1 B r2 load=1.50 1.89 3.09 cc1=0
+09:49:22 done k=1 insert1 B r2 rc=0
+09:49:22 start k=1 insert1 A r2 load=1.58 1.89 3.08 cc1=0
+09:49:36 done k=1 insert1 A r2 rc=0
+09:49:36 start k=1 insert1 A2 r2 load=1.68 1.90 3.06 cc1=0
+09:49:50 done k=1 insert1 A2 r2 rc=0
+09:49:50 start k=1 insert1 A2 r3 load=1.69 1.89 3.04 cc1=0
+09:50:04 done k=1 insert1 A2 r3 rc=0
+09:50:04 start k=1 insert1 B r3 load=1.70 1.88 3.01 cc1=0
+09:50:18 done k=1 insert1 B r3 rc=0
+09:50:18 start k=1 insert1 A r3 load=1.78 1.89 3.00 cc1=0
+09:50:32 done k=1 insert1 A r3 rc=0
+09:50:32 start k=1 insert1 A r4 load=2.13 1.96 3.01 cc1=0
+09:50:46 done k=1 insert1 A r4 rc=0
+09:50:46 start k=1 insert1 A2 r4 load=2.39 2.03 3.01 cc1=0
+09:51:00 done k=1 insert1 A2 r4 rc=0
+09:51:00 start k=1 insert1 B r4 load=2.25 2.01 2.99 cc1=0
+09:51:14 done k=1 insert1 B r4 rc=0
+09:51:14 start k=1 insert1 B r5 load=2.06 1.98 2.96 cc1=0
+09:51:28 done k=1 insert1 B r5 rc=0
+09:51:28 start k=1 insert1 A r5 load=2.12 1.99 2.95 cc1=0
+09:51:42 done k=1 insert1 A r5 rc=0
+09:51:42 start k=1 insert1 A2 r5 load=1.95 1.96 2.93 cc1=0
+09:51:56 done k=1 insert1 A2 r5 rc=0
+09:51:56 start k=1 insert1 A2 r6 load=1.97 1.96 2.92 cc1=0
+09:52:10 done k=1 insert1 A2 r6 rc=0
+09:52:10 start k=1 insert1 B r6 load=1.84 1.93 2.89 cc1=0
+09:52:24 done k=1 insert1 B r6 rc=0
+09:52:24 start k=1 insert1 A r6 load=1.74 1.91 2.87 cc1=0
+09:52:38 done k=1 insert1 A r6 rc=0
+09:52:38 start k=1 pkmix A r1 load=1.82 1.91 2.85 cc1=0
+09:52:52 done k=1 pkmix A r1 rc=0
+09:52:52 start k=1 pkmix A2 r1 load=1.85 1.92 2.84 cc1=0
+09:53:06 done k=1 pkmix A2 r1 rc=0
+09:53:06 start k=1 pkmix B r1 load=1.81 1.90 2.82 cc1=0
+09:53:19 done k=1 pkmix B r1 rc=0
+09:53:19 start k=1 pkmix B r2 load=1.64 1.86 2.79 cc1=0
+09:53:33 done k=1 pkmix B r2 rc=0
+09:53:33 start k=1 pkmix A r2 load=1.66 1.85 2.77 cc1=0
+09:53:47 done k=1 pkmix A r2 rc=0
+09:53:47 start k=1 pkmix A2 r2 load=1.52 1.81 2.75 cc1=0
+09:54:01 done k=1 pkmix A2 r2 rc=0
+09:54:01 start k=1 pkmix A2 r3 load=1.52 1.80 2.73 cc1=0
+09:54:15 done k=1 pkmix A2 r3 rc=0
+09:54:15 start k=1 pkmix B r3 load=1.49 1.78 2.71 cc1=0
+09:54:29 done k=1 pkmix B r3 rc=0
+09:54:29 start k=1 pkmix A r3 load=1.46 1.75 2.69 cc1=0
+09:54:43 done k=1 pkmix A r3 rc=0
+09:54:43 start k=1 pkmix A r4 load=1.69 1.79 2.68 cc1=0
+09:54:57 done k=1 pkmix A r4 rc=0
+09:54:57 start k=1 pkmix A2 r4 load=1.81 1.81 2.68 cc1=0
+09:55:11 done k=1 pkmix A2 r4 rc=0
+09:55:11 start k=1 pkmix B r4 load=2.10 1.87 2.68 cc1=0
+09:55:25 done k=1 pkmix B r4 rc=0
+09:55:25 start k=1 pkmix B r5 load=1.94 1.84 2.66 cc1=0
+09:55:39 done k=1 pkmix B r5 rc=0
+09:55:39 start k=1 pkmix A r5 load=1.83 1.82 2.64 cc1=0
+09:55:53 done k=1 pkmix A r5 rc=0
+09:55:53 start k=1 pkmix A2 r5 load=1.73 1.80 2.62 cc1=0
+09:56:06 done k=1 pkmix A2 r5 rc=0
+09:56:06 start k=1 pkmix A2 r6 load=1.77 1.80 2.61 cc1=0
+09:56:20 done k=1 pkmix A2 r6 rc=0
+09:56:20 start k=1 pkmix B r6 load=1.84 1.81 2.60 cc1=0
+09:56:34 done k=1 pkmix B r6 rc=0
+09:56:34 start k=1 pkmix A r6 load=2.10 1.87 2.61 cc1=0
+09:56:48 done k=1 pkmix A r6 rc=0
+09:56:48 Q1b END

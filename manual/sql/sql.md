@@ -710,6 +710,65 @@ Rules:
 - **`ALTER TABLE RENAME COLUMN`** keeps the Transition. It names the column
   by position.
 
+### CREATE VIEW / DROP VIEW (built, DP, v3.2.0)
+
+```sql
+CREATE VIEW open_orders (order_id, customer, amount) AS
+    SELECT id, cid, amount FROM orders WHERE status = 1;
+SELECT order_id, amount FROM open_orders WHERE customer = 7;
+DROP VIEW open_orders;
+```
+
+A view is a named `SELECT`, stored as its text (`docs/spec/view.md`). Its
+name is a relation name: no table and view share one in a namespace, and
+`ns.v` reaches a view in another. `CREATE VIEW` and `DROP VIEW` are `admin`'s,
+and **transactional** - inside `BEGIN`, a `ROLLBACK` takes them back, and no
+other session sees an uncommitted view.
+
+- **Columns.** The column list names them; without one, each is named by
+  its select-list item. Two columns of one name, or an expression with no
+  name, are refused: write a column list.
+- **The body's unqualified names mean the view's namespace**, whoever reads
+  it. A `SELECT *` body is the columns live at the create, stored expanded:
+  a column added to the table later does not appear in the view.
+- **A body is refused at its create** if it does not compile - an unknown
+  column, a relation that does not exist.
+- **No `CREATE OR REPLACE VIEW`**: a view's body never changes. `DROP VIEW`,
+  then `CREATE VIEW` - a new view, with a new oid, so no plan or trail made
+  through the old one applies to it.
+- **Nesting**: a view may read views, eight levels deep.
+
+**How a view is read.** A view whose body is one plain block - one table or
+inner joins, conditions, plain columns - is **absorbed**: the statement runs
+exactly as if its body had been written out in place, so its conditions
+combine with yours, its keys and indexes are used, and `ANALYZE` shows its
+tables as `<table> AS <view>.<binding>`. Any other body (`GROUP BY`,
+`DISTINCT`, `ORDER BY ... LIMIT`, a set operation, a select-list `AS`) is
+read as a derived table: the whole body runs, then your conditions filter
+its rows. `CREATE VIEW` warns when a body is of that kind, and
+`sys.views.absorbable` says which a view is.
+
+A view's base columns are not yours to name: `SELECT amount FROM v` reads
+the view's `amount` and refuses a column the view does not list.
+
+**Plans.** A statement through a view is its own shape, apart from the same
+statement written over the tables. `CREATE PLAN` names a view's tables by
+the view's path - `ORDER (v.o, v.c)` - and an enabled plan made through a
+view must be dropped or disabled before `DROP VIEW`.
+
+**What a view protects.** While a view reads a table, `DROP TABLE`, `ALTER
+TABLE ... RENAME`, renaming or dropping a column the view's text names, and
+adding a column whose name its text writes are refused, naming the view;
+`DROP NAMESPACE` is refused while it holds a view, and `DROP VIEW` while
+another view reads it.
+
+**What names a view.** A `SELECT`, a write's `FROM`, `INSERT ... SELECT`,
+`ANALYZE`, `WAYSTONE ON`, `CREATE PLAN`, `ADVISE PLAN` and `DESCRIBE`.
+`SELECT ... FOR UPDATE` through a view over one table locks that table's
+rows. Nothing writes through a view: `INSERT`, `UPDATE`, `DELETE`, `PURGE`,
+an index, a Cabin, an assertion, a transition or a foreign key naming one
+is refused `NOT_IMPLEMENTED`. There is no materialized view.
+
 ### CREATE CABIN / DROP CABIN (built, CB01-CB11; expressions and predicates since AQ)
 
 ```sql
@@ -2188,8 +2247,9 @@ newline protocol.
 | `SHOW FKEYS` | `SELECT * FROM sys.fkeys` |
 | `SHOW ASSERTIONS` | `SELECT * FROM sys.assertions`, with `enforcing` and the live counters |
 | `SHOW TRANSITIONS` | `SELECT * FROM sys.transitions`, the declaration verbatim |
+| `SHOW VIEWS` | `SELECT * FROM sys.views`: each view's `namespace`, `name`, `absorbable`, `columns`, `reads` (the oids it reads) and `source_text` |
 | `SHOW CABIN_OPTIMIZER` | `SELECT * FROM sys.cabin_optimizer`; refused where the instance runs no controller |
-| `DESCRIBE <t>` (`DESC`) | `SELECT * FROM sys.columns WHERE rel_name = '<t>'`; an unknown name is refused, never answered with no rows |
+| `DESCRIBE <t>` (`DESC`) | `SELECT * FROM sys.columns WHERE rel_name = '<t>'`; an unknown name is refused, never answered with no rows; a view's columns are named as the view names them and typed as its body returns them |
 | `PING` | `PONG` |
 | `SYNC` | forces log + store durability: `OK synced` |
 | `STOP` | answers `OK bye` and shuts the whole server down; admin's, and over KWP an ordinary statement (`docs/spec/client-manual.md`) |
@@ -2347,7 +2407,8 @@ worth anything:
 
 - **`ERR NOT_IMPLEMENTED retryable=0 …`** — the design admits this form and
   this release has not built it. Feature-detect and try again against a later
-  server. Most of this section is this one: CTEs,
+  server. Most of this section is this one: CTEs, a write through a view,
+  `CREATE OR REPLACE VIEW`, a materialized view,
   `ALTER TABLE`'s row-rewriting forms (a type change, an `ADD` with no free slot), a
   value wider than one var-heap page.
 - **`ERR UNSUPPORTED retryable=0 …`** — this engine's architecture cannot

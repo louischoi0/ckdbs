@@ -4,6 +4,7 @@
 #include "kds/parser/fingerprint.hpp"
 
 #include <algorithm>
+#include <tuple>
 #include <array>
 #include <cctype>
 #include <limits>
@@ -36,7 +37,7 @@ namespace kds::catalog {
 // map hands out, and no two share one (well_known.hpp).
 static_assert(CatalogRootsAreDistinctAndFixed(server::kFirstUserPageId),
               "every fixed catalog root must be unique and sit below the first user page; "
-              "add a new root past the highest, in the unused ids 19..127");
+              "add a new root past the highest, in the unused ids 20..127");
 
 namespace {
 
@@ -613,6 +614,9 @@ void Catalog::InitWellKnownObjects() {
     // until 2026-08-13; once the oid moved off 22 it would otherwise name
     // nothing at all.
     register_type(kTypeDroppedTable, "type_dropped_table");
+    // A view and its tombstone (DP-Q3), registered as the dropped table is.
+    register_type(kTypeView, "type_view");
+    register_type(kTypeDroppedView, "type_dropped_view");
 
     register_type(kTypeInt8, "type_int8");
     register_type(kTypeInt16, "type_int16");
@@ -717,6 +721,9 @@ Status Catalog::Bootstrap() {
         // sys.statistics (CY-S1): a page and its two catalog rows, and
         // unlogged (CR6).
         {kSysStatisticsTable, "statistics", kCatalogPageStatistics},
+        // sys.views (DP-S1): sys.fkeys' shape - a page, its two catalog rows,
+        // and a `next_id` its rows' `row_id`s are issued from.
+        {kSysViewsTable, "views", kCatalogPageViews},
     };
 
     // Phase 1: allocate the fixed catalog heap pages. min_key=0: catalog
@@ -1674,9 +1681,11 @@ Status CheckObjects(storage::PageStore& store, const txn::TransactionManager* tx
 
 Status Catalog::CheckNameFree(std::string_view name, Oid live_type, Oid namespace_oid,
                               std::uint64_t own_trx_id, bool own_drop_frees) {
-    const bool table = live_type == kTypeTable;
+    // **A view shares a namespace's one relation name space** (NS6, DP-Q3):
+    // asked for either, the check counts a table and a view, live or an
+    // undecided tombstone, as the name taken.
+    const bool table = live_type == kTypeTable || live_type == kTypeView;
     const std::string_view kind = table ? "relation" : "namespace";
-    const Oid dropped_type = table ? kTypeDroppedTable : kTypeDroppedNamespace;
     // Each row of the name read by its type and its stamp (`CheckObjects`):
     // a live row is taken, whoever wrote it and whether or not it has
     // committed (the unfiltered duplicate check); a tombstone still
@@ -1689,12 +1698,15 @@ Status Catalog::CheckNameFree(std::string_view name, Oid live_type, Oid namespac
                                                       Stamp whose) -> Status {
         if (NameView(row.name) != name) return Status::OK();
         if (table && row.namespace_oid != namespace_oid) return Status::OK();
-        if (row.type_oid == live_type) {
+        if (table ? IsLiveRelationName(row.type_oid) : row.type_oid == live_type) {
+            const std::string_view what = row.type_oid == kTypeView ? "view" : kind;
             return Status::AlreadyExists(
-                "a " + std::string(kind) + " named '" + std::string(name) + "' already exists" +
+                "a " + std::string(what) + " named '" + std::string(name) + "' already exists" +
                 (table ? " in namespace '" + NamespaceSpelling(namespace_oid) + "'" : ""));
         }
-        if (row.type_oid != dropped_type || whose == Stamp::kDecided) return Status::OK();
+        const bool tombstone = table ? IsDroppedRelationName(row.type_oid)
+                                     : row.type_oid == kTypeDroppedNamespace;
+        if (!tombstone || whose == Stamp::kDecided) return Status::OK();
         if (whose == Stamp::kOther) return PendingDropRefusal(kind, name);
         if (own_drop_frees) return Status::OK();
         // Not retryable: the only transaction it waits on is the asker's own.
@@ -1751,12 +1763,14 @@ Status Catalog::CheckNamespaceEmpty(Oid namespace_oid, std::uint64_t own_trx_id)
     return CheckObjects(store_, txn_, own_trx_id, [&](const SysObjectRow& row,
                                                       Stamp whose) -> Status {
         if (row.namespace_oid != namespace_oid) return Status::OK();
-        const bool live = row.type_oid == kTypeTable;
-        if (!live && !(row.type_oid == kTypeDroppedTable && whose != Stamp::kDecided)) {
+        // A view is a member as a table is (DP-S0's census).
+        const bool live = IsLiveRelationName(row.type_oid);
+        if (!live && !(IsDroppedRelationName(row.type_oid) && whose != Stamp::kDecided)) {
             return Status::OK();
         }
+        const bool is_view = row.type_oid == kTypeView || row.type_oid == kTypeDroppedView;
         const std::string still = "namespace oid " + std::to_string(namespace_oid) +
-                                  " cannot be dropped: relation '" +
+                                  " cannot be dropped: " + (is_view ? "view '" : "relation '") +
                                   std::string(NameView(row.name)) + "' is still in it";
         // Another transaction's drop is retryable; the asker's own is not,
         // and was refused before AT-S17b too - commit it first.
@@ -2247,6 +2261,16 @@ StatusOr<Oid> Catalog::ResolveRelation(std::string_view qualifier, std::string_v
     std::string where;
     std::string example;
     for (const SysObjectRow& row : rows.value()) {
+        // **A view's name is not a relation here** (DP-Q9): a view has no
+        // rows, so no write, DDL target or foreign key's parent is one. A
+        // `SELECT` absorbs or derives a view before it binds
+        // (`exec/view_absorb.hpp`, the query layer), so only a statement
+        // that names a view where a relation must stand meets this.
+        if (row.type_oid == kTypeView && row.namespace_oid == ns && NameView(row.name) == name) {
+            return at(Status::NotImplemented(
+                "'" + written + "' is a view: a view is read in a SELECT's FROM, and no other "
+                "statement names one where a relation stands"));
+        }
         if (row.type_oid != kTypeTable || row.namespace_oid == ns || NameView(row.name) != name) {
             continue;
         }
@@ -2396,6 +2420,79 @@ Status Catalog::DropNamespace(Oid namespace_oid, std::uint64_t trx_id,
     return Status::OK();
 }
 
+// One loop shape for every row type a drop takes with its object (DT3's
+// "dependents out"): each row `matches` accepts is delete-marked under
+// `trx_id`, its change appended to `written` for the rollback - or, at the
+// bootstrap id, retired outright (`DropTable`'s note). Loops `ForFirstRow`
+// until nothing matches, because an object owns many rows.
+template <typename RowT, typename Matches>
+Status Catalog::MarkOwnedRows(PageId root, Matches matches, std::uint64_t trx_id,
+                              std::vector<CatalogRowChange>* written) {
+    const bool transactional = trx_id != kBootstrapXid;
+    for (;;) {
+        PageId acted_page = kInvalidPageId;
+        CatalogRowChange marked;
+        auto acted = ForFirstRow<RowT>(
+            store_, root,
+            [&](RowT& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+                const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+                if (!matches(row)) return false;
+                // **Already marked is already done.** The sweep loops
+                // until nothing matches, and a retired slot stops
+                // matching because it is gone - a delete-marked one
+                // does not. Without this the loop never terminates.
+                if (tuple.deleted) return false;
+                if (!transactional) {
+                    if (Status s = RetireLogged(wal_, store_, page, page_id, i, trx_id);
+                        !s.ok()) {
+                        return s;
+                    }
+                    return true;
+                }
+                // Delete-marked, not retired: a retired slot has no
+                // compensation that puts it back, and `ScanAll` now
+                // knows how to read a mark (DT5). The row's bytes stay
+                // where they are, which is what a rollback needs; the
+                // mark is retired later by the catalog's own purge once
+                // every reader has settled (`PurgeSettledDeleteMarks`).
+                if (ddl_undo_hook_) {
+                    if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id,
+                                                   i, {}, tuple.trx_id, tuple.undo_ptr,
+                                                   UndoTupleKeyOf(tuple.payload)});
+                        !s.ok()) {
+                        return s;
+                    }
+                }
+                if (Status s = DeleteMarkLogged(wal_, store_, page, page_id, i, trx_id);
+                    !s.ok()) {
+                    return s;
+                }
+                NoteMark();
+                CatalogRowChange change;
+                change.slot = i;
+                // The identity `Compensate` will re-read before it
+                // clears the mark, taken the way that check takes it -
+                // not from a `.oid` member, which not every catalog row
+                // has.
+                if (auto id = KeystoneIdOfPayload(tuple.payload); id.ok()) {
+                    change.oid = static_cast<Oid>(id.value());
+                }
+                change.prior_trx_id = tuple.trx_id;
+                change.prior_undo_ptr = tuple.undo_ptr;
+                change.deleted = true;
+                marked = std::move(change);
+                return true;
+            },
+            &acted_page);
+        if (!acted.ok()) return acted.status();
+        if (!acted.value()) return Status::OK();
+        if (transactional) {
+            marked.page_id = acted_page;
+            if (written != nullptr) written->push_back(marked);
+        }
+    }
+}
+
 Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cabins,
                           std::uint64_t trx_id, std::vector<CatalogRowChange>* written,
                           PendingRoots* owed_out) {
@@ -2451,72 +2548,10 @@ Status Catalog::DropTable(Oid table_oid, std::vector<std::uint64_t>& dropped_cab
     //    catalog reads have no snapshot to filter a mark against. Each
     //    sweep loops ForFirstRow until nothing matches, because a relation
     //    owns many columns and may own several indexes and cabins.
-    // One loop shape, four row types: the tag parameter names the type and
-    // the predicate is the one line that differs per sweep.
+    // `MarkOwnedRows` for five row types: the tag names the type and the
+    // predicate is the one line that differs per sweep.
     const auto sweep = [&](auto row_tag, PageId root, auto matches) -> Status {
-        using RowT = decltype(row_tag);
-        for (;;) {
-            PageId acted_page = kInvalidPageId;
-            CatalogRowChange marked;
-            auto acted = ForFirstRow<RowT>(
-                store_, root,
-                [&](RowT& row, heap::PageView& page, PageId page_id, std::uint16_t i,
-                    const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
-                    if (!matches(row)) return false;
-                    // **Already marked is already done.** The sweep loops
-                    // until nothing matches, and a retired slot stops
-                    // matching because it is gone - a delete-marked one
-                    // does not. Without this the loop never terminates.
-                    if (tuple.deleted) return false;
-                    if (!transactional) {
-                        if (Status s = RetireLogged(wal_, store_, page, page_id, i, trx_id);
-                            !s.ok()) {
-                            return s;
-                        }
-                        return true;
-                    }
-                    // Delete-marked, not retired: a retired slot has no
-                    // compensation that puts it back, and `ScanAll` now
-                    // knows how to read a mark (DT5). The row's bytes stay
-                    // where they are, which is what a rollback needs; the
-                    // mark is retired later by the catalog's own purge once
-                    // every reader has settled (`PurgeSettledDeleteMarks`).
-                    if (ddl_undo_hook_) {
-                        if (Status s = ddl_undo_hook_({DdlUndoEvent::Kind::kDeleteMark, page_id,
-                                                       i, {}, tuple.trx_id, tuple.undo_ptr,
-                                                       UndoTupleKeyOf(tuple.payload)});
-                            !s.ok()) {
-                            return s;
-                        }
-                    }
-                    if (Status s = DeleteMarkLogged(wal_, store_, page, page_id, i, trx_id);
-                        !s.ok()) {
-                        return s;
-                    }
-                    NoteMark();
-                    CatalogRowChange change;
-                    change.slot = i;
-                    // The identity `Compensate` will re-read before it
-                    // clears the mark, taken the way that check takes it -
-                    // not from a `.oid` member, which not every catalog row
-                    // has.
-                    if (auto id = KeystoneIdOfPayload(tuple.payload); id.ok()) {
-                        change.oid = static_cast<Oid>(id.value());
-                    }
-                    change.prior_trx_id = tuple.trx_id;
-                    change.prior_undo_ptr = tuple.undo_ptr;
-                    change.deleted = true;
-                    marked = std::move(change);
-                    return true;
-                },
-                &acted_page);
-            if (!acted.ok()) return acted.status();
-            if (!acted.value()) return Status::OK();
-            if (transactional) {
-                marked.page_id = acted_page;
-                note(marked);
-            }
-        }
+        return MarkOwnedRows<decltype(row_tag)>(root, matches, trx_id, written);
     };
 
     if (Status s = sweep(SysTableRow{}, kCatalogPageTables,
@@ -3850,6 +3885,318 @@ StatusOr<std::optional<SysFkeyRow>> Catalog::FindForeignKeyOnColumn(
         }
     }
     return std::optional<SysFkeyRow>();
+}
+
+// ---- Views (instructions/v3.2.0/workorder-dp-view.md) ---------------------
+
+namespace {
+
+// A view's rows, assembled: `objects` names each live view (a `kTypeView`
+// row the reader sees) and `rows` carries every sys.views row the reader
+// sees. **Under a read view** (`filtered`) a view without its whole set of
+// rows is refused `Corruption`: `CreateView` writes them all with the name
+// under one transaction, so such a reader sees all or none. **An unfiltered
+// read is two scans of rows another core may be writing** - a `CREATE VIEW`
+// between its name and its last row, a drop or a rollback between the two
+// scans - so there an incomplete view is one in flight and is skipped; no
+// RESTRICT loses by it, since a create holds `IS` on what it reads until its
+// decide and the `X` a dependency's DDL holds keeps one from being written.
+StatusOr<std::vector<ViewDef>> AssembleViews(const std::vector<SysObjectRow>& objects,
+                                             std::vector<SysViewRow> rows, bool filtered) {
+    std::sort(rows.begin(), rows.end(), [](const SysViewRow& a, const SysViewRow& b) {
+        return std::tie(a.view_oid, a.kind, a.seq) < std::tie(b.view_oid, b.kind, b.seq);
+    });
+    std::vector<ViewDef> out;
+    for (const SysObjectRow& object : objects) {
+        if (object.type_oid != kTypeView) continue;
+        ViewDef def;
+        def.oid = object.oid;
+        def.namespace_oid = object.namespace_oid;
+        def.name = std::string(NameView(object.name));
+        bool header = false;
+        std::size_t column_count = 0;
+        const auto first = std::lower_bound(
+            rows.begin(), rows.end(), object.oid,
+            [](const SysViewRow& r, Oid oid) { return r.view_oid < oid; });
+        for (auto it = first; it != rows.end() && it->view_oid == object.oid; ++it) {
+            switch (it->kind) {
+                case kViewRowHeader:
+                    header = true;
+                    def.absorbable = (it->flags & kViewAbsorbable) != 0;
+                    def.star_width = (it->flags & kViewStarWidth) != 0;
+                    column_count = it->seq;
+                    break;
+                case kViewRowText:
+                    def.text.append(it->text());
+                    break;
+                case kViewRowColumn:
+                    def.columns.emplace_back(it->text());
+                    break;
+                case kViewRowDependency:
+                    def.dependencies.push_back(ViewDef::Dependency{it->ref_oid, it->ref_column});
+                    break;
+                default:
+                    return Status::Corruption("sys.views row " + std::to_string(it->row_id) +
+                                              " has kind " + std::to_string(it->kind));
+            }
+        }
+        if (!header || def.columns.size() != column_count || def.text.empty()) {
+            if (!filtered) continue;
+            return Status::Corruption("view '" + def.name + "' (oid " +
+                                      std::to_string(def.oid) +
+                                      ") has no whole set of sys.views rows");
+        }
+        out.push_back(std::move(def));
+    }
+    return out;
+}
+
+}  // namespace
+
+bool Catalog::AnyView() {
+    std::atomic<std::uint8_t>& word = ViewsSeenWord();
+    std::uint8_t seen = word.load(std::memory_order_acquire);
+    if (seen != 0) return seen == 2;
+    // The probe, once an instance: any view row, live or a tombstone, ever
+    // written to the volume. A failed scan answers "one exists", which only
+    // costs the lookups the word saves.
+    auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, nullptr, txn_);
+    const bool any =
+        !rows.ok() || std::any_of(rows.value().begin(), rows.value().end(),
+                                  [](const SysObjectRow& r) {
+                                      return r.type_oid == kTypeView ||
+                                             r.type_oid == kTypeDroppedView;
+                                  });
+    std::uint8_t expected = 0;
+    word.compare_exchange_strong(expected, any ? 2 : 1, std::memory_order_acq_rel,
+                                 std::memory_order_acquire);
+    return word.load(std::memory_order_acquire) == 2;
+}
+
+StatusOr<Oid> Catalog::CreateView(Oid namespace_oid, std::string_view name, const ViewDef& def,
+                                  std::uint64_t trx_id, std::vector<CatalogRowRef>* written) {
+    if (Status s = CheckNameFits("view", name); !s.ok()) return s;
+    if (IsSystemNamespace(namespace_oid)) {
+        return Status::InvalidArgument("catalog: a view cannot be created in namespace 'sys'");
+    }
+    if (def.text.empty() || def.text.size() > kMaxViewTextBytes) {
+        return Status::InvalidArgument("catalog: a view's text is 1 to " +
+                                       std::to_string(kMaxViewTextBytes) + " bytes");
+    }
+    if (def.columns.empty() || def.columns.size() > 0xFFFF) {
+        return Status::InvalidArgument("catalog: a view has 1 to 65535 columns");
+    }
+    if (def.dependencies.size() > 0xFFFF) {
+        return Status::InvalidArgument("catalog: a view has at most 65535 dependencies");
+    }
+    for (const std::string& column : def.columns) {
+        if (Status s = CheckNameFits("view column", column); !s.ok()) return s;
+    }
+    auto noted = [written](const CatalogRowRef& ref) {
+        if (written != nullptr) written->push_back(ref);
+    };
+
+    auto generated_oid = GenerateUserOid();
+    if (!generated_oid.ok()) return generated_oid.status();
+    const Oid new_oid = generated_oid.value();
+
+    // Before the name is written, so no reader can resolve the view while
+    // the word still says none exists (DP-Q18).
+    ViewsSeenWord().store(2, std::memory_order_release);
+
+    {
+        // CT7, `CreateTable`'s hold: the name checked and taken under page
+        // 6, and the namespace asked live there.
+        auto names = store_.Get(kCatalogPageObjects);
+        if (!names.ok()) return names.status();
+        if (Status s = CheckNameFree(name, kTypeView, namespace_oid, trx_id,
+                                     /*own_drop_frees=*/true);
+            !s.ok()) {
+            return s;
+        }
+        if (Status s = CheckNamespaceLive(namespace_oid, trx_id); !s.ok()) return s;
+        CatalogRowRef ref;
+        if (Status s = InsertObjectRow(new_oid, namespace_oid, kTypeView, name, trx_id, &ref);
+            !s.ok()) {
+            return s;
+        }
+        ref.oid = new_oid;
+        noted(ref);
+    }
+
+    // The rows, each under the transaction (DP-Q14). The identity a
+    // rollback re-reads is set on a failure too, `CreateForeignKey`'s rule.
+    const auto place = [&](SysViewRow row) -> Status {
+        auto row_id = AllocateRowId(kSysViewsTable);
+        if (!row_id.ok()) return row_id.status();
+        row.row_id = row_id.value();
+        row.view_oid = new_oid;
+        CatalogRowRef ref;
+        const Status inserted =
+            InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageViews, row, trx_id, &ref);
+        ref.oid = row.row_id;
+        ref.rel_oid = kSysViewsTable;
+        noted(ref);
+        return inserted;
+    };
+    const auto chars = [](SysViewRow& row, std::string_view bytes) {
+        row.len = static_cast<std::uint16_t>(bytes.size());
+        std::copy(bytes.begin(), bytes.end(), row.bytes.begin());
+    };
+
+    SysViewRow header{};
+    header.kind = kViewRowHeader;
+    header.flags = static_cast<std::uint8_t>((def.absorbable ? kViewAbsorbable : 0) |
+                                             (def.star_width ? kViewStarWidth : 0));
+    header.seq = static_cast<std::uint16_t>(def.columns.size());
+    if (Status s = place(header); !s.ok()) return s;
+    std::uint16_t seq = 0;
+    for (std::size_t at = 0; at < def.text.size(); at += kViewChunkBytes, ++seq) {
+        SysViewRow row{};
+        row.kind = kViewRowText;
+        row.seq = seq;
+        chars(row, std::string_view(def.text).substr(at, kViewChunkBytes));
+        if (Status s = place(row); !s.ok()) return s;
+    }
+    seq = 0;
+    for (const std::string& column : def.columns) {
+        SysViewRow row{};
+        row.kind = kViewRowColumn;
+        row.seq = seq++;
+        chars(row, column);
+        if (Status s = place(row); !s.ok()) return s;
+    }
+    seq = 0;
+    for (const ViewDef::Dependency& dep : def.dependencies) {
+        SysViewRow row{};
+        row.kind = kViewRowDependency;
+        row.seq = seq++;
+        row.ref_oid = dep.oid;
+        row.ref_column = dep.column;
+        if (Status s = place(row); !s.ok()) return s;
+    }
+
+    BumpVersion("create view");
+    return new_oid;
+}
+
+Status Catalog::DropView(Oid view_oid, std::uint64_t trx_id,
+                         std::vector<CatalogRowChange>* written) {
+    {
+        // The retype under page 6, `DropNamespace`'s: the tombstone keeps
+        // the oid from being reissued (DT2, DP-R3) and frees the name.
+        auto names = store_.Get(kCatalogPageObjects);
+        if (!names.ok()) return names.status();
+        CatalogRowChange retype_change;
+        auto retyped = ForFirstRow<SysObjectRow>(
+            store_, kCatalogPageObjects,
+            [&](SysObjectRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
+                const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
+                if (row.type_oid != kTypeView || row.oid != view_oid) return false;
+                const auto before = row.Encode();
+                row.type_oid = kTypeDroppedView;
+                auto overwritten = OverwriteForDdl(ddl_undo_hook_, wal_, store_, page, page_id,
+                                                   i, tuple, kSysObjectsTable, row.oid, before,
+                                                   row.Encode(), trx_id);
+                if (!overwritten.ok()) return overwritten.status();
+                retype_change = std::move(overwritten.value());
+                return true;
+            });
+        if (!retyped.ok()) return retyped.status();
+        if (!retyped.value()) return Status::NotFound("no sys.objects row for this view");
+        if (trx_id != kBootstrapXid && written != nullptr) written->push_back(retype_change);
+    }
+    if (Status s = MarkOwnedRows<SysViewRow>(
+            kCatalogPageViews, [view_oid](const SysViewRow& r) { return r.view_oid == view_oid; },
+            trx_id, written);
+        !s.ok()) {
+        return s;
+    }
+    BumpVersion("drop view");
+    return Status::OK();
+}
+
+StatusOr<std::optional<Oid>> Catalog::ResolveView(std::string_view qualifier,
+                                                  std::string_view name, Oid default_namespace,
+                                                  const txn::ReadView* view) {
+    if (!AnyView()) return std::optional<Oid>();
+    Oid ns = default_namespace;
+    if (!qualifier.empty()) {
+        auto named = FindNamespaceOidByName(qualifier, view);
+        if (!named.ok()) {
+            if (named.status().code() == StatusCode::kNotFound) return std::optional<Oid>();
+            return named.status();
+        }
+        ns = named.value();
+    }
+    if (ns == kNamespaceSys) return std::optional<Oid>();
+
+    // The names, whole: from the cache with no view, else this reader's
+    // (DT3, `FindTableOidByName`'s rule).
+    CatalogCache::ViewNames scanned;
+    const CatalogCache::ViewNames* names = view == nullptr ? cache_.FindViewNames() : nullptr;
+    if (names == nullptr) {
+        auto rows = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
+        if (!rows.ok()) return rows.status();
+        for (const SysObjectRow& row : rows.value()) {
+            if (row.type_oid == kTypeView) {
+                scanned[row.namespace_oid].emplace(std::string(NameView(row.name)), row.oid);
+            }
+        }
+        names = view == nullptr ? cache_.PutViewNames(std::move(scanned)) : &scanned;
+    }
+    const auto in_ns = names->find(ns);
+    if (in_ns == names->end()) return std::optional<Oid>();
+    const auto found = in_ns->second.find(std::string(name));
+    if (found == in_ns->second.end()) return std::optional<Oid>();
+    return std::optional<Oid>(found->second);
+}
+
+StatusOr<ViewDef> Catalog::GetView(Oid view_oid, const txn::ReadView* view) {
+    if (view == nullptr) {
+        if (const ViewDef* cached = cache_.FindViewDef(view_oid); cached != nullptr) {
+            return *cached;
+        }
+    }
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
+    if (!objects.ok()) return objects.status();
+    std::vector<SysObjectRow> one;
+    for (const SysObjectRow& row : objects.value()) {
+        if (row.type_oid == kTypeView && row.oid == view_oid) one.push_back(row);
+    }
+    if (one.empty()) return Status::NotFound("no view with oid " + std::to_string(view_oid));
+    auto rows = ScanAll<SysViewRow>(store_, kCatalogPageViews, view, txn_);
+    if (!rows.ok()) return rows.status();
+    auto defs = AssembleViews(one, std::move(rows.value()), view != nullptr);
+    if (!defs.ok()) return defs.status();
+    if (defs.value().empty()) {
+        return Status::NotFound("view oid " + std::to_string(view_oid) + " is being written");
+    }
+    if (view == nullptr) cache_.PutViewDef(defs.value().front());
+    return std::move(defs.value().front());
+}
+
+StatusOr<std::vector<ViewDef>> Catalog::ListViews(const txn::ReadView* view) {
+    auto objects = ScanAll<SysObjectRow>(store_, kCatalogPageObjects, view, txn_);
+    if (!objects.ok()) return objects.status();
+    auto rows = ScanAll<SysViewRow>(store_, kCatalogPageViews, view, txn_);
+    if (!rows.ok()) return rows.status();
+    return AssembleViews(objects.value(), std::move(rows.value()), view != nullptr);
+}
+
+StatusOr<std::vector<ViewDef>> Catalog::ViewsReading(Oid rel_oid) {
+    if (!AnyView()) return std::vector<ViewDef>();
+    auto all = ListViews(nullptr);
+    if (!all.ok()) return all.status();
+    std::vector<ViewDef> out;
+    for (ViewDef& def : all.value()) {
+        const bool reads = std::any_of(def.dependencies.begin(), def.dependencies.end(),
+                                       [rel_oid](const ViewDef::Dependency& d) {
+                                           return d.oid == rel_oid;
+                                       });
+        if (reads) out.push_back(std::move(def));
+    }
+    return out;
 }
 
 StatusOr<bool> Catalog::DiscardUnloggedChain(

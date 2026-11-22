@@ -66,6 +66,7 @@
 #include "kds/exec/purge_key.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_compiler.hpp"
+#include "kds/exec/view_absorb.hpp"
 #include "kds/exec/step_vm.hpp"
 #include "kds/exec/tuple_verify.hpp"
 #include "kds/wal/log_page_init.hpp"
@@ -1887,6 +1888,22 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "NAMESPACE")) {
             return HandleNamespace(Trim(line), session);
         }
+        if (IEquals(sub, "VIEW")) {
+            return HandleView(Trim(line), session);
+        }
+        // DP-Q6 (a) and §6: a view's body never changes under its oid, and no
+        // view stores rows. Refused at the word, which is the statement's
+        // second.
+        if (IEquals(sub, "OR") || IEquals(sub, "MATERIALIZED")) {
+            const std::string_view head = Trim(line);
+            const std::size_t byte = static_cast<std::size_t>(sub.data() - head.data());
+            return Refused(Status::NotImplemented(
+                std::string(IEquals(sub, "OR")
+                                ? "CREATE OR REPLACE is not supported: a view's body never "
+                                  "changes under its oid - DROP VIEW, then CREATE VIEW"
+                                : "a materialized view is not supported") +
+                " (byte " + std::to_string(byte) + ")"));
+        }
         if (IEquals(sub, "TABLE")) {
             // Disambiguate the bare-name form ("CREATE TABLE foo")
             // from the SQL form ("CREATE TABLE foo (col type, ...)"): the
@@ -1944,10 +1961,13 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         if (IEquals(sub, "NAMESPACE")) {
             return HandleNamespace(Trim(line), session);
         }
+        if (IEquals(sub, "VIEW")) {
+            return HandleView(Trim(line), session);
+        }
         if (IEquals(sub, "TABLE")) {
             return HandleDropTable(Trim(line), session);
         }
-        return {"ERR only DROP TABLE, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP "
+        return {"ERR only DROP TABLE, DROP VIEW, DROP NAMESPACE, DROP CABIN, DROP INDEX, DROP "
                 "ASSERTION, DROP TRANSITION and DROP PLAN are supported",
                 false};
     }
@@ -4731,6 +4751,28 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                     "ASSERTION, rename, then re-declare it",
                 false};
     }
+    // DP-Q16, AL4's argument for a view: its text names the relation and
+    // the columns it reads by their current names. A renamed column is
+    // refused when a view names the old name or the new one.
+    {
+        std::optional<std::uint16_t> column;
+        if (rename_column) {
+            auto access = catalog_.InitTableAccess(oid.value());
+            if (!access.ok()) return Refused(access.status());
+            auto old = access.value()->schema.FindColumn(stmt.old_column,
+                                                         stmt.old_column_byte_offset);
+            if (!old.ok()) return Refused(old.status());
+            if (old.value() != nullptr) column = static_cast<std::uint16_t>(old.value()->pos);
+        }
+        auto viewed = ViewDependant(oid.value(), column,
+                                    rename_column ? std::string_view(stmt.new_name) : "");
+        if (!viewed.ok()) return Refused(viewed.status());
+        if (viewed.value().has_value()) {
+            return Refused(Status::InvalidArgument(
+                std::string(rename_column ? "the column" : "the relation") +
+                " cannot be renamed: " + *viewed.value()));
+        }
+    }
 
     const Status renamed =
         rename_column
@@ -4800,6 +4842,9 @@ StatusOr<std::optional<std::string>> CommandDispatcher::DropColumnRestriction(
     // it (AL4's argument: a constraint is not allowed to die quietly).
     auto named = PositionDependant(oid, pos);
     if (!named.ok() || named.value().has_value()) return named;
+    // A view naming it (DP-Q16): its text would name a column that is gone.
+    auto viewed = ViewDependant(oid, pos, "");
+    if (!viewed.ok() || viewed.value().has_value()) return viewed;
     // AL4's predicate, by relation: an assertion's canon is its source
     // text, and a coarser refusal is never wrong.
     auto assertions = exec::AssertionsOnRelation(catalog_, page_store_, oid);
@@ -4997,6 +5042,14 @@ DispatchOutcome CommandDispatcher::HandleAddColumn(const parser::AlterStmt& stmt
             return refused(Status::InvalidArgument("position " + std::to_string(pos.value()) +
                                                    " is still named: " + *dependant.value()));
         }
+        // DP-Q16: a view whose body names the new column's name, which the
+        // column could capture from a name the body resolves elsewhere today.
+        auto viewed = ViewDependant(oid.value(), std::nullopt, col.name);
+        if (!viewed.ok()) return refused(viewed.status());
+        if (viewed.value().has_value()) {
+            return refused(Status::InvalidArgument("a column named '" + col.name +
+                                                   "' cannot be added: " + *viewed.value()));
+        }
 
         DdlScope ddl = DdlScopeFor(scope);
         catalog::CatalogRowRef created;
@@ -5135,6 +5188,15 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         // allocated pages; once a drop's pages are reclaimed within the run,
         // a cached parent could be descended into reused ones.
         const auto restricted = [&]() -> std::optional<DispatchOutcome> {
+            // A view reading it (DP-S1): its text would name a relation
+            // that is gone.
+            auto viewed = ViewDependant(oid.value(), std::nullopt, "");
+            if (!viewed.ok()) return Refused(viewed.status());
+            if (viewed.value().has_value()) {
+                return DispatchOutcome{"ERR relation '" + stmt.table_name +
+                                           "' cannot be dropped: " + *viewed.value(),
+                                       false};
+            }
             auto fkeys = catalog_.ListForeignKeys();
             if (!fkeys.ok()) {
                 return Refused(fkeys.status());
@@ -5168,33 +5230,10 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
             // in force for none and the drop protects nothing by waiting for
             // it. Read off the rows, and only once the table says some
             // enabled plan names the relation.
-            if (admin_plans_->EnabledNaming(oid.value()).has_value()) {
-                auto plans = exec::ListPlans(catalog_, page_store_);
-                if (!plans.ok()) return Refused(plans.status());
-                auto tables = catalog_.ListTables(nullptr);
-                if (!tables.ok()) return Refused(tables.status());
-                for (const exec::PlanRow& plan : plans.value()) {
-                    if (plan.captured || !plan.readable || !plan.enabled ||
-                        !plan.key.Names(oid.value())) {
-                        continue;
-                    }
-                    // The newest row of a name is the plan (`LoadPlans`): an
-                    // `ALTER PLAN` whose delete of the old row failed leaves
-                    // it beside the new one, and it speaks for nothing.
-                    const bool superseded = std::any_of(
-                        plans.value().begin(), plans.value().end(),
-                        [&](const exec::PlanRow& other) {
-                            return !other.captured && other.id > plan.id &&
-                                   exec::SameName(other.name, plan.name);
-                        });
-                    if (superseded || !exec::PlanRowCanMatch(catalog_, plan, tables.value())) {
-                        continue;
-                    }
-                    return DispatchOutcome{"ERR plan '" + plan.name +
-                                               "' names this relation; DROP PLAN or ALTER PLAN " +
-                                               plan.name + " DISABLE first",
-                                           false};
-                }
+            auto planned = EnabledPlanNaming(oid.value(), "relation");
+            if (!planned.ok()) return Refused(planned.status());
+            if (planned.value().has_value()) {
+                return DispatchOutcome{"ERR " + *planned.value(), false};
             }
             // CN-4 T7 as revised in BV-S2: a Transition goes with its
             // relation - but its row commits at its own statement and a drop
@@ -5259,10 +5298,7 @@ DispatchOutcome CommandDispatcher::HandleDropTable(std::string_view line,
         if (scope.txn != nullptr) {
             owed_drops_.push_back(OwedDrop{scope.txn->id(), oid.value(), owed});
         } else {
-            captured_plans_->ForgetRelation(oid.value());
-            admin_plans_->ForgetRelation(oid.value());
-            ForgetRelationStatistics(oid.value());
-            EndOptInsNaming(oid.value());
+            ForgetDropped(oid.value());
         }
         // The catalog rows are gone and the compiler stops emitting probes;
         // the in-memory sets would only leak, so they are forgotten, not
@@ -9654,19 +9690,11 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
             continue;
         }
         if (committed_lsn != wal::kNoLsn) {
-            if (reclaim_queue_ != nullptr) {
+            if (reclaim_queue_ != nullptr && !owed->view) {
                 reclaim_queue_->EnqueueCommittedDrop(owed->oid, owed->roots, committed_lsn,
                                                      catalog_.schema_word_now());
             }
-            // CX-Q24: the dropped relation's captured plans can match
-            // nothing again; forgotten here and their rows removed by the
-            // persisting task (`exec/plan_catalog.hpp`).
-            captured_plans_->ForgetRelation(owed->oid);
-            // And a disabled administrator's plan naming it: forgotten in
-            // the table, its row kept (`exec/plan_catalog.hpp`).
-            admin_plans_->ForgetRelation(owed->oid);
-            ForgetRelationStatistics(owed->oid);
-            EndOptInsNaming(owed->oid);
+            ForgetDropped(owed->oid);
         }
         owed = owed_drops_.erase(owed);
     }
@@ -9867,7 +9895,7 @@ DispatchOutcome CommandDispatcher::HandleShow(std::string_view line, std::string
         {"FKEYS", "fkeys"},         {"ASSERTIONS", "assertions"},
         {"CABIN_OPTIMIZER", "cabin_optimizer"},
         {"PAGE", "page_slots"},     {"TRANSITIONS", "transitions"},
-        {"PLANS", "plans"}};
+        {"PLANS", "plans"},         {"VIEWS", "views"}};
 
     std::string_view view;
     // `DESCRIBE <t>` / `DESC <t>`: the target is the statement's own verb,
@@ -10613,6 +10641,20 @@ DispatchOutcome CommandDispatcher::HandleLockingRead(const parser::SelectStmt& s
             "statement's ends with the statement; BEGIN first"));
     }
 
+    // ---- Through a view (DP-Q10) -----------------------------------------
+    //
+    // The views it names absorbed first, and the shape asked of what they
+    // absorb to: one relation is a locking read of that relation's rows,
+    // its body's conjuncts among the WHERE.
+    auto absorbed = AbsorbFor(session, stmt, context.default_namespace);
+    if (!absorbed.ok()) {
+        return Refused(absorbed.status().code() == StatusCode::kNotImplemented
+                           ? Status::NotImplemented("FOR UPDATE through a view the query layer "
+                                                    "answers is not supported" + at)
+                           : absorbed.status());
+    }
+    const parser::SelectStmt& shape = absorbed.value().has_value() ? *absorbed.value() : stmt;
+
     // ---- The shape (DC-Q5 (a)) -------------------------------------------
     //
     // One relation, the WHERE an UPDATE admits, `*` or plain columns.
@@ -10626,15 +10668,15 @@ DispatchOutcome CommandDispatcher::HandleLockingRead(const parser::SelectStmt& s
     }
     // `aggregated()` covers a GROUP BY and a HAVING: either makes a fold.
     const char* unbuilt = nullptr;
-    if (!stmt.joins.empty()) {
-        unbuilt = "over a join";
-    } else if (stmt.aggregated()) {
+    if (!shape.joins.empty()) {
+        unbuilt = absorbed.value().has_value() ? "through a view over a join" : "over a join";
+    } else if (shape.aggregated()) {
         unbuilt = "over an aggregate or GROUP BY";
-    } else if (!stmt.order_by.empty()) {
+    } else if (!shape.order_by.empty()) {
         unbuilt = "with ORDER BY";
-    } else if (stmt.limit.has_value()) {
+    } else if (shape.limit.has_value()) {
         unbuilt = "with LIMIT";
-    } else if (stmt.offset != 0) {
+    } else if (shape.offset != 0) {
         unbuilt = "with OFFSET";
     }
     if (unbuilt != nullptr) {
@@ -10644,7 +10686,7 @@ DispatchOutcome CommandDispatcher::HandleLockingRead(const parser::SelectStmt& s
             "returned in tuple key order"));
     }
 
-    return RunLockingRead(stmt, session, context, snap);
+    return RunLockingRead(shape, session, context, snap);
 }
 
 DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& run,
@@ -10722,10 +10764,32 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // `join_order`, read once a statement (CX-R10): a `SET JOIN_ORDER` on
     // any core lands at the next compile.
     const exec::JoinOrder join_order = this->join_order();
-    auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+    // The written block, kept while a view exists: a second resolve absorbs
+    // again from it, under its own view (DP-S2).
+    std::optional<parser::SelectStmt> written;
+    auto chain = ResolveNames(session, [&](const txn::ReadView* v) -> StatusOr<exec::StepChain> {
         // This resolve's binds alone: one made again because a DDL moved
         // under it forgets the first (`statement_binding.hpp`).
         run->binding = {};
+        // **The views the statement names, absorbed here** (DP-S2): the
+        // block the run keeps is the expansion, so everything after the
+        // compile - the select list's rendering, the fold, `ANALYZE` - reads
+        // the relations the chain walks. The compile's own absorption then
+        // finds no view left at this level.
+        if (catalog_.AnyView()) {
+            const parser::SelectStmt& source = written.has_value() ? *written : stmt;
+            std::uint32_t lens = source.lens_high;
+            auto absorbed =
+                exec::AbsorbViews(catalog_, source, v, context->default_namespace, lens);
+            if (!absorbed.ok()) return absorbed.status();
+            if (absorbed.value().has_value()) {
+                if (!written.has_value()) written = std::move(stmt);
+                stmt = std::move(*absorbed.value());
+            } else if (written.has_value()) {
+                stmt = *written;  // a second resolve found what the first absorbed gone
+            }
+            stmt.views_settled = true;
+        }
         exec::PlanOptions plan;
         plan.join_build_max_rows = budget_.join_build_max_rows();
         plan.sort_max_rows = sort_max_rows_;
@@ -11659,6 +11723,53 @@ public:
           context_(context),
           borrow_(d.locks_, d.NextReadHolder(), &d.read_borrows_, &d.statement_binding_) {}
 
+    // Every relation `DescribeRelation` resolves, appended in order: what a
+    // `CREATE VIEW` over a query-layer body reads (DP-Q20). Null records
+    // nothing.
+    void RecordDescribed(std::vector<catalog::Oid>* into) noexcept { described_ = into; }
+
+    StatusOr<std::optional<exec::LayerView>> ViewOf(const parser::RelationRef& rel) override {
+        // DP-R10: no read view is minted while no view has existed.
+        if (!d_.catalog_.AnyView() || IEquals(rel.schema, exec::kCatalogSchema)) {
+            return std::optional<exec::LayerView>();
+        }
+        const catalog::Oid ns =
+            rel.namespace_oid != 0 ? rel.namespace_oid : context_.default_namespace;
+        auto def = d_.ResolveNames(session_, [&](const txn::ReadView* v)
+                                                 -> StatusOr<std::optional<catalog::ViewDef>> {
+            auto oid = d_.catalog_.ResolveView(rel.schema, rel.table_name, ns, v);
+            if (!oid.ok()) return oid.status();
+            if (!oid.value().has_value()) return std::optional<catalog::ViewDef>();
+            auto got = d_.catalog_.GetView(*oid.value(), v);
+            if (!got.ok()) return got.status();
+            return std::optional<catalog::ViewDef>(std::move(got.value()));
+        });
+        if (!def.ok()) return def.status();
+        if (!def.value().has_value()) return std::optional<exec::LayerView>();
+        const catalog::ViewDef& view = *def.value();
+        // A body's view must be one it was created over (DP-Q22 (b)).
+        if (Status s = exec::CheckViewReads(rel, view.oid); !s.ok()) return s;
+        // The view is part of what the statement binds (DP-R5), and of what
+        // a `CREATE VIEW` over it reads.
+        if (described_ != nullptr) described_->push_back(view.oid);
+        borrow_.Position(view.oid, rel.schema.empty() && rel.namespace_oid == 0
+                                       ? context_.default_namespace
+                                       : 0);
+        exec::LayerView out;
+        out.text = std::make_shared<const std::string>(view.text);
+        parser::Parser parser(*out.text);
+        auto query = parser.ParseQuery();
+        if (!query.ok()) {
+            return Status::Corruption("view '" + view.name + "''s text no longer parses: " +
+                                      query.status().message());
+        }
+        out.query = std::make_shared<const parser::Query>(std::move(query.value()));
+        out.namespace_oid = view.namespace_oid;
+        out.reads = exec::ReadsOf(view);
+        out.columns = view.columns;
+        return std::optional<exec::LayerView>(std::move(out));
+    }
+
     StatusOr<std::vector<exec::LayerColumn>> DescribeRelation(
         const parser::RelationRef& rel) override {
         if (IEquals(rel.schema, exec::kCatalogSchema)) {
@@ -11675,6 +11786,7 @@ public:
             return exec::Compile(d_.catalog_, probe, v, &borrow_, &context_);
         });
         if (!chain.ok()) return chain.status();
+        if (described_ != nullptr) described_->push_back(chain.value().steps[0].rel_oid);
         auto access = d_.catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
         if (!access.ok()) return access.status();
         std::vector<exec::LayerColumn> out;
@@ -11709,6 +11821,7 @@ public:
 
 private:
     CommandDispatcher& d_;
+    std::vector<catalog::Oid>* described_ = nullptr;
     Session& session_;
     const txn::Snapshot& snap_;
     const exec::StatementContext& context_;
@@ -11892,16 +12005,465 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     return out;
 }
 
+// ---- CREATE VIEW / DROP VIEW (instructions/v3.2.0/workorder-dp-view.md) ---
+//
+// One handler for both, `HandleNamespace`'s shape, under `InDdlStatement`:
+// the view's rows are placed or delete-marked under the DDL's transaction
+// (DP-Q4) and a rollback takes them back.
+
+namespace {
+
+// Every relation and view a body binds, in first-declaration order - the
+// view's dependency list (DP-Q3). A `PositionSink` because the compiler
+// already declares every bind, nested blocks included; it holds nothing.
+class DependencyRecorder final : public exec::PositionSink {
+public:
+    void Position(catalog::Oid rel, catalog::Oid) override {
+        if (std::find(oids.begin(), oids.end(), rel) == oids.end()) oids.push_back(rel);
+    }
+    std::vector<catalog::Oid> oids;
+};
+
+// A name as every view check compares it: identifiers are case-insensitive.
+std::string Folded(std::string_view name) {
+    std::string out(name);
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
+// Every identifier a text writes, folded to lower case: the names a view's
+// body could resolve a column by (DP-Q16). A superset - a relation's name,
+// an alias and a keyword are among them - and so a dependency a column of
+// that name is given is never fewer than the body reads.
+std::set<std::string> IdentifiersIn(std::string_view text) {
+    std::set<std::string> out;
+    parser::Lexer lexer(text);
+    for (parser::Token tok = lexer.Next(); tok.type != parser::TokenType::kEof;
+         tok = lexer.Next()) {
+        if (tok.type == parser::TokenType::kIdent) out.insert(Folded(tok.text));
+    }
+    return out;
+}
+
+// Whether a query-layer body's output carries a `*` or `rel.*` - in a block's
+// select list, either arm of a set operation, or a derived table it reads -
+// so its width is the columns its relations have (DP-Q11, DP-Q16). A `*` in
+// a predicate's subquery sets no output column and is not counted.
+bool WritesStar(const parser::Query& query);
+bool WritesStar(const parser::FromItem& item) {
+    return item.derived != nullptr && WritesStar(*item.derived);
+}
+bool WritesStar(const parser::Query& query) {
+    if (query.op != parser::Query::Op::kBlock) {
+        return (query.lhs != nullptr && WritesStar(*query.lhs)) ||
+               (query.rhs != nullptr && WritesStar(*query.rhs));
+    }
+    const parser::QueryBlock& block = *query.block;
+    if (std::any_of(block.items.begin(), block.items.end(),
+                    [](const parser::OutputItem& item) { return item.star; })) {
+        return true;
+    }
+    if (block.has_from && WritesStar(block.from)) return true;
+    return std::any_of(block.joins.begin(), block.joins.end(),
+                       [](const parser::FromJoin& join) { return WritesStar(join.item); });
+}
+
+// Whether a native SELECT is §2's absorbable form (DP-Q1): one block of
+// inner equi-joins and conjuncts with a plain select list - nothing an outer
+// conjunct appended to it could change the answer of.
+const char* NotAbsorbable(const parser::SelectStmt& body) {
+    if (body.aggregated()) return "an aggregate, GROUP BY or HAVING";
+    if (!body.order_by.empty()) return "ORDER BY";
+    if (body.limit.has_value() || body.offset != 0) return "LIMIT or OFFSET";
+    if (body.lock.has_value()) return "FOR UPDATE";
+    return nullptr;
+}
+
+}  // namespace
+
+exec::LayerLimits CommandDispatcher::LayerLimitsNow() const {
+    exec::LayerLimits limits;
+    limits.max_rows = sort_max_rows_;
+    limits.max_groups = aggregate_limits_.max_groups;
+    limits.max_distinct = aggregate_limits_.max_distinct;
+    return limits;
+}
+
+StatusOr<std::vector<exec::LayerColumn>> CommandDispatcher::DescribeBody(
+    std::string_view text, catalog::Oid namespace_oid, Session& session,
+    std::vector<catalog::Oid>* described, const parser::Query* parsed) {
+    std::optional<parser::Query> own;
+    if (parsed == nullptr) {
+        parser::Parser parser(text);
+        auto query = parser.ParseQuery();
+        if (!query.ok()) return query.status();
+        own.emplace(std::move(query.value()));
+        parsed = &*own;
+    }
+    exec::StatementContext context = StatementContextFor(session);
+    context.default_namespace = namespace_oid;  // DP-Q21
+    auto snapshot = SnapshotFor(session);
+    if (!snapshot.ok()) return snapshot.status();
+    LayerHostImpl host(*this, session, snapshot.value().snap, context);
+    host.RecordDescribed(described);
+    return exec::DescribeQuery(*parsed, text, host, context, LayerLimitsNow());
+}
+
+StatusOr<std::vector<exec::LayerColumn>> CommandDispatcher::DescribeView(
+    const catalog::ViewDef& def, Session& session) {
+    auto described = DescribeBody(def.text, def.namespace_oid, session);
+    if (!described.ok()) return described.status();
+    std::vector<exec::LayerColumn> body = std::move(described.value());
+    // A native `*` body is stored expanded (DP-Q11), and an `ADD COLUMN` under
+    // a query-layer `*` body is refused (DP-Q16), so the body returns the
+    // view's columns, by position.
+    if (body.size() != def.columns.size()) {
+        return Status::Corruption("view '" + def.name + "' has " +
+                                  std::to_string(def.columns.size()) +
+                                  " columns and its body now returns " +
+                                  std::to_string(body.size()));
+    }
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        body[i].name = def.columns[i];  // the view's own names (DP-Q15)
+        body[i].heading.clear();
+    }
+    return body;
+}
+
+StatusOr<std::uint32_t> CommandDispatcher::ViewDepthOver(
+    const std::vector<catalog::ViewDef::Dependency>& reads,
+    std::map<catalog::Oid, std::uint32_t>& depths) {
+    std::uint32_t deepest = 0;
+    for (const catalog::ViewDef::Dependency& dep : reads) {
+        // A relation's or a view's own entry; a column's names nothing new.
+        if (dep.column != catalog::kViewNoColumn) continue;
+        if (const auto known = depths.find(dep.oid); known != depths.end()) {
+            deepest = std::max(deepest, known->second);
+            continue;
+        }
+        auto view = catalog_.GetView(dep.oid);
+        if (!view.ok()) {
+            if (view.status().code() != StatusCode::kNotFound) return view.status();
+            depths.emplace(dep.oid, 0);  // a relation
+            continue;
+        }
+        // Bounded: every view below was refused past the bound at its own
+        // create, and each is walked once (`depths`).
+        auto below = ViewDepthOver(view.value().dependencies, depths);
+        if (!below.ok()) return below.status();
+        depths.emplace(dep.oid, below.value() + 1);
+        deepest = std::max(deepest, below.value() + 1);
+    }
+    return deepest;
+}
+
+StatusOr<std::optional<std::string>> CommandDispatcher::ViewDependant(
+    catalog::Oid oid, std::optional<std::uint16_t> column, std::string_view new_name) {
+    auto readers = catalog_.ViewsReading(oid);
+    if (!readers.ok()) return readers.status();
+    const std::string folded = Folded(new_name);
+    for (const catalog::ViewDef& view : readers.value()) {
+        bool blocks = !column.has_value() && new_name.empty();
+        if (column.has_value()) {
+            blocks = std::any_of(view.dependencies.begin(), view.dependencies.end(),
+                                 [&](const catalog::ViewDef::Dependency& d) {
+                                     return d.oid == oid && d.column == *column;
+                                 });
+        }
+        if (!blocks && !new_name.empty()) {
+            // A query-layer `*` body's width is its relations' (DP-Q11): any
+            // column added under it would widen the view.
+            blocks = view.star_width || IdentifiersIn(view.text).count(folded) != 0;
+        }
+        if (blocks) {
+            return std::optional<std::string>("view '" + view.name +
+                                              "' reads it; DROP VIEW first");
+        }
+    }
+    return std::optional<std::string>();
+}
+
+DispatchOutcome CommandDispatcher::HandleView(std::string_view line, Session& session) {
+    parser::Parser parser(line);
+    auto parsed = parser.ParseView();
+    if (!parsed.ok()) return Refused(parsed.status());
+    const parser::ViewStmt stmt = std::move(parsed.value());
+    const std::string at = " (byte " + std::to_string(stmt.byte_offset) + ")";
+    if (Status s = NameFitsAt("view", stmt.name, stmt.byte_offset); !s.ok()) return Refused(s);
+
+    return InDdlStatement(session, [&](WriteScope& scope) -> DispatchOutcome {
+        DdlScope ddl = DdlScopeFor(scope);
+
+        if (stmt.drop) {
+            auto oid = ResolveNames(session, [&](const txn::ReadView* v)
+                                                 -> StatusOr<std::optional<catalog::Oid>> {
+                return catalog_.ResolveView(stmt.schema, stmt.name, session.default_namespace(),
+                                            v);
+            });
+            if (!oid.ok()) return Refused(oid.status());
+            if (!oid.value().has_value()) {
+                return Refused(Status::NotFound("no view named '" + stmt.name + "'" + at));
+            }
+            const catalog::Oid view_oid = *oid.value();
+            // DP-Q22 (b): the view oid's `X`, which a reader's bind and a
+            // `CREATE VIEW` over this one hold `IS` on, so neither runs under
+            // the drop.
+            if (std::optional<Status> held = BorrowRelationForDdl(scope.txn, view_oid);
+                held.has_value()) {
+                return Refused(*held);
+            }
+            // RESTRICT: an enabled administrator's plan made through it
+            // (DP-Q6), and a view over this one.
+            auto planned = EnabledPlanNaming(view_oid, "view");
+            if (!planned.ok()) return Refused(planned.status());
+            if (planned.value().has_value()) {
+                return Refused(Status::InvalidArgument("cannot drop view '" + stmt.name + "'" +
+                                                       at + ": " + *planned.value()));
+            }
+            auto readers = catalog_.ViewsReading(view_oid);
+            if (!readers.ok()) return Refused(readers.status());
+            for (const catalog::ViewDef& reader : readers.value()) {
+                return Refused(Status::InvalidArgument(
+                    "cannot drop view '" + stmt.name + "'" + at + ": view '" + reader.name +
+                    "' reads it; drop that view first"));
+            }
+            std::vector<catalog::CatalogRowChange> changed;
+            Status dropped = catalog_.DropView(view_oid, ddl.trx_id,
+                                               ddl.txn != nullptr ? &changed : nullptr);
+            NoteCatalogRowChanges(ddl, changed);
+            if (!dropped.ok()) return Refused(dropped.WithContext("byte " +
+                                                                  std::to_string(stmt.byte_offset)));
+            // What was made through it is forgotten once the drop commits:
+            // the view's oid is never reissued, so none of it matches again.
+            if (scope.txn != nullptr) {
+                OwedDrop owed;
+                owed.txn_id = scope.txn->id();
+                owed.oid = view_oid;
+                owed.view = true;
+                owed_drops_.push_back(owed);
+            } else {
+                ForgetDropped(view_oid);
+            }
+            if (logging(LogLevel::kInfo)) {
+                log_->Info("ddl", "dropped view '" + stmt.name + "' oid=" +
+                                      std::to_string(view_oid));
+            }
+            return {"DROPPED VIEW " + stmt.name + " oid=" + std::to_string(view_oid), false};
+        }
+
+        auto create_ns = ResolveNames(session, [&](const txn::ReadView* v) {
+            return ResolveCreateNamespace(stmt.schema, stmt.byte_offset, session, v);
+        });
+        if (!create_ns.ok()) return Refused(create_ns.status());
+        if (stmt.body.size() > catalog::kMaxViewTextBytes) {
+            return Refused(Status::InvalidArgument(
+                "a view's body is at most " + std::to_string(catalog::kMaxViewTextBytes) +
+                " bytes; this one is " + std::to_string(stmt.body.size()) + " (byte " +
+                std::to_string(stmt.body_offset) + ")"));
+        }
+        // A body's refusal names its byte in the statement, not the body.
+        const auto in_body = [&](const Status& s) {
+            return s.WithContext("in the view's body, which starts at byte " +
+                                 std::to_string(stmt.body_offset) +
+                                 " (its bytes counted from there)");
+        };
+
+        // The body's own context: its unqualified names mean the view's
+        // namespace, whoever reads it (DP-Q21).
+        exec::StatementContext context = StatementContextFor(session);
+        context.default_namespace = create_ns.value();
+
+        // **What the body is, read twice** (C6 of DP-S1's review): once to
+        // learn what it reads, and again under the `IS` on all of it, so a
+        // rename or a drop that landed in between is met - refused
+        // `TxnConflict` when the second reading binds other relations, and
+        // the columns the dependencies record read from the second.
+        struct Reading {
+            catalog::ViewDef def;
+            std::vector<catalog::Oid> reads;  // first-declaration order
+            bool star = false;                // a native `*`, expanded into `def.text`
+            const char* why_not = nullptr;    // a native block's reason not to absorb
+        };
+        const auto read_body = [&]() -> StatusOr<Reading> {
+            Reading out;
+            out.def.text = stmt.body;
+            DependencyRecorder deps;
+            std::vector<std::string>& names = out.def.columns;
+
+            // ---- Absorbable: one native block (DP-Q1) --------------------
+            parser::Parser body_parser(stmt.body);
+            auto native = body_parser.Parse();
+            const parser::SelectStmt* body = nullptr;
+            if (native.ok() && std::holds_alternative<parser::SelectStmt>(native.value())) {
+                body = &std::get<parser::SelectStmt>(native.value());
+                out.why_not = NotAbsorbable(*body);
+                if (out.why_not != nullptr) body = nullptr;
+            }
+            if (body != nullptr) {
+                auto chain = ResolveNames(session, [&](const txn::ReadView* v) {
+                    deps.oids.clear();
+                    return exec::Compile(catalog_, *body, v, &deps, &context);
+                });
+                if (chain.ok()) {
+                    out.def.absorbable = true;
+                    out.star = body->star();
+                    if (out.star) {
+                        // DP-Q11: a `*` is the columns live now, **stored so** -
+                        // the text written with them in its place - so the view
+                        // keeps its width whatever is added later.
+                        auto access = catalog_.InitTableAccess(chain.value().steps[0].rel_oid);
+                        if (!access.ok()) return access.status();
+                        for (const catalog::SysColumnRow& col : access.value()->schema.columns) {
+                            if (col.visible()) names.emplace_back(catalog::NameView(col.name));
+                        }
+                        parser::Lexer lexer(stmt.body);
+                        lexer.Next();  // SELECT
+                        const parser::Token star = lexer.Next();
+                        std::string list;
+                        for (const std::string& n : names) list += (list.empty() ? "" : ", ") + n;
+                        out.def.text = stmt.body.substr(0, star.byte_offset) + list +
+                                       stmt.body.substr(star.byte_offset + 1);
+                    } else {
+                        for (const parser::ColumnName& item : body->projection) {
+                            names.push_back(item.name);
+                        }
+                    }
+                } else if (chain.status().code() != StatusCode::kNotImplemented) {
+                    return in_body(chain.status());
+                }
+            }
+
+            // ---- Otherwise the query layer's, a derived table (DP-Q2) ----
+            if (!out.def.absorbable) {
+                parser::Parser query_parser(stmt.body);
+                auto query = query_parser.ParseQuery();
+                if (!query.ok()) return in_body(query.status());
+                std::vector<catalog::Oid> described;
+                auto columns = DescribeBody(stmt.body, create_ns.value(), session, &described,
+                                            &query.value());
+                if (!columns.ok()) return in_body(columns.status());
+                for (const exec::LayerColumn& c : columns.value()) names.push_back(c.name);
+                out.def.star_width = WritesStar(query.value());
+                for (const catalog::Oid oid : described) deps.Position(oid, 0);
+            }
+            out.reads = std::move(deps.oids);
+            return out;
+        };
+
+        auto first = read_body();
+        if (!first.ok()) return Refused(first.status());
+        // ---- What it reads, each held `IS` to the decide (DP-Q22 (b)) -----
+        //
+        // A relation's `DROP TABLE` or a view's `DROP VIEW` takes its `X`,
+        // so neither commits under this create - the child's `CREATE
+        // TABLE`'s rule.
+        for (const catalog::Oid oid : first.value().reads) {
+            if (std::optional<Status> held = BorrowRelationForDdl(
+                    scope.txn, oid, /*poisons=*/true, txn::LockMode::kIntentionShared);
+                held.has_value()) {
+                return Refused(*held);
+            }
+        }
+        catalog_.Revalidate();
+        auto settled = read_body();
+        if (!settled.ok()) return Refused(settled.status());
+        if (settled.value().reads != first.value().reads) {
+            return Refused(Status::TxnConflict(
+                "a relation view '" + stmt.name + "' reads changed while the create waited for "
+                "it" + at + " - retry"));
+        }
+        catalog::ViewDef def = std::move(settled.value().def);
+        const bool star_body = settled.value().star || def.star_width;
+
+        // ---- The view's columns (DP-Q15) ----------------------------------
+        std::vector<std::string>& names = def.columns;
+        if (!stmt.columns.empty()) {
+            if (stmt.columns.size() != names.size()) {
+                return Refused(Status::InvalidArgument(
+                    "the view's column list names " + std::to_string(stmt.columns.size()) +
+                    " columns and its body returns " + std::to_string(names.size()) +
+                    " (byte " + std::to_string(stmt.columns_offset) + ")"));
+            }
+            names = stmt.columns;
+        }
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (!parser::IsIdentifier(names[i])) {
+                return Refused(Status::InvalidArgument(
+                    "the view's column " + std::to_string(i + 1) + " ('" + names[i] +
+                    "') has no name a reader could write" + at +
+                    "; name it in a column list - CREATE VIEW v (a, b) AS ..."));
+            }
+            for (std::size_t j = 0; j < i; ++j) {
+                if (!IEquals(names[i], names[j])) continue;
+                return Refused(Status::InvalidArgument(
+                    "the view would have two columns named '" + names[i] + "'" + at +
+                    "; name them apart in a column list - CREATE VIEW v (a, b) AS ..."));
+            }
+        }
+
+        // ---- The dependencies (DP-Q16), read under the `IS` ---------------
+        const std::set<std::string> written = IdentifiersIn(def.text);
+        for (const catalog::Oid oid : settled.value().reads) {
+            def.dependencies.push_back(catalog::ViewDef::Dependency{oid, catalog::kViewNoColumn});
+            // A view it reads (DP-Q8) is a dependency on the view alone: its
+            // own rows RESTRICT what its body reads, and its columns change
+            // under no DDL (DP-R3). Asked under the `IS`, as a relation is.
+            if (catalog_.GetView(oid).ok()) continue;
+            // A relation dropped before its grant is refused here, `CREATE
+            // TABLE`'s parent rule, not recorded as an oid that names nothing.
+            auto access = catalog_.InitTableAccess(oid);
+            if (!access.ok()) return Refused(in_body(access.status()));
+            const auto& columns = access.value()->schema.columns;
+            for (std::size_t i = 0; i < columns.size(); ++i) {
+                if (!columns[i].visible()) continue;
+                if (star_body || written.count(Folded(catalog::NameView(columns[i].name))) != 0) {
+                    def.dependencies.push_back(catalog::ViewDef::Dependency{
+                        oid, static_cast<std::uint16_t>(columns[i].pos)});
+                }
+            }
+        }
+        const char* why_not = settled.value().why_not;
+
+        // DP-Q8: the view's depth is one more than the deepest view it reads,
+        // and a reader absorbs or derives that many levels - so it is refused
+        // here, at its create, rather than at every read.
+        std::map<catalog::Oid, std::uint32_t> depths;
+        auto depth = ViewDepthOver(def.dependencies, depths);
+        if (!depth.ok()) return Refused(depth.status());
+        if (depth.value() + 1 > exec::kMaxViewDepth) {
+            return Refused(Status::Unsupported(
+                "views nest deeper than " + std::to_string(exec::kMaxViewDepth) + at +
+                ": this one would be level " + std::to_string(depth.value() + 1)));
+        }
+
+        auto oid = catalog_.CreateView(create_ns.value(), stmt.name, def, ddl.trx_id,
+                                       ddl.sink());
+        NoteDdlRows(ddl);  // before the status: a partial write is still a write
+        if (!oid.ok()) return Refused(oid.status().WithContext("byte " +
+                                                               std::to_string(stmt.byte_offset)));
+        if (logging(LogLevel::kInfo)) {
+            log_->Info("ddl", "created view '" + stmt.name + "' oid=" +
+                                  std::to_string(oid.value()) +
+                                  (def.absorbable ? " (absorbable)" : " (a derived table)"));
+        }
+        // DP-Q2: a body no reader absorbs is said so, here and in sys.views.
+        return {"CREATED VIEW " + stmt.name + " oid=" + std::to_string(oid.value()) +
+                    (def.absorbable
+                         ? ""
+                         : std::string(" WARNING: its body is not absorbable") +
+                               (why_not != nullptr ? std::string(" (") + why_not + ")" : "") +
+                               " - every read runs the whole body as a derived table"),
+                false};
+    });
+}
+
 StatusOr<exec::RowSet> CommandDispatcher::RunLayerQuery(const parser::Query& query,
                                                         std::string_view text, Session& session,
                                                         const txn::Snapshot& snap,
                                                         const exec::StatementContext& context) {
     LayerHostImpl host(*this, session, snap, context);
-    exec::LayerLimits limits;
-    limits.max_rows = sort_max_rows_;
-    limits.max_groups = aggregate_limits_.max_groups;
-    limits.max_distinct = aggregate_limits_.max_distinct;
-    return exec::RunQuery(query, text, host, context, limits);
+    return exec::RunQuery(query, text, host, context, LayerLimitsNow());
 }
 
 std::optional<DispatchOutcome> CommandDispatcher::TryQueryLayer(
@@ -13114,13 +13676,25 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     //
     // **Nothing is asked yet, so nothing here fails the transaction**
     // (DC-Q11): these refusals leave as a `SELECT`'s do, past `EndWrite`.
+    // A block a view absorbed to carries its relation's namespace and the
+    // view's columns (DP-Q10): `through` is it, or null.
+    const parser::SelectStmt* through = stmt.views.empty() ? nullptr : &stmt;
     auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
-        return catalog_.ResolveRelation(stmt.from.schema, stmt.from.table_name,
-                                        context.default_namespace, stmt.from.byte_offset, v);
+        return catalog_.ResolveRelation(
+            stmt.from.schema, stmt.from.table_name,
+            stmt.from.namespace_oid != 0 ? stmt.from.namespace_oid : context.default_namespace,
+            stmt.from.byte_offset, v);
     });
     if (!oid.ok()) return Refused(oid.status());
-    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_, oid.value(),
-                      stmt.from.schema.empty() ? context.default_namespace : 0);  // AT-R1
+    if (Status s = exec::CheckViewReads(stmt.from, oid.value()); !s.ok()) return Refused(s);
+    // AT-R1, and DP-R5: the views it came through declared before it.
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, &statement_binding_);
+    for (const parser::OpenedView& opened : stmt.from.opens) {
+        borrow.Position(opened.oid, opened.unqualified_in);
+    }
+    borrow.Position(oid.value(),
+                    stmt.from.lens == 0 && stmt.from.schema.empty() ? context.default_namespace
+                                                                    : 0);
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
@@ -13130,10 +13704,11 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     // rows the plain statement's. The WHERE first, as a chain is compiled.
     const std::string& binding = stmt.from.binding();
     auto predicates = ResolveNames(session, [&](const txn::ReadView* v) {
-        return exec::CompileWhere(catalog_, ta, binding, stmt.where, v, &borrow, &context);
+        return exec::CompileWhere(catalog_, ta, binding, stmt.where, v, &borrow, &context,
+                                  through);
     });
     if (!predicates.ok()) return Refused(predicates.status());
-    auto list = exec::CompileSelectList(ta, binding, stmt.projection, stmt.star());
+    auto list = exec::CompileSelectList(ta, binding, stmt.projection, stmt.star(), through);
     if (!list.ok()) return Refused(list.status());
     NoteStatementCompiled();
 
@@ -13155,7 +13730,12 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     WriteWalk walk(*this, scope, ta, snap, predicates.value(), /*resumed_targets=*/nullptr);
     std::vector<std::uint64_t> claimed;  // ascending: every arm meets rows in key order
 
-    const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    // The window is folded by column name, so through a view its conjuncts
+    // are read as the relation's columns (DP-Q10): a view's column named as
+    // the relation's tuple key, over another column, would declare a window
+    // the rows claimed lie outside, and a row it covers takes no unit.
+    const std::optional<txn::LockKey> declared =
+        DeclaredWriteBorrow(ta, through != nullptr ? exec::WhereOnRelation(stmt) : stmt.where);
     if (declared.has_value()) {
         // `kFutile` and `U`: `UpdateParsed`'s site states both arguments.
         if (std::optional<Status> held = BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile,
@@ -15072,6 +15652,61 @@ std::string OrderText(const exec::CapturedOrder& order, const std::vector<std::s
 
 }  // namespace
 
+StatusOr<std::optional<std::string>> CommandDispatcher::EnabledPlanNaming(
+    catalog::Oid oid, std::string_view what) {
+    // Read off the rows only once the table says some enabled plan names it.
+    // **A plan that can match no statement restricts nothing** (DI-S4):
+    // after a rename of a name its statement writes, its key is out of every
+    // statement's reach (`exec::PlanRowCanMatch`).
+    if (!admin_plans_->EnabledNaming(oid).has_value()) return std::optional<std::string>();
+    auto plans = exec::ListPlans(catalog_, page_store_);
+    if (!plans.ok()) return plans.status();
+    auto tables = catalog_.ListTables(nullptr);
+    if (!tables.ok()) return tables.status();
+    for (const exec::PlanRow& plan : plans.value()) {
+        if (plan.captured || !plan.readable || !plan.enabled || !plan.key.Names(oid)) continue;
+        // The newest row of a name is the plan (`LoadPlans`): an `ALTER
+        // PLAN` whose delete of the old row failed leaves it beside the new
+        // one, and it speaks for nothing.
+        const bool superseded =
+            std::any_of(plans.value().begin(), plans.value().end(), [&](const exec::PlanRow& other) {
+                return !other.captured && other.id > plan.id &&
+                       exec::SameName(other.name, plan.name);
+            });
+        if (superseded || !exec::PlanRowCanMatch(catalog_, plan, tables.value())) continue;
+        return std::optional<std::string>("plan '" + plan.name + "' names this " +
+                                          std::string(what) + "; DROP PLAN or ALTER PLAN " +
+                                          plan.name + " DISABLE first");
+    }
+    return std::optional<std::string>();
+}
+
+void CommandDispatcher::ForgetDropped(catalog::Oid oid) {
+    // CX-Q24: the dropped object's captured plans can match nothing again;
+    // forgotten here and their rows removed by the persisting task
+    // (`exec/plan_catalog.hpp`). A disabled administrator's plan naming it
+    // is forgotten in the table, its row kept.
+    captured_plans_->ForgetRelation(oid);
+    admin_plans_->ForgetRelation(oid);
+    ForgetRelationStatistics(oid);
+    EndOptInsNaming(oid);
+}
+
+Status CommandDispatcher::KeyViews(const parser::SelectStmt& block, exec::CapturedKey& key) {
+    if (exec::FillKeyViews(block, key)) return Status::OK();
+    return Status::Unsupported("a plan is made through at most " +
+                               std::to_string(exec::kMaxPlannedRelations) + " views");
+}
+
+StatusOr<std::optional<parser::SelectStmt>> CommandDispatcher::AbsorbFor(
+    Session& session, const parser::SelectStmt& stmt, catalog::Oid default_namespace) {
+    if (!catalog_.AnyView()) return std::optional<parser::SelectStmt>();
+    return ResolveNames(session, [&](const txn::ReadView* v) {
+        std::uint32_t lens = stmt.lens_high;
+        return exec::AbsorbViews(catalog_, stmt, v, default_namespace, lens);
+    });
+}
+
 Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
                                             std::optional<ReadBorrow>& hold) {
     // A borrow of its own, so what is counted is these asks and nothing a
@@ -15086,6 +15721,13 @@ Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
         const auto* const seen = std::find(key.oids.data(), key.oids.data() + i, key.oids[i]);
         if (seen == key.oids.data() + i) ++distinct;
         hold->Position(key.oids[i], 0);
+    }
+    // And the views it was made through (DP-Q6): a `DROP VIEW` takes the
+    // view's `X`, so it meets the plan under it.
+    for (std::size_t i = 0; i < key.v; ++i) {
+        const auto* const seen = std::find(key.views.data(), key.views.data() + i, key.views[i]);
+        if (seen == key.views.data() + i) ++distinct;
+        hold->Position(key.views[i], 0);
     }
     if (holder != 0 && read_borrows_ - before < distinct) {
         hold.reset();
@@ -15161,7 +15803,15 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
         return Refused(Status::InvalidArgument("CREATE PLAN ... FOR takes one SELECT" +
                                                ByteSuffix(create.statement_at)));
     }
-    const auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+    const auto& written_stmt = std::get<parser::SelectStmt>(parsed.value());
+    // **Through a view, the plan is the absorbed block's** (DP-R4, DP-Q7):
+    // its relations are the base relations, named by their view's path, and
+    // its key carries the views it was made through.
+    auto absorbed =
+        AbsorbFor(session, written_stmt, StatementContextFor(session).default_namespace);
+    if (!absorbed.ok()) return Refused(AtByte(absorbed.status(), create.statement_at));
+    const parser::SelectStmt& stmt =
+        absorbed.value().has_value() ? *absorbed.value() : written_stmt;
     if (Status s = exec::PlannableBlock(stmt); !s.ok()) {
         return Refused(AtByte(s, create.statement_at));
     }
@@ -15177,8 +15827,8 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
     row.name = create.name;
     row.arguments = fingerprint->literal_count;
     row.statement = parser::ShapeText(padded);
-    row.bindings.push_back(stmt.from.binding());
-    for (const parser::JoinClause& join : stmt.joins) row.bindings.push_back(join.relation.binding());
+    row.bindings.push_back(stmt.from.display());
+    for (const parser::JoinClause& join : stmt.joins) row.bindings.push_back(join.relation.display());
     if (row.bindings.size() > exec::kMaxPlannedRelations) {
         return Refused(Status::Unsupported(
             "a plan orders at most " + std::to_string(exec::kMaxPlannedRelations) +
@@ -15208,6 +15858,7 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
         for (std::size_t w = 0; w < row.bindings.size(); ++w) {
             row.key.oids[w] = written.value().steps[w].rel_oid;
         }
+        if (Status s = KeyViews(stmt, row.key); !s.ok()) return AtByte(s, create.statement_at);
         // **The relations' `IS`, held to the row's install**, asked of the
         // key's own oids: so no plan is installed for a relation whose drop
         // then commits, and a drop that comes after waits and meets the
@@ -15453,15 +16104,23 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
         return Refused(Status::InvalidArgument("ADVISE PLAN FOR takes one SELECT" +
                                                ByteSuffix(at)));
     }
-    const auto& stmt = std::get<parser::SelectStmt>(parsed.value());
+    const auto& written_stmt = std::get<parser::SelectStmt>(parsed.value());
+    // **Through a view, the plan is the absorbed block's** (DP-R4, DP-Q7):
+    // its relations are the base relations, named by their view's path, and
+    // its key carries the views it was made through.
+    auto absorbed =
+        AbsorbFor(session, written_stmt, StatementContextFor(session).default_namespace);
+    if (!absorbed.ok()) return Refused(AtByte(absorbed.status(), at));
+    const parser::SelectStmt& stmt =
+        absorbed.value().has_value() ? *absorbed.value() : written_stmt;
     // CX-Q33 (a): a statement over one relation has no order to propose.
     if (stmt.joins.empty()) {
         return Refused(Status::Unsupported(
             "ADVISE PLAN takes a join: a statement over one relation has no join order to "
             "search" + ByteSuffix(at)));
     }
-    std::vector<std::string> bindings{stmt.from.binding()};
-    for (const parser::JoinClause& join : stmt.joins) bindings.push_back(join.relation.binding());
+    std::vector<std::string> bindings{stmt.from.display()};
+    for (const parser::JoinClause& join : stmt.joins) bindings.push_back(join.relation.display());
     if (bindings.size() > exec::kMaxPlannedRelations) {
         return Refused(Status::Unsupported("a plan orders at most " +
                                            std::to_string(exec::kMaxPlannedRelations) +
@@ -15485,6 +16144,7 @@ DispatchOutcome CommandDispatcher::HandleAdvisePlan(std::string_view line, Sessi
     for (std::size_t w = 0; w < bindings.size(); ++w) {
         key.oids[w] = written.value().steps[w].rel_oid;
     }
+    if (Status s = KeyViews(stmt, key); !s.ok()) return Refused(AtByte(s, at));
 
     // ---- The plan in force (CX-Q32 (a)) ----------------------------------
     exec::CapturedOrder in_force_order{};

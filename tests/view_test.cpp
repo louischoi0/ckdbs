@@ -1,0 +1,568 @@
+#include <cstdlib>
+#include <optional>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#include "kds/bootstrap/bootstrap.hpp"
+#include "kds/server/command_dispatcher.hpp"
+#include "kds/server/session.hpp"
+#include "kds/stats/cabin_store.hpp"
+#include "kds/storage/in_memory_page_store.hpp"
+#include "kds/txn/manager.hpp"
+#include "lock_family_fixture.hpp"
+
+// DP - VIEW (instructions/v3.2.0/workorder-dp-view.md).
+//
+// DP-S1, the object: a view is a name in its namespace's relation name space
+// (NS6) with its text, columns and dependencies in `sys.views`; created and
+// dropped transactionally (DP-Q4); every change to what it reads RESTRICTed
+// (DP-Q16); no write names one (DP-Q9).
+
+namespace kds::server {
+namespace {
+
+class ViewTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto boot = bootstrap::BootstrapDatabase(store_, 1000);
+        ASSERT_TRUE(boot.ok());
+        boot_.emplace(std::move(boot.value()));
+        cabins_.emplace();
+        ids_.emplace(boot_->superblock);
+        undo_.emplace(store_, /*wal=*/nullptr);
+        mgr_.emplace(*ids_, *undo_, store_, /*wal=*/nullptr);
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                            /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kGroup,
+                            exec::Budget(), /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/true, &*cabins_, &*mgr_);
+    }
+
+    std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
+    std::string Run(Session& s, const std::string& sql) {
+        return dispatcher_->Dispatch(sql, &s).response;
+    }
+    void Ok(const std::string& sql) {
+        const std::string out = Run(sql);
+        EXPECT_NE(out.rfind("ERR", 0), 0u) << sql << " -> " << out;
+    }
+    // A refusal, and that its text says `needle`.
+    void Refused(const std::string& sql, const std::string& needle) {
+        const std::string out = Run(sql);
+        EXPECT_EQ(out.rfind("ERR", 0), 0u) << sql << " -> " << out;
+        EXPECT_NE(out.find(needle), std::string::npos) << sql << " -> " << out;
+    }
+    std::uint64_t OidOf(const std::string& reply) {
+        const auto at = reply.find("oid=");
+        EXPECT_NE(at, std::string::npos) << reply;
+        return std::strtoull(reply.c_str() + at + 4, nullptr, 10);
+    }
+
+    storage::InMemoryPageStore store_{kFirstUserPageId};
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<stats::CabinStore> cabins_;
+    std::optional<txn::TrxIdSequence> ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> mgr_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+TEST_F(ViewTest, ACreatedViewIsListedWithItsTextColumnsAndDependency) {
+    Ok("CREATE TABLE t (id int64, a int64, b int64)");
+    const std::string created = Run("CREATE VIEW v AS SELECT id, a FROM t WHERE b = 1");
+    ASSERT_EQ(created.rfind("CREATED VIEW v oid=", 0), 0u) << created;
+    EXPECT_EQ(created.find("WARNING"), std::string::npos) << "an absorbable body is not warned";
+    const std::uint64_t t_oid =
+        std::strtoull(Run("SELECT oid FROM sys.tables WHERE name = 't'").substr(5).c_str(),
+                      nullptr, 10);
+
+    EXPECT_EQ(Run("SELECT name, absorbable, columns, reads, source_text FROM sys.views"),
+              "name,absorbable,columns,reads,source_text\\nv,1,id, a," +
+                  std::to_string(t_oid) + ",SELECT id, a FROM t WHERE b = 1");
+    EXPECT_NE(Run("SHOW VIEWS").find("SELECT id, a FROM t WHERE b = 1"), std::string::npos);
+}
+
+TEST_F(ViewTest, AViewAndATableShareOneNameSpace) {
+    Ok("CREATE TABLE t (id int64)");
+    Refused("CREATE VIEW t AS SELECT id FROM t", "already exists");
+    Ok("CREATE VIEW v AS SELECT id FROM t");
+    Refused("CREATE TABLE v (id int64)", "a view named 'v' already exists");
+    Refused("CREATE VIEW v AS SELECT id FROM t", "a view named 'v' already exists");
+    Refused("ALTER TABLE t RENAME TO v", "view");
+}
+
+TEST_F(ViewTest, ADropFreesTheNameAndNeverReissuesTheOid) {
+    Ok("CREATE TABLE t (id int64)");
+    const std::uint64_t first = OidOf(Run("CREATE VIEW v AS SELECT id FROM t"));
+    EXPECT_EQ(Run("DROP VIEW v"), "DROPPED VIEW v oid=" + std::to_string(first));
+    Refused("DROP VIEW v", "no view named 'v'");
+    EXPECT_EQ(Run("SELECT name FROM sys.views"), "name");
+    const std::uint64_t second = OidOf(Run("CREATE VIEW v AS SELECT id FROM t"));
+    EXPECT_GT(second, first) << "DP-R3: a new body is a new oid, never the tombstone's";
+}
+
+TEST_F(ViewTest, WhatAViewReadsIsRestricted) {
+    Ok("CREATE TABLE t (id int64, a int64 NULL, b int64 NULL, c int64 NULL) SPARE 1");
+    Ok("CREATE VIEW v AS SELECT id, a FROM t WHERE b = 1");
+
+    Refused("DROP TABLE t", "view 'v' reads it");
+    Refused("ALTER TABLE t RENAME TO u", "view 'v' reads it");
+    Refused("ALTER TABLE t RENAME COLUMN a TO z", "view 'v' reads it");
+    Refused("ALTER TABLE t RENAME COLUMN b TO z", "view 'v' reads it");
+    Refused("ALTER TABLE t DROP COLUMN b", "view 'v' reads it");
+    // DP-Q16: a column the body's text names, renamed to or added, could
+    // capture a name the body resolves today.
+    Refused("ALTER TABLE t RENAME COLUMN c TO b", "view 'v' reads it");
+    Refused("ALTER TABLE t ADD COLUMN t int64 NULL", "view 'v' reads it");
+
+    // A column the body names nowhere is the relation's own business.
+    Ok("ALTER TABLE t RENAME COLUMN c TO d");
+    Ok("ALTER TABLE t DROP COLUMN d");
+
+    Ok("DROP VIEW v");
+    Ok("DROP TABLE t");
+}
+
+TEST_F(ViewTest, AStarBodyIsTheColumnsLiveAtItsCreate) {
+    Ok("CREATE TABLE t (id int64, a int64) SPARE 1");
+    Ok("CREATE VIEW v AS SELECT * FROM t");
+    // DP-Q11: stored so - the text carries the columns in the `*`'s place.
+    EXPECT_EQ(Run("SELECT source_text FROM sys.views"), "source_text\\nSELECT id, a FROM t");
+    Ok("ALTER TABLE t ADD COLUMN z int64 NULL");
+    EXPECT_EQ(Run("SELECT columns FROM sys.views"), "columns\\nid, a") << "DP-Q11";
+    Refused("ALTER TABLE t DROP COLUMN a", "view 'v' reads it");
+}
+
+// A query-layer `*` is not expanded, so its width is its relation's: no
+// column is added under it (DP-Q16).
+TEST_F(ViewTest, AQueryLayerStarBodyRefusesAnAddedColumn) {
+    Ok("CREATE TABLE t (id int64, a int64) SPARE 1");
+    Ok("CREATE VIEW v AS SELECT DISTINCT * FROM t");
+    Refused("ALTER TABLE t ADD COLUMN z int64 NULL", "view 'v' reads it");
+}
+
+// DP-Q6 (a), §6: the forms not built, refused by name at their word.
+TEST_F(ViewTest, ReplaceAndMaterializedAreRefusedByName) {
+    Ok("CREATE TABLE t (id int64)");
+    Refused("CREATE OR REPLACE VIEW v AS SELECT id FROM t", "CREATE OR REPLACE is not supported");
+    Refused("CREATE MATERIALIZED VIEW v AS SELECT id FROM t", "materialized view");
+    EXPECT_NE(Run("CREATE OR REPLACE VIEW v AS SELECT id FROM t").find("NOT_IMPLEMENTED"),
+              std::string::npos);
+    EXPECT_NE(Run("CREATE OR REPLACE VIEW v AS SELECT id FROM t").find("byte 7"),
+              std::string::npos);
+}
+
+// DP-Q11 with DP-Q15: a `*` body's columns are the view's by position, so a
+// column list renames them and a later `ADD COLUMN` adds none to the view.
+TEST_F(ViewTest, AStarBodyUnderAColumnListIsDescribedAfterAnAdd) {
+    Ok("CREATE TABLE t (id int64, a int64) SPARE 1");
+    Ok("CREATE VIEW v (x, y) AS SELECT * FROM t");
+    Ok("ALTER TABLE t ADD COLUMN z int64 NULL");
+    const std::string described = Run("DESCRIBE v");
+    EXPECT_EQ(described.rfind("ERR", 0), std::string::npos) << described;
+    EXPECT_NE(described.find(",x,"), std::string::npos) << described;
+    EXPECT_NE(described.find(",y,"), std::string::npos) << described;
+    EXPECT_EQ(described.find(",z,"), std::string::npos) << described;
+}
+
+// DP-Q16: a `*` the query layer answers reads every column as a native one
+// does, so no column of its relation may go.
+TEST_F(ViewTest, AStarBodyTheQueryLayerAnswersRestrictsEveryColumn) {
+    Ok("CREATE TABLE t (id int64, a int64 NULL, b int64 NULL)");
+    const std::string created = Run("CREATE VIEW v AS SELECT DISTINCT * FROM t");
+    ASSERT_NE(created.find("WARNING"), std::string::npos) << created;
+    Refused("ALTER TABLE t DROP COLUMN b", "view 'v' reads it");
+    Refused("ALTER TABLE t RENAME COLUMN b TO c", "view 'v' reads it");
+}
+
+// NS6: a rename onto a view's name is a collision, as onto a table's.
+TEST_F(ViewTest, ARenameOntoAViewsNameIsRefused) {
+    Ok("CREATE TABLE t (id int64)");
+    Ok("CREATE TABLE u (id int64)");
+    Ok("CREATE VIEW v AS SELECT id FROM t");
+    Refused("ALTER TABLE u RENAME TO v", "a view named 'v' already exists");
+}
+
+TEST_F(ViewTest, NoWriteNamesAView) {
+    Ok("CREATE TABLE t (id int64, a int64)");
+    Ok("CREATE VIEW v AS SELECT id, a FROM t");
+    Refused("INSERT INTO v VALUES (1, 2)", "'v' is a view");
+    Refused("UPDATE v SET a = 3", "'v' is a view");
+    Refused("DELETE FROM v WHERE id = 1", "'v' is a view");
+    Refused("CREATE INDEX ix ON v (a)", "'v' is a view");
+    EXPECT_EQ(Run("SELECT * FROM v"), "id,a") << "DP-S2: a SELECT reads one";
+    EXPECT_NE(Run("INSERT INTO v VALUES (1, 2)").find("NOT_IMPLEMENTED"), std::string::npos)
+        << Run("INSERT INTO v VALUES (1, 2)");
+}
+
+TEST_F(ViewTest, ANonAbsorbableBodyIsWarnedAndSaidSo) {
+    Ok("CREATE TABLE t (id int64, a int64)");
+    const std::string created =
+        Run("CREATE VIEW totals (a, n) AS SELECT a, COUNT(*) FROM t GROUP BY a");
+    ASSERT_EQ(created.rfind("CREATED VIEW totals oid=", 0), 0u) << created;
+    EXPECT_NE(created.find("WARNING: its body is not absorbable"), std::string::npos);
+    EXPECT_EQ(Run("SELECT absorbable, columns FROM sys.views"), "absorbable,columns\\n0,a, n");
+}
+
+TEST_F(ViewTest, ColumnNamesAreTheViewsOwnAndUnique) {
+    Ok("CREATE TABLE p (id int64, k int64)");
+    Ok("CREATE TABLE c (id int64, k int64)");
+    Refused("CREATE VIEW v (x) AS SELECT id, k FROM p", "names 1 columns and its body returns 2");
+    Refused("CREATE VIEW v AS SELECT p.id, c.id FROM p JOIN c ON p.k = c.k",
+            "two columns named 'id'");
+    Ok("CREATE VIEW v (pid, cid) AS SELECT p.id, c.id FROM p JOIN c ON p.k = c.k");
+    EXPECT_EQ(Run("SELECT columns FROM sys.views"), "columns\\npid, cid");
+}
+
+TEST_F(ViewTest, AWrongBodyIsRefusedAtItsCreate) {
+    Ok("CREATE TABLE t (id int64)");
+    Refused("CREATE VIEW v AS SELECT nope FROM t", "in the view's body");
+    Refused("CREATE VIEW v AS SELECT id FROM missing", "in the view's body");
+    Refused("CREATE VIEW v AS DELETE FROM t", "a view's body is a SELECT");
+    // An unlexable tail is the body's refusal; the parse that drains the
+    // statement to its end stops there too.
+    Refused("CREATE VIEW v AS SELECT id FROM t WHERE id = 'x", "in the view's body");
+    Refused("CREATE VIEW v AS SELECT id FROM t WHERE id = 1 #", "in the view's body");
+    EXPECT_EQ(Run("SELECT name FROM sys.views"), "name");
+}
+
+TEST_F(ViewTest, DescribeListsAViewsColumnsTyped) {
+    Ok("CREATE TABLE t (id int64, a varchar(32), b int64)");
+    Ok("CREATE VIEW v (key, label) AS SELECT id, a FROM t");
+    const std::string described = Run("DESCRIBE v");
+    EXPECT_NE(described.find(",key,"), std::string::npos) << described;
+    EXPECT_NE(described.find(",label,"), std::string::npos) << described;
+    EXPECT_EQ(described.find(",b,"), std::string::npos) << described;
+}
+
+TEST_F(ViewTest, ACreateInsideATransactionIsRolledBack) {
+    Ok("CREATE TABLE t (id int64)");
+    Session session;
+    ASSERT_EQ(Run(session, "BEGIN").substr(0, 5), "BEGIN");
+    EXPECT_EQ(Run(session, "CREATE VIEW v AS SELECT id FROM t").rfind("CREATED VIEW", 0), 0u);
+    Run(session, "ROLLBACK");
+    EXPECT_EQ(Run("SELECT name FROM sys.views"), "name");
+    Ok("DROP TABLE t");  // nothing reads it any more
+}
+
+TEST_F(ViewTest, ADropInsideATransactionIsRolledBack) {
+    Ok("CREATE TABLE t (id int64)");
+    Ok("CREATE VIEW v AS SELECT id FROM t");
+    Session session;
+    ASSERT_EQ(Run(session, "BEGIN").substr(0, 5), "BEGIN");
+    EXPECT_EQ(Run(session, "DROP VIEW v").rfind("DROPPED VIEW", 0), 0u);
+    Run(session, "ROLLBACK");
+    EXPECT_EQ(Run("SELECT name, source_text FROM sys.views"),
+              "name,source_text\\nv,SELECT id FROM t");
+    Refused("DROP TABLE t", "view 'v' reads it");
+}
+
+TEST_F(ViewTest, ANamespaceHoldingAViewIsNotDropped) {
+    Ok("CREATE NAMESPACE app");
+    Ok("CREATE TABLE t (id int64)");
+    Ok("CREATE VIEW app.v AS SELECT id FROM public.t");
+    EXPECT_NE(Run("SELECT namespace, name FROM sys.views").find("app,v"), std::string::npos);
+    Refused("DROP NAMESPACE app", "view 'v'");
+}
+
+// ---- DP-S2: absorption -------------------------------------------------
+
+// A fixture of two relations a view joins: orders and their customers.
+class ViewReadTest : public ViewTest {
+protected:
+    void SetUp() override {
+        ViewTest::SetUp();
+        Ok("CREATE TABLE c (id int64, name varchar(32), region int64)");
+        Ok("CREATE TABLE o (id int64, cid int64, amount int64, status int64)");
+        Ok("INSERT INTO c VALUES (1, 'ann', 10), (2, 'bob', 20), (3, 'cid', 10)");
+        Ok("INSERT INTO o VALUES (1, 1, 100, 0), (2, 1, 200, 1), (3, 2, 300, 1), "
+           "(4, 3, 400, 1)");
+    }
+};
+
+TEST_F(ViewReadTest, AnAbsorbedViewAnswersAsItsExpansion) {
+    Ok("CREATE VIEW open_orders (oid, cid, amount) AS SELECT id, cid, amount FROM o "
+       "WHERE status = 1");
+    EXPECT_EQ(Run("SELECT oid, amount FROM open_orders WHERE cid = 1"), "oid,amount\\n2,200");
+    EXPECT_EQ(Run("SELECT open_orders.amount FROM open_orders WHERE oid = 3"),
+              "open_orders.amount\\n300");
+    // `*` is the view's columns under its names (DP-Q12).
+    EXPECT_EQ(Run("SELECT * FROM open_orders WHERE amount > 250"),
+              "oid,cid,amount\\n3,2,300\\n4,3,400");
+    // A fold over a view's column.
+    EXPECT_EQ(Run("SELECT cid, SUM(amount) FROM open_orders GROUP BY cid ORDER BY cid"),
+              "cid,sum(amount)\\n1,200\\n2,300\\n3,400");
+}
+
+TEST_F(ViewReadTest, AViewsBaseColumnsAreNotTheReadersNames) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    // DP-Q23: `status` and `amount` are the body's, not the reader's.
+    EXPECT_EQ(Run("SELECT amount FROM open_orders").rfind("ERR", 0), 0u)
+        << Run("SELECT amount FROM open_orders");
+    EXPECT_EQ(Run("SELECT oid FROM open_orders WHERE status = 0").rfind("ERR", 0), 0u);
+    EXPECT_EQ(Run("SELECT o.amount FROM open_orders").rfind("ERR", 0), 0u);
+    Refused("SELECT open_orders.amount FROM open_orders", "view 'open_orders' has no column");
+}
+
+TEST_F(ViewReadTest, AJoinViewJoinsAndIsJoined) {
+    Ok("CREATE VIEW sales (oid, who, region, amount) AS SELECT o.id, c.name, c.region, "
+       "o.amount FROM o JOIN c ON o.cid = c.id WHERE o.status = 1");
+    EXPECT_EQ(Run("SELECT who, amount FROM sales WHERE region = 10 ORDER BY amount"),
+              "who,amount\\nann,200\\ncid,400");
+    // The view joined to a relation, its column in the ON.
+    EXPECT_EQ(Run("SELECT c.name, sales.amount FROM c JOIN sales ON c.region = sales.region "
+                  "WHERE c.id = 2"),
+              "c.name,sales.amount\\nbob,300");
+    // Two readings of one view: each absorption's names are its own.
+    EXPECT_EQ(Run("SELECT a.oid, b.oid FROM sales AS a JOIN sales AS b ON a.region = b.region "
+                  "WHERE a.oid = 2 ORDER BY b.oid"),
+              "a.oid,b.oid\\n2,2\\n2,4");
+}
+
+TEST_F(ViewReadTest, AViewReadInASubqueryAndASubqueryInAView) {
+    Ok("CREATE VIEW big (oid, cid) AS SELECT id, cid FROM o WHERE amount >= 300");
+    EXPECT_EQ(Run("SELECT name FROM c WHERE id IN (SELECT cid FROM big) ORDER BY name"),
+              "name\\nbob\\ncid");
+    Ok("CREATE VIEW buyers (cid, name) AS SELECT id, name FROM c WHERE EXISTS (SELECT id "
+       "FROM o WHERE o.cid = c.id AND o.status = 0)");
+    EXPECT_EQ(Run("SELECT name FROM buyers"), "name\\nann");
+}
+
+TEST_F(ViewReadTest, AnalyzeNamesAViewsRelationsByItsPath) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    const std::string plan = Run("ANALYZE SELECT oid FROM open_orders WHERE oid = 2");
+    EXPECT_NE(plan.find("o AS open_orders.o"), std::string::npos) << plan;
+}
+
+TEST_F(ViewReadTest, AViewsBodyReadsItsOwnNamespace) {
+    Ok("CREATE NAMESPACE app");
+    Ok("CREATE TABLE app.o (id int64, cid int64)");
+    Ok("INSERT INTO app.o VALUES (7, 7)");
+    Ok("CREATE VIEW app.mine AS SELECT id FROM o");
+    // Read from `public`: the body's `o` is still app's (DP-Q21).
+    EXPECT_EQ(Run("SELECT id FROM app.mine"), "id\\n7");
+}
+
+// DP-R4, DP-Q6, DP-Q7: a plan made through a view names its inner relations
+// by the view's path, carries the view in its key, and RESTRICTs the view's
+// drop while it is enabled.
+TEST_F(ViewReadTest, APlanMadeThroughAViewNamesItAndRestrictsItsDrop) {
+    Ok("CREATE VIEW sales (oid, who, amount) AS SELECT o.id, c.name, o.amount FROM o JOIN c "
+       "ON o.cid = c.id");
+    const std::string created =
+        Run("CREATE PLAN p FOR SELECT who FROM sales WHERE oid = 2 VARIANT only ELSE ORDER "
+            "(sales.c, sales.o)");
+    ASSERT_EQ(created.rfind("ERR", 0), std::string::npos) << created;
+    const std::string plans = Run("SELECT name, state, variants FROM sys.plans");
+    EXPECT_NE(plans.find("ORDER (sales.c, sales.o)"), std::string::npos) << plans;
+    // The plan applies, and the answer is the statement's.
+    EXPECT_EQ(Run("SELECT who FROM sales WHERE oid = 2"), "who\\nann");
+    Refused("DROP VIEW sales", "plan 'p' names this view");
+    Ok("DROP PLAN p");
+    Ok("DROP VIEW sales");
+}
+
+TEST_F(ViewReadTest, APlanNamesOnlyTheRelationsOfTheStatementsBlock) {
+    Ok("CREATE VIEW sales (oid, who) AS SELECT o.id, c.name FROM o JOIN c ON o.cid = c.id");
+    // The view's inner relations are named by its path, never bare.
+    Refused("CREATE PLAN p FOR SELECT who FROM sales WHERE oid = 2 VARIANT only ELSE ORDER "
+            "(c, o)",
+            "ERR");
+}
+
+// DP-Q10: a locking read through a view over one relation claims that
+// relation's rows; through a join it is refused.
+TEST_F(ViewReadTest, ForUpdateThroughAOneRelationView) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    Ok("CREATE VIEW sales (oid, who) AS SELECT o.id, c.name FROM o JOIN c ON o.cid = c.id");
+    Session session;
+    ASSERT_EQ(Run(session, "BEGIN").substr(0, 5), "BEGIN");
+    EXPECT_EQ(Run(session, "SELECT oid, cid FROM open_orders WHERE cid = 1 FOR UPDATE"),
+              "oid,cid\\n2,1");
+    const std::string joined = Run(session, "SELECT oid FROM sales WHERE oid = 1 FOR UPDATE");
+    EXPECT_NE(joined.find("FOR UPDATE through a view over a join is not supported"),
+              std::string::npos)
+        << joined;
+    Run(session, "ROLLBACK");
+}
+
+// A write's `FROM` reads a view like any SELECT does (DP-Q9 refuses only a
+// write naming one as its target).
+TEST_F(ViewReadTest, AWritesFromReadsAView) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    Ok("UPDATE c SET region = 99 FROM open_orders WHERE open_orders.cid = c.id");
+    EXPECT_EQ(Run("SELECT id FROM c WHERE region = 99 ORDER BY id"), "id\\n1\\n2\\n3");
+}
+
+// DP-R5: the binding is the view's oid, then its body's relations.
+TEST_F(ViewReadTest, AStatementThroughAViewIsItsOwnShape) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    Run("SELECT oid FROM open_orders WHERE oid = 2");
+    Run("SELECT id FROM o WHERE status = 1 AND id = 2");
+    const std::string stats = Run("SELECT relations FROM sys.statement_stats");
+    EXPECT_NE(stats.find("public.open_orders, public.o"), std::string::npos) << stats;
+}
+
+// DP-Q6 over one relation and beside a written relation: the statement's
+// references are not the key's positions, so the plan is not read as renamed
+// out of reach (`PlanRowCanMatch`), and it RESTRICTs the view's drop.
+TEST_F(ViewReadTest, APlanThroughAViewBesideItsCountOfRelationsStillRestrictsTheDrop) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    Ok("CREATE PLAN p1 FOR SELECT oid FROM open_orders WHERE oid = 2 VARIANT only ELSE ORDER "
+       "(open_orders.o) ACCESS open_orders.o SCAN");
+    Ok("CREATE PLAN p2 FOR SELECT c.name FROM open_orders JOIN c ON open_orders.cid = c.id "
+       "WHERE c.id = 1 VARIANT only ELSE ORDER (c, open_orders.o)");
+    const std::string plans = Run("SELECT name, state FROM sys.plans ORDER BY name");
+    EXPECT_EQ(plans.find("invalid"), std::string::npos) << plans;
+    Refused("DROP VIEW open_orders", "plan 'p");
+    Ok("DROP PLAN p1");
+    Refused("DROP VIEW open_orders", "plan 'p2' names this view");
+    Ok("DROP PLAN p2");
+    Ok("DROP VIEW open_orders");
+}
+
+// DP-Q7's path is read whole: a `.` with no name after it is refused at
+// the token that stands there.
+TEST_F(ViewReadTest, APlansViewPathWithNoNameAfterADotIsRefusedThere) {
+    Ok("CREATE VIEW sales (oid, who) AS SELECT o.id, c.name FROM o JOIN c ON o.cid = c.id");
+    const std::string sql =
+        "CREATE PLAN p FOR SELECT who FROM sales WHERE oid = 2 VARIANT only ELSE ORDER "
+        "(sales., sales.o)";
+    Refused(sql, "a view's path names a relation after each '.' (byte " +
+                     std::to_string(sql.find("., sales.o") + 1) + ")");
+}
+
+// The query layer's walk of one written name is shared only within one
+// namespace: a view's body names its relations in its own (DP-Q21).
+TEST_F(ViewReadTest, TheQueryLayerReadsABodysRelationInItsOwnNamespace) {
+    Ok("CREATE NAMESPACE app");
+    Ok("CREATE TABLE app.o (id int64, cid int64, amount int64, status int64)");
+    Ok("INSERT INTO app.o VALUES (70, 70, 700, 1)");
+    Ok("CREATE VIEW app.ids (id) AS SELECT DISTINCT id FROM o");  // not absorbable
+    EXPECT_EQ(Run("SELECT id FROM o UNION ALL SELECT id FROM app.ids"),
+              "id\\n1\\n2\\n3\\n4\\n70");
+    EXPECT_EQ(Run("SELECT id FROM app.ids UNION ALL SELECT id FROM o"),
+              "id\\n70\\n1\\n2\\n3\\n4");
+}
+
+// DP-Q21 in the binding: a body's relation is declared with no unqualified
+// namespace of the reader's, so a text that names everything qualified is
+// one shape under any `USE` (DI), the query layer's body as the native one.
+TEST_F(ViewReadTest, ABodysRelationCarriesNoUnqualifiedNamespaceOfTheReaders) {
+    Ok("CREATE NAMESPACE app");
+    Ok("CREATE TABLE app.o (id int64, cid int64, amount int64, status int64)");
+    Ok("CREATE VIEW app.ids (id) AS SELECT DISTINCT id FROM o");  // the query layer's
+    Ok("CREATE VIEW app.mine (id) AS SELECT id FROM o");          // absorbed
+    Session s;
+    for (const char* use : {"USE public", "USE app"}) {
+        ASSERT_EQ(Run(s, use).rfind("ERR", 0), std::string::npos) << use;
+        Run(s, "SELECT id FROM app.ids");
+        Run(s, "SELECT id FROM app.mine");
+    }
+    const std::string stats = Run("SELECT relations, calls FROM sys.statement_stats");
+    EXPECT_NE(stats.find("app.ids, app.o,2"), std::string::npos) << stats;
+    EXPECT_NE(stats.find("app.mine, app.o,2"), std::string::npos) << stats;
+}
+
+// DP-Q10 under the lock family: a locking read's window is folded from its
+// conjuncts by column name, and through a view the name is the view's - here
+// `id`, over the relation's `v`, which must declare no window over the
+// relation's tuple keys. Every row returned is held.
+class ViewLockTest : public LockFamilyTest {};
+
+TEST_F(ViewLockTest, ALockingReadThroughAViewHoldsEveryRowItReturns) {
+    ASSERT_EQ(Local("INSERT INTO t VALUES (1, 2), (2, 1), (5, 1)").rfind("INSERTED", 0), 0u);
+    ASSERT_EQ(Local("CREATE VIEW sw (id, k) AS SELECT v, id FROM t").rfind("CREATED", 0), 0u);
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("SELECT k FROM sw WHERE id BETWEEN 1 AND 2 FOR UPDATE",
+                                    &holder)
+                  .response,
+              "k\\n1\\n2\\n5");
+    Session writer;
+    Started w = Start("UPDATE t SET v = 9 WHERE id = 5", writer);
+    Pump();
+    EXPECT_FALSE(*w.done) << "row 5 was returned unheld: " << w.out->response;
+    ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*w.done);
+    EXPECT_EQ(w.out->response, "UPDATED 1");
+}
+
+// ---- DP-S3: nesting, a non-absorbable body ------------------------------
+
+// DP-Q8: a view over a view absorbs inside out, to depth 8; a ninth level is
+// refused at its create.
+TEST_F(ViewReadTest, ViewsNestToDepthEight) {
+    Ok("CREATE VIEW n1 (oid, amount) AS SELECT id, amount FROM o WHERE amount > 100");
+    for (int k = 2; k <= 8; ++k) {
+        Ok("CREATE VIEW n" + std::to_string(k) + " AS SELECT oid, amount FROM n" +
+           std::to_string(k - 1) + " WHERE oid > " + std::to_string(k - 2));
+    }
+    EXPECT_EQ(Run("SELECT oid FROM n5 ORDER BY oid"), "oid\\n4") << "oid > 3, amount > 100";
+    EXPECT_EQ(Run("SELECT oid FROM n8"), "oid") << "oid > 6: no row";
+    EXPECT_EQ(Run("SELECT oid FROM n3 ORDER BY oid"), "oid\\n2\\n3\\n4");
+    // The query layer derives the eight levels too: its bound is the same.
+    EXPECT_EQ(Run("SELECT DISTINCT oid FROM n5"), "oid\\n4");
+    EXPECT_EQ(Run("SELECT DISTINCT oid FROM n8"), "oid");
+    Refused("CREATE VIEW n9 AS SELECT oid FROM n8", "views nest deeper than 8");
+    Refused("CREATE VIEW n9 (n) AS SELECT COUNT(*) FROM n8", "views nest deeper than 8");
+    // A view read in a subquery or a derived table of the body is a level
+    // too: the query layer counts it wherever it stands.
+    Refused("CREATE VIEW n9 AS SELECT id FROM o WHERE id IN (SELECT oid FROM n8)",
+            "views nest deeper than 8");
+    Refused("CREATE VIEW n9 (x) AS SELECT oid FROM (SELECT oid FROM n8) AS d",
+            "views nest deeper than 8");
+    // The inner view is read by the outer, so it is not dropped under it.
+    Refused("DROP VIEW n1", "view 'n2' reads it");
+    const std::string plan = Run("ANALYZE SELECT oid FROM n2 WHERE oid = 3");
+    EXPECT_NE(plan.find("o AS n2.n1.o"), std::string::npos) << plan;
+    EXPECT_NE(Run("DESCRIBE n3").find(",amount,"), std::string::npos) << Run("DESCRIBE n3");
+}
+
+// A view over a view the same transaction created: the create reads its
+// own transaction's view as a view, and both leave with its rollback.
+TEST_F(ViewReadTest, AViewOverAViewOfTheSameTransaction) {
+    Ok("BEGIN");
+    Ok("CREATE VIEW t1 (oid) AS SELECT id FROM o WHERE id > 1");
+    Ok("CREATE VIEW t2 AS SELECT oid FROM t1 WHERE oid > 2");
+    EXPECT_EQ(Run("SELECT oid FROM t2 ORDER BY oid"), "oid\\n3\\n4");
+    Ok("ROLLBACK");
+    Refused("SELECT oid FROM t2", "no relation named 't2'");
+    Refused("SELECT oid FROM t1", "no relation named 't1'");
+}
+
+// DP-Q2, DP-R6: a non-absorbable body answers as a derived table, whole,
+// whatever the reader's filter.
+TEST_F(ViewReadTest, ANonAbsorbableViewAnswersAsADerivedTable) {
+    Ok("CREATE VIEW per_customer (cid, total, n) AS SELECT cid, SUM(amount), COUNT(*) FROM o "
+       "GROUP BY cid");
+    EXPECT_EQ(Run("SELECT cid, total FROM per_customer WHERE n > 1"), "cid,total\\n1,300");
+    EXPECT_EQ(Run("SELECT c.name, p.total FROM c JOIN per_customer AS p ON c.id = p.cid "
+                  "WHERE p.total >= 300 ORDER BY c.name"),
+              "c.name,p.total\\nann,300\\nbob,300\\ncid,400");
+    Ok("CREATE VIEW top1 AS SELECT id, amount FROM o ORDER BY amount DESC LIMIT 1");
+    // The reader's filter is applied to the body's one row, never pushed
+    // under its LIMIT: no row, not the largest row with amount < 400.
+    EXPECT_EQ(Run("SELECT id FROM top1 WHERE amount < 400"), "id");
+    // A view over a non-absorbable view is itself a query-layer body.
+    const std::string made =
+        Run("CREATE VIEW big_customers (cid) AS SELECT cid FROM per_customer WHERE total > 300");
+    EXPECT_NE(made.find("CREATED VIEW"), std::string::npos) << made;
+    EXPECT_EQ(Run("SELECT cid FROM big_customers"), "cid\\n3");
+}
+
+// VW7: an `INSERT ... SELECT` reads a view as any SELECT does, and a shape
+// through a view is opted into Waystone as its own.
+TEST_F(ViewReadTest, AnInsertSelectAndAnOptInReadAView) {
+    Ok("CREATE VIEW open_orders (oid, cid) AS SELECT id, cid FROM o WHERE status = 1");
+    Ok("CREATE TABLE copy (id int64, cid int64)");
+    Ok("INSERT INTO copy SELECT oid, cid FROM open_orders");
+    EXPECT_EQ(Run("SELECT id FROM copy ORDER BY id"), "id\\n2\\n3\\n4");
+    const std::string opted = Run("WAYSTONE ON SELECT cid FROM open_orders WHERE oid = 2");
+    EXPECT_EQ(opted.rfind("ERR", 0), std::string::npos) << opted;
+    EXPECT_EQ(Run("SELECT cid FROM open_orders WHERE oid = 2"), "cid\\n1");
+}
+
+}  // namespace
+}  // namespace kds::server

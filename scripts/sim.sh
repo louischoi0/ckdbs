@@ -93,6 +93,9 @@ for seed in $COMMITTED $FRESH_SEEDS; do
     # The advisory-feature pairing (SIM06): one op stream, two instances
     # differing only in the three switches.
     run_one "seed=$seed pair" --seed "$seed" --ops "$OPS" --iterations 1 --pair
+    # DP-R1's differential (sim/view_diff.hpp): each statement through a view
+    # against the same statement with the body as a derived table.
+    run_one "seed=$seed view-diff" --seed "$seed" --ops "$OPS" --iterations 1 --view-diff
 done
 
 echo "sim: $runs run(s), $failures failure(s)"

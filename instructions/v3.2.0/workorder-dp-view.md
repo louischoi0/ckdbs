@@ -1,6 +1,6 @@
 # Work order DP - VIEW: a named, stored SELECT that a statement's block absorbs by text before any plan is chosen, so a statement through a view runs the chain, the plan sources and the access ladder its expansion would run
 
-Status: **WRITTEN 2026-11-22, not opened.** Written in the main checkout on
+Status: **CLOSED 2026-11-22 on the operator's standing go-ahead (go-ahead-achieving-milestone; `raft-marks-2026-11-22.md` §5, §6), not landed.** DP-S0..S3 on `worktree-dp-view` (worktree `sync-stale-records`) at `03242261`, `184b1c2c`, `5e2491fe`, `78a32c4f`; the close measured at `v3.5.0-84-g78a32c4f` (`bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`); DP-Q14..Q23 adopted (a) under that word, DP-Q22 revised to (b), DP-Q1's wording revised, DP-R11's `[provisional]` lifted. The contract is `docs/spec/view.md`. Opened at `30c47abf`; written 2026-11-22. Written in the main checkout on
 `main` at `71013396` (`v3.4.17-94-g71013396f`) on the operator's words of
 2026-11-21 and 2026-11-22 (§0; `raft-marks-2026-11-22.md` §3). The letter
 DP, the shape of §2, the rules, the items and the stages are CLA's
@@ -291,8 +291,13 @@ Binding once DP opens.
 
 ## 4. Items for the operator (DP-Q)
 
-(a) is CLA's proposal in each. **Every item is marked (a) by the
-operator, 2026-11-22** (`raft-marks-2026-11-22.md` §4).
+(a) is CLA's proposal in each. **DP-Q0..Q13 are marked (a) by the
+operator, 2026-11-22** (`raft-marks-2026-11-22.md` §4). **DP-Q14..Q22 were
+raised at DP-S0 and are adopted (a) on the operator's standing go-ahead of
+2026-11-22 (go-ahead-achieving-milestone)** - CLA's proposals, not the
+operator's per-item mark (`raft-marks-2026-11-22.md` §5); DP-Q16
+`[quiet-wrong]` and DP-Q17 `[plan-identity]` among them, each premise
+re-read against the tree at `30c47abf` before its adoption (§7, DP-S0).
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -310,6 +315,15 @@ operator, 2026-11-22** (`raft-marks-2026-11-22.md` §4).
 | DP-Q11 | `SELECT *` in a body. | **a body over one relation may write `*`; it is expanded at `CREATE VIEW` to the columns then live and stored so** - an `ADD COLUMN` later does not change the view, so its shape and its plan key do not move | (b) `*` refused in a body |
 | DP-Q12 | `SELECT *` from a view over a join. | **admitted**: the view's columns are its own named list, so the statement reads no join's `*`; the native parser's refusal (`parser-v2.md:148`) is of a `*` written over a written join, which this is not | (b) refused, as a joined `*` is |
 | DP-Q13 | Who may create a view. | **`admin`, as every DDL is** (`docs/spec/protocol.md:142`: ranks, not grant sets, no per-relation `GRANT`); a read through a view is a `SELECT`, `readonly`'s. With no per-relation grant there is nothing a view could hide, so DP gives it no access meaning | (b) `readwrite` may create a view: the first DDL below `admin`, a change to the rank table |
+| DP-Q14 | How `sys.views` stores its rows (raised at DP-S0). | **fixed-width rows, one relation, written by the catalog's transactional typed-row writer** - a header row, the text in 192-byte chunks, one row a column name, one row a dependency - placed under the DDL's transaction (`InsertRow`, `catalog.cpp:475`), delete-marked by the drop as `DropTable`'s sweep marks a relation's rows (`catalog.cpp:2470-2520`), read through `ScanAll`'s view filter (DT3); a body of at most 16,384 bytes | (b) a transactional var-length writer for a declaration-shaped relation: none exists - `InsertDeclaration` writes at `kBootstrapXid` and `ScanDeclarations` filters by no view (`declaration_relation.cpp:82-239`) - so it is a writer and a reader to build for one relation |
+| DP-Q15 | How a view's columns are named (raised at DP-S0). | **`CREATE VIEW v [(c1, ...)] AS <select>`**: the list names the columns; without it a column is named by its item - a column's name, or a query-layer item's alias; two columns of one name are refused `InvalidArgument`, naming the list as the remedy. **The native select list carries no alias** (`ColumnName`, `ast.hpp:147`), so a body that writes `AS` in its select list is not a native block and is non-absorbable: §2's "plain columns with optional aliases" is read as plain columns and the view's column list (a revision of DP-Q1's wording, below) | (b) the native grammar taught select-list aliases: a grammar change to every native SELECT, for a name a column list already gives |
+| DP-Q16 `[quiet-wrong]` | What a view's column dependencies are (raised at DP-S0). | **a dependency on every column of a relation the body reads whose name the body's text names** (every column for a `*` body); `DROP COLUMN` or `RENAME COLUMN` of one is RESTRICT; **and `ADD COLUMN`, or `RENAME COLUMN` to a name the body's text names, on a relation the body reads, is RESTRICT too** - a new column of that name could re-point a bare name in the stored body (a correlated subquery's name resolved outward today would resolve to the new inner column, `step_compiler.cpp:697-728`), which changes a view's answer with no statement naming the change | (b) relation-level: every column change of a relation a view reads refused |
+| DP-Q17 `[plan-identity]` | The plan key's shape with a view (raised at DP-S0). | **`n` and `oids[]` stay the block's base relations**, so every order and pin is measured by them as today (`captured_plans.hpp:70-93`, `admin_plans.cpp:106-120`), **and the key gains a view list**: every view oid the block absorbed, in declaration order, at most 16, compared and hashed with the rest; `sys.plans`' text carries it as `views=`, absent for none, so no stored row changes meaning; a block absorbing more views has no plan | (b) the view oids folded into the key's `fetch_id`: one field, but `PlanRowCanMatch`'s fetch-id comparison (`plan_catalog.cpp:582`) and every display of the key would read a number no parse produces |
+| DP-Q18 | DP-R10's fast path (raised at DP-S0). | **a catalog word "a view exists or has existed since mount"**, set at mount from `sys.objects` and by every `CREATE VIEW`, never cleared: while it is clear a compile asks nothing; once set, each `FROM` name of every block is asked as a view before it binds, measured at DP-S4 | (b) always asked: one name lookup a relation for every statement on every instance |
+| DP-Q19 | `ANALYZE`'s mark on a view's conjuncts (raised at DP-S0; §2's step 3). | **not built**: an absorbed relation's step is named `<table> AS <view>.<inner>` (DP-Q7), which says where it came from; the conjuncts carry no mark, since no reader consumes one and a new chain field would enter the configurations the contract suites compare | (b) a `from_view` flag on each lowered conjunct, printed by `ANALYZE` |
+| DP-Q20 | A non-absorbable body at `CREATE VIEW` (raised at DP-S0). | **compiled by the query layer without running** - a describe entry beside `RunQuery` - so its relations resolve, its columns are named and typed, and a wrong body is refused at its `CREATE`, not at its first read | (b) parsed only, refused at its first read |
+| DP-Q21 | Where a body's unqualified names resolve (raised at DP-S0). | **in the view's own namespace**, whatever the reading session's `USE` (DP-R3: the body is fixed for its oid's life) | (b) in the reader's namespace: one view text meaning other relations under another `USE` |
+| DP-Q22 | `DROP VIEW` against a running reader (raised at DP-S0). | **no lock of its own**: a reader declares the view's oid (DP-R5) and holds `IS` on every base relation it absorbed, so a drop changes nothing a running statement reads; `DROP VIEW` waits for nothing | (b) `DROP VIEW` takes the view oid's `X` under the 1 s fault net, as `DROP TABLE` takes a relation's |
 
 ## 5. Stages
 
@@ -363,3 +377,351 @@ table it reads; the cost stated - `sys.views` needs a transactional row
 write, not `declaration_relation.hpp`'s `kBootstrapXid` writer), DP-Q13
 (every DDL is `admin`'s and there is no per-relation grant), and the rest
 in one line each. The operator marked all fourteen (a).
+
+### DP-S0 - the census, 2026-11-22
+
+Opened on the operator's standing go-ahead of 2026-11-22
+(go-ahead-achieving-milestone, `raft-marks-2026-11-22.md` §5), in worktree
+`sync-stale-records` on branch `worktree-dp-view` at `30c47abf`. Every
+`[source-read]` line below was read at `30c47abf`; the full suite ran 0
+failed of 5107 there (Debug, before any DP change). No engine code.
+
+**Every site that takes a resolved `FROM` oid as a table.**
+
+- The native bind is one loop: `CompileBlock`'s step 1
+  (`src/exec/step_compiler.cpp:2575-2591`) resolves every relation of the
+  `FROM`, every `JOIN` and every subquery block, declares it
+  (`PositionSink::Position`) and reads its schema. **`exec::Compile`
+  (`:2290`) is not the one entry above it**: every nested block reaches
+  `CompileBlock` through `LowerSubquery` (`:2201-2226`, called at `:3116`),
+  and `exec::CompileWhere` (`:2408`) lowers an `UPDATE`'s, a `DELETE`'s and
+  a `FOR UPDATE`'s `WHERE` subqueries the same way (`:2428`;
+  `command_dispatcher.cpp:12424`, `:16049`, `:13133`) - `UPDATE ... FROM`
+  and `DELETE ... USING` among them, parsed as an `EXISTS` over the named
+  relation (`parser.cpp:3602-3614`). So absorption stands at
+  `CompileBlock`'s head, before step 1, which every native caller reaches:
+  `SelectBody` (`command_dispatcher.cpp:10753`), an `UPDATE`'s scalar
+  subquery (`:11546`, `:11556`), `ON CONFLICT ... DO UPDATE`'s subqueries
+  (`:7947`), the query layer's `DescribeRelation` (`:11675`), `WAYSTONE
+  ON`/`OFF` (`:14898`, `:14927`), `CREATE PLAN` (`:15193`), `ADVISE PLAN`
+  (`:15475`), and `CompileWhere`'s three callers above.
+- Read off the compiled chain as though one written relation were one
+  step, and so to be fixed for an absorbed block: `SELECT *`'s rendering
+  from `steps[0]`'s schema (`:10974-10983`), the query layer's
+  `DescribeRelation`, which describes `steps[0].rel_oid`'s columns
+  (`:11678-11695`) while its `WalkRelation` renders the walk's rows, so the
+  two must agree on the view's columns or `SourceRows`' width check
+  (`query_layer.cpp:1296-1302`) refuses, `CREATE PLAN`'s and
+  `ADVISE PLAN`'s bindings and key oids by written position (`:15180`,
+  `:15206-15210`, `:15463-15487`, `:15538`), and `PlanRowCanMatch`'s
+  written-name check (`src/exec/plan_catalog.cpp:570-600`, which answers
+  "nothing established" when the counts differ, `:575`).
+- `FOR UPDATE` compiles no chain: `RunLockingRead` resolves the one
+  relation and lowers its `WHERE` and select list by `CompileWhere` and
+  `CompileSelectList` (`:13101-13136`), so DP-Q10 is served there by the
+  absorbed statement, not by `Compile`.
+- The query layer resolves a relation through `LayerHost::DescribeRelation`
+  and `WalkRelation` (`src/exec/query_layer.cpp:662-703`, `:1284-1306`); a
+  derived table is `FromItem::derived` (`ast.hpp:977-981`), but **the
+  runner reads every block's `where_spans` against one statement text**
+  (`query_layer.cpp:884-899`), so a view's block parsed from its own text
+  must carry its own text into the runner, or a pushed conjunct would be
+  read from the wrong bytes.
+- Writes and DDL resolve their target through `Catalog::ResolveRelation`,
+  whose gate matches `kTypeTable` only (`catalog.cpp:1601`, `:2213-2271`):
+  `INSERT` (`:7919`), `UPDATE` (`:12347`), `DELETE` (`:16024`),
+  `RETURNING` (`:11776`), `PURGE` (`:15597`, `:15826`), the KWP load
+  (`kwp_load_server.cpp:391`), and every DDL target (`CREATE INDEX`,
+  Cabin, `ALTER`, `DROP TABLE`, a foreign key's parent, Transition,
+  Assertion). **DP-Q9's refusal is therefore one arm in the gate's miss
+  path** - a name that is a view answers `NotImplemented` naming it -
+  reaching every one of them at once.
+
+**Every DDL that must ask a view's dependency list.** `DROP TABLE`'s
+`restricted` lambda (`command_dispatcher.cpp:5137-5219`, asked before and
+under the relation's `X`); `ALTER ... RENAME TO` and `RENAME COLUMN`
+(`HandleAlter`, `:4653-4792`, beside AL4's assertion RESTRICT at `:4724`);
+`DROP COLUMN` (`DropColumnRestriction`, `:4794`); `ADD COLUMN` (DP-Q16);
+`DROP NAMESPACE` (`Catalog::CheckNamespaceEmpty`, `catalog.cpp:1743`,
+which counts `kTypeTable` and `kTypeDroppedTable` rows only, `:1754-1756`,
+so it must count a view as an occupant - a name check, not a dependency
+list); `DROP VIEW` of a view another view reads. The name checks -
+`CheckNameFree` (`catalog.cpp:1675-1705`), `FindTableOidByName`,
+`ExistingRelationReply` (`command_dispatcher.cpp:9546`) - test
+`kTypeTable` and so must count a view as a live name and its tombstone as a
+pending drop (NS6, CT7). `HighestIssuedUserOid` scans every `sys.objects`
+row (`catalog.cpp:900`), so a dropped view keeps a tombstone row and its oid
+is never reissued (DT2, DP-R3).
+
+**Where absorption stands in the compile.** Before `CompileBlock`'s bind
+loop and so before everything in `CompileBound`: the ON and WHERE lowering
+(`step_compiler.cpp:3089-3147`), equality propagation (`:3150`), the
+boolean-tree conjuncts (`:3135`), placement, and every plan source
+(`CompileBlock`'s step 1a on, `:2593-3052`). An inner join's ON is one flat
+conjunct list with the WHERE (`:3080-3086`), so a body's ON conjuncts may be
+appended wherever its relations land. **One resolver**: `ResolveColumn`
+(`:677-738`) - qualified
+by binding, unqualified exactly one match at the innermost level that has
+one - is extended rather than paralleled, so an absorbed view's columns are
+resolved by the rule every other column is.
+
+**The golden corpus.** `tests/testdata/parser_corpus.txt` (752 lines,
+`tests/parser_golden_test.cpp:185-196`) holds `CREATE`/`DROP` lines only
+with the hash `-` (not a patternable head), and no `VIEW` line: a new
+`CREATE VIEW` branch moves no hash and flips no verdict, so
+`kFingerprintVersion` stays 2 (DP-R7).
+
+**DP-Q0..Q13 restated against the census.** All stand as marked. Two read
+differently against the tree and are written down here, not re-opened:
+
+- **DP-Q1 `[quiet-wrong]`, premise re-read**: "an appended outer conjunct
+  cannot change the body's answer" holds for exactly the native block -
+  inner joins, conjuncts, plain columns - because an inner join's ON and
+  WHERE are one conjunct list (`step_compiler.cpp:3080-3086`). **The
+  wording "plain columns with optional aliases" is revised**: the native
+  select list has no alias (`ast.hpp:147`), so a view's column names come
+  from its column list (DP-Q15) and a body writing a select-list `AS` is a
+  query-layer body, non-absorbable. The revision narrows what is absorbed
+  and changes no answer: a body moved out of the absorbable set is answered
+  by the query layer as a derived table, which DP-R1 names as the answer.
+  Adopted so revised on the standing go-ahead.
+- **DP-Q4**: no transactional writer for a text-bearing system relation
+  exists (`declaration_relation.cpp:158-239`), so DP-Q4's "transactional, as
+  a relation's" is met by DP-Q14's fixed-width rows, written under the
+  DDL's transaction by the typed-row writer `sys.fkeys` uses.
+
+**DP-Q14..Q22 raised and adopted (a)** on the standing go-ahead (§4).
+DP-Q16 `[quiet-wrong]`'s premise, re-read: an unqualified name resolves at
+the innermost level that has a match (`step_compiler.cpp:697-728`; the
+query layer's `ResolveIn` by the same rule, `query_layer.cpp:417-456`), so a
+column added to a body's relation can capture a name a body subquery
+resolved outward - hence the `ADD COLUMN` arm. DP-Q17 `[plan-identity]`'s
+premise, re-read: `n` is both the key's width and the count every order and
+pin is measured by (`captured_plans.hpp:93`, `admin_plans.hpp:167-174`), so
+the view oids go beside it, not into it.
+
+**DP-S0's review** (`critics-developer`, on `03242261`). Applied: the false
+claim that `exec::Compile` is the one entry above the bind (corrected above:
+absorption stands at `CompileBlock`'s head, which `LowerSubquery` and
+`CompileWhere` reach too); nine line ranges; the query layer's
+`DescribeRelation` as a one-step site; `DROP NAMESPACE` reframed as a name
+check. Taken into DP-S1 and DP-S2 as design, each adopted on the standing
+go-ahead:
+
+- **Absorption takes no `PlanOptions`** - a block in, a block out - so
+  DP-R2's structural guarantee holds at `CompileBlock`'s head as it would in
+  `CompileBound`; §2's "inside `CompileBound`" is read so.
+- **DP-Q23 `[quiet-wrong]` (raised here): an absorbed body's names are its
+  own.** A view's base relations are bound unreachable from the reader's
+  names - the reader sees the view's columns under its binding and nothing
+  else - and the body's names resolve only among the body's relations, at
+  every level. Without it a reader's bare name could match a base column the
+  view does not project, and a body's bare name a reader's relation, with no
+  DDL at all. (a) one absorption id a view instance, carried by every name
+  and relation of its body, and `ResolveColumn` matching only an equal id;
+  (b) the body's names rewritten to fully qualified ones at absorption, which
+  needs a second resolver over the body's schemas. **(a) adopted.**
+- **DP-Q21's path**: a body's relations resolve in the view's namespace, and
+  are declared with no unqualified namespace (`statement_binding.hpp:96`), so
+  the reader's binding keeps its own.
+- **DP-Q22 revised to (b)**, against the tree: a `CREATE VIEW` takes a
+  blocking `IS` on every relation and view its body reads, held to its
+  decide, as a child's `CREATE TABLE` takes its parent's
+  (`command_dispatcher.cpp:5130-5136`), so a concurrent `DROP TABLE` or `DROP
+  VIEW` (which takes the view oid's `X` under the 1 s fault net) cannot commit
+  under it; and **absorption refuses a body whose names no longer resolve to
+  the dependency oids `sys.views` recorded**, so no path leaves a view
+  re-pointed at a relation created later under an old name. The revision is
+  the operator's standing go-ahead's, recorded in `raft-marks-2026-11-22.md`
+  §5.
+- **DP-Q17**: `CapturedKey::Names` reads the view list, so `EnabledNaming`
+  RESTRICTs `DROP VIEW` (DP-Q6); the posterior statistics key stays the base
+  relations' (advisory only).
+- **DP-Q18**: the word is the instance's (`InstanceWords`), since a catalog
+  is a core's.
+- Rejected: refusing a DDL on a view (`CREATE INDEX`, Cabin, Assertion,
+  Transition, `REFERENCES`) `Unsupported` rather than the gate's one
+  `NotImplemented`. A materialized view (§6) is the order that would make an
+  index or a constraint on a view admissible, so "nobody built it" is the
+  truthful code, and one gate answers every caller alike.
+
+### DP-S1 - the object, 2026-11-22
+
+Built on `worktree-dp-view` over `05e7cbc8`. A view is a `kTypeView` (36)
+row in `sys.objects` - one relation name space with the tables (NS6, CT7:
+`CheckNameFree` and `CheckNamespaceEmpty` count a view and an undecided view
+tombstone) - and its `sys.views` rows (oid 168, root page 19, superblock 40),
+fixed-width `SysViewRow`s written under the DDL's transaction (DP-Q14):
+`CREATE VIEW` and `DROP VIEW` roll back with their transaction (DP-Q4), and a
+dropped view is retyped to `kTypeDroppedView` (37), its oid never reissued
+(DP-R3). `Parser::ParseView` reads `CREATE VIEW [<ns>.]<name> [(<col>, ...)]
+AS <select>` and `DROP VIEW`; `CREATE OR REPLACE` and `CREATE MATERIALIZED`
+are refused `NotImplemented` at their word (DP-Q6, §6). A body the native
+grammar reads in §2's form is compiled and marked absorbable; any other is
+described by the query layer without running (`exec::DescribeQuery`,
+DP-Q20) and the create answers with a warning (DP-Q2). A native `*` is
+stored expanded (DP-Q11); a query-layer `*` sets `kViewStarWidth`, and no
+column may then be added under it. The view's unqualified names resolve in
+its own namespace (DP-Q21). `CREATE VIEW` holds `IS` on everything it reads
+and reads its body again under the grants, refused `TxnConflict` if the
+second reading binds other relations; `DROP VIEW` takes the view's `X`
+(DP-Q22 (b)). Dependencies RESTRICT `DROP TABLE`, `RENAME TO`, `RENAME
+COLUMN`, `DROP COLUMN`, `ADD COLUMN` and `DROP NAMESPACE` (DP-Q16); a view a
+view reads RESTRICTs its `DROP VIEW`. `ResolveRelation`'s gate answers a
+view's name `NotImplemented` for every write and DDL (DP-Q9). `sys.views`,
+`SHOW VIEWS`, and `DESCRIBE <view>` (`sys.columns`' view arm, typed by the
+query layer's describe). The "a view has existed" word is the instance's
+(`InstanceWords::views_seen`, DP-Q18). Tests: `tests/view_test.cpp` (18).
+Suite: 0 failed of 5126 (Debug, `-j8`). Overhead not measured; measured at
+the milestone's close.
+
+**DP-S1's review** (`critics-developer`). Fixed by the reviewer: a
+query-layer `*` body recorded no column dependencies (C1); `DESCRIBE` of a
+`*` view under a column list after an `ADD` (C2, then removed with its
+filter by S1 below); a relation dropped between the body's compile and the
+`IS` grant recorded as a dependency (C3); an incomplete view seen by an
+unfiltered scan failing unrelated DDL `Corruption` (C4: skipped on an
+unfiltered read, refused under a read view); a refusal text false in S1
+(C5); two swapped comments; one case-folding helper for three copies.
+Applied by CLA: the body read again under the `IS` (C6); `CREATE OR REPLACE`
+and `CREATE MATERIALIZED` refused `NotImplemented` with their byte; a native
+`*` stored expanded and a query-layer `*` refusing `ADD COLUMN` (S1, which
+deleted C2's 25-line filter); one describe helper and one limits helper for
+the three copies (S2); the non-absorbable reason in the create's warning
+and the impossible self-check removed (S5); the dependency-count message.
+Rejected: S3 (`GetView` through `ListViews`) - `GetView` reads one view's
+rows into the cache and is what every read through a view asks at DP-S2,
+so it keeps its own path; S4 (call `MarkOwnedRows` at each of `DropTable`'s
+five sites) - the lambda keeps each site to a tag, a root and a predicate,
+and its comment is corrected instead.
+
+### DP-S2 - absorption, 2026-11-22
+
+Built on `worktree-dp-view` over `184b1c2c`. `exec::AbsorbViews`
+(`include/kds/exec/view_absorb.hpp`) replaces a view a block's `FROM` names
+by its body - its relations at the view's position, the ON that attached
+the view kept with the body's first relation, the body's conjuncts
+appended, its columns read through a `parser::AbsorbedView` - at
+`CompileBlock`'s head, before the bind and with no `PlanOptions` in hand
+(DP-R2; its row is in `parser-v2.md` I12's CX-S2 inventory). Each spliced
+body carries a fresh `lens`, and `ResolveColumn` (`ResolveAtLevel`) matches
+a name only against relations and views of its own lens (DP-Q23): a reader
+reaches a view's columns and never its base relations, and a body's names
+never reach the reader's. A body's unqualified names resolve in its view's
+namespace (DP-Q21), and a body relation that resolves to an oid its view
+was not created over is refused (`exec::CheckViewReads`, DP-Q22 (b)). The
+binding declares the view, then its body's relations (DP-R5); `SELECT *`
+from a view is the view's columns (DP-Q12). The plan key keeps `n`/`oids`
+as the base relations and gains `v`/`views` (DP-Q17), persisted as
+`views=` in `sys.plans`; a plan names a view's inner relation by its path
+(`v.o`, DP-Q7); an enabled administrator's plan made through a view
+RESTRICTs its `DROP VIEW`, and a committed drop forgets what was made
+through the view (DP-Q6). `FOR UPDATE` through a view that absorbs to one
+relation is that relation's locking read, its WHERE read through the views
+to the relation's columns (DP-Q10). The query layer reads a view as a
+derived table (`LayerHost::ViewOf`), its body compiled over its own text
+and namespace with nothing pushed into it (DP-Q2, DP-R6) - brought forward
+from DP-S3, since a `SELECT` the native compile declines reaches it.
+Tests: `tests/view_test.cpp` (34). Suite: 0 failed of 5142 (Debug, `-j8`).
+Overhead not measured; measured at the milestone's close.
+
+**DP-S2's review** (`critics-developer`). Fixed by the reviewer, each with a
+test: a locking read through a view whose column shares the tuple key's
+name declared a range over the wrong keys and returned a row it did not
+hold (B1, `[quiet-wrong]`; `exec::WhereOnRelation`); the query layer's walk
+cache keyed a body's relation and the reader's of one name together (B2,
+`[quiet-wrong]`; the namespace is in the key); a plan made through a view
+read `invalid` and RESTRICTed nothing when its relation count matched its
+written one (B3; `PlanRowCanMatch` establishes nothing for a key with
+views); a body's relation declared under the reader's namespace on the
+query-layer path (B4); the locking read skipping the dependency check (B5,
+and one `CheckViewReads` for its four copies); `ViewOf` asking with no view
+ever created (B6, DP-R10); a malformed plan path refused at the wrong byte
+(B7); the nested views' order. Applied by CLA: one `AbsorbFor` for the
+three statement-level sites and `views_settled`, so a block `SelectBody`
+absorbed is not asked again and no copy is kept unless something was
+absorbed (S1, S2); one `FillKeyViews` (S3); one `ReadsOf` (S4); one depth
+constant, `kMaxViewDepth` (S5); the dead counter fallback (S6);
+`TakeOptionalField` and the refusal texts naming `views` (S8); the mount's
+captured rows asking their views too (F2). Rejected: S7 (move
+`AbsorbedView::Column` onto `catalog::ColumnNamesCollide`) - the parser's
+one case-folded compare keeps `ast.hpp` free of a catalog call for a name
+match. Taken into DP-S3: F1, a view over a view.
+
+### DP-S3 - the rest, 2026-11-22
+
+Built on `worktree-dp-view` over `5e2491fe`. **A view over a view**
+(DP-Q8): `CREATE VIEW` records a view its body reads as a relation-less
+dependency, and refuses `Unsupported` a create whose depth - one more than
+the deepest view it reads, at any position - would pass `kMaxViewDepth`
+(8, `[provisional]` to DP-S4); native absorption and the query layer's
+derived tables each admit exactly eight levels. **A non-absorbable body**
+(DP-Q2) is read by the query layer as a derived table with nothing pushed
+in (built at DP-S2, tested here: a `LIMIT` body under a reader's filter
+answers no row rather than a pushed one). **DP-Q9's refusals** stand from
+DP-S1's gate. **The differential cell** (DP-R1): `sim/view_diff.cpp`,
+`ckdbs-sim --view-diff`, one run a seed in `scripts/sim.sh` - random
+absorbable bodies (one relation, an inner join on a key or on a nullable
+column, subquery conjuncts, a permuting column list, a view over an earlier
+view to depth 3-4) read by random outer statements (plain, a join with a
+relation on either side, a self-join, a fold, `[NOT] IN` and `[NOT] EXISTS`,
+the view inside a subquery), each compared byte for byte with the same
+statement over `(<body>) AS <view>`, which only the query layer answers; an
+`ANALYZE` of each statement proves the view side absorbed natively, and any
+refusal on either side fails the run. A mutation that drops the body's
+conjuncts at absorption fails seed 1 at once. Tests: `tests/view_test.cpp`
+(38). Suite: 0 failed of 5146 (Debug, `-j8`); `scripts/sim.sh` on the
+release build: 290 runs, 0 failures. Overhead not measured; measured at the
+milestone's close.
+
+**DP-S3's review** (`critics-developer`). No engine defect. Fixed by the
+reviewer in the cell: it never proved the view side was absorbed - a native
+decline would have compared the query layer with itself (D1, now an
+`ANALYZE` check); a random chain could reach a ninth level and fail
+spuriously (D2); comments and literal ranges that did not match the schema
+(D3); and its coverage widened as above; one misplaced declaration comment.
+Applied by CLA: `ViewDepthOver` memoised by oid and reading relation entries
+only, so a chain is walked once a view (its S1); the unused binding (S2);
+the include order (S3). No finding rejected.
+
+### DP-S4 - the close, 2026-11-22
+
+Measured by `ck-tester` in `build-release` from `git archive` exports, arm A
+`30c47abf` (`v3.5.0-79-g30c47abf`, the commit DP opened from) against arm B
+`78a32c4f` (`v3.5.0-84-g78a32c4f`, DP's closing build input), interleaved,
+with a same-binary control: `bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`
+(archive beside it; the driver `tools/dp_close.py`), about 30 minutes,
+inside the hour.
+
+- **DP-R10, a statement over no view: met within what the method
+  resolves.** Server CPU a statement over 15 cells: B - A +0.25 us on
+  average against an A2 - A control of +0.20 us, no cell outside the
+  control's range. `ba_census` at `cores = 1`, 6 runs an arm: `point`
+  -0.44 %, `insert1` -0.27 %, inside their floors; **`pkmix` -0.79 %, 6 of 6
+  paired runs lower, about 0.3 us of 30 us a statement - the edge of its
+  floor (-0.52..+1.02 %), stated as such and not claimed as level**; a
+  profile of the compile head with and without the view check is what
+  would settle it, and was not taken. At `cores = 2` every cell's own spread
+  (3.5-9.8 %) exceeds any B - A: a bound, not a result.
+- **A view that exists and is not read**: at most +0.4 us a point read,
+  inside its floor (DP-Q18's word costs no lookup until a view exists; it
+  was not measured against its alternative).
+- **Reading through an absorbable view**: a fixed 3.0-3.7 us a statement
+  (a point read +13.8..+14.8 %, a two-relation key join +10..+11 %), flat in
+  rows - the body parsed and absorbed at every compile.
+- **DP-R11, depth 8: measured and affordable**, about 3 us a level, linear:
+  a point read through eight levels is 47.2 us against 22.7 us by hand
+  (2.1x); a chain joining one more relation a level, +32.4 us on a 54.8 us
+  nine-way join (1.6x). **`[provisional]` is lifted from `kMaxViewDepth`**
+  (adopted on the standing go-ahead), on one chain shape; nothing past 8 was
+  measurable.
+- **Cut**: `cores` 4 and 8, `group`/`strict` durability, 100,000 rows, a
+  non-absorbable view's read, a PostgreSQL twin.
+
+**DP is closed** on the operator's standing go-ahead of 2026-11-22
+(go-ahead-achieving-milestone). The durable content is in
+`docs/spec/view.md` (new), `parser-v2.md` I12's inventory row,
+`sys-views.md`, `drop-table.md` DT3, `alter.md` AL4, `namespace.md` NS6,
+`known-gaps.md` ("Views (DP)"), `manual/sql/sql.md` and CLAUDE.md's row. Not
+landed: the push, the merge to `main`, a tag or a version wait for the
+operator's word.
