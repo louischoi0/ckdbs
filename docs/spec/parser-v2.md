@@ -168,6 +168,7 @@ The join surface: inner equi-join chains over 2+ relations (`JOIN … ON a.col =
 
 | what | decided by | what it changes | class |
 |---|---|---|---|
+| view absorption (DP-S2, `exec/view_absorb.hpp`): a view the block's `FROM` names replaced by its body - its relations at the view's position, its conjuncts appended, its columns read through the view's binding - at `CompileBlock`'s head, before the bind, with no `PlanOptions` in hand; a body not absorbable is refused to the query layer whole, never partly absorbed | text, the catalog's DDL state (the view rows the reader sees) | which relations the block binds and which conjuncts it carries - exactly the hand-written expansion's; never the order, an arm or a read the expansion would not make | (a) text-pure (DP-R2) |
 | literal coercion to the column's type; `BETWEEN` as two conjuncts; a literal on the left mirrored; `NOW()` read once a statement | text, column types | the conjunct's bytes, never which rows pass | (a) text-pure |
 | equality propagation (`PropagateEqualities`) | text, column descriptors | appends `member = literal`, marked `derived`; never removes or reorders a written conjunct; the derived set does not depend on the order | (a) text-pure, append-only |
 | range bounds across the same classes (CB-S1) | text, column descriptors | appends a derived bound, on the same terms | (a) text-pure, append-only |

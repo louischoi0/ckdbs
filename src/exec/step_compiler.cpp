@@ -21,6 +21,7 @@
 #include "kds/exec/plan_memo.hpp"
 #include "kds/exec/row_codec.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/exec/view_absorb.hpp"
 #include "kds/stats/cabin_store.hpp"
 
 namespace kds::exec {
@@ -38,14 +39,22 @@ bool IEquals(std::string_view a, std::string_view b) {
 // One relation of the chain being compiled, with everything resolution
 // needs: what the statement calls it, and what columns it has.
 struct BoundRelation {
-    std::string binding;  // alias if written, else the table name
+    // How a plan, `ANALYZE` and a message name it: the alias if written,
+    // else the table name - a view's inner relation behind its view's path
+    // (`v.o`, DP-Q7).
+    std::string binding;
     const catalog::TableAccess* access = nullptr;
     // An administrator's plan's pin on this relation's step, or null
     // (CX-S3a; `admin_plans.hpp` `ArmPin`). It travels with the relation
     // through a permutation, and restricts the ladder in section 4.
     const ArmPin* pin = nullptr;
+    // The name its own text calls it, when that is not `binding` (a view's
+    // inner relation's), and that text (`ColumnName::lens`, DP-Q23).
+    std::string local{};
+    std::uint32_t lens = 0;
 
     const catalog::Schema& schema() const noexcept { return access->schema; }
+    const std::string& Local() const noexcept { return local.empty() ? binding : local; }
 };
 
 // The scope a name resolves against. One per query block; sub-chains
@@ -55,6 +64,13 @@ struct Scope {
     const Scope* parent = nullptr;
     // One name space with the parent (`SelectStmt::shares_parent_names`).
     bool shares_parent_names = false;
+
+    // The views this block absorbed (DP-S2), whose columns its names may
+    // read; null for a block that absorbed none.
+    const std::vector<parser::AbsorbedView>* views = nullptr;
+    // The statement's highest lens (`view_absorb.hpp`), on the root scope:
+    // every block's absorption takes its next one from here.
+    std::uint32_t* next_lens = nullptr;
 
     // The statement's constants (exec/functions.hpp), set on the root scope.
     // A SELECT is compiled once per execution, so taking them at compile is
@@ -70,6 +86,16 @@ const StatementContext& ContextOf(const Scope& scope) {
     while (s->parent != nullptr) s = s->parent;
     return s->context;
 }
+
+std::uint32_t* LensCounterOf(const Scope& scope) {
+    const Scope* s = &scope;
+    while (s->parent != nullptr) s = s->parent;
+    return s->next_lens;
+}
+
+// The view `name`'s text reaches by `binding` at one level (DP-Q23).
+const parser::AbsorbedView* FindView(const Scope& s, std::uint32_t lens,
+                                     std::string_view binding);
 
 
 std::string Position(std::uint32_t byte_offset) {
@@ -674,58 +700,104 @@ StatusOr<AggregateSpec> CompileAggregate(const Scope& scope, const parser::Selec
     return spec;
 }
 
+const parser::AbsorbedView* FindView(const Scope& s, std::uint32_t lens,
+                                     std::string_view binding) {
+    if (s.views == nullptr) return nullptr;
+    for (const parser::AbsorbedView& view : *s.views) {
+        if (view.lens == lens && IEquals(view.binding, binding)) return &view;
+    }
+    return nullptr;
+}
+
+// `name` at one level of the scope, or nullopt when the level has no match.
+// **A name reaches only relations and views of its own text** (DP-Q23): a
+// view's column is read through the view - its target resolved at this same
+// level, under the body's text - and nothing else of the body is visible.
+StatusOr<std::optional<ColumnRef>> ResolveAtLevel(const Scope& s, std::uint16_t up,
+                                                  const parser::ColumnName& name) {
+    const auto through = [&](const parser::AbsorbedView& view,
+                             const parser::ColumnName& target)
+        -> StatusOr<std::optional<ColumnRef>> {
+        auto ref = ResolveAtLevel(s, up, target);
+        if (!ref.ok()) return ref.status();
+        if (!ref.value().has_value()) {
+            return Status::Corruption("view '" + view.binding + "' column '" + name.name +
+                                      "' names nothing in its body" + Position(name.byte_offset));
+        }
+        return ref;
+    };
+    if (name.qualified()) {
+        if (const parser::AbsorbedView* view = FindView(s, name.lens, name.qualifier)) {
+            const parser::ColumnName* target = view->Column(name.name);
+            if (target == nullptr) {
+                return Status::InvalidArgument("view '" + name.qualifier + "' has no column '" +
+                                               name.name + "'" + Position(name.byte_offset));
+            }
+            return through(*view, *target);
+        }
+        for (std::size_t i = 0; i < s.relations.size(); ++i) {
+            const BoundRelation& rel = s.relations[i];
+            if (rel.lens != name.lens || !IEquals(rel.Local(), name.qualifier)) continue;
+            std::uint16_t col_pos = 0;
+            auto matched = FindColumnPos(rel.access->schema, name, col_pos);
+            if (!matched.ok()) return matched.status();
+            if (!matched.value()) {
+                return Status::InvalidArgument("relation '" + name.qualifier +
+                                                "' has no column '" + name.name + "'" +
+                                                Position(name.byte_offset));
+            }
+            return std::optional<ColumnRef>(ColumnRef{up, static_cast<std::uint16_t>(i), col_pos});
+        }
+        return std::optional<ColumnRef>();  // not at this level
+    }
+
+    // Unqualified: count matches at this level only, a view's column among
+    // them.
+    const auto ambiguous = [&](const char* why) {
+        return Status::InvalidArgument("column '" + name.name + "' is ambiguous" +
+                                       Position(name.byte_offset) + ": " + why +
+                                       "; qualify it (`a." + name.name + "`)");
+    };
+    std::optional<ColumnRef> found;
+    for (std::size_t i = 0; i < s.relations.size(); ++i) {
+        if (s.relations[i].lens != name.lens) continue;
+        std::uint16_t col_pos = 0;
+        auto matched = FindColumnPos(s.relations[i].access->schema, name, col_pos);
+        if (!matched.ok()) return matched.status();
+        if (!matched.value()) continue;
+        if (found.has_value()) return ambiguous("more than one relation in scope has it");
+        found = ColumnRef{up, static_cast<std::uint16_t>(i), col_pos};
+    }
+    if (s.views != nullptr) {
+        for (const parser::AbsorbedView& view : *s.views) {
+            if (view.lens != name.lens) continue;
+            const parser::ColumnName* target = view.Column(name.name);
+            if (target == nullptr) continue;
+            if (found.has_value()) return ambiguous("more than one relation in scope has it");
+            auto ref = through(view, *target);
+            if (!ref.ok()) return ref.status();
+            found = ref.value();
+        }
+    }
+    if (found.has_value() && s.shares_parent_names && s.parent != nullptr) {
+        auto outer = ResolveAtLevel(*s.parent, static_cast<std::uint16_t>(up + 1), name);
+        if (!outer.ok()) return outer.status();
+        if (outer.value().has_value()) {
+            return ambiguous("the statement's relation and its FROM relation both have it");
+        }
+    }
+    return found;
+}
+
 StatusOr<ColumnRef> ResolveColumn(const Scope& scope, const parser::ColumnName& name) {
     std::uint16_t up = 0;
     for (const Scope* s = &scope; s != nullptr; s = s->parent, ++up) {
-        if (name.qualified()) {
-            for (std::size_t i = 0; i < s->relations.size(); ++i) {
-                if (!IEquals(s->relations[i].binding, name.qualifier)) continue;
-
-                std::uint16_t col_pos = 0;
-                auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
-                if (!matched.ok()) return matched.status();
-                if (!matched.value()) {
-                    return Status::InvalidArgument("relation '" + name.qualifier +
-                                                    "' has no column '" + name.name + "'" +
-                                                    Position(name.byte_offset));
-                }
-                return ColumnRef{up, static_cast<std::uint16_t>(i), col_pos};
-            }
-            continue;  // not at this level; try the enclosing one
-        }
-
-        // Unqualified: count matches at this level only.
-        std::optional<ColumnRef> found;
-        for (std::size_t i = 0; i < s->relations.size(); ++i) {
-            std::uint16_t col_pos = 0;
-            auto matched = FindColumnPos(s->relations[i].access->schema, name, col_pos);
-            if (!matched.ok()) return matched.status();
-            if (!matched.value()) continue;
-            if (found.has_value()) {
-                return Status::InvalidArgument(
-                    "column '" + name.name + "' is ambiguous" + Position(name.byte_offset) +
-                    ": more than one relation in scope has it; qualify it (`a." + name.name + "`)");
-            }
-            found = ColumnRef{up, static_cast<std::uint16_t>(i), col_pos};
-        }
-        if (found.has_value() && s->shares_parent_names && s->parent != nullptr) {
-            for (const BoundRelation& r : s->parent->relations) {
-                std::uint16_t col_pos = 0;
-                auto matched = FindColumnPos(r.access->schema, name, col_pos);
-                if (!matched.ok()) return matched.status();
-                if (matched.value()) {
-                    return Status::InvalidArgument(
-                        "column '" + name.name + "' is ambiguous" + Position(name.byte_offset) +
-                        ": the statement's relation and its FROM relation both have it; "
-                        "qualify it (`a." + name.name + "`)");
-                }
-            }
-        }
-        if (found.has_value()) return *found;
-        // No match at this level: keep going outward. This is the
-        // innermost-first rule; a level that matches stops the search
-        // above, so an outer relation is only consulted when no inner one
-        // has the column at all.
+        // The innermost level that has the name decides it: adding a column
+        // to an *outer* relation can never silently change an inner chain's
+        // meaning.
+        auto found = ResolveAtLevel(*s, up, name);
+        if (!found.ok()) return found.status();
+        if (found.value().has_value()) return *found.value();
     }
 
     if (name.qualified()) {
@@ -2405,14 +2477,34 @@ Status CompileAssignments(const catalog::TableAccess& access,
     return Status::OK();
 }
 
+// One relation's scope, as a write's or a locking read's WHERE and select
+// list resolve against: the relation, and - for a block a view absorbed to
+// (DP-Q10) - its text and the view's columns.
+Scope OneRelationScope(const catalog::TableAccess& access, std::string_view binding,
+                       const parser::SelectStmt* absorbed) {
+    Scope scope;
+    BoundRelation bound{std::string(binding), &access};
+    if (absorbed != nullptr && absorbed->from.lens != 0) {
+        bound.binding = absorbed->from.display();
+        bound.local = absorbed->from.binding();
+        bound.lens = absorbed->from.lens;
+    }
+    scope.relations.push_back(std::move(bound));
+    if (absorbed != nullptr && !absorbed->views.empty()) scope.views = &absorbed->views;
+    return scope;
+}
+
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where,
                             const txn::ReadView* view, PositionSink* declare,
-                            const StatementContext* context) {
-    Scope scope;
-    scope.relations.push_back(BoundRelation{std::string(binding), &access});
+                            const StatementContext* context,
+                            const parser::SelectStmt* absorbed) {
+    Scope scope = OneRelationScope(access, binding, absorbed);
     scope.context = context != nullptr ? *context : StatementContextNow();
+    // The statement's lens counter, for the views its subqueries absorb.
+    std::uint32_t lens = absorbed != nullptr ? absorbed->lens_high : 0;
+    scope.next_lens = &lens;
 
     Step out;
     out.rel_oid = access.oid;
@@ -2488,9 +2580,9 @@ std::optional<KeySet> WriteKeySetOf(const Step& where) {
 
 StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
                                        std::string_view binding,
-                                       const std::vector<parser::ColumnName>& list, bool star) {
-    Scope scope;
-    scope.relations.push_back(BoundRelation{std::string(binding), &access});
+                                       const std::vector<parser::ColumnName>& list, bool star,
+                                       const parser::SelectStmt* absorbed) {
+    const Scope scope = OneRelationScope(access, binding, absorbed);
     SelectList out;
     if (Status s = ProjectColumns(scope, list, star, out); !s.ok()) return s;
     return out;
@@ -2544,7 +2636,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                                  const txn::ReadView* view, bool inner_build,
                                  PositionSink* declare);
 
-StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::SelectStmt& written_stmt,
                                  const Scope* parent, std::uint32_t& next_step_id,
                                  std::uint32_t depth, const txn::ReadView* view,
                                  bool inner_build, PositionSink* declare,
@@ -2559,12 +2651,32 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
                                     " is not supported");
     }
 
-    // ---- 1. Bind every relation in written order --------------------------
+    // ---- 0. Absorb the views the block names (DP-S2, `view_absorb.hpp`) ---
+    //
+    // Before anything is bound or planned, and with no `PlanOptions` in
+    // hand (DP-R2): the block below is the expansion written out by hand.
     Scope scope;
     scope.parent = parent;
-    scope.shares_parent_names = stmt.shares_parent_names;
     // A nested block reads its outermost's through `parent`.
-    if (parent == nullptr) scope.context = context != nullptr ? *context : StatementContextNow();
+    std::uint32_t root_lens = written_stmt.lens_high;
+    if (parent == nullptr) {
+        scope.context = context != nullptr ? *context : StatementContextNow();
+        scope.next_lens = &root_lens;
+    }
+    std::optional<parser::SelectStmt> absorbed;
+    if (!written_stmt.views_settled && catalog.AnyView()) {
+        // Every root that lowers a block sets the counter (here, and
+        // `CompileWhere`), so a nested block always finds it.
+        auto expanded = AbsorbViews(catalog, written_stmt, view,
+                                    ContextOf(scope).default_namespace, *LensCounterOf(scope));
+        if (!expanded.ok()) return expanded.status();
+        absorbed = std::move(expanded.value());
+    }
+    const parser::SelectStmt& stmt = absorbed.has_value() ? *absorbed : written_stmt;
+    if (!stmt.views.empty()) scope.views = &stmt.views;
+
+    // ---- 1. Bind every relation in written order --------------------------
+    scope.shares_parent_names = stmt.shares_parent_names;
     std::vector<const parser::RelationRef*> refs;
     refs.push_back(&stmt.from);
     for (const parser::JoinClause& j : stmt.joins) refs.push_back(&j.relation);
@@ -2574,20 +2686,39 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     const catalog::Oid default_namespace = ContextOf(scope).default_namespace;
     for (const parser::RelationRef* rel : refs) {
         // One site for FROM, every JOIN and every subquery block - they all
-        // bind through this loop.
-        auto oid = catalog.ResolveRelation(rel->schema, rel->table_name, default_namespace,
-                                           rel->byte_offset, view);
+        // bind through this loop. A view's inner relation's unqualified name
+        // means its view's namespace (DP-Q21).
+        auto oid = catalog.ResolveRelation(
+            rel->schema, rel->table_name,
+            rel->namespace_oid != 0 ? rel->namespace_oid : default_namespace, rel->byte_offset,
+            view);
         if (!oid.ok()) return oid.status();
+        // A body binds only what its view was created over (DP-Q22 (b)): a
+        // name re-pointed at a relation created later is refused, never read.
+        if (Status s = CheckViewReads(*rel, oid.value()); !s.ok()) return s;
         // AT-R1: the declaration, between the name and the schema
         // (`step_compiler.hpp` on `declare`). A bind is a claim on the
         // relation and not on any part of it, and nothing finer is declared
-        // by anyone since CP-S2a.
+        // by anyone since CP-S2a. **A view is declared before its body's
+        // first relation** (DP-R5), and a body's relation with no
+        // unqualified namespace of the statement's.
         if (declare != nullptr) {
-            declare->Position(oid.value(), rel->schema.empty() ? default_namespace : 0);
+            for (const parser::OpenedView& opened : rel->opens) {
+                declare->Position(opened.oid, opened.unqualified_in);
+            }
+            declare->Position(oid.value(), rel->lens == 0 && rel->namespace_oid == 0 &&
+                                                   rel->schema.empty()
+                                               ? default_namespace
+                                               : 0);
         }
         auto access = catalog.InitTableAccess(oid.value());
         if (!access.ok()) return access.status();
-        scope.relations.push_back(BoundRelation{rel->binding(), access.value()});
+        BoundRelation bound{rel->display(), access.value()};
+        if (rel->lens != 0) {
+            bound.local = rel->binding();
+            bound.lens = rel->lens;
+        }
+        scope.relations.push_back(std::move(bound));
     }
 
     // ---- 1a. The join order (CB-S2, workorder-cb-join-planner.md §3.2) ---
@@ -2659,13 +2790,16 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     // fits - no fetch id (a statement that came with no parse), or more
     // relations than a key holds - has neither kind of plan.
     std::optional<CapturedKey> shape;
-    if (plan->fetch_id != 0 && refs.size() <= kMaxPlannedRelations) {
+    if (plan->fetch_id != 0 && refs.size() <= kMaxPlannedRelations &&
+        stmt.views.size() <= kMaxPlannedRelations) {
         shape.emplace();
         shape->fetch_id = plan->fetch_id;
         shape->n = static_cast<std::uint8_t>(refs.size());
         for (std::size_t w = 0; w < refs.size(); ++w) {
             shape->oids[w] = scope.relations[w].access->oid;
         }
+        // DP-R4: the views it was made through, beside the relations.
+        (void)FillKeyViews(stmt, *shape);  // bounded by the condition above
     }
     const bool written_sorted = best.value().sorted();
     // The key the run's counts fold under and the posteriors are found by

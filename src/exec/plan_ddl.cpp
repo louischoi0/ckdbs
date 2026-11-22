@@ -20,6 +20,23 @@ bool IsIdent(const Token& tok, std::string_view word) noexcept {
 std::string At(std::size_t byte) { return " (byte " + std::to_string(byte) + ")"; }
 std::string At(const Token& tok) { return At(tok.byte_offset); }
 
+// A relation's binding as a plan writes it: a name, or a view's inner
+// relation by its view's path - `v.o`, `v.w.o` (DP-Q7) - `first` being its
+// first name, already read. A `.` not followed by a name is refused there.
+StatusOr<std::string> BindingPath(parser::Lexer& lexer, const Token& first) {
+    std::string path(first.text);
+    while (lexer.Peek().type == TokenType::kDot) {
+        lexer.Next();
+        const Token next = lexer.Next();
+        if (next.type != TokenType::kIdent) {
+            return Status::InvalidArgument("a view's path names a relation after each '.'" +
+                                           At(next));
+        }
+        path.append(".").append(next.text);
+    }
+    return path;
+}
+
 // `<verb> PLAN <name>`, the head both statements share.
 Status ParseHead(parser::Lexer& lexer, std::string_view verb, std::string& name,
                  std::size_t& name_at) {
@@ -71,7 +88,9 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
                 "ORDER lists the statement's relations by alias, or by table name where it "
                 "wrote none" + At(relation));
         }
-        variant.order.emplace_back(relation.text);
+        auto path = BindingPath(lexer, relation);
+        if (!path.ok()) return path.status();
+        variant.order.push_back(std::move(path.value()));
         const Token sep = lexer.Next();
         if (sep.type == TokenType::kRParen) break;
         if (sep.type != TokenType::kComma) {
@@ -88,7 +107,9 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
                 return Status::InvalidArgument(
                     "ACCESS names a relation of the statement, then its pin" + At(binding));
             }
-            access.binding = std::string(binding.text);
+            auto path = BindingPath(lexer, binding);
+            if (!path.ok()) return path.status();
+            access.binding = std::move(path.value());
             access.binding_at = binding.byte_offset;
             Token arm = lexer.Next();
             if (arm.type == TokenType::kKeyword && arm.kw == parser::Keyword::kNot) {
@@ -164,7 +185,9 @@ StatusOr<PlanVariantSpec> ParseVariant(parser::Lexer& lexer) {
                 return Status::InvalidArgument(
                     "BUILD names a relation of the statement, then ON or OFF" + At(binding));
             }
-            build.binding = std::string(binding.text);
+            auto path = BindingPath(lexer, binding);
+            if (!path.ok()) return path.status();
+            build.binding = std::move(path.value());
             build.binding_at = binding.byte_offset;
             const Token word = lexer.Next();
             if (word.type == TokenType::kKeyword && word.kw == parser::Keyword::kOn) {

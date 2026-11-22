@@ -2262,13 +2262,14 @@ StatusOr<Oid> Catalog::ResolveRelation(std::string_view qualifier, std::string_v
     std::string example;
     for (const SysObjectRow& row : rows.value()) {
         // **A view's name is not a relation here** (DP-Q9): a view has no
-        // rows, so no write, DDL target or foreign key's parent is one, and
-        // no `SELECT` reads one - every caller of this gate, a `SELECT`'s
-        // bind included, meets this refusal.
+        // rows, so no write, DDL target or foreign key's parent is one. A
+        // `SELECT` absorbs or derives a view before it binds
+        // (`exec/view_absorb.hpp`, the query layer), so only a statement
+        // that names a view where a relation must stand meets this.
         if (row.type_oid == kTypeView && row.namespace_oid == ns && NameView(row.name) == name) {
             return at(Status::NotImplemented(
-                "'" + written + "' is a view, and no statement but DROP VIEW and DESCRIBE "
-                "names one"));
+                "'" + written + "' is a view: a view is read in a SELECT's FROM, and no other "
+                "statement names one where a relation stands"));
         }
         if (row.type_oid != kTypeTable || row.namespace_oid == ns || NameView(row.name) != name) {
             continue;

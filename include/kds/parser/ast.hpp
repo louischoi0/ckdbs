@@ -149,6 +149,13 @@ struct ColumnName {
     std::string name;
     std::uint32_t byte_offset = 0;  // of the qualifier if any, else of the name
 
+    // **The text the name was written in** (DP-Q23): 0 for the statement's
+    // own, else the absorption that spliced a view's body in
+    // (`exec/view_absorb.hpp`). A name resolves only against relations and
+    // views of its own text, so a reader never reaches a view's base columns
+    // and a body never reaches the reader's relations.
+    std::uint32_t lens = 0;
+
     bool qualified() const noexcept { return !qualifier.empty(); }
 };
 
@@ -609,6 +616,25 @@ struct InsertStmt {
 };
 
 
+// A view a relation's bind declares before it (DP-R5): the first relation
+// spliced from a view's body carries the view, and a nested view's after it,
+// so the binding reads the view's oid, then its body's relations, depth
+// first. `unqualified_in` is the namespace an unqualified name in the
+// statement's own text was resolved in, else 0 (`PositionSink`).
+struct OpenedView {
+    std::uint64_t oid = 0;
+    std::uint64_t unqualified_in = 0;
+};
+
+// What a view's body was created over: every relation and view its bind may
+// resolve to (`sys.views`' dependencies). A body's name that resolves to any
+// other oid - a relation created later under a name the body read - is
+// refused, never read (DP-Q22 (b)).
+struct ViewReads {
+    std::string view;
+    std::vector<std::uint64_t> oids;
+};
+
 // One relation in a FROM list, with the name predicates will use to refer
 // to it.
 struct RelationRef {
@@ -626,6 +652,23 @@ struct RelationRef {
     // alias when there is one, otherwise the table name. Two relations in
     // one FROM list may never share a binding - see SelectStmt.
     const std::string& binding() const noexcept { return alias.empty() ? table_name : alias; }
+
+    // ---- Set by absorption only (`exec/view_absorb.hpp`) -----------------
+    //
+    // `ColumnName::lens`' text; 0 for a relation the statement wrote.
+    std::uint32_t lens = 0;
+    // The namespace an unqualified name means, when it is not the
+    // statement's: a view's body reads its view's (DP-Q21). 0 is the
+    // statement's.
+    std::uint64_t namespace_oid = 0;
+    // The views the relation's bind opens (`OpenedView`).
+    std::vector<OpenedView> opens;
+    // What its view was created over (`ViewReads`); null for the statement's.
+    std::shared_ptr<const ViewReads> reads;
+    // How a plan, `ANALYZE` and a message name it (DP-Q7): the bindings of
+    // the views it came through, then its own - `v.o`, `v.w.o`.
+    std::string path;
+    std::string display() const { return path + binding(); }
 };
 
 // `JOIN <relation> ON <left> = <right>`. Inner equi-join only: one
@@ -719,6 +762,18 @@ struct HavingCondition {
     // The right-hand side. Unread for `kIsNull` / `kIsNotNull`, which take
     // none - the same rule `Condition::val` follows one clause over.
     AstValue val;
+};
+
+// A view a block absorbed (DP-S2, `exec/view_absorb.hpp`): its binding,
+// visible to names of the text the reference was written in, and each of its
+// columns as the body names it - a name of the body's own text.
+struct AbsorbedView {
+    std::uint64_t oid = 0;
+    std::uint32_t lens = 0;
+    std::string binding;
+    std::vector<std::pair<std::string, ColumnName>> columns;
+
+    const ColumnName* Column(std::string_view name) const;
 };
 
 struct SelectStmt {
@@ -825,6 +880,18 @@ struct SelectStmt {
         std::uint32_t byte_offset = 0;
     };
     std::optional<LockClause> lock;
+
+    // ---- Set by absorption only (DP-S2) ------------------------------------
+    //
+    // Every view this block absorbed, nested ones included, in the order
+    // their binds open them; and the highest `lens` any text in the tree
+    // carries, so a later absorption over the same tree takes a fresh one.
+    std::vector<AbsorbedView> views;
+    std::uint32_t lens_high = 0;
+    // Absorption has been asked of this block's `FROM` already, so asking
+    // again would find nothing: the compile's own pass skips it. Its nested
+    // blocks are not covered - each is asked when the compiler reaches it.
+    bool views_settled = false;
 
     // Every relation's binding is distinct - the parser refuses the
     // statement otherwise, rather than picking one silently. That refusal

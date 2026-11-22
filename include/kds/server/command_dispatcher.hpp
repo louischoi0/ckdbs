@@ -1689,6 +1689,23 @@ private:
     // until it is destroyed: what keeps a `DROP TABLE` from committing
     // under a plan DDL's install. A plan DDL is not a read that must never
     // wait on a DDL: `TxnConflict` where any ask is refused.
+    // The views an absorbed block was made through, into a plan's key
+    // (DP-R4); Unsupported past what a key holds.
+    static Status KeyViews(const parser::SelectStmt& block, exec::CapturedKey& key);
+    // A statement's block with the views its `FROM` names absorbed, under
+    // the session's view (DT3), or nullopt when it names none: what the
+    // locking read and the plan DDL take their block from (DP-Q10, DP-R4).
+    StatusOr<std::optional<parser::SelectStmt>> AbsorbFor(Session& session,
+                                                          const parser::SelectStmt& stmt,
+                                                          catalog::Oid default_namespace);
+    // The enabled administrator's plan that names `oid` - a relation or a
+    // view - and can still match a statement, for a drop's RESTRICT
+    // (CX-Q24 (a), DP-Q6): its refusal, or nullopt.
+    StatusOr<std::optional<std::string>> EnabledPlanNaming(catalog::Oid oid,
+                                                           std::string_view what);
+    // What a committed drop of `oid` leaves to forget: its captured plans,
+    // its disabled administrator's plans, its statistics and its opt-ins.
+    void ForgetDropped(catalog::Oid oid);
     Status HoldPlanRelations(const exec::CapturedKey& key, std::optional<ReadBorrow>& hold);
     DispatchOutcome HandleSetAsh(std::string_view line, std::string_view rest);
 
@@ -3076,6 +3093,9 @@ private:
         std::uint64_t txn_id = 0;
         catalog::Oid oid = 0;
         catalog::PendingRoots roots;
+        // A view's drop (DP-S2): it owes no page, only the plans, statistics
+        // and opt-ins made through the view to forget.
+        bool view = false;
     };
     std::vector<OwedDrop> owed_drops_;
     // **What an open transaction's index DDL may orphan** (BY-R2): a

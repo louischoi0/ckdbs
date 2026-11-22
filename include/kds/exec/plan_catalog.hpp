@@ -213,7 +213,8 @@ bool PlanRowIsValid(catalog::Catalog& catalog, const PlanRow& row);
 //   - a column the stored statement writes **qualified by one of its
 //     bindings** (`b.col`) is no column of that binding's relation now.
 // True for everything else, checked or not: a row this build cannot read,
-// a statement stored cut short or that the native grammar does not read
+// a plan made through a view (its statement's references are not its key's
+// positions, DP-R4), a statement stored cut short or that the native grammar does not read
 // with its literals as `0` (a `LIKE` pattern), a relation that is gone
 // (that is `PlanRowIsValid`'s), a column written unqualified or dropped, a
 // statement that no longer compiles for any other reason. Reads the

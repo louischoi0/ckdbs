@@ -167,6 +167,7 @@ add_library(kds
     src/exec/admin_plans.cpp
     src/exec/plan_advice.cpp
     src/exec/captured_plans.cpp
+    src/exec/view_absorb.cpp
     src/exec/plan_catalog.cpp
     src/exec/plan_ddl.cpp
     src/exec/plan_rule.cpp

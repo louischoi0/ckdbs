@@ -594,3 +594,56 @@ rows into the cache and is what every read through a view asks at DP-S2,
 so it keeps its own path; S4 (call `MarkOwnedRows` at each of `DropTable`'s
 five sites) - the lambda keeps each site to a tag, a root and a predicate,
 and its comment is corrected instead.
+
+### DP-S2 - absorption, 2026-11-22
+
+Built on `worktree-dp-view` over `184b1c2c`. `exec::AbsorbViews`
+(`include/kds/exec/view_absorb.hpp`) replaces a view a block's `FROM` names
+by its body - its relations at the view's position, the ON that attached
+the view kept with the body's first relation, the body's conjuncts
+appended, its columns read through a `parser::AbsorbedView` - at
+`CompileBlock`'s head, before the bind and with no `PlanOptions` in hand
+(DP-R2; its row is in `parser-v2.md` I12's CX-S2 inventory). Each spliced
+body carries a fresh `lens`, and `ResolveColumn` (`ResolveAtLevel`) matches
+a name only against relations and views of its own lens (DP-Q23): a reader
+reaches a view's columns and never its base relations, and a body's names
+never reach the reader's. A body's unqualified names resolve in its view's
+namespace (DP-Q21), and a body relation that resolves to an oid its view
+was not created over is refused (`exec::CheckViewReads`, DP-Q22 (b)). The
+binding declares the view, then its body's relations (DP-R5); `SELECT *`
+from a view is the view's columns (DP-Q12). The plan key keeps `n`/`oids`
+as the base relations and gains `v`/`views` (DP-Q17), persisted as
+`views=` in `sys.plans`; a plan names a view's inner relation by its path
+(`v.o`, DP-Q7); an enabled administrator's plan made through a view
+RESTRICTs its `DROP VIEW`, and a committed drop forgets what was made
+through the view (DP-Q6). `FOR UPDATE` through a view that absorbs to one
+relation is that relation's locking read, its WHERE read through the views
+to the relation's columns (DP-Q10). The query layer reads a view as a
+derived table (`LayerHost::ViewOf`), its body compiled over its own text
+and namespace with nothing pushed into it (DP-Q2, DP-R6) - brought forward
+from DP-S3, since a `SELECT` the native compile declines reaches it.
+Tests: `tests/view_test.cpp` (34). Suite: 0 failed of 5142 (Debug, `-j8`).
+Overhead not measured; measured at the milestone's close.
+
+**DP-S2's review** (`critics-developer`). Fixed by the reviewer, each with a
+test: a locking read through a view whose column shares the tuple key's
+name declared a range over the wrong keys and returned a row it did not
+hold (B1, `[quiet-wrong]`; `exec::WhereOnRelation`); the query layer's walk
+cache keyed a body's relation and the reader's of one name together (B2,
+`[quiet-wrong]`; the namespace is in the key); a plan made through a view
+read `invalid` and RESTRICTed nothing when its relation count matched its
+written one (B3; `PlanRowCanMatch` establishes nothing for a key with
+views); a body's relation declared under the reader's namespace on the
+query-layer path (B4); the locking read skipping the dependency check (B5,
+and one `CheckViewReads` for its four copies); `ViewOf` asking with no view
+ever created (B6, DP-R10); a malformed plan path refused at the wrong byte
+(B7); the nested views' order. Applied by CLA: one `AbsorbFor` for the
+three statement-level sites and `views_settled`, so a block `SelectBody`
+absorbed is not asked again and no copy is kept unless something was
+absorbed (S1, S2); one `FillKeyViews` (S3); one `ReadsOf` (S4); one depth
+constant, `kMaxViewDepth` (S5); the dead counter fallback (S6);
+`TakeOptionalField` and the refusal texts naming `views` (S8); the mount's
+captured rows asking their views too (F2). Rejected: S7 (move
+`AbsorbedView::Column` onto `catalog::ColumnNamesCollide`) - the parser's
+one case-folded compare keeps `ast.hpp` free of a catalog call for a name
+match. Taken into DP-S3: F1, a view over a view.

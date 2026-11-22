@@ -139,12 +139,18 @@ Status PlannableBlock(const parser::SelectStmt& stmt);
 // recompiles on its resume and must hand the same one back, or `NOW()` would
 // filter the rows after the park against a later instant. Null takes a fresh
 // one, which is right for a statement compiled once.
+//
+// `absorbed`, when given, is the one-relation block a view absorbed to
+// (DP-Q10, `view_absorb.hpp`): `access` is its relation, and `where` and the
+// select list below are its names - the reader's through the view, the
+// body's under its own text.
 StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAccess& access,
                             std::string_view binding,
                             const std::vector<parser::Condition>& where,
                             const txn::ReadView* view = nullptr,
                             PositionSink* declare = nullptr,
-                            const StatementContext* context = nullptr);
+                            const StatementContext* context = nullptr,
+                            const parser::SelectStmt* absorbed = nullptr);
 
 // **Where a write descends instead of walking** (CU-S3, CU-S3b), read off
 // `CompileWhere`'s step by the rules a read's step is keyed by: a conjunct
@@ -179,7 +185,8 @@ struct SelectList {
 };
 StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
                                        std::string_view binding,
-                                       const std::vector<parser::ColumnName>& list, bool star);
+                                       const std::vector<parser::ColumnName>& list, bool star,
+                                       const parser::SelectStmt* absorbed = nullptr);
 
 // Resolve an UPDATE's SET list against the relation, before any storage is
 // touched (keystoneid-invariant.md K-M3).

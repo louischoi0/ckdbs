@@ -31,6 +31,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -72,9 +74,28 @@ struct LayerLimits {
 };
 
 // What the layer asks of the dispatcher.
+// A view the query layer reads as a derived table (DP-Q2): its body, the
+// text the body's byte spans index, the namespace its unqualified names mean
+// (DP-Q21), what it was created over (DP-Q22 (b)) and its column names
+// (DP-Q15). Nothing of an enclosing query is pushed into it (DP-R6).
+struct LayerView {
+    std::shared_ptr<const parser::Query> query;
+    std::shared_ptr<const std::string> text;
+    std::uint64_t namespace_oid = 0;
+    std::shared_ptr<const parser::ViewReads> reads;
+    std::vector<std::string> columns;
+};
+
 class LayerHost {
 public:
     virtual ~LayerHost() = default;
+
+    // The view `rel` names, or nullopt when it names a relation. Asked of
+    // every `FROM` name before it is described as a relation.
+    virtual StatusOr<std::optional<LayerView>> ViewOf(const parser::RelationRef& rel) {
+        (void)rel;
+        return std::optional<LayerView>();
+    }
 
     // `rel`'s columns, in schema order and typed as the schema declares, its
     // column 0 marked the Keystone. Asked at compile, before any walk.

@@ -1,6 +1,20 @@
+#include <cctype>
 #include "kds/parser/ast.hpp"
 
 namespace kds::parser {
+
+const ColumnName* AbsorbedView::Column(std::string_view name) const {
+    for (const auto& [view_name, target] : columns) {
+        if (view_name.size() != name.size()) continue;
+        bool same = true;
+        for (std::size_t i = 0; i < name.size() && same; ++i) {
+            same = std::tolower(static_cast<unsigned char>(view_name[i])) ==
+                   std::tolower(static_cast<unsigned char>(name[i]));
+        }
+        if (same) return &target;
+    }
+    return nullptr;
+}
 
 const char* StatementTypeName(const Statement& stmt) {
     return std::visit(

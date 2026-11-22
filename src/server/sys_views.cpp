@@ -162,6 +162,14 @@ public:
         for (const catalog::SysObjectRow& row : tables.value()) {
             out.relations_[row.oid] = {row.namespace_oid, std::string(catalog::NameView(row.name))};
         }
+        // A view is a name a binding and a plan carry too (DP-R4, DP-R5).
+        if (catalog.AnyView()) {
+            auto views = catalog.ListViews(view);
+            if (!views.ok()) return views.status();
+            for (const catalog::ViewDef& def : views.value()) {
+                out.relations_[def.oid] = {def.namespace_oid, def.name};
+            }
+        }
         return out;
     }
 
