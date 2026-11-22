@@ -1,12 +1,16 @@
 # Work order CW - a page read that takes no latch: the optimistic page read, measured before it is built
 
-Status: **WRITTEN 2026-11-17, not opened.** Written on worktree
+Status: **OPENED 2026-11-22 on the operator's standing go-ahead**
+(`/go-ahead-achieving-milestone CW`, `raft-marks-2026-11-22.md` §11), at
+`56b44964` (`v3.5.0-90-g56b44964`) on branch
+`worktree-cw-optimistic-page-read` in the worktree `sync-stale-records`.
+**CW-Q0..Q9 adopted (a) on that go-ahead** - CLA's proposals, not the
+operator's per-item mark (§4). Before that: **written 2026-11-17** on worktree
 `cw-optimistic-page-read` from `7aa75760` (`v3.4.11-28-g7aa75760`) on the
 operator's word of 2026-11-17 (`raft-marks-2026-11-17.md` §1): *"Then write
 a milestone for the optimistic page read - the measurement, the validity
-verdict, the implementation and so on."* No stage is started; CW-S0 waits
-for the operator's word and for the marks on §4's items. Every
-`[source-read]` claim below was read at `7aa75760`.
+verdict, the implementation and so on."* Every `[source-read]` claim in §1
+was read at `7aa75760`; CW-S0 re-reads them at its own commit (§7).
 
 **Exploratory, and the measurement comes first.** The one number the tree
 holds on this path argues against the premise (§1.1), so CW-S0 and CW-S1
@@ -213,7 +217,9 @@ Binding from CW-S2 on, if the order reaches it.
 
 ## 4. Items for the operator (CW-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+(a) is CLA's proposal in each. **CW-Q0..Q9 (a) adopted on the operator's
+standing go-ahead of 2026-11-22 (go-ahead-achieving-milestone)**
+(`raft-marks-2026-11-22.md` §11); none is the operator's own mark.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -290,3 +296,13 @@ proposal. No review was run and no suite was executed: the commit
 changes no build input. Pushed to `main` with `--no-verify` on the
 operator's word given while the order was being written
 (`raft-marks-2026-11-17.md` §2).
+
+### Opened 2026-11-22
+
+Opened at `56b44964` (`v3.5.0-90-g56b44964`) on branch
+`worktree-cw-optimistic-page-read`, worktree `sync-stale-records`, on the
+operator's standing go-ahead (`/go-ahead-achieving-milestone CW`,
+`raft-marks-2026-11-22.md` §11). CW-Q0..Q9 adopted (a) on that go-ahead,
+CLA's proposals and not the operator's mark. The worktree is the session's
+own: a second worktree cannot be entered from inside one, so the branch is
+made in place, as DM's was.

@@ -96,3 +96,12 @@ The operator's words of 2026-11-22, recorded in English.
 | **Skipped on that word** | the pre-push hook; no suite was executed |
 | **Does not settle** | DM-Q10 (b), DM-Q2 (b), DM-Q7 (b), U2; a tag or a version |
 | **Recorded at** | this file; the DM order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 11. CW opened on the standing go-ahead; CW-Q0..Q9 adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone CW`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **CW is opened** at `56b44964` (`v3.5.0-90-g56b44964`; worktree `sync-stale-records`, branch `worktree-cw-optimistic-page-read`). **CW-Q0..Q9 are adopted (a) on that standing go-ahead** - CLA's proposals, not the operator's per-item mark: CW is exploratory, S0 or S1 may close it with nothing built (Q0); V0 and V1 as written (Q1); the cheapest candidate whose own spike reaches two thirds of the ceiling, C3 only if C1 does not (Q2); C3a and C3b only under C3 (Q3); a boot key `page_read = latched | optimistic` (Q4); the copy routine alone carries the `tsan` exemption, with a rig test (Q5); 3 failed validations, then the shared latch (Q6); S0 uses the pending `cores = 4` entry's options 1 and 2 for the read shapes and writes what it finds into that entry, the entry staying the operator's (Q7); the page latch's fairness out of CW (Q8); the standing measurement budget (Q9). No CW-Q item is `[quiet-wrong]`; CW-R1..R3 are, and bind from CW-S2 on |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the CW order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
