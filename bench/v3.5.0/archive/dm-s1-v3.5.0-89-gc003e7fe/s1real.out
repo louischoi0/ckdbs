@@ -1,0 +1,15 @@
+14:03:10 start
+14:03:10 cold loaded
+14:03:19 cold life=0 arm=0 ins_ix1 writes=19955 rp99=9004.8
+14:03:28 cold life=0 arm=0 update_pk writes=10565 rp99=5992.2
+14:03:37 cold life=0 arm=1024 ins_ix1 writes=23009 rp99=9195.8
+14:03:46 cold life=0 arm=1024 update_pk writes=8393 rp99=7376.4
+14:03:56 cold life=0 arm=16384 ins_ix1 writes=21815 rp99=9366.1
+14:04:06 cold life=0 arm=16384 update_pk writes=10996 rp99=5699.2
+14:04:16 cold life=1 arm=0 ins_ix1 writes=22050 rp99=11063.2
+14:04:25 cold life=1 arm=0 update_pk writes=7922 rp99=6729.4
+14:04:34 cold life=1 arm=1024 ins_ix1 writes=22037 rp99=9074.4
+14:04:43 cold life=1 arm=1024 update_pk writes=11642 rp99=6584.2
+14:04:53 cold life=1 arm=16384 ins_ix1 writes=22837 rp99=10057.1
+14:05:02 cold life=1 arm=16384 update_pk writes=10054 rp99=5609.2
+14:05:02 end

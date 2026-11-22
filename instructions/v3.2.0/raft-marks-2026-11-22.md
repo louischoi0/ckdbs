@@ -68,3 +68,21 @@ The operator's words of 2026-11-22, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; the DP order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 8. DM opened on the standing go-ahead; DM-Q1..Q9 adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone DM`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **DM is opened** at `bf5fce58` (worktree `sync-stale-records`, branch `worktree-dm-leaf-upper-bound`). **DM-Q1..Q9 are adopted (a) on that standing go-ahead** - CLA's proposals, not the operator's per-item mark: an order of its own beside DK (Q1); V0 and V1 as written (Q2); U1 first, U2 only on the operator's word for a format event (Q3); U2b and U2's tail place recorded for a DM-S4 that does not run (Q4, Q5); U3 not DM's (Q6); 1,024 entries a core, keys up to the bound DM-S0 proposes - **49 bytes**, the widest uncovered single-column entry (a string key on a heap, its discriminator byte included; first written 48 and corrected by DM-S1's review) (Q7); the range walk's stop left as today under U1 (Q8); the standing measurement budget (Q9). None is `[quiet-wrong]`. **DM-S4 (U2) does not run**: the go-ahead is not the operator's word for a format event (DM-R6) |
+| **Does not settle** | a format event; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DM order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 9. DM closed on the standing go-ahead: abandoned, nothing built
+
+| | |
+|---|---|
+| **Word** | the same `/go-ahead-achieving-milestone DM` (§8) |
+| **Mark** | **DM is closed, abandoned with nothing built**, at V1 with U0 - CLA's proposal adopted on that standing go-ahead, not the operator's own mark. DM-S0 (`bench/v3.5.0/results-dm-s0-premise-v3.5.0-88-g1b3a4583.md`) passed V0: every write off the rightmost leaf on a btree relation fetches the right sibling, a point `UPDATE`/`DELETE` included, and on a table six times the pool that fetch misses the pool in 49-79 % of write statements (served from the OS page cache there; a device read of 130-320 µs under a memory cap, DM-S1). DM-S1 (`bench/v3.5.0/results-dm-s1-ceiling-v3.5.0-89-gc003e7fe.md`) failed V1 at DM-Q7 (a)'s 1,024 entries on the cells the order defines: the indexed-insert cell returns 0 % warm and −1.5 % as M3 (DB's regime, served from the OS page cache on this host); 6-20 % of M3's sibling reads are removed, with the reader's p99 inside its spread or moving upward. **DM-Q10 is raised and adopted (a) on that standing go-ahead**, CLA's proposal and not the operator's mark: a cold cell in a regime the order does not define (the file out of the page cache, the server under a 64 MiB `memory.high` cap) does not count toward V1. In that cell the 1,024 memo returns a median −5.9 % CPU (95 % interval −2.3 % to −12.9 %), a return that scales as 1,024 / the tree's leaves. DM-Q10 (b) would reopen DM at DM-S2. A 16,384-entry memo returns −5.7 % (page cache) and −10 to −11 % (capped), and raises EV8's pool refusals on a cold update (DM-Q7 (b)). The spikes stay on the unpushed `worktree-dm-s0-spike`; the pool cell is in `known-gaps.md` (Eviction). No suite and no close A/B: the branch carries no build input |
+| **Does not settle** | U2 (a format event, the operator's word); DM-Q10 (b); DM-Q2 (b); DM-Q7 (b); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DM order's header and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |

@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| DM | abandoned | 2026-11-22 | 2026-11-20 | 2026-11-22 | 2026-11-22 | - | - | a leaf that knows its own upper bound | v3.2.0/workorder-dm-leaf-upper-bound.md |
 | DP | closed | 2026-11-22 | 2026-11-22 | 2026-11-22 | 2026-11-22 | 8fef04fa | - | VIEW: a stored SELECT absorbed by text before any plan | v3.2.0/workorder-dp-view.md |
 | DO | closed | 2026-11-22 | 2026-11-21 | 2026-11-21 | 2026-11-22 | c22a1a95 | - | the frame table's long holds | v3.2.0/workorder-do-frame-table-long-holds.md |
 | DN | closed | 2026-11-21 | 2026-11-20 | 2026-11-20 | 2026-11-21 | 48a3276c | - | the heap redefined again: an Oracle-style heap | v3.2.0/workorder-dn-heap-rowid.md |
@@ -75,7 +76,6 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | DK | closed-narrow | 2026-11-21 | 2026-11-20 | 2026-11-21 | 2026-11-21 | 46ee8a6e | - | a btree descent that leans on the immutable low key | v3.2.0/workorder-dk-descent-low-key.md |
 | DG | abandoned | 2026-11-21 | 2026-11-18 | 2026-11-21 | 2026-11-21 | dcab41e5 | - | a WAL segment's body: what the zero fill and its absence cost | v3.2.0/workorder-dg-wal-segment-body.md |
 | DD | closed | 2026-11-21 | 2026-11-18 | 2026-11-20 | 2026-11-20 | 2c2639df | - | secondary index entries removed: an index entry purge | v3.2.0/workorder-dd-index-entry-purge.md |
-| DM | written | 2026-11-20 | 2026-11-20 | - | - | n/a | - | a leaf that knows its own upper bound | v3.2.0/workorder-dm-leaf-upper-bound.md |
 | DJ | closed | 2026-11-20 | 2026-11-20 | 2026-11-20 | 2026-11-20 | 56d57f16 | v3.4.18 (local) | connections, sessions and cursors | v3.2.0/workorder-dj-connections-sessions-cursors.md |
 | DI | closed | 2026-11-20 | 2026-11-20 | 2026-11-20 | 2026-11-20 | fba5529f | v3.4.17 | a shape's statistics named by what the statement binds | v3.2.0/workorder-di-shape-identity.md |
 | DH | closed | 2026-11-20 | 2026-11-20 | 2026-11-20 | 2026-11-20 | 799a767d | v3.4.17 | the page image's price where pages are written often | v3.2.0/workorder-dh-page-image-volume.md |
