@@ -58,3 +58,13 @@ The operator's words of 2026-11-22, recorded in English.
 | **Mark** | **DP is closed**: DP-S0..S3 on `worktree-dp-view` (worktree `sync-stale-records`) at `03242261`, `184b1c2c`, `5e2491fe`, `78a32c4f`, each reviewed and suite-run; the close measured at `v3.5.0-84-g78a32c4f` against `v3.5.0-79-g30c47abf` (`bench/v3.5.0/results-dp-close-v3.5.0-84-g78a32c4f.md`). **Adopted on the standing go-ahead, CLA's proposals**: DP-Q23 (a body's names are its own, raised by DP-S0's review), DP-Q22 revised to (b) (`CREATE VIEW` holds `IS` on what it reads, `DROP VIEW` takes the view's `X`), and DP-R11's `[provisional]` lifted from depth 8 on the measured 3 us a level. **DP-R10 read as met within what the method resolves**, with `pkmix` stated at the edge of its floor (-0.79 %, 6 of 6 paired runs lower), not as level |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the DP order's header and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 7. DP landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report of DP's close |
+| **Mark** | **DP lands on `main`**: `worktree-dp-view` (worktree `sync-stale-records`, at `62001c4c`) merged `--no-ff` over `origin/main` `30c47abf` as `8fef04fa` and pushed with `--no-verify`. The merged tree is `62001c4c`'s, on which the full suite ran 0 failed of 5146 (Debug), so the hook was not run again; this record is documents only |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; the DP order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
