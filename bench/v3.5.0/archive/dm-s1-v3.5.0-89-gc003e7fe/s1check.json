@@ -1,0 +1,96 @@
+[
+ {
+  "arm": 0,
+  "ok": 40177,
+  "not_one": 0,
+  "errors": {
+   "851968:buffer pool full: buffer_pool_frames 2048 cannot": 220
+  },
+  "pool": {
+   "pool_misses": 64494.0,
+   "pool_hits": 177915.0,
+   "pool_reclaimed_inline": 55019.0,
+   "pool_reclaimed_background": 7697.0,
+   "pool_batches_inline": 10143.0,
+   "pool_batches_background": 191.0,
+   "pool_dirty_queued": 35482.0,
+   "pool_dirty_drained": 35482.0,
+   "pool_refused": 220.0,
+   "pool_resident": 1778.0,
+   "contention_checkpoint_pages_written": 185.0,
+   "contention_checkpoint_runs": 0.0,
+   "pool_resident_end": 1799.0
+  }
+ },
+ {
+  "arm": 16384,
+  "ok": 39416,
+  "not_one": 0,
+  "errors": {
+   "851968:buffer pool full: buffer_pool_frames 2048 cannot": 560,
+   "851968:buffer pool full: buffer_pool_frames 2048, 2048": 18
+  },
+  "pool": {
+   "pool_misses": 40593.0,
+   "pool_hits": 167555.0,
+   "pool_reclaimed_inline": 31384.0,
+   "pool_reclaimed_background": 7399.0,
+   "pool_batches_inline": 23288.0,
+   "pool_batches_background": 160.0,
+   "pool_dirty_queued": 34215.0,
+   "pool_dirty_drained": 34215.0,
+   "pool_refused": 596.0,
+   "pool_resident": 1774.0,
+   "contention_checkpoint_pages_written": 99.0,
+   "contention_checkpoint_runs": 1.0,
+   "pool_resident_end": 1795.0
+  }
+ },
+ {
+  "arm": 0,
+  "ok": 39020,
+  "not_one": 0,
+  "errors": {
+   "851968:buffer pool full: buffer_pool_frames 2048 cannot": 143
+  },
+  "pool": {
+   "pool_misses": 62374.0,
+   "pool_hits": 172772.0,
+   "pool_reclaimed_inline": 53429.0,
+   "pool_reclaimed_background": 7169.0,
+   "pool_batches_inline": 6891.0,
+   "pool_batches_background": 154.0,
+   "pool_dirty_queued": 32712.0,
+   "pool_dirty_drained": 32443.0,
+   "pool_refused": 143.0,
+   "pool_resident": 1776.0,
+   "contention_checkpoint_pages_written": 1499.0,
+   "contention_checkpoint_runs": 0.0,
+   "pool_resident_end": 1797.0
+  }
+ },
+ {
+  "arm": 16384,
+  "ok": 40392,
+  "not_one": 0,
+  "errors": {
+   "851968:buffer pool full: buffer_pool_frames 2048 cannot": 515,
+   "851968:buffer pool full: buffer_pool_frames 2048, 2048": 21
+  },
+  "pool": {
+   "pool_misses": 41268.0,
+   "pool_hits": 171655.0,
+   "pool_reclaimed_inline": 31653.0,
+   "pool_reclaimed_background": 7796.0,
+   "pool_batches_inline": 21795.0,
+   "pool_batches_background": 162.0,
+   "pool_dirty_queued": 36103.0,
+   "pool_dirty_drained": 36103.0,
+   "pool_refused": 557.0,
+   "pool_resident": 1777.0,
+   "contention_checkpoint_pages_written": 90.0,
+   "contention_checkpoint_runs": 1.0,
+   "pool_resident_end": 1798.0
+  }
+ }
+]

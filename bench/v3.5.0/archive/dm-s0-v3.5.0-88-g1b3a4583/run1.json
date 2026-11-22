@@ -1,0 +1,603 @@
+{
+ "bin": "/home/louis/dm-s0-run/kds_server_spike",
+ "sha256": "dd9467f485b5f404a28af0d4af66131e93b329c639e1a7d8a52fa0366bd536fe",
+ "started": "2026-11-22 13:27:13 UTC",
+ "host_before": {
+  "loadavg": "1.01 1.46 0.78 3/601 809435",
+  "cc1plus": "0"
+ },
+ "args": {
+  "bin": "/home/louis/dm-s0-run/kds_server_spike",
+  "workdir": "/home/louis/dm-s0-run/w",
+  "out": "/home/louis/dm-s0-run/run1.json",
+  "port": 15751,
+  "m1_rows": 50000,
+  "m1_stmts": 3000,
+  "m2_cores": "4",
+  "sessions_per_core": 4,
+  "seconds": 8.0,
+  "m3_rows": 1000000,
+  "m3_frames": 2048,
+  "only": "m1,m2,m3",
+  "heartbeat": "/home/louis/dm-s0-run/hb"
+ },
+ "m1": {
+  "ins_ix0": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "INSERT INTO t0 (v1, v2, v3, v4, w) VALUES (484128951870, 203600062346, 162343619250, 455285274162, 0)",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.0,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.009,
+    "pool_hits": 4.026
+   }
+  },
+  "ins_ix1": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "INSERT INTO t1 (v1, v2, v3, v4, w) VALUES (800218558329, 273389562595, 735663231938, 1095870488351, 0)",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.9947,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.107,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.011,
+    "pool_hits": 8.025
+   }
+  },
+  "ins_ix4": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "INSERT INTO t4 (v1, v2, v3, v4, w) VALUES (917343798696, 588655653721, 61221481124, 855338600170, 0)",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 3.9683,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.3987,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0197,
+    "pool_hits": 20.0163
+   }
+  },
+  "named_mid": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "INSERT INTO t0 VALUES (63889, 0, 0, 0, 0, 0)",
+   "per_stmt": {
+    "dm_bt_cover_write": 1.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.1483,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.1513,
+    "pool_hits": 6.2223
+   }
+  },
+  "update_pk": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "UPDATE t1 SET w = w + 1 WHERE id = 6248",
+   "per_stmt": {
+    "dm_bt_cover_write": 1.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.1067,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 5.0113
+   }
+  },
+  "delete_pk": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "DELETE FROM td WHERE id = 6822",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.9993,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.1057,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 5.005
+   }
+  },
+  "purge_pk": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "PURGE FROM td WHERE id = 6822",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.9993,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.0993,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 6.008
+   }
+  },
+  "point_hit": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "SELECT * FROM t1 WHERE id = 6248",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.0,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 4.0003
+   }
+  },
+  "point_miss": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "SELECT * FROM t1 WHERE id = 6249",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 1.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.1037,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 5.0
+   }
+  },
+  "seek_bt_desc": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "SELECT * FROM t1 WHERE id BETWEEN 1 AND 6248 ORDER BY id DESC LIMIT 5",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 1.0447,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.1007,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 6.1787
+   }
+  },
+  "seek_ix_desc": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "SELECT * FROM t1 WHERE v1 BETWEEN 1 AND 888272044870 ORDER BY v1 DESC LIMIT 5",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 1.0007,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.1133,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 15.0147
+   }
+  },
+  "range20": {
+   "stmts": 3000,
+   "errors": {},
+   "example": "SELECT * FROM t1 WHERE id BETWEEN 6248 AND 6288",
+   "per_stmt": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 0.0,
+    "dm_cover_miss_us": 0.0,
+    "dm_range_past_leaf": 1.0,
+    "descent_hops": 0.0,
+    "pool_misses": 0.0,
+    "pool_hits": 6.1743
+   }
+  }
+ },
+ "m2": {
+  "1": {
+   "ins_ix1": {
+    "sessions": 4,
+    "readers": 0,
+    "seconds": 8.0,
+    "writes": 192749,
+    "reads": 0,
+    "errors": {},
+    "total": {
+     "dm_bt_cover_write": 0.0,
+     "dm_bt_cover_lookup": 0.0,
+     "dm_bt_cover_seek": 0.0,
+     "dm_ix_cover_write": 192186.0,
+     "dm_ix_cover_seek": 0.0,
+     "dm_ix_cover_batch": 0.0,
+     "dm_bt_cover_misses": 0.0,
+     "dm_ix_cover_misses": 0.0,
+     "dm_cover_us": 28741.0,
+     "dm_cover_miss_us": 0.0,
+     "dm_range_past_leaf": 0.0,
+     "descent_hops": 0.0,
+     "pool_misses": 2358.0,
+     "pool_hits": 1833664.0
+    },
+    "server_cpu_s": 5.84,
+    "server_cpu_us_per_write": 30.3,
+    "writer_latency_us": {
+     "n": 192749,
+     "p0": 39.0,
+     "p25": 84.7,
+     "p50": 120.8,
+     "p90": 256.4,
+     "p99": 526.7,
+     "p99.9": 1609.5,
+     "p100": 165649.6
+    },
+    "host": {
+     "loadavg": "1.33 1.51 0.80 1/572 809531",
+     "cc1plus": "0"
+    },
+    "cover_us_per_write": 0.1491,
+    "cover_share_of_cpu": 0.00492,
+    "dm_bt_cover_write_per_write": 0.0,
+    "dm_ix_cover_write_per_write": 0.99708,
+    "dm_bt_cover_misses_per_write": 0.0,
+    "dm_ix_cover_misses_per_write": 0.0,
+    "dm_cover_miss_us_per_write": 0.0,
+    "pool_misses_per_write": 0.01223
+   },
+   "update_pk": {
+    "sessions": 4,
+    "readers": 0,
+    "seconds": 8.0,
+    "writes": 219041,
+    "reads": 0,
+    "errors": {},
+    "total": {
+     "dm_bt_cover_write": 219041.0,
+     "dm_bt_cover_lookup": 0.0,
+     "dm_bt_cover_seek": 0.0,
+     "dm_ix_cover_write": 0.0,
+     "dm_ix_cover_seek": 0.0,
+     "dm_ix_cover_batch": 0.0,
+     "dm_bt_cover_misses": 0.0,
+     "dm_ix_cover_misses": 0.0,
+     "dm_cover_us": 25837.0,
+     "dm_cover_miss_us": 0.0,
+     "dm_range_past_leaf": 0.0,
+     "descent_hops": 0.0,
+     "pool_misses": 0.0,
+     "pool_hits": 1316790.0
+    },
+    "server_cpu_s": 6.02,
+    "server_cpu_us_per_write": 27.48,
+    "writer_latency_us": {
+     "n": 219041,
+     "p0": 31.2,
+     "p25": 79.4,
+     "p50": 112.3,
+     "p90": 235.0,
+     "p99": 469.0,
+     "p99.9": 1543.7,
+     "p100": 231605.7
+    },
+    "host": {
+     "loadavg": "1.66 1.58 0.83 1/572 809554",
+     "cc1plus": "0"
+    },
+    "cover_us_per_write": 0.118,
+    "cover_share_of_cpu": 0.00429,
+    "dm_bt_cover_write_per_write": 1.0,
+    "dm_ix_cover_write_per_write": 0.0,
+    "dm_bt_cover_misses_per_write": 0.0,
+    "dm_ix_cover_misses_per_write": 0.0,
+    "dm_cover_miss_us_per_write": 0.0,
+    "pool_misses_per_write": 0.0
+   }
+  },
+  "4": {
+   "ins_ix1": {
+    "sessions": 16,
+    "readers": 0,
+    "seconds": 8.01,
+    "writes": 162622,
+    "reads": 0,
+    "errors": {},
+    "total": {
+     "dm_bt_cover_write": 29.0,
+     "dm_bt_cover_lookup": 0.0,
+     "dm_bt_cover_seek": 0.0,
+     "dm_ix_cover_write": 162175.0,
+     "dm_ix_cover_seek": 0.0,
+     "dm_ix_cover_batch": 0.0,
+     "dm_bt_cover_misses": 0.0,
+     "dm_ix_cover_misses": 0.0,
+     "dm_cover_us": 47723.0,
+     "dm_cover_miss_us": 0.0,
+     "dm_range_past_leaf": 0.0,
+     "descent_hops": 57.0,
+     "pool_misses": 2029.0,
+     "pool_hits": 1530427.0
+    },
+    "server_cpu_s": 7.78,
+    "server_cpu_us_per_write": 47.84,
+    "writer_latency_us": {
+     "n": 162622,
+     "p0": 56.5,
+     "p25": 362.6,
+     "p50": 620.0,
+     "p90": 1560.1,
+     "p99": 2776.4,
+     "p99.9": 4223.6,
+     "p100": 19323.0
+    },
+    "host": {
+     "loadavg": "1.64 1.57 0.84 1/608 809630",
+     "cc1plus": "0"
+    },
+    "cover_us_per_write": 0.2935,
+    "cover_share_of_cpu": 0.00614,
+    "dm_bt_cover_write_per_write": 0.00018,
+    "dm_ix_cover_write_per_write": 0.99725,
+    "dm_bt_cover_misses_per_write": 0.0,
+    "dm_ix_cover_misses_per_write": 0.0,
+    "dm_cover_miss_us_per_write": 0.0,
+    "pool_misses_per_write": 0.01248
+   },
+   "update_pk": {
+    "sessions": 16,
+    "readers": 0,
+    "seconds": 8.01,
+    "writes": 172582,
+    "reads": 0,
+    "errors": {
+     "655360:row id=22964 was written by": 1
+    },
+    "total": {
+     "dm_bt_cover_write": 172583.0,
+     "dm_bt_cover_lookup": 0.0,
+     "dm_bt_cover_seek": 0.0,
+     "dm_ix_cover_write": 0.0,
+     "dm_ix_cover_seek": 0.0,
+     "dm_ix_cover_batch": 0.0,
+     "dm_bt_cover_misses": 0.0,
+     "dm_ix_cover_misses": 0.0,
+     "dm_cover_us": 46509.0,
+     "dm_cover_miss_us": 0.0,
+     "dm_range_past_leaf": 0.0,
+     "descent_hops": 0.0,
+     "pool_misses": 136.0,
+     "pool_hits": 1037366.0
+    },
+    "server_cpu_s": 8.11,
+    "server_cpu_us_per_write": 46.99,
+    "writer_latency_us": {
+     "n": 172582,
+     "p0": 50.3,
+     "p25": 345.2,
+     "p50": 585.9,
+     "p90": 1456.7,
+     "p99": 2579.9,
+     "p99.9": 3795.2,
+     "p100": 207284.1
+    },
+    "host": {
+     "loadavg": "2.08 1.67 0.88 1/579 809664",
+     "cc1plus": "0"
+    },
+    "cover_us_per_write": 0.2695,
+    "cover_share_of_cpu": 0.00574,
+    "dm_bt_cover_write_per_write": 1.00001,
+    "dm_ix_cover_write_per_write": 0.0,
+    "dm_bt_cover_misses_per_write": 0.0,
+    "dm_ix_cover_misses_per_write": 0.0,
+    "dm_cover_miss_us_per_write": 0.0,
+    "pool_misses_per_write": 0.00079
+   }
+  }
+ },
+ "m3": {
+  "pool_frames": 2048,
+  "rows": 1000000,
+  "ins_ix1": {
+   "sessions": 4,
+   "readers": 1,
+   "seconds": 8.0,
+   "writes": 88786,
+   "reads": 23497,
+   "errors": {},
+   "total": {
+    "dm_bt_cover_write": 0.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 88771.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 0.0,
+    "dm_ix_cover_misses": 43864.0,
+    "dm_cover_us": 166718.0,
+    "dm_cover_miss_us": 157375.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 112030.0,
+    "pool_hits": 897778.0
+   },
+   "server_cpu_s": 4.97,
+   "server_cpu_us_per_write": 55.98,
+   "writer_latency_us": {
+    "n": 88786,
+    "p0": 50.3,
+    "p25": 136.8,
+    "p50": 200.5,
+    "p90": 400.3,
+    "p99": 821.3,
+    "p99.9": 16372.0,
+    "p100": 311140.4
+   },
+   "host": {
+    "loadavg": "2.07 1.69 0.90 1/603 809778",
+    "cc1plus": "0"
+   },
+   "reader_latency_us": {
+    "n": 23497,
+    "p0": 59.7,
+    "p25": 138.8,
+    "p50": 195.1,
+    "p90": 370.2,
+    "p99": 703.4,
+    "p99.9": 16111.4,
+    "p100": 310674.1
+   },
+   "cover_us_per_write": 1.8778,
+   "cover_share_of_cpu": 0.03354,
+   "dm_bt_cover_write_per_write": 0.0,
+   "dm_ix_cover_write_per_write": 0.99983,
+   "dm_bt_cover_misses_per_write": 0.0,
+   "dm_ix_cover_misses_per_write": 0.49404,
+   "dm_cover_miss_us_per_write": 1.77252,
+   "pool_misses_per_write": 1.2618
+  },
+  "update_pk": {
+   "sessions": 4,
+   "readers": 1,
+   "seconds": 8.0,
+   "writes": 48621,
+   "reads": 13081,
+   "errors": {},
+   "total": {
+    "dm_bt_cover_write": 48621.0,
+    "dm_bt_cover_lookup": 0.0,
+    "dm_bt_cover_seek": 0.0,
+    "dm_ix_cover_write": 0.0,
+    "dm_ix_cover_seek": 0.0,
+    "dm_ix_cover_batch": 0.0,
+    "dm_bt_cover_misses": 38467.0,
+    "dm_ix_cover_misses": 0.0,
+    "dm_cover_us": 136640.0,
+    "dm_cover_miss_us": 134318.0,
+    "dm_range_past_leaf": 0.0,
+    "descent_hops": 0.0,
+    "pool_misses": 84909.0,
+    "pool_hits": 272789.0
+   },
+   "server_cpu_s": 2.89,
+   "server_cpu_us_per_write": 59.44,
+   "writer_latency_us": {
+    "n": 48621,
+    "p0": 55.2,
+    "p25": 139.6,
+    "p50": 194.5,
+    "p90": 378.1,
+    "p99": 826.0,
+    "p99.9": 169671.9,
+    "p100": 587055.6
+   },
+   "host": {
+    "loadavg": "2.05 1.70 0.91 1/579 809811",
+    "cc1plus": "0"
+   },
+   "reader_latency_us": {
+    "n": 13081,
+    "p0": 58.9,
+    "p25": 134.9,
+    "p50": 185.0,
+    "p90": 336.2,
+    "p99": 677.1,
+    "p99.9": 102451.2,
+    "p100": 586978.4
+   },
+   "cover_us_per_write": 2.8103,
+   "cover_share_of_cpu": 0.04728,
+   "dm_bt_cover_write_per_write": 1.0,
+   "dm_ix_cover_write_per_write": 0.0,
+   "dm_bt_cover_misses_per_write": 0.79116,
+   "dm_ix_cover_misses_per_write": 0.0,
+   "dm_cover_miss_us_per_write": 2.76255,
+   "pool_misses_per_write": 1.74634
+  }
+ },
+ "host_after": {
+  "loadavg": "2.05 1.70 0.91 1/571 809812",
+  "cc1plus": "0"
+ },
+ "ended": "2026-11-22 13:28:20 UTC"
+}

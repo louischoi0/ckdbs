@@ -1,0 +1,352 @@
+diff --git a/include/kds/base/contention.hpp b/include/kds/base/contention.hpp
+index 8fe764e0..e2bddbd5 100644
+--- a/include/kds/base/contention.hpp
++++ b/include/kds/base/contention.hpp
+@@ -142,6 +142,12 @@ enum class Tally : std::uint8_t {
+     kFrameTableWalksOver100us,
+     kFrameTableWalksOver1ms,
+     kFrameTableWalksOver10ms,
++    // DM-S0 spike only (never landed): the sibling fetch census.
++    kDmBtCoverWrite, kDmBtCoverLookup, kDmBtCoverSeek,
++    kDmIxCoverWrite, kDmIxCoverSeek, kDmIxCoverBatch,
++    kDmBtCoverMisses, kDmIxCoverMisses, kDmCoverNs, kDmCoverMissNs,
++    kDmRangePastLeaf,
++    kDmMemoHits, kDmMemoFills,  // DM-S1 spike only: U1's memo
+     kCount,
+ };
+ 
+@@ -163,6 +169,11 @@ inline constexpr std::array<const char*, kTallyCount> kTallyNames = {
+     "descent_hops",           "frame_table_walks",      "frame_table_walk_us",
+     "frame_table_walks_over_100us", "frame_table_walks_over_1ms",
+     "frame_table_walks_over_10ms",
++    "dm_bt_cover_write", "dm_bt_cover_lookup", "dm_bt_cover_seek",
++    "dm_ix_cover_write", "dm_ix_cover_seek", "dm_ix_cover_batch",
++    "dm_bt_cover_misses", "dm_ix_cover_misses", "dm_cover_us", "dm_cover_miss_us",
++    "dm_range_past_leaf",
++    "dm_memo_hits", "dm_memo_fills",
+ };
+ static_assert(kTallyNames.back() != nullptr, "a Tally without a name");
+ 
+diff --git a/include/kds/storage/dm_memo.hpp b/include/kds/storage/dm_memo.hpp
+new file mode 100644
+index 00000000..1b717b35
+--- /dev/null
++++ b/include/kds/storage/dm_memo.hpp
+@@ -0,0 +1,65 @@
++#pragma once
++// DM-S1 spike only (never landed): U1, a core-local memo of a right
++// sibling's low key (`instructions/v3.2.0/workorder-dm-leaf-upper-bound.md`
++// §2). Keyed by the sibling's own page id and its owner's oid, so the link
++// read under the leaf's hold picks the entry and is its validation (DM-R4):
++// a page id names one page for its owner's life (no tree page is freed while
++// its owner lives), its low key never moves (invariant 2; an index leaf's
++// first entry is never removed), and an owner oid is never reissued within
++// a run (`Catalog::GenerateUserOid`'s instance sequence). The memo is
++// per thread - a reactor is one thread - and memory only.
++//
++// `DM_MEMO_ENTRIES` in the server's environment sizes each table
++// (direct-mapped by page id); unset reads 1024 (DM-Q7 (a)), 0 turns it off.
++
++#include <cstddef>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++namespace kds::storage::dm_memo {
++
++inline constexpr std::size_t kMaxIndexKeyBytes = 48;
++
++inline std::size_t Entries() {
++    static const std::size_t n = [] {
++        const char* v = std::getenv("DM_MEMO_ENTRIES");
++        return v != nullptr ? static_cast<std::size_t>(std::strtoull(v, nullptr, 10))
++                            : std::size_t{1024};
++    }();
++    return n;
++}
++
++struct BtEntry {
++    std::uint64_t owner = 0;
++    std::uint32_t page = 0;
++    std::uint32_t valid = 0;
++    std::uint64_t low = 0;
++};
++
++struct IxEntry {
++    std::uint64_t owner = 0;
++    std::uint32_t page = 0;
++    std::uint16_t width = 0;
++    std::uint16_t valid = 0;
++    std::byte low[kMaxIndexKeyBytes];
++};
++
++inline BtEntry* BtSlot(std::uint32_t page) {
++    thread_local std::vector<BtEntry> table;
++    const std::size_t n = Entries();
++    if (n == 0) return nullptr;
++    if (table.size() != n) table.assign(n, BtEntry{});
++    return &table[page % n];
++}
++
++inline IxEntry* IxSlot(std::uint32_t page) {
++    thread_local std::vector<IxEntry> table;
++    const std::size_t n = Entries();
++    if (n == 0) return nullptr;
++    if (table.size() != n) table.assign(n, IxEntry{});
++    return &table[page % n];
++}
++
++}  // namespace kds::storage::dm_memo
+diff --git a/include/kds/storage/heap/heap_page.hpp b/include/kds/storage/heap/heap_page.hpp
+index 8fc39fa7..fb029db0 100644
+--- a/include/kds/storage/heap/heap_page.hpp
++++ b/include/kds/storage/heap/heap_page.hpp
+@@ -253,6 +253,7 @@ public:
+     std::uint16_t free_space() const;
+ 
+     PageId next_page_id() const;
++    std::span<std::byte, kPageSize> dm_raw() const { return page_; }  // DM spike only
+     void set_next_page_id(PageId next);
+ 
+     // `kHeaderFlagGrownOver`, on a B+ tree leaf. The caller holds the page
+diff --git a/include/kds/storage/index/index_page.hpp b/include/kds/storage/index/index_page.hpp
+index 77038103..70f1143b 100644
+--- a/include/kds/storage/index/index_page.hpp
++++ b/include/kds/storage/index/index_page.hpp
+@@ -294,6 +294,7 @@ public:
+ 
+     std::uint16_t entry_count() const;
+     PageId right_sibling() const;
++    std::span<std::byte, kPageSize> dm_raw() const { return page_; }  // DM spike only
+     void set_right_sibling(PageId page_id);
+ 
+     // The whole entry, which is also its sort key. Fails with OutOfRange
+diff --git a/include/kds/storage/page_store.hpp b/include/kds/storage/page_store.hpp
+index d1486529..2172a919 100644
+--- a/include/kds/storage/page_store.hpp
++++ b/include/kds/storage/page_store.hpp
+@@ -942,6 +942,10 @@ bool NoRefuseWindowOpenOnThisThread() noexcept;
+ // no-op counts nothing here either.
+ std::size_t PinsHeldOnThisThread() noexcept;
+ 
++// DM-S0 spike only (never landed): frames this thread reserved - a device
++// read or a creation - so a caller can tell whether one fetch missed.
++std::uint64_t DmReservesOnThisThread() noexcept;
++
+ // Drain mode for the life of the guard (`PageStore`'s note).
+ class DrainOnPressure {
+ public:
+diff --git a/src/exec/step_vm.cpp b/src/exec/step_vm.cpp
+index 1e68064f..1fa5f429 100644
+--- a/src/exec/step_vm.cpp
++++ b/src/exec/step_vm.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/contention.hpp"
+ #include "kds/storage/page_header.hpp"
+ #include "kds/exec/heap_store.hpp"
+ #include "kds/exec/step_vm.hpp"
+@@ -2420,6 +2421,7 @@ private:
+             // already in cache, and it fires on the first slot of the first
+             // page past the range.
+             if (pruning && page.min_key() > range_high) {
++                Contention::Add(Tally::kDmRangePastLeaf);  // DM-S0 spike only
+                 ++stats_.For(step.step_id).range_pages_pruned;
+                 return stop_here();
+             }
+diff --git a/src/storage/btree/btree.cpp b/src/storage/btree/btree.cpp
+index e16492a2..e4328478 100644
+--- a/src/storage/btree/btree.cpp
++++ b/src/storage/btree/btree.cpp
+@@ -1,5 +1,6 @@
+ #include "kds/storage/btree/btree.hpp"
+ 
++#include <chrono>
+ #include <algorithm>
+ #include <cstring>
+ #include <string>
+@@ -8,6 +9,7 @@
+ #include "kds/base/contention.hpp"
+ #include "kds/stats/leaf_stats.hpp"
+ #include "kds/storage/heap/heap_page.hpp"
++#include "kds/storage/dm_memo.hpp"
+ #include "kds/storage/keystone.hpp"
+ #include "kds/storage/page_header.hpp"
+ 
+@@ -103,10 +105,34 @@ struct Descent {
+ // this file is bottom-up (a leaf, then its parents, in `SecureParents`).
+ // A split reads `next_page_id` and never fetches the page it names.
+ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& leaf,
+-                                   std::uint64_t key) {
++                                   std::uint64_t key, Tally dm_site = Tally::kDmBtCoverWrite) {
+     const PageId right = leaf.next_page_id();
+     if (right == kInvalidPageId) return true;  // the rightmost leaf holds every key above it
++    // DM-S1 spike only (never landed): U1, the sibling's low key remembered
++    // (`storage/dm_memo.hpp`), keyed by the link read under this hold.
++    storage::dm_memo::BtEntry* memo = storage::dm_memo::BtSlot(right);
++    const std::uint64_t owner = storage::GetOwnerOid(leaf.dm_raw());
++    if (memo != nullptr && memo->valid != 0 && memo->page == right && memo->owner == owner) {
++        Contention::Add(Tally::kDmMemoHits);
++        return key < memo->low;
++    }
++    // DM-S0 spike only (never landed): who fetched, whether it missed, and
++    // what it took.
++    Contention::Add(dm_site);
++    const std::uint64_t dm_reserves = storage::DmReservesOnThisThread();
++    const auto dm_t0 = std::chrono::steady_clock::now();
+     auto bytes = store.GetForRead(right);
++    {
++        const auto dm_ns = static_cast<std::uint64_t>(
++            std::chrono::duration_cast<std::chrono::nanoseconds>(
++                std::chrono::steady_clock::now() - dm_t0)
++                .count());
++        Contention::Add(Tally::kDmCoverNs, dm_ns);
++        if (storage::DmReservesOnThisThread() != dm_reserves) {
++            Contention::Add(Tally::kDmBtCoverMisses);
++            Contention::Add(Tally::kDmCoverMissNs, dm_ns);
++        }
++    }
+     if (!bytes.ok()) return bytes.status();
+     // `min_key` lives in the heap page *body*, not the common header, so on
+     // anything that is not a leaf those bytes are another view's fields -
+@@ -116,7 +142,13 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, heap::PageView& lea
+     if (Status s = RequireType(bytes.value().bytes(), right, PageType::kBtreeLeaf); !s.ok()) {
+         return s;
+     }
+-    return key < heap::PageView(bytes.value().bytes()).min_key();
++    const std::uint64_t low = heap::PageView(bytes.value().bytes()).min_key();
++    if (memo != nullptr) {
++        *memo = storage::dm_memo::BtEntry{storage::GetOwnerOid(bytes.value().bytes()), right, 1,
++                                          low};
++        Contention::Add(Tally::kDmMemoFills);
++    }
++    return key < low;
+ }
+ 
+ // **DK's D2: one move right along the leaf chain**, taken where a held
+@@ -1273,7 +1305,7 @@ StatusOr<Location> BtreeLookup(storage::PageStore& store, PageId root, std::uint
+ 
+             bool covered = for_write;
+             if (!covered) {
+-                auto covers = LeafStillCoversKey(store, leaf, id);
++                auto covers = LeafStillCoversKey(store, leaf, id, Tally::kDmBtCoverLookup);
+                 if (!covers.ok()) return covers.status();
+                 covered = covers.value();
+             }
+@@ -1375,7 +1407,7 @@ StatusOr<HeldLeaf> BtreeFetchLeafAtOrBelow(storage::PageStore& store, PageId roo
+         // Asked under the leaf's hold: a split of it has to write it, so the
+         // answer cannot go stale while it is held.
+         heap::PageView view(leaf.value().bytes());
+-        auto covers = LeafStillCoversKey(store, view, key);
++        auto covers = LeafStillCoversKey(store, view, key, Tally::kDmBtCoverSeek);
+         if (!covers.ok()) return covers.status();
+         if (covers.value()) return HeldLeaf{current, std::move(leaf.value())};
+         current = view.next_page_id();
+diff --git a/src/storage/device_page_store.cpp b/src/storage/device_page_store.cpp
+index 0816fe6d..b052c9ad 100644
+--- a/src/storage/device_page_store.cpp
++++ b/src/storage/device_page_store.cpp
+@@ -898,9 +898,15 @@ thread_local std::size_t t_pins_here = 0;
+ bool NoRefuseWindowOpenOnThisThread() noexcept { return t_fill.window_depth > 0; }
+ std::size_t PinsHeldOnThisThread() noexcept { return t_pins_here; }
+ 
++namespace {
++thread_local std::uint64_t t_dm_reserves = 0;  // DM-S0 spike only
++}  // namespace
++std::uint64_t DmReservesOnThisThread() noexcept { return t_dm_reserves; }
++
+ StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
+     AssertOrderBeforeFrames("ReserveFrame");
+     misses_.Add();
++    ++t_dm_reserves;
+     const bool in_window = t_fill.store == this && t_fill.window_depth > 0;
+     // MG06's on-demand trigger (EV5), in BE-R2's bounded form: a fill at the
+     // limit reclaims a batch before it takes a slot, so the next
+diff --git a/src/storage/index/index_tree.cpp b/src/storage/index/index_tree.cpp
+index 00754fcc..e13b23ab 100644
+--- a/src/storage/index/index_tree.cpp
++++ b/src/storage/index/index_tree.cpp
+@@ -1,11 +1,13 @@
+ #include "kds/storage/index/index_tree.hpp"
+ 
++#include <chrono>
+ #include <cstring>
+ #include <string>
+ 
+ #include "kds/base/contention.hpp"
+ #include "kds/stats/leaf_stats.hpp"
+ #include "kds/storage/page_header.hpp"
++#include "kds/storage/dm_memo.hpp"
+ 
+ namespace kds::index {
+ 
+@@ -67,10 +69,35 @@ struct Descent {
+ // parents), and a descent releases a parent before it reads the child.
+ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView& leaf,
+                                   const IndexLayout& layout,
+-                                  std::span<const std::byte> sort_key) {
++                                  std::span<const std::byte> sort_key,
++                                  Tally dm_site = Tally::kDmIxCoverWrite) {
+     const PageId right = leaf.right_sibling();
+     if (right == kInvalidPageId) return true;  // the rightmost leaf holds every key above it
++    // DM-S1 spike only (never landed): U1, btree.cpp's memo one tree over;
++    // a sort key wider than the memo's bound is not remembered.
++    storage::dm_memo::IxEntry* memo = storage::dm_memo::IxSlot(right);
++    const std::uint64_t owner = storage::GetOwnerOid(leaf.dm_raw());
++    if (memo != nullptr && memo->valid != 0 && memo->page == right && memo->owner == owner &&
++        sort_key.size() <= memo->width) {
++        Contention::Add(Tally::kDmMemoHits);
++        return std::memcmp(sort_key.data(), memo->low, sort_key.size()) < 0;
++    }
++    // DM-S0 spike only (never landed): btree.cpp's census, one tree over.
++    Contention::Add(dm_site);
++    const std::uint64_t dm_reserves = storage::DmReservesOnThisThread();
++    const auto dm_t0 = std::chrono::steady_clock::now();
+     auto bytes = store.GetForRead(right);
++    {
++        const auto dm_ns = static_cast<std::uint64_t>(
++            std::chrono::duration_cast<std::chrono::nanoseconds>(
++                std::chrono::steady_clock::now() - dm_t0)
++                .count());
++        Contention::Add(Tally::kDmCoverNs, dm_ns);
++        if (storage::DmReservesOnThisThread() != dm_reserves) {
++            Contention::Add(Tally::kDmIxCoverMisses);
++            Contention::Add(Tally::kDmCoverMissNs, dm_ns);
++        }
++    }
+     if (!bytes.ok()) return bytes.status();
+     if (Status s = RequireType(bytes.value().bytes(), right, PageType::kIndexLeaf); !s.ok()) {
+         return s;
+@@ -84,6 +111,14 @@ StatusOr<bool> LeafStillCoversKey(storage::PageStore& store, const IndexLeafView
+         return Status::Corruption("index leaf " + std::to_string(right) +
+                                   " is a right sibling holding no entries");
+     }
++    if (memo != nullptr && low.value().size() <= storage::dm_memo::kMaxIndexKeyBytes) {
++        memo->owner = storage::GetOwnerOid(bytes.value().bytes());
++        memo->page = right;
++        memo->width = static_cast<std::uint16_t>(low.value().size());
++        memo->valid = 1;
++        std::memcpy(memo->low, low.value().data(), low.value().size());
++        Contention::Add(Tally::kDmMemoFills);
++    }
+     return std::memcmp(sort_key.data(), low.value().data(), sort_key.size()) < 0;
+ }
+ 
+@@ -665,7 +700,7 @@ StatusOr<storage::PageRef> IndexFetchLeafAtOrBelow(storage::PageStore& store, Pa
+         // Asked under the leaf's hold: a divide of it has to write it. "At
+         // or below a key" and `LeafStillCoversKey`'s "strictly below the
+         // sibling's first entry" are one question of one sibling.
+-        auto covers = LeafStillCoversKey(store, view, layout, sort_key);
++        auto covers = LeafStillCoversKey(store, view, layout, sort_key, Tally::kDmIxCoverSeek);
+         if (!covers.ok()) return covers.status();
+         if (covers.value()) return leaf;
+         // The right neighbour is taken before this leaf is let go: a
+@@ -722,7 +757,7 @@ StatusOr<std::uint64_t> IndexRemoveEntries(
+             // Position 0 is kept by rule (DD-Q3 (a)); an entry not found
+             // was never here or is gone already.
+             if (++i == entries.size()) break;
+-            auto covers = LeafStillCoversKey(store, view, layout, entries[i]);
++            auto covers = LeafStillCoversKey(store, view, layout, entries[i], Tally::kDmIxCoverBatch);
+             if (!covers.ok()) {
+                 stop = covers.status();
+                 break;

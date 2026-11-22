@@ -34,6 +34,34 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   written 2026-10-07 and stopped after BG-S1 (2026-10-08). Owned by
   `docs/spec/eviction.md` (EV6, §3.1).
 
+- **A pool whose resident set is mostly dirty refuses point updates, and
+  fewer clean reads make it refuse more.** Measured on the engine at
+  `bf5fce58`, through DM's census spike (`c003e7fe`, `v3.5.0-89-gc003e7fe`,
+  whose memo-off arm is `bf5fce58` plus counters):
+  `bench/v3.5.0/results-dm-s1-ceiling-v3.5.0-89-gc003e7fe.md` §3. The cell
+  is a random-key `UPDATE ... WHERE id = k` on 1,000,000 rows (a 101 MB
+  file) on 2,048 frames, four sessions at `cores = 1`, with the file in the
+  OS page cache.
+  - On the base engine, the pool refuses `ResourceExhausted` ("buffer pool
+    full") 143-220 times in 6 s, against about 40,000 updates.
+  - With 78 % of the right sibling's reads removed (DM's U1 memo at 16,384
+    entries), it refuses 557-596 times (the pool's `pool_refused`; the
+    client counted 536-578). The pool's misses fall 35 %, and an inline
+    reclaim batch frees 1.35-1.45 frames where it freed 5.4-7.8.
+  - **The likely cause is how dirty frames get written back.** A dirty
+    frame is queued for writeback by a reclaim walk that passes over it,
+    and the checkpoint writes the rest. A read-heavy fault stream keeps
+    clean frames resident for the walk to take. An update stream that
+    faults less leaves the walk mostly dirty frames. These frames can be
+    flushed, but the built retry re-walks without yielding, and so it
+    refuses.
+  - The refusal is EV8 as built (`eviction.md` §3.3), and no answer moves:
+    every update that did not fail affected its one row.
+  - Any change that removes reads from a write path meets this cell; DM's
+    U1 and U2 are two.
+
+  Owned by `docs/spec/eviction.md` (§3.3, EV8).
+
 - **The executor does not scan through EV6's ring, by decision.** Re-read
   at `0205444b`: `OpenScanRing`'s only caller is `cabin_optimizer_exec.cpp`
   (the relayout planner, its other caller, is deleted since BZ). A `SELECT`'s outermost walk faults cold

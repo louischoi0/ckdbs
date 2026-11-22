@@ -1,0 +1,21 @@
+13:27:13 start
+13:27:16 m1 ins_ix0 done errors=0
+13:27:16 m1 ins_ix1 done errors=0
+13:27:16 m1 ins_ix4 done errors=0
+13:27:16 m1 named_mid done errors=0
+13:27:16 m1 update_pk done errors=0
+13:27:17 m1 delete_pk done errors=0
+13:27:17 m1 purge_pk done errors=0
+13:27:17 m1 point_hit done errors=0
+13:27:17 m1 point_miss done errors=0
+13:27:17 m1 seek_bt_desc done errors=0
+13:27:18 m1 seek_ix_desc done errors=0
+13:27:18 m1 range20 done errors=0
+13:27:27 m2 cores=1 ins_ix1 writes=192749
+13:27:35 m2 cores=1 update_pk writes=219041
+13:27:45 m2 cores=4 ins_ix1 writes=162622
+13:27:53 m2 cores=4 update_pk writes=172582
+13:28:04 m3 loaded
+13:28:12 m3 ins_ix1 writes=88786
+13:28:20 m3 update_pk writes=48621
+13:28:20 end
