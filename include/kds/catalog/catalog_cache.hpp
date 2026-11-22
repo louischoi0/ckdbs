@@ -218,6 +218,22 @@ public:
     const std::vector<SysObjectRow>* FindTableList() noexcept;
     const std::vector<SysObjectRow>* PutTableList(std::vector<SysObjectRow> tables);
 
+    // ---- Views (DP-Q18) ---------------------------------------------------
+    //
+    // **Every live view's name, whole**, so "is this name a view" is
+    // answered present or absent from memory - a relation's name is asked
+    // it at every bind once a view exists, and an absence the name map
+    // above cannot hold (`FindTableOidByName`'s note) would be a page scan
+    // a statement. Filled by one unfiltered scan and dropped by
+    // `Invalidate`, as the table list is. The pointer is valid until the
+    // next `Invalidate`, and no caller holds it past its lookup.
+    using ViewNames = std::unordered_map<Oid, std::unordered_map<std::string, Oid>>;
+    const ViewNames* FindViewNames() noexcept;
+    const ViewNames* PutViewNames(ViewNames names);
+    // A view's definition by oid, from an unfiltered read; a copy out.
+    const ViewDef* FindViewDef(Oid oid) noexcept;
+    void PutViewDef(ViewDef def);
+
     // ---- lifecycle ------------------------------------------------------
 
     // The single DDL choke point: drops every fact that DDL can change,
@@ -289,6 +305,8 @@ private:
     // "not loaded", which a bare empty vector cannot.
     std::optional<std::vector<SysTypeRow>> types_;
     std::optional<std::vector<SysObjectRow>> table_list_;
+    std::optional<ViewNames> view_names_;
+    std::unordered_map<Oid, ViewDef> view_defs_;
 
     Stats stats_;
 

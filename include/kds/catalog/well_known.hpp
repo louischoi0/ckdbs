@@ -124,6 +124,29 @@ inline constexpr Oid kTypeDroppedTable = 34;
 // match the other's tombstones.
 inline constexpr Oid kTypeDroppedNamespace = 35;
 
+// A **view**'s sys.objects row (DP-Q3, `instructions/v3.2.0/workorder-dp-view.md`):
+// a name in a namespace's one relation name space beside its tables (NS6),
+// so a table and a view never share a name; its text, columns and
+// dependencies are its sys.views rows. A dropped view is retyped to
+// `kTypeDroppedView`, never retired, for `kTypeDroppedTable`'s reason - the
+// row is `GenerateUserOid()`'s floor, and an oid a dropped view held is
+// never reissued (DT2), which is what keeps a plan or a trail made through
+// the old body from naming a new one (DP-R3). Appended past 35 per the rule
+// above.
+inline constexpr Oid kTypeView = 36;
+inline constexpr Oid kTypeDroppedView = 37;
+
+// The one test for "this sys.objects row holds a name in a namespace's
+// relation name space" (NS6), and for its undecided-drop counterpart: every
+// name check asks these, so a third relation kind cannot be counted by one
+// check and missed by another.
+constexpr bool IsLiveRelationName(Oid type_oid) {
+    return type_oid == kTypeTable || type_oid == kTypeView;
+}
+constexpr bool IsDroppedRelationName(Oid type_oid) {
+    return type_oid == kTypeDroppedTable || type_oid == kTypeDroppedView;
+}
+
 inline constexpr Oid kSysTypesTable = 100;
 inline constexpr Oid kSysObjectsTable = 110;
 inline constexpr Oid kSysColumnsTable = 111;
@@ -259,6 +282,13 @@ inline constexpr Oid kSysPlansTable = 161;
 // Fixed oids for sys.plans' six sys.columns rows, 162..167.
 inline constexpr Oid kSysPlansColumnOidBase = 162;
 
+// sys.views (DP-Q3, DP-Q14, superblock 40): a view's text, its column
+// names, whether it is absorbable and what it reads, as fixed-width
+// `SysViewRow`s written under the DDL's transaction. **Logged**: a view is
+// schema. It issues Keystone ids (a row's `row_id`) from its own `next_id`,
+// as sys.fkeys does.
+inline constexpr Oid kSysViewsTable = 168;
+
 // The catalog relations CR6 writes unlogged (`crosscore.md` CC13). Their
 // rows are inserted at the bootstrap id and never delete-marked, and
 // **nothing walks their chains but their own guarded walk**
@@ -317,13 +347,14 @@ inline constexpr Oid kAllWellKnownOids[] = {
     kTypeInt8,            kTypeInt16,            kTypeInt32,
     kTypeFloat,           kTypeDecimal,          kTypeUint64,
     kTypeDate,            kTypeTimestamp,        kTypeDecimalWide,
-    kTypeDroppedTable,    kTypeDroppedNamespace, kSysTypesTable,        kSysObjectsTable,
+    kTypeDroppedTable,    kTypeDroppedNamespace, kTypeView,             kTypeDroppedView,
+    kSysTypesTable,       kSysObjectsTable,
     kSysColumnsTable,     kSysTablesTable,       kSysIndexesTable,
     kSysPatternsTable,    kSysAssertionsTable,
     kSysCabinsTable,      kSysFkeysTable,        kSysAssertionsColumnOidBase,
     kSysTransitionsTable, kSysTransitionsColumnOidBase, kSysCabinExprsTable,
     kSysCabinExprsColumnOidBase, kSysStatisticsTable, kSysPlansTable,
-    kSysPlansColumnOidBase, kUserOidStart,
+    kSysPlansColumnOidBase, kSysViewsTable, kUserOidStart,
 };
 
 // O(n^2) over ~39 values is ~750 compile-time comparisons - a sort would be
@@ -402,10 +433,14 @@ inline constexpr PageId kCatalogPageTransitions = 16;
 // typed row, so it has no var-heap.
 inline constexpr PageId kCatalogPageStatistics = 17;
 
-// Root heap page of sys.plans (superblock 37, CX-S1a), the highest fixed
-// root. Ids 19..127 are unused, left for a future bootstrap root. Its
-// var-heap root is allocated, as sys.assertions' is.
+// Root heap page of sys.plans (superblock 37, CX-S1a). Its var-heap root is
+// allocated, as sys.assertions' is.
 inline constexpr PageId kCatalogPagePlans = 18;
+
+// Root heap page of sys.views (superblock 40, DP-S1), the highest fixed
+// root. A fixed-offset typed row, so it has no var-heap. Ids 20..127 are
+// unused, left for a future bootstrap root.
+inline constexpr PageId kCatalogPageViews = 19;
 
 // Every catalog relation's **root** page, in id order, with the relation
 // it heads.
@@ -452,6 +487,7 @@ inline constexpr CatalogRoot kCatalogRoots[] = {
     {kCatalogPageTransitions, kSysTransitionsTable},
     {kCatalogPageStatistics, kSysStatisticsTable},
     {kCatalogPagePlans, kSysPlansTable},
+    {kCatalogPageViews, kSysViewsTable},
 };
 
 // The relation whose chain starts at `root`; 0, unattributed, for a page

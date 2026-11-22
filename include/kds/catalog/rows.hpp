@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
@@ -1074,5 +1075,101 @@ constexpr bool IsCurrentOptIn(const SysPatternRow& row) noexcept {
     return (row.flags & kPatternWaystone) != 0 &&
            parser::IsCurrentFingerprintVersion(row.fingerprint_version);
 }
+
+// ---- sys.views ------------------------------------------------------------
+//
+// A view (`instructions/v3.2.0/workorder-dp-view.md`, DP-Q3, DP-Q14): its
+// name is a `kTypeView` row in sys.objects, and everything else is rows of
+// this one shape - a header, the text in chunks, one row a column name, one
+// row a dependency - all keyed by `view_oid`. **Fixed-width, so the catalog's
+// typed-row writer places them under the DDL's transaction** and `ScanAll`
+// filters them by the reader's view (DT3), which is what makes `CREATE VIEW`
+// and `DROP VIEW` transactional (DP-Q4); no text-bearing catalog writer is
+// transactional (`declaration_relation.hpp`). A drop delete-marks every row.
+//
+// `row_id` is first because a rollback's compensation re-reads a row's
+// identity from its first word (`KeystoneIdOfPayload`); it comes from
+// sys.views' own `next_id`, as an `fk_id` does.
+inline constexpr std::uint8_t kViewRowHeader = 1;      // `flags`; `seq` = column count
+inline constexpr std::uint8_t kViewRowText = 2;        // `seq`-th chunk of the text
+inline constexpr std::uint8_t kViewRowColumn = 3;      // `seq`-th column's name
+inline constexpr std::uint8_t kViewRowDependency = 4;  // `ref_oid`, `ref_column`
+
+// A header's `flags`: the body is one native block absorbed into its reader
+// (DP-Q1); clear, it is answered by the query layer as a derived table (DP-Q2).
+inline constexpr std::uint8_t kViewAbsorbable = 1u << 0;
+// A header's `flags`: a query-layer body whose width is its relations' - a
+// `*` the native grammar did not expand at the create (DP-Q11) - so no column
+// may be added under it (DP-Q16).
+inline constexpr std::uint8_t kViewStarWidth = 1u << 1;
+// A dependency row naming the relation alone - a view's dependency on
+// another view.
+inline constexpr std::uint16_t kViewNoColumn = 0xFFFF;
+
+// The chunk a text row carries, and so a column name's room too (64 bytes,
+// `kCatalogNameMax`, fits). 192 keeps the row at 224 bytes.
+inline constexpr std::size_t kViewChunkBytes = 192;
+// A body's longest text: 86 chunks. A bound on a format, not a tuned
+// constant - a longer body is refused at `CREATE VIEW` by name.
+inline constexpr std::size_t kMaxViewTextBytes = 16384;
+
+struct SysViewRow {
+    std::uint64_t row_id;
+    Oid view_oid;
+    Oid ref_oid;               // kViewRowDependency: the relation or view read
+    std::uint16_t seq;         // order within the kind; a header's column count
+    std::uint16_t ref_column;  // kViewRowDependency: a schema position, or kViewNoColumn
+    std::uint16_t len;         // bytes of `bytes` in use
+    std::uint8_t kind;
+    std::uint8_t flags;
+    std::array<char, kViewChunkBytes> bytes;
+
+    static constexpr std::size_t kRowIdOffset = 0;
+    static constexpr std::size_t kViewOidOffset = 8;
+    static constexpr std::size_t kRefOidOffset = 16;
+    static constexpr std::size_t kSeqOffset = 24;
+    static constexpr std::size_t kRefColumnOffset = 26;
+    static constexpr std::size_t kLenOffset = 28;
+    static constexpr std::size_t kKindOffset = 30;
+    static constexpr std::size_t kFlagsOffset = 31;
+    static constexpr std::size_t kBytesOffset = 32;
+    static constexpr std::size_t kOnDiskSize = kBytesOffset + kViewChunkBytes;
+
+    std::string_view text() const noexcept { return {bytes.data(), len}; }
+
+    std::array<std::byte, kOnDiskSize> Encode() const;
+    static StatusOr<SysViewRow> Decode(std::span<const std::byte> bytes);
+};
+
+static_assert(offsetof(SysViewRow, row_id) == SysViewRow::kRowIdOffset);
+static_assert(offsetof(SysViewRow, view_oid) == SysViewRow::kViewOidOffset);
+static_assert(offsetof(SysViewRow, ref_oid) == SysViewRow::kRefOidOffset);
+static_assert(offsetof(SysViewRow, seq) == SysViewRow::kSeqOffset);
+static_assert(offsetof(SysViewRow, ref_column) == SysViewRow::kRefColumnOffset);
+static_assert(offsetof(SysViewRow, len) == SysViewRow::kLenOffset);
+static_assert(offsetof(SysViewRow, kind) == SysViewRow::kKindOffset);
+static_assert(offsetof(SysViewRow, flags) == SysViewRow::kFlagsOffset);
+static_assert(offsetof(SysViewRow, bytes) == SysViewRow::kBytesOffset);
+static_assert(SysViewRow::kOnDiskSize == 224, "a change here is a format event (superblock)");
+
+// A view as its sys.views rows hold it (DP-Q3): the body's text verbatim,
+// the view's column names in order, whether the body is absorbed into its
+// reader (DP-Q1) or answered as a derived table (DP-Q2), and what it reads
+// - each relation or view with the schema position of a column the body
+// names, or `kViewNoColumn` for the relation alone (DP-Q16).
+struct ViewDef {
+    Oid oid = 0;
+    Oid namespace_oid = 0;
+    std::string name;
+    std::string text;
+    std::vector<std::string> columns;
+    bool absorbable = false;
+    bool star_width = false;  // kViewStarWidth
+    struct Dependency {
+        Oid oid = 0;
+        std::uint16_t column = kViewNoColumn;
+    };
+    std::vector<Dependency> dependencies;
+};
 
 }  // namespace kds::catalog

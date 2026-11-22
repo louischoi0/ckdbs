@@ -544,3 +544,53 @@ go-ahead:
   `NotImplemented`. A materialized view (§6) is the order that would make an
   index or a constraint on a view admissible, so "nobody built it" is the
   truthful code, and one gate answers every caller alike.
+
+### DP-S1 - the object, 2026-11-22
+
+Built on `worktree-dp-view` over `05e7cbc8`. A view is a `kTypeView` (36)
+row in `sys.objects` - one relation name space with the tables (NS6, CT7:
+`CheckNameFree` and `CheckNamespaceEmpty` count a view and an undecided view
+tombstone) - and its `sys.views` rows (oid 168, root page 19, superblock 40),
+fixed-width `SysViewRow`s written under the DDL's transaction (DP-Q14):
+`CREATE VIEW` and `DROP VIEW` roll back with their transaction (DP-Q4), and a
+dropped view is retyped to `kTypeDroppedView` (37), its oid never reissued
+(DP-R3). `Parser::ParseView` reads `CREATE VIEW [<ns>.]<name> [(<col>, ...)]
+AS <select>` and `DROP VIEW`; `CREATE OR REPLACE` and `CREATE MATERIALIZED`
+are refused `NotImplemented` at their word (DP-Q6, §6). A body the native
+grammar reads in §2's form is compiled and marked absorbable; any other is
+described by the query layer without running (`exec::DescribeQuery`,
+DP-Q20) and the create answers with a warning (DP-Q2). A native `*` is
+stored expanded (DP-Q11); a query-layer `*` sets `kViewStarWidth`, and no
+column may then be added under it. The view's unqualified names resolve in
+its own namespace (DP-Q21). `CREATE VIEW` holds `IS` on everything it reads
+and reads its body again under the grants, refused `TxnConflict` if the
+second reading binds other relations; `DROP VIEW` takes the view's `X`
+(DP-Q22 (b)). Dependencies RESTRICT `DROP TABLE`, `RENAME TO`, `RENAME
+COLUMN`, `DROP COLUMN`, `ADD COLUMN` and `DROP NAMESPACE` (DP-Q16); a view a
+view reads RESTRICTs its `DROP VIEW`. `ResolveRelation`'s gate answers a
+view's name `NotImplemented` for every write and DDL (DP-Q9). `sys.views`,
+`SHOW VIEWS`, and `DESCRIBE <view>` (`sys.columns`' view arm, typed by the
+query layer's describe). The "a view has existed" word is the instance's
+(`InstanceWords::views_seen`, DP-Q18). Tests: `tests/view_test.cpp` (18).
+Suite: 0 failed of 5126 (Debug, `-j8`). Overhead not measured; measured at
+the milestone's close.
+
+**DP-S1's review** (`critics-developer`). Fixed by the reviewer: a
+query-layer `*` body recorded no column dependencies (C1); `DESCRIBE` of a
+`*` view under a column list after an `ADD` (C2, then removed with its
+filter by S1 below); a relation dropped between the body's compile and the
+`IS` grant recorded as a dependency (C3); an incomplete view seen by an
+unfiltered scan failing unrelated DDL `Corruption` (C4: skipped on an
+unfiltered read, refused under a read view); a refusal text false in S1
+(C5); two swapped comments; one case-folding helper for three copies.
+Applied by CLA: the body read again under the `IS` (C6); `CREATE OR REPLACE`
+and `CREATE MATERIALIZED` refused `NotImplemented` with their byte; a native
+`*` stored expanded and a query-layer `*` refusing `ADD COLUMN` (S1, which
+deleted C2's 25-line filter); one describe helper and one limits helper for
+the three copies (S2); the non-absorbable reason in the create's warning
+and the impossible self-check removed (S5); the dependency-count message.
+Rejected: S3 (`GetView` through `ListViews`) - `GetView` reads one view's
+rows into the cache and is what every read through a view asks at DP-S2,
+so it keeps its own path; S4 (call `MarkOwnedRows` at each of `DropTable`'s
+five sites) - the lambda keeps each site to a tag, a root and a predicate,
+and its comment is corrected instead.

@@ -60,6 +60,14 @@ struct InstanceWords {
     // It publishes nothing beside itself - what a peer's opted map holds is
     // the schema word's to order.
     std::atomic<std::uint64_t> opted_count{0};
+
+    // **Whether a view exists or has existed** (DP-Q18): 0 unprobed, 1 no
+    // view row on the volume, 2 one has been seen. Moved only up - a probe's
+    // compare-exchange from 0, a `CREATE VIEW`'s `release` store of 2 - so a
+    // core that reads 1 has read it before any view row was written; a read
+    // is `acquire`. Instance-wide because a view one core creates is read on
+    // every core (`Catalog::AnyView`).
+    std::atomic<std::uint8_t> views_seen{0};
 };
 
 static_assert(std::is_trivially_destructible_v<InstanceWords>,

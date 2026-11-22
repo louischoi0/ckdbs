@@ -91,4 +91,12 @@ public:
 StatusOr<RowSet> RunQuery(const parser::Query& query, std::string_view sql, LayerHost& host,
                           const StatementContext& context, const LayerLimits& limits);
 
+// `query`'s output columns, compiled as `RunQuery` compiles it - every
+// relation described through `host`, every expression typed - and not run:
+// what `CREATE VIEW` asks of a body the native grammar does not absorb
+// (DP-Q20), so a wrong body is refused at its `CREATE`.
+StatusOr<std::vector<LayerColumn>> DescribeQuery(const parser::Query& query, std::string_view sql,
+                                                 LayerHost& host, const StatementContext& context,
+                                                 const LayerLimits& limits);
+
 }  // namespace kds::exec

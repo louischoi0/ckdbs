@@ -1293,6 +1293,8 @@ private:
     // `{CREATE | DROP} NAMESPACE <name>` (AF-T3). One handler for both, as
     // the parser has one production - see `NamespaceStmt` (ast.hpp).
     DispatchOutcome HandleNamespace(std::string_view line, Session& session);
+    // `CREATE VIEW` / `DROP VIEW` (instructions/v3.2.0/workorder-dp-view.md).
+    DispatchOutcome HandleView(std::string_view line, Session& session);
 
     // Both take the session so a `CREATE TABLE` inside an explicit
     // transaction stamps its catalog rows with that transaction's id and
@@ -1532,6 +1534,29 @@ private:
     // which resolves names and so cannot name a position. Asked by every
     // ADD COLUMN of the position it takes (CD-S4).
     StatusOr<std::optional<std::string>> PositionDependant(catalog::Oid oid, std::uint16_t pos);
+
+    // A view's columns, named as the view names them and typed as its body
+    // returns them now - through the query layer's describe, which reads
+    // every body (DESCRIBE, `sys.columns`).
+    StatusOr<std::vector<exec::LayerColumn>> DescribeView(const catalog::ViewDef& def,
+                                                          Session& session);
+    // A query-layer body's columns, compiled and not run, its unqualified
+    // names in `namespace_oid` (DP-Q21): what `CREATE VIEW` and `DescribeView`
+    // ask. Every relation it describes is appended to `described` when given;
+    // `parsed` is the body's parse when the caller holds one.
+    StatusOr<std::vector<exec::LayerColumn>> DescribeBody(
+        std::string_view text, catalog::Oid namespace_oid, Session& session,
+        std::vector<catalog::Oid>* described = nullptr, const parser::Query* parsed = nullptr);
+    // The query layer's caps, as every statement of this dispatcher has them.
+    exec::LayerLimits LayerLimitsNow() const;
+    // **A view a change to relation `oid` would break** (DP-Q16), named for
+    // the refusal, or nullopt: with `column`, one naming that schema
+    // position; with `new_name`, one whose text names it (an added or renamed
+    // column could re-point the body's bare name); with neither, any view
+    // reading the relation (a drop, a rename of the relation).
+    StatusOr<std::optional<std::string>> ViewDependant(catalog::Oid oid,
+                                                       std::optional<std::uint16_t> column,
+                                                       std::string_view new_name);
     // Drops every column Cabin of `oid` on one of `positions` - each a
     // position no live column holds, so no statement can name it to drop it
     // (CD-S0 P5) - transactionless and durable, and returns their ids. The
@@ -2590,10 +2615,11 @@ private:
     StatusOr<exec::CatalogView> ReadSysView(const SysViewSpec& spec, Session& session,
                                             const parser::AstValue* key, std::uint32_t byte);
     StatusOr<exec::CatalogView> TablesView(const txn::ReadView* view);
+    StatusOr<exec::CatalogView> ViewsView(const txn::ReadView* view);
     StatusOr<exec::CatalogView> ObjectsView(const txn::ReadView* view);
     StatusOr<exec::CatalogView> ColumnsView(const txn::ReadView* view,
                                             const parser::AstValue* rel_name,
-                                            catalog::Oid default_namespace);
+                                            Session& session);
     StatusOr<exec::CatalogView> TypesView();
     StatusOr<exec::CatalogView> PatternsView();
     StatusOr<exec::CatalogView> NamespacesView(const txn::ReadView* view);

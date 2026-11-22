@@ -347,7 +347,14 @@ TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
 // binary refuses the record kind or leaves the loser's departure counted.
 TEST(SuperBlockTest, AVersion34VolumeDoesNotMount) {
     ExpectRefusedNamingBoth(34);
-    EXPECT_EQ(kSuperBlockVersion, 39u);
+    EXPECT_EQ(kSuperBlockVersion, 40u);
+}
+
+// DP-S1: a version-39 volume has no `sys.views` root (page 19) and no view
+// type, so a view could neither be stored nor kept from being read as no
+// relation.
+TEST(SuperBlockTest, AVersion39VolumeDoesNotMount) {
+    ExpectRefusedNamingBoth(39);
 }
 
 // DA-S3 and DI-S3: a version-37 volume still has `sys.access_stats`'

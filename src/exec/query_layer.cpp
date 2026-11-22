@@ -1704,4 +1704,13 @@ StatusOr<RowSet> RunQuery(const parser::Query& query, std::string_view sql, Laye
     return runner.Execute(*compiled.value(), Row{});
 }
 
+StatusOr<std::vector<LayerColumn>> DescribeQuery(const parser::Query& query, std::string_view sql,
+                                                 LayerHost& host, const StatementContext& context,
+                                                 const LayerLimits& limits) {
+    Runner runner(sql, host, context, limits);
+    auto compiled = runner.Compile(query, nullptr);
+    if (!compiled.ok()) return compiled.status();
+    return compiled.value()->columns;
+}
+
 }  // namespace kds::exec

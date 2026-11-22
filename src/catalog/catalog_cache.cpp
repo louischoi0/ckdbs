@@ -147,6 +147,38 @@ std::uint64_t CatalogCache::Pin() {
     return generation_;
 }
 
+const CatalogCache::ViewNames* CatalogCache::FindViewNames() noexcept {
+    if (!view_names_.has_value()) {
+        ++stats_.misses;
+        return nullptr;
+    }
+    ++stats_.hits;
+    return &*view_names_;
+}
+
+const CatalogCache::ViewNames* CatalogCache::PutViewNames(ViewNames names) {
+    if (!view_names_.has_value()) {
+        view_names_ = std::move(names);
+        ++stats_.fills;
+    }
+    return &*view_names_;
+}
+
+const ViewDef* CatalogCache::FindViewDef(Oid oid) noexcept {
+    auto it = view_defs_.find(oid);
+    if (it == view_defs_.end()) {
+        ++stats_.misses;
+        return nullptr;
+    }
+    ++stats_.hits;
+    return &it->second;
+}
+
+void CatalogCache::PutViewDef(ViewDef def) {
+    const Oid oid = def.oid;
+    if (view_defs_.try_emplace(oid, std::move(def)).second) ++stats_.fills;
+}
+
 void CatalogCache::Unpin(std::uint64_t generation) noexcept {
     const auto pin = std::find_if(pins_.begin(), pins_.end(),
                                   [generation](const Pins& p) { return p.generation == generation; });
@@ -174,6 +206,8 @@ void CatalogCache::Invalidate() noexcept {
     table_access_.clear();
     name_to_oid_.clear();
     table_list_.reset();
+    view_names_.reset();
+    view_defs_.clear();
     patterns_.clear();
     patterns_filled_ = false;
     ++stats_.invalidations;

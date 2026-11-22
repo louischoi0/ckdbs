@@ -400,4 +400,42 @@ std::string ColumnTypeText(const SysColumnRow& col, std::string_view base_name) 
     return std::string(base_name);
 }
 
+std::array<std::byte, SysViewRow::kOnDiskSize> SysViewRow::Encode() const {
+    std::array<std::byte, kOnDiskSize> buf{};
+    std::byte* base = buf.data();
+    std::memcpy(base + kRowIdOffset, &row_id, sizeof(row_id));
+    std::memcpy(base + kViewOidOffset, &view_oid, sizeof(view_oid));
+    std::memcpy(base + kRefOidOffset, &ref_oid, sizeof(ref_oid));
+    std::memcpy(base + kSeqOffset, &seq, sizeof(seq));
+    std::memcpy(base + kRefColumnOffset, &ref_column, sizeof(ref_column));
+    std::memcpy(base + kLenOffset, &len, sizeof(len));
+    std::memcpy(base + kKindOffset, &kind, sizeof(kind));
+    std::memcpy(base + kFlagsOffset, &flags, sizeof(flags));
+    std::memcpy(base + kBytesOffset, bytes.data(), bytes.size());
+    return buf;
+}
+
+StatusOr<SysViewRow> SysViewRow::Decode(std::span<const std::byte> in) {
+    if (Status s = CheckSize(in, kOnDiskSize); !s.ok()) return s;
+    SysViewRow row{};
+    const std::byte* base = in.data();
+    std::memcpy(&row.row_id, base + kRowIdOffset, sizeof(row.row_id));
+    std::memcpy(&row.view_oid, base + kViewOidOffset, sizeof(row.view_oid));
+    std::memcpy(&row.ref_oid, base + kRefOidOffset, sizeof(row.ref_oid));
+    std::memcpy(&row.seq, base + kSeqOffset, sizeof(row.seq));
+    std::memcpy(&row.ref_column, base + kRefColumnOffset, sizeof(row.ref_column));
+    std::memcpy(&row.len, base + kLenOffset, sizeof(row.len));
+    std::memcpy(&row.kind, base + kKindOffset, sizeof(row.kind));
+    std::memcpy(&row.flags, base + kFlagsOffset, sizeof(row.flags));
+    std::memcpy(row.bytes.data(), base + kBytesOffset, row.bytes.size());
+    // A length past the chunk is a row no writer produces: refused here, so
+    // `text()` never reads past the array.
+    if (row.len > kViewChunkBytes) {
+        return Status::Corruption("sys.views row " + std::to_string(row.row_id) + " claims " +
+                                  std::to_string(row.len) + " bytes of a " +
+                                  std::to_string(kViewChunkBytes) + "-byte chunk");
+    }
+    return row;
+}
+
 }  // namespace kds::catalog

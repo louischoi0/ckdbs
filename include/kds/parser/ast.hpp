@@ -1302,6 +1302,25 @@ struct TransitionStmt {
     std::string source_text;
 };
 
+// `CREATE VIEW [<ns>.]<name> [(<column>, ...)] AS <select>` and `DROP VIEW
+// [<ns>.]<name>` (instructions/v3.2.0/workorder-dp-view.md). **Not a
+// `Statement` alternative**: the dispatcher routes `VIEW` by its word and
+// asks `Parser::ParseView`, as the plan DDL is asked of its own parser, so no
+// visit over the variant gains an arm. `VIEW` is matched by text and reserves
+// nothing (DP-R7). The body is kept as text - from its first word to the
+// end, a trailing `;` dropped - because a view is its text (DP-Q3): every
+// reader parses it again, and `CREATE VIEW` validates it there.
+struct ViewStmt {
+    bool drop = false;
+    std::string schema;  // the qualifier, empty when unqualified
+    std::string name;
+    std::uint32_t byte_offset = 0;     // the name's first byte
+    std::vector<std::string> columns;  // the written column list, or empty
+    std::uint32_t columns_offset = 0;  // its `(`, when written
+    std::string body;
+    std::uint32_t body_offset = 0;  // the body's first byte in the statement
+};
+
 using Statement = std::variant<CreateTableStmt, InsertStmt, SelectStmt, UpdateStmt,
                                DeleteStmt, PurgeStmt, CabinStmt, IndexStmt, AssertionStmt,
                                TransitionStmt, AlterStmt, DropTableStmt, NamespaceStmt>;
