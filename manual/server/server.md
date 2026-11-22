@@ -83,7 +83,7 @@ mounts has **one WAL stream for the instance**, whatever `cores` says, and
 `SHOW META`'s `wal_topology` field says so. A volume whose superblock
 records more than one stream **does not mount**: there is no migration,
 and the refusal names it. Recreate the database. The same holds
-for every volume older than superblock version 35 (2026-11-02): 20 keeps a
+for every volume older than superblock version 39 (2026-11-21): 20 keeps a
 B+ tree leaf in key order by placement, 21 records a dropped relation's
 roots in its tombstone, 22 carries the 48-bit Keystone id, 27 marks a
 unique index, 28 orders a secondary index by its whole entry, 29 logs
@@ -95,15 +95,19 @@ dropped column whose bytes `PURGE DROPPED COLUMNS` has cleaned, 33
 shape traffic registered, 34 (2026-10-23) marks an index an online
 `CREATE INDEX` is still building, and 35 (2026-11-02) lets a checkpoint
 list the assertion reservations of an undecided transaction, so a crash
-gives them back. **A version-34 volume does not mount under this
+gives them back, 36 (2026-11-18) keeps the join planner's relation
+statistics across a clean shutdown in `sys.statistics`, 37 (2026-11-18)
+keeps captured join orders in `sys.plans`, 38 (2026-11-20) names a
+Waystone opt-in under the relations its example bound, and 39
+(2026-11-21) stores a heap as data pages addressed by rowid, found by key
+through a Keystone index. **A version-38 volume does not mount under this
 build, and a backup taken from one is refused by its restore**: recreate
 the database, or keep the build that wrote it.
 
 The listener is **loopback only** (`127.0.0.1`) unless `listen_address`
-says otherwise, plain TCP, no TLS, no
-authentication — a development/inspection surface, not a production API.
-The binary wire protocol (KWP/1, `docs/spec/protocol.md`) is specified with a
-handshake and auth stages, but only its frame codec exists in code.
+says otherwise, and by default plain TCP with no authentication: TLS 1.3
+and SCRAM are off until `tls = on` and `auth = scram`. The port speaks the
+binary wire protocol, KWP/1 (`docs/spec/protocol.md`).
 
 **Every core accepts on the port.** With `cores > 1` each core binds `port`
 with `SO_REUSEPORT` and the kernel decides which core accepts a connection,
@@ -279,10 +283,15 @@ the server refuses to start.
 ## 6. What a restart loses — known gaps
 
 The engine-wide list lives in **`docs/inflight/known-gaps.md`** — durability and
-recovery gaps, what a restart loses, the no-purge rule, multicore limits
-and protocol gaps, each entry naming its owning doc. The three an operator
-must know before trusting this server with data: **WAL recovery is not
-implemented** (a crash loses everything since the last
-checkpoint/`SYNC`/clean shutdown), **an uncommitted row surviving a crash
-reads as committed on the next boot**, and **assertions report
-`enforcing=0` after a restart** until recovery exists.
+recovery gaps, what a restart loses, multicore limits
+and protocol gaps, each entry naming its owning doc. Every mount runs
+recovery from the log (§5): a crash loses only what the log had not made
+durable, an uncommitted transaction is rolled back at the mount, a torn
+page of a logged class is healed from the log, and assertions enforce
+immediately after a restart. What an operator must know before trusting
+this server with data: **a torn page 0 or free-map page refuses the
+mount, and a torn page of an unlogged class is refused `Corruption`**,
+each lost until a restore (`docs/spec/wal.md` §10), and **memory-resident
+state is gone after a restart** - Cabin entry sets, Waystone trails, the
+access and statement statistics, and the planner's statistics after a
+crash.

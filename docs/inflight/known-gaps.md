@@ -310,14 +310,6 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## WAL
 
-- **The server manual still says WAL recovery is not implemented.**
-  `manual/server/server.md` §6 ("What a restart loses") reads "WAL recovery
-  is not implemented" and "`enforcing=0` after a restart until recovery
-  exists", against §5 of the same file, `wal.md` §8 and `assertion.md`:
-  recovery runs at every mount and assertions enforce immediately after a
-  restart. Read on `de-page-read-off-the-reactor` at `1942cb9a` and re-read at `bf289a82`,
-  2026-11-19; DE's close corrected the same claim in §5 ("Durability
-  points") and left §6 as found - it is not DE's.
 - **A log this build wrote is not one a pre-DH build of the same
   superblock can always replay.** Since DH-S1b (on `dh-page-image-volume`
   over `8fc41252`) the write fetch's image is record kind 35,

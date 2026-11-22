@@ -178,15 +178,15 @@ gets its `X` only in the gap between a slice's release and the next one's
 
 ## 3. Which clustered types may carry one
 
-> **IX3 — a secondary index is built on a btree-clustered relation only.**
-> Every user relation is one - a heap too, under its hidden tuple key
-> (`heap-and-tuple.md` §3.1b) - so the refusal reaches only a system
-> relation, whose catalog chain has no tuple key descent
+> **IX3 — a secondary index is built on a btree-clustered relation or a
+> heap only.** The refusal reaches only a system relation, whose catalog
+> chain has neither a tuple key descent nor a rowid
 > (`Catalog::CheckIndexDef`, `InvalidArgument`, naming this rule).
 
 An entry's payload is the tuple key, and resolving one costs one descent of
-the clustered tree. A heap's index entries carry its hidden key like any
-other relation's; no statement names that key, and none needs to.
+the clustered tree. On a heap the entry carries the row's Keystone and its
+rowid, and resolving it fetches the rowid's page (IX1,
+`heap-and-tuple.md` §3.1b).
 
 Three consequences of the entry format:
 
