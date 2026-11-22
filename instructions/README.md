@@ -5,7 +5,7 @@
   milestone, AL through BU (`v3.0.0/index.md`). No `v3.0.0` tag was taken;
   the first v3 tag is `v3.1.0`.
 - **`v3.2.0/`** opened 2026-10-14 on the operator's naming of that version,
-  with BV, and holds every work order written since - BV through DO -
+  with BV, and holds every work order written since - BV through DP -
   whatever tag it landed under (`v3.2.0/index.md`). These two are the only
   version directories.
 - **`milestones.md`** is the register across both: one row a milestone,

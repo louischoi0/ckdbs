@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| DP | written | 2026-11-22 | 2026-11-22 | - | - | n/a | - | VIEW: a stored SELECT absorbed by text before any plan | v3.2.0/workorder-dp-view.md |
 | DO | closed | 2026-11-22 | 2026-11-21 | 2026-11-21 | 2026-11-22 | c22a1a95 | - | the frame table's long holds | v3.2.0/workorder-do-frame-table-long-holds.md |
 | DN | closed | 2026-11-21 | 2026-11-20 | 2026-11-20 | 2026-11-21 | 48a3276c | - | the heap redefined again: an Oracle-style heap | v3.2.0/workorder-dn-heap-rowid.md |
 | DL | closed | 2026-11-21 | 2026-11-20 | 2026-11-20 | 2026-11-20 | f0c95a09 | - | statistics queue no statement, an off consumer collects nothing | v3.2.0/workorder-dl-statistics-queue-no-statement.md |

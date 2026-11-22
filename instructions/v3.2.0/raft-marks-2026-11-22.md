@@ -21,3 +21,13 @@ The operator's words of 2026-11-22, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | a tag or a version; the walking core's stall and the latch's unfairness between fetches, left in `known-gaps.md` |
 | **Recorded at** | this file; this file's row in `instructions/v3.2.0/index.md` |
+
+## 3. DP written: VIEW
+
+| | |
+|---|---|
+| **Word** | *"Bring the kdbs repo up to date and write the view milestone work order again to fit the recent state of the work"* (2026-11-22), after the operator's words of 2026-11-21 in conversation: *"I want to apply the view feature to ckdbs in the way that is optimized for it"*, and, correcting CLA's first draft, *"The contract that the query is the plan has been retired. In its place, a little relaxed: the database cannot change a plan freely, and the plan itself is a managed object."* |
+| **Mark** | **DP is written**, not opened: `workorder-dp-view.md`, at `71013396`. The 2026-11-21 conversation draft (VW1-VW19, never committed) is superseded, three of its premises corrected against the tree (DP's header) |
+| **CLA's, not the operator's** | the letter DP; absorption as a class (a) compile-time item; every DP-R and DP-Q; the stages |
+| **Does not settle** | any DP-Q item; an opening; a push beyond this record; a tag or a version |
+| **Recorded at** | this file; `workorder-dp-view.md`; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
