@@ -96,3 +96,14 @@ The operator's words of 2026-11-22, recorded in English.
 | **Skipped on that word** | the pre-push hook; no suite was executed |
 | **Does not settle** | DM-Q10 (b), DM-Q2 (b), DM-Q7 (b), U2; a tag or a version |
 | **Recorded at** | this file; the DM order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 11. DQ written: a Cabin's miss answered from a map
+
+| | |
+|---|---|
+| **Word** | Three words in one claude.ai conversation, given in Korean: *"Now, a way to add, for joins, a method that works together with the Cabin."*; after CLA's account of the join methods the tree has, *"How about unifying the Cabin and the hash map at the inner build?"*; and after CLA's answer to that, *"Write the work order, then push."* |
+| **Mark** | **DQ is written**, not opened: `workorder-dq-cabin-miss-build.md`, in the main checkout on `main` at `56b44964`, and pushed, documents only. The correlated Cabin probe's miss falls to the statement-local build the step would otherwise have carried; the Cabin and the map stay two structures |
+| **CLA's, not the operator's** | the letter DQ; that DQ is exploratory (DQ-Q0); every candidate, DQ-R and DQ-Q; the stages. **Two things CLA told the operator in that conversation are corrected in the order's section 0**: banking the map's buckets into the Cabin after the build is unsound, since a set is announced before its walk; and `BUILD <relation> OFF` already parses beside a Cabin pin |
+| **Skipped** | the pre-push hook and the suite: neither was run, the session having no build tree, and the commit changes no build input. No `critics-developer` review |
+| **Does not settle** | any DQ-Q item; an opening; a tag or a version; a Bound Cabin read by a SELECT, which the order leaves out |
+| **Recorded at** | this file; `workorder-dq-cabin-miss-build.md`; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
