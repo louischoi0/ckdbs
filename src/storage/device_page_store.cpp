@@ -2401,7 +2401,7 @@ std::size_t DevicePageStore::MaintainFreeReserve() {
 Status DevicePageStore::Flush() {
     // **Collect under the hold, write outside it** (AM-S2 step 3f): the
     // writeback is device I/O, which this latch may never span. A page that
-    // turns dirty after the collection is the next flush's.
+    // turns dirty after its chunk's hold (DO's E2) is the next flush's.
     // `DirtyPageIds` is that collection (H6 is H2's walk); `WriteBack` sorts
     // its own copy.
     auto written = WriteBack(DirtyPageIds());
@@ -2439,36 +2439,111 @@ Status DevicePageStore::Sync() {
     return s;
 }
 
-std::vector<PageId> DevicePageStore::DirtyPageIds() const {
-    // **Only the collection under the hold** (DO's E1): the reserve before
-    // it and the sort after it touch no frame. The configured capacity
-    // never moves after `Open` and bounds the table, so it sizes the
-    // vector with no latch. The first touch of its pages still faults
-    // under the hold, as it did.
-    std::vector<PageId> dirty;
-    dirty.reserve(configured_capacity_);
-    {
-        const WalkHold structure(structure_latch());
+// How long the dirty-table walk waits between chunks for a waiter to take
+// the structure latch (DO's E2): several wake-ups' time on this host. A
+// bound, not the usual cost - the wait ends when one waiter is in.
+constexpr std::chrono::microseconds kChunkHandover{20};
+
+template <typename Emit>
+void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
+    Latch* const latch = structure_latch();
+    if (latch == nullptr) {
+        // **Unarmed: one walk of the table**, as before E2 (DO-R2): one
+        // thread reaches this store, so nothing runs beside it to wait.
         for (const auto& [page_id, frame] : frames_) {
-            if (frame.dirty) dirty.push_back(page_id);
+            if (frame.dirty) emit(page_id, frame.rec_lsn);
+        }
+        return;
+    }
+    // **Armed: the slot array a chunk a hold** (DO's E2, the order's §5a,
+    // marked by the operator): each chunk's frames are read under a hold of
+    // their own and the latch is released between chunks, nothing held
+    // across the gap. The table is therefore not one instant's but each
+    // frame's as of its chunk's hold - the ARIES fuzzy table - which §5a
+    // proves is a correct input to `RedoStartFrom`, on two premises: no
+    // core yields between an append and its stamp, and the walk has no
+    // suspension point (this is no coroutine, so none can enter it). A page
+    // that moved from a walked slot to one not yet walked can be met twice,
+    // which the callers merge; one that moved the other way was clean when
+    // it left, and anything stamped on it since is §5a's case 4.
+    for (std::size_t base = 0;; base += kFrameChunk) {
+        bool last = false;
+        {
+            const WalkHold structure(latch);
+            if (base >= slot_count_) return;
+            const std::size_t end = std::min(base + kFrameChunk, slot_count_);
+            last = end == slot_count_;  // a slot added after this is §5a's case 4
+            const FrameChunk& chunk = chunks_[base / kFrameChunk];
+            for (std::size_t slot = base; slot < end; ++slot) {
+                const PageId owner = chunk.owners[slot - base];
+                if (owner == kInvalidPageId) continue;  // free, or reserved and unpublished
+                // A slot's owner and its frame's slot are written in one
+                // hold (`InsertFrame`) and cleared in one (`ReleaseFrameLocked`).
+                const auto found = frames_.find(owner);
+                assert(found != frames_.end() && found->second.slot == slot &&
+                       "a slot names a page whose frame is not in it");
+                if (found->second.dirty) emit(owner, found->second.rec_lsn);
+            }
+        }
+        if (after_dirty_table_chunk_for_test_) {
+            after_dirty_table_chunk_for_test_(base / kFrameChunk);
+        }
+        if (last) return;
+        // **The latch handed to one waiter** before the next chunk: a fetch
+        // woken by the release above would otherwise lose the re-take to
+        // this loop and wait out the whole walk (measured: 13 ms at 1 Mi
+        // frames, with no hold over 224 us). One waiter, not all - a steady
+        // stream of fetches is never empty - and bounded; a spin holds
+        // nothing and is no suspension (§5a).
+        if (latch->has_waiters()) {
+            const std::uint32_t seen = latch->handed();
+            const auto until = std::chrono::steady_clock::now() + kChunkHandover;
+            while (latch->handed() == seen && std::chrono::steady_clock::now() < until) {
+                std::this_thread::yield();
+            }
         }
     }
+}
+
+void DevicePageStore::MergeDirtyTable(std::vector<std::pair<PageId, wal::Lsn>>& table) {
+    std::sort(table.begin(), table.end());
+    // One entry a page, its **lowest non-zero** recLSN: a recLSN of 0 is
+    // "nothing to replay" (`RedoStartFrom` skips it), so a zero met beside
+    // a real one must not hide it. Sorted by (page, recLSN), a page's run
+    // begins with its zeros and then its lowest real recLSN.
+    std::size_t out = 0;
+    for (const auto& [page_id, rec_lsn] : table) {
+        if (out != 0 && table[out - 1].first == page_id) {
+            if (table[out - 1].second == wal::kNoLsn) table[out - 1].second = rec_lsn;
+        } else {
+            table[out++] = {page_id, rec_lsn};
+        }
+    }
+    table.resize(out);
+}
+
+std::vector<PageId> DevicePageStore::DirtyPageIds() const {
+    // **Only the collection under the latch** (DO's E1): the reserve before
+    // it and the sort after it touch no frame. The configured capacity
+    // never moves after `Open` and bounds the table, so it sizes the
+    // vector with no latch. Collected a chunk a hold (`ForEachDirtyFrame`,
+    // E2); a page met twice is listed once.
+    std::vector<PageId> dirty;
+    dirty.reserve(configured_capacity_);
+    ForEachDirtyFrame([&](PageId page_id, wal::Lsn) { dirty.push_back(page_id); });
     std::sort(dirty.begin(), dirty.end());
+    dirty.erase(std::unique(dirty.begin(), dirty.end()), dirty.end());
     return dirty;
 }
 
 std::vector<std::pair<PageId, wal::Lsn>> DevicePageStore::DirtyPagesWithRecLsn() const {
-    // As `DirtyPageIds`, and for the same reason: the table is the instant
-    // of the one hold, and sorting a copy changes no entry (DO-R1).
+    // As `DirtyPageIds`, a page met twice merged to its lowest real recLSN
+    // (`MergeDirtyTable`), which can only lower the redo start (DO-R1).
     std::vector<std::pair<PageId, wal::Lsn>> dirty;
     dirty.reserve(configured_capacity_);
-    {
-        const WalkHold structure(structure_latch());
-        for (const auto& [page_id, frame] : frames_) {
-            if (frame.dirty) dirty.emplace_back(page_id, frame.rec_lsn);
-        }
-    }
-    std::sort(dirty.begin(), dirty.end());
+    ForEachDirtyFrame(
+        [&](PageId page_id, wal::Lsn rec_lsn) { dirty.emplace_back(page_id, rec_lsn); });
+    MergeDirtyTable(dirty);
     return dirty;
 }
 
