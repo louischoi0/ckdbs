@@ -2467,7 +2467,7 @@ private:
     // `keyidentity`. Refuses a NULL or unstorable key value, the one key
     // the form cannot name, and a `keyidentity` (`named_by_row`, in `id`)
     // that is not the row's. Out of `InsertOneRow`'s body on purpose: a
-    // relation with no such key pays one branch for it.
+    // relation with no such key pays a test and a branch for it (DR-R9).
     Status EmbeddedRowId(catalog::Oid oid, const catalog::TableAccess& ta,
                          const std::vector<parser::AstValue>& body, bool named_by_row,
                          std::uint64_t& id, std::uint32_t& key_byte);

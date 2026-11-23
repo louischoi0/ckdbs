@@ -44,18 +44,22 @@ StatusOr<SysObjectRow> SysObjectRow::Decode(std::span<const std::byte> bytes) {
 
 // ---- sys.tables --------------------------------------------------------
 
-namespace {
-
-// `SysTableRow::Decode`'s refusal of a key form this build never writes,
-// kept out of its body (see there).
-[[gnu::noinline]] Status UnwrittenKeyForm(Oid oid, std::uint8_t key_form, bool has_cols) {
+Status SysTableRow::CheckKeyForm() const {
+    const bool has_cols = embedded_key_cols[0] != 0;
+    // Positions are written first to last with 0 past the last: a position
+    // after a 0 is no key this build wrote.
+    bool gap = false;
+    for (std::size_t i = 1; i < embedded_key_cols.size(); ++i) {
+        gap = gap || (embedded_key_cols[i] != 0 && embedded_key_cols[i - 1] == 0);
+    }
+    if (key_form <= kKeyFormEmbedded && has_cols == (key_form == kKeyFormEmbedded) && !gap) {
+        return Status::OK();
+    }
     return Status::Corruption("sys.tables row for oid " + std::to_string(oid) +
                               " carries key form " + std::to_string(key_form) +
                               (has_cols ? " with" : " without") +
                               " embedded key columns, which this build never writes");
 }
-
-}  // namespace
 
 std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::array<std::byte, kOnDiskSize> buf{};
@@ -91,20 +95,11 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(row.embedded_key_cols.data(), base + kEmbeddedKeyColsOffset,
                 row.embedded_key_cols.size());
     std::memcpy(&row.key_form, base + kKeyFormOffset, sizeof(row.key_form));
-    // A form this build does not know, or key columns the form does not
-    // carry, is a row this build did not write (DR-R12): refused, never
-    // read as the nearest form it does know.
-    //
-    // **One branch here, the refusal out of line** (DR's close): a named
-    // key's insert decodes every `sys.tables` row before its relation's
-    // (`Catalog::AdmitExplicitRowId`), so this function is on every such
-    // row's path, and the refusal's string building inside it measured as a
-    // dearer load on relations that have no embedded key.
-    const bool has_cols = row.embedded_key_cols[0] != 0;
-    if (row.key_form > kKeyFormEmbedded || has_cols != (row.key_form == kKeyFormEmbedded))
-        [[unlikely]] {
-        return UnwrittenKeyForm(row.oid, row.key_form, has_cols);
-    }
+    // **Not checked here** (`CheckKeyForm`): every insert that names or is
+    // issued an id decodes the `sys.tables` rows before its relation's
+    // (`ForFirstRow`), so this function is on each inserted row's path once
+    // a row passed, and a relation with no such key owes it nothing
+    // (DR-R9). The form is checked where a relation is loaded for use.
     std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
     std::memcpy(&row.spare_slots, base + kSpareSlotsOffset, sizeof(row.spare_slots));
     return row;

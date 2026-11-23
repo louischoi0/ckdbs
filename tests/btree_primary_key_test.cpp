@@ -421,6 +421,17 @@ TEST_F(BtreePrimaryKeyTest, OnlyAKeyThatEmbedsOnABtreeHasNoIndex) {
     Ok("CREATE TABLE text (c char(4), v int64, PRIMARY KEY (c))", "CREATED");
     Ok("CREATE TABLE onheap (a int32, b int16, PRIMARY KEY (a, b)) HEAP", "CREATED");
     EXPECT_EQ(Indexes("$pkey_").size(), 3u);
+
+    // A key column past position 255 is one the catalog row's byte cannot
+    // name, so a key that would embed by its types is indexed instead.
+    std::string far = "CREATE TABLE far (";
+    for (int i = 0; i < 255; ++i) far += "f" + std::to_string(i) + " int8, ";
+    Ok(far + "k int32, PRIMARY KEY (k))", "CREATED");
+    EXPECT_EQ(Indexes("$pkey_").size(), 4u);
+    std::string row = "INSERT INTO far VALUES (";
+    for (int i = 0; i < 255; ++i) row += "0, ";
+    Ok(row + "7)", "INSERTED");
+    EXPECT_EQ(Rows("SELECT k FROM far WHERE k = 7").rows, (Table{{"7"}}));
 }
 
 // The key form and the hidden column are catalog facts, logged with the

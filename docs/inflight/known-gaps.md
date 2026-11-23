@@ -3627,8 +3627,10 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
   The heap's slot release purges its indexes only when it collected a
   retired slot, so a relation whose keys move and whose rows are never
   deleted keeps every old entry: space, and a longer run for the value's
-  next holder. `PURGE INDEX` cannot name `$pkey_<oid>`. The remedy named
-  and not built: the release's index purge run with no retired slot.
+  next holder. `PURGE INDEX $pkey_<oid>` takes them out when asked
+  (DR-Q21; its cell is the btree form's, `btree_primary_key_test.cpp`) and
+  nothing runs it unasked. The remedy named and not built: the release's
+  index purge run with no retired slot.
 - **A join key enters an index by its leading column only**
   (`CorrelatedIndexProbeOf`): a join on every column of a composite key
   probes the first and filters the rest, so its cost follows the first

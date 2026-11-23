@@ -422,25 +422,37 @@ TEST(SysTableRowTest, TheKeyFormAndItsColumnsOccupyTheirOwnBytes) {
 }
 
 // DR-R12: a form this build does not know, or key columns without the form
-// that carries them, is a row this build never wrote - refused, not read as
-// the nearest form it knows.
+// that carries them, is a row this build never wrote - refused where the
+// relation is loaded (`CheckKeyForm`), not read as the nearest form it
+// knows. `Decode` itself stays a copy: the insert path runs it over rows
+// that are not its relation's.
 TEST(SysTableRowTest, AKeyFormThisBuildNeverWritesIsCorruption) {
     const SysTableRow in = SampleTableRow();
+    EXPECT_TRUE(in.CheckKeyForm().ok());
+    const auto checked = [](const std::array<std::byte, SysTableRow::kOnDiskSize>& bytes) {
+        auto row = SysTableRow::Decode(bytes);
+        EXPECT_TRUE(row.ok()) << row.status().message();
+        return row.ok() ? row.value().CheckKeyForm().code() : StatusCode::kOk;
+    };
     auto unknown = in.Encode();
     unknown[SysTableRow::kKeyFormOffset] = std::byte{2};
-    EXPECT_EQ(SysTableRow::Decode(unknown).status().code(), StatusCode::kCorruption);
+    EXPECT_EQ(checked(unknown), StatusCode::kCorruption);
 
     auto columns_without_form = in.Encode();
     columns_without_form[SysTableRow::kKeyFormOffset] = std::byte{kKeyFormIssued};
-    EXPECT_EQ(SysTableRow::Decode(columns_without_form).status().code(),
-              StatusCode::kCorruption);
+    EXPECT_EQ(checked(columns_without_form), StatusCode::kCorruption);
 
     auto form_without_columns = in.Encode();
     for (std::size_t i = 0; i < kMaxEmbeddedKeyColumns; ++i) {
         form_without_columns[SysTableRow::kEmbeddedKeyColsOffset + i] = std::byte{0};
     }
-    EXPECT_EQ(SysTableRow::Decode(form_without_columns).status().code(),
-              StatusCode::kCorruption);
+    EXPECT_EQ(checked(form_without_columns), StatusCode::kCorruption);
+
+    // A row from before superblock 41: both fields 0, which is a form.
+    SysTableRow issued = in;
+    issued.key_form = kKeyFormIssued;
+    issued.embedded_key_cols = {};
+    EXPECT_TRUE(issued.CheckKeyForm().ok());
 }
 
 TEST(SysTableRowTest, TheRetiredNameIsWrittenZeroAndNeverRead) {

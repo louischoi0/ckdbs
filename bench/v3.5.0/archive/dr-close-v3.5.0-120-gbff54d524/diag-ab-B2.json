@@ -1,0 +1,3039 @@
+{
+ "part": "ab",
+ "args": {
+  "part": "ab",
+  "bin_a": "/home/louis/dr-bench/s0/kds_server_e9df68d0",
+  "bin_b": "/home/louis/dr-bench/close/kds_server_B2",
+  "workdir": "/home/louis/dr-bench/close/w",
+  "out": "/home/louis/dr-bench/close/ab-r1.json",
+  "rows": 100000,
+  "reads": 20000,
+  "writes": 4000,
+  "walks": 40,
+  "ranges": 1000,
+  "rounds": 5,
+  "frames": 131072,
+  "port": 15891,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "heartbeat": "/home/louis/dr-bench/close/ab-r1.beat"
+ },
+ "host_before": {
+  "loadavg": "3.38 2.69 3.23",
+  "cc1plus": "0"
+ },
+ "sha256_16": {
+  "A": "e33a55473f81fade",
+  "A2": "e33a55473f81fade",
+  "B": "f295d05a1affed4b"
+ },
+ "started_utc": "2026-11-23 07:02:44",
+ "cells": [
+  {
+   "arm": "A",
+   "round": 0,
+   "host": {
+    "loadavg": "3.19 2.66 3.22",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 5.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.555,
+     "wall_us_row": 3.675,
+     "rows_s": 272093
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.41,
+     "cpu_us_lo": 22.1,
+     "cpu_us_hi": 23.53,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 35.0,
+      "p25": 38.4,
+      "p50": 39.0,
+      "p95": 44.2,
+      "p99": 52.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 24.97,
+     "cpu_us_lo": 24.18,
+     "cpu_us_hi": 26.3,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.3,
+      "p25": 38.7,
+      "p50": 39.4,
+      "p95": 46.7,
+      "p99": 62.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6985.02,
+     "cpu_us_lo": 6887.36,
+     "cpu_us_hi": 7142.91,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6920.8,
+      "p25": 6986.2,
+      "p50": 7062.6,
+      "p95": 7457.6,
+      "p99": 7465.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 45.89,
+     "cpu_us_lo": 44.74,
+     "cpu_us_hi": 49.84,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.7,
+      "p25": 72.8,
+      "p50": 75.3,
+      "p95": 91.9,
+      "p99": 125.0
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.79,
+     "cpu_us_lo": 21.94,
+     "cpu_us_hi": 25.73,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.4,
+      "p25": 36.6,
+      "p50": 37.2,
+      "p95": 45.6,
+      "p99": 64.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.4,
+     "cpu_us_lo": 21.91,
+     "cpu_us_hi": 24.92,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.4,
+      "p25": 36.5,
+      "p50": 37.3,
+      "p95": 45.5,
+      "p99": 65.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.461,
+     "wall_us_row": 7.609,
+     "rows_s": 131427
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.51,
+     "cpu_us_lo": 23.1,
+     "cpu_us_hi": 37.42,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 35.1,
+      "p25": 39.2,
+      "p50": 39.9,
+      "p95": 45.3,
+      "p99": 54.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 26.89,
+     "cpu_us_lo": 25.94,
+     "cpu_us_hi": 31.45,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.5,
+      "p25": 40.0,
+      "p50": 41.0,
+      "p95": 50.9,
+      "p99": 78.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6773.43,
+     "cpu_us_lo": 6674.7,
+     "cpu_us_hi": 6980.55,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6690.2,
+      "p25": 6809.3,
+      "p50": 6895.2,
+      "p95": 7172.9,
+      "p99": 7186.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 70.29,
+     "cpu_us_lo": 69.41,
+     "cpu_us_hi": 78.89,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.5,
+      "p25": 97.4,
+      "p50": 99.0,
+      "p95": 115.0,
+      "p99": 134.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 26.92,
+     "cpu_us_lo": 26.23,
+     "cpu_us_hi": 28.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.0,
+      "p25": 40.3,
+      "p50": 41.1,
+      "p95": 53.3,
+      "p99": 76.9
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.51,
+     "cpu_us_lo": 22.94,
+     "cpu_us_hi": 24.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.8,
+      "p25": 37.3,
+      "p50": 38.0,
+      "p95": 45.3,
+      "p99": 63.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 0,
+   "host": {
+    "loadavg": "3.23 2.69 3.22",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.42,
+     "wall_us_row": 3.545,
+     "rows_s": 282112
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.72,
+     "cpu_us_lo": 22.35,
+     "cpu_us_hi": 24.2,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 33.3,
+      "p25": 38.7,
+      "p50": 39.2,
+      "p95": 43.5,
+      "p99": 51.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.47,
+     "cpu_us_lo": 24.3,
+     "cpu_us_hi": 28.66,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.6,
+      "p25": 39.2,
+      "p50": 40.0,
+      "p95": 49.5,
+      "p99": 71.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7028.11,
+     "cpu_us_lo": 6865.72,
+     "cpu_us_hi": 7136.17,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6922.8,
+      "p25": 7019.0,
+      "p50": 7067.6,
+      "p95": 7227.9,
+      "p99": 7387.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.07,
+     "cpu_us_lo": 44.39,
+     "cpu_us_hi": 56.51,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.7,
+      "p25": 72.6,
+      "p50": 75.1,
+      "p95": 90.8,
+      "p99": 125.6
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.78,
+     "cpu_us_lo": 21.83,
+     "cpu_us_hi": 24.04,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 36.4,
+      "p50": 37.0,
+      "p95": 46.7,
+      "p99": 64.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.34,
+     "cpu_us_lo": 21.8,
+     "cpu_us_hi": 24.04,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.0,
+      "p25": 36.5,
+      "p50": 37.1,
+      "p95": 43.5,
+      "p99": 57.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.495,
+     "wall_us_row": 7.659,
+     "rows_s": 130568
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.16,
+     "cpu_us_lo": 23.77,
+     "cpu_us_hi": 37.96,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 37.6,
+      "p25": 40.1,
+      "p50": 40.8,
+      "p95": 46.9,
+      "p99": 56.8
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 26.99,
+     "cpu_us_lo": 25.77,
+     "cpu_us_hi": 31.41,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.5,
+      "p25": 40.4,
+      "p50": 41.4,
+      "p95": 52.6,
+      "p99": 72.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6801.8,
+     "cpu_us_lo": 6718.36,
+     "cpu_us_hi": 8288.26,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6733.3,
+      "p25": 6848.7,
+      "p50": 6895.6,
+      "p95": 7333.1,
+      "p99": 9783.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 72.15,
+     "cpu_us_lo": 69.37,
+     "cpu_us_hi": 84.72,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.9,
+      "p25": 97.9,
+      "p50": 99.6,
+      "p95": 125.9,
+      "p99": 235.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.05,
+     "cpu_us_lo": 26.22,
+     "cpu_us_hi": 29.59,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.2,
+      "p25": 40.5,
+      "p50": 41.4,
+      "p95": 51.6,
+      "p99": 74.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.45,
+     "cpu_us_lo": 22.56,
+     "cpu_us_hi": 25.29,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 35.0,
+      "p25": 37.4,
+      "p50": 38.3,
+      "p95": 47.3,
+      "p99": 63.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 0,
+   "host": {
+    "loadavg": "2.97 2.64 3.21",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.621,
+     "wall_us_row": 3.751,
+     "rows_s": 266589
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.9,
+     "cpu_us_lo": 22.59,
+     "cpu_us_hi": 24.87,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.5,
+      "p25": 38.6,
+      "p50": 39.1,
+      "p95": 45.2,
+      "p99": 53.1
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.37,
+     "cpu_us_lo": 24.41,
+     "cpu_us_hi": 29.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.8,
+      "p25": 39.0,
+      "p50": 39.7,
+      "p95": 51.7,
+      "p99": 73.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7346.24,
+     "cpu_us_lo": 7175.93,
+     "cpu_us_hi": 8851.52,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7198.5,
+      "p25": 7369.7,
+      "p50": 7433.3,
+      "p95": 8676.4,
+      "p99": 9171.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.61,
+     "cpu_us_lo": 45.34,
+     "cpu_us_hi": 54.92,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.9,
+      "p25": 73.3,
+      "p50": 75.5,
+      "p95": 96.3,
+      "p99": 130.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.12,
+     "cpu_us_lo": 22.44,
+     "cpu_us_hi": 25.36,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 36.8,
+      "p50": 37.5,
+      "p95": 46.7,
+      "p99": 65.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.32,
+     "cpu_us_lo": 21.36,
+     "cpu_us_hi": 23.95,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 33.8,
+      "p25": 36.4,
+      "p50": 37.0,
+      "p95": 44.3,
+      "p99": 58.7
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.705,
+     "wall_us_row": 7.862,
+     "rows_s": 127187
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.26,
+     "cpu_us_lo": 23.82,
+     "cpu_us_hi": 37.91,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 35.1,
+      "p25": 39.7,
+      "p50": 40.6,
+      "p95": 47.9,
+      "p99": 57.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.56,
+     "cpu_us_lo": 26.28,
+     "cpu_us_hi": 32.55,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.4,
+      "p25": 40.0,
+      "p50": 41.1,
+      "p95": 52.0,
+      "p99": 73.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7018.99,
+     "cpu_us_lo": 6911.17,
+     "cpu_us_hi": 7872.71,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6957.5,
+      "p25": 7001.4,
+      "p50": 7086.1,
+      "p95": 8195.2,
+      "p99": 8948.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 69.35,
+     "cpu_us_lo": 67.73,
+     "cpu_us_hi": 81.11,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 92.5,
+      "p25": 95.6,
+      "p50": 97.2,
+      "p95": 132.2,
+      "p99": 183.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.45,
+     "cpu_us_lo": 26.8,
+     "cpu_us_hi": 29.52,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.4,
+      "p25": 41.0,
+      "p50": 41.8,
+      "p95": 52.0,
+      "p99": 79.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.57,
+     "cpu_us_lo": 22.68,
+     "cpu_us_hi": 24.9,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.9,
+      "p25": 37.2,
+      "p50": 38.1,
+      "p95": 46.7,
+      "p99": 66.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 1,
+   "host": {
+    "loadavg": "2.81 2.62 3.19",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.472,
+     "wall_us_row": 3.594,
+     "rows_s": 278234
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.79,
+     "cpu_us_lo": 22.39,
+     "cpu_us_hi": 24.21,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.4,
+      "p25": 38.8,
+      "p50": 39.4,
+      "p95": 45.4,
+      "p99": 53.4
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.37,
+     "cpu_us_lo": 24.56,
+     "cpu_us_hi": 26.99,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.9,
+      "p25": 39.2,
+      "p50": 39.9,
+      "p95": 48.4,
+      "p99": 65.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7122.87,
+     "cpu_us_lo": 6933.32,
+     "cpu_us_hi": 7532.89,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6940.0,
+      "p25": 7085.2,
+      "p50": 7197.4,
+      "p95": 7741.2,
+      "p99": 7913.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 47.22,
+     "cpu_us_lo": 45.25,
+     "cpu_us_hi": 69.19,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.9,
+      "p25": 74.1,
+      "p50": 76.5,
+      "p95": 106.2,
+      "p99": 148.9
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.08,
+     "cpu_us_lo": 22.63,
+     "cpu_us_hi": 24.99,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 35.0,
+      "p25": 37.2,
+      "p50": 37.9,
+      "p95": 47.0,
+      "p99": 62.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.81,
+     "cpu_us_lo": 22.2,
+     "cpu_us_hi": 24.94,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.3,
+      "p25": 36.8,
+      "p50": 37.6,
+      "p95": 45.4,
+      "p99": 59.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.522,
+     "wall_us_row": 7.68,
+     "rows_s": 130209
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.83,
+     "cpu_us_lo": 24.01,
+     "cpu_us_hi": 38.21,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 35.4,
+      "p25": 39.9,
+      "p50": 40.7,
+      "p95": 49.4,
+      "p99": 58.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.79,
+     "cpu_us_lo": 26.51,
+     "cpu_us_hi": 34.87,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.6,
+      "p25": 40.5,
+      "p50": 41.8,
+      "p95": 55.2,
+      "p99": 83.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6985.02,
+     "cpu_us_lo": 6709.79,
+     "cpu_us_hi": 8429.56,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6743.6,
+      "p25": 6981.8,
+      "p50": 7059.6,
+      "p95": 8440.0,
+      "p99": 8605.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 73.19,
+     "cpu_us_lo": 69.44,
+     "cpu_us_hi": 84.79,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.9,
+      "p25": 97.5,
+      "p50": 99.7,
+      "p95": 136.4,
+      "p99": 189.0
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 28.57,
+     "cpu_us_lo": 27.51,
+     "cpu_us_hi": 29.89,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.2,
+      "p25": 40.7,
+      "p50": 41.6,
+      "p95": 54.6,
+      "p99": 82.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.96,
+     "cpu_us_lo": 22.51,
+     "cpu_us_hi": 27.35,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.4,
+      "p25": 37.1,
+      "p50": 38.0,
+      "p95": 47.7,
+      "p99": 70.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 1,
+   "host": {
+    "loadavg": "2.46 2.55 3.16",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.1,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.827,
+     "wall_us_row": 3.953,
+     "rows_s": 252994
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.37,
+     "cpu_us_lo": 22.7,
+     "cpu_us_hi": 24.93,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 32.8,
+      "p25": 39.0,
+      "p50": 39.7,
+      "p95": 45.7,
+      "p99": 54.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 24.9,
+     "cpu_us_lo": 24.5,
+     "cpu_us_hi": 27.16,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.3,
+      "p25": 38.9,
+      "p50": 39.7,
+      "p95": 48.2,
+      "p99": 63.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7257.74,
+     "cpu_us_lo": 7121.26,
+     "cpu_us_hi": 7404.26,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7177.7,
+      "p25": 7235.1,
+      "p50": 7326.0,
+      "p95": 7519.9,
+      "p99": 7615.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.27,
+     "cpu_us_lo": 45.14,
+     "cpu_us_hi": 54.51,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.6,
+      "p25": 73.2,
+      "p50": 75.3,
+      "p95": 93.9,
+      "p99": 121.8
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.93,
+     "cpu_us_lo": 22.3,
+     "cpu_us_hi": 25.03,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.7,
+      "p25": 36.9,
+      "p50": 37.6,
+      "p95": 45.2,
+      "p99": 62.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.37,
+     "cpu_us_lo": 21.65,
+     "cpu_us_hi": 23.98,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 36.7,
+      "p50": 37.3,
+      "p95": 44.0,
+      "p99": 59.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.775,
+     "wall_us_row": 7.939,
+     "rows_s": 125968
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.24,
+     "cpu_us_lo": 23.96,
+     "cpu_us_hi": 38.8,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 34.5,
+      "p25": 39.9,
+      "p50": 40.8,
+      "p95": 46.9,
+      "p99": 56.0
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.01,
+     "cpu_us_lo": 25.91,
+     "cpu_us_hi": 32.6,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.4,
+      "p25": 40.0,
+      "p50": 41.1,
+      "p95": 51.4,
+      "p99": 77.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6969.3,
+     "cpu_us_lo": 6902.37,
+     "cpu_us_hi": 7155.23,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6902.4,
+      "p25": 6988.6,
+      "p50": 7057.1,
+      "p95": 7231.3,
+      "p99": 7262.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 69.84,
+     "cpu_us_lo": 67.63,
+     "cpu_us_hi": 77.74,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 92.6,
+      "p25": 95.2,
+      "p50": 96.9,
+      "p95": 122.6,
+      "p99": 164.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.79,
+     "cpu_us_lo": 27.02,
+     "cpu_us_hi": 28.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.6,
+      "p25": 40.9,
+      "p50": 41.7,
+      "p95": 51.9,
+      "p99": 77.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.34,
+     "cpu_us_lo": 22.86,
+     "cpu_us_hi": 25.99,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 37.0,
+      "p50": 37.9,
+      "p95": 45.6,
+      "p99": 59.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 1,
+   "host": {
+    "loadavg": "2.34 2.52 3.15",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.449,
+     "wall_us_row": 3.56,
+     "rows_s": 280916
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.85,
+     "cpu_us_lo": 22.5,
+     "cpu_us_hi": 24.76,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.3,
+      "p25": 38.5,
+      "p50": 39.1,
+      "p95": 45.0,
+      "p99": 53.4
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.14,
+     "cpu_us_lo": 24.51,
+     "cpu_us_hi": 26.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.7,
+      "p25": 39.1,
+      "p50": 39.8,
+      "p95": 46.3,
+      "p99": 62.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7120.22,
+     "cpu_us_lo": 6969.46,
+     "cpu_us_hi": 7351.56,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7030.8,
+      "p25": 7127.0,
+      "p50": 7203.6,
+      "p95": 7433.5,
+      "p99": 7458.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 47.0,
+     "cpu_us_lo": 45.27,
+     "cpu_us_hi": 51.46,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 69.2,
+      "p25": 73.4,
+      "p50": 75.8,
+      "p95": 94.6,
+      "p99": 142.2
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.86,
+     "cpu_us_lo": 22.58,
+     "cpu_us_hi": 23.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.0,
+      "p25": 36.4,
+      "p50": 37.1,
+      "p95": 47.2,
+      "p99": 64.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.97,
+     "cpu_us_lo": 21.87,
+     "cpu_us_hi": 24.63,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 33.5,
+      "p25": 36.5,
+      "p50": 37.2,
+      "p95": 45.2,
+      "p99": 59.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.463,
+     "wall_us_row": 7.617,
+     "rows_s": 131278
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.51,
+     "cpu_us_lo": 23.97,
+     "cpu_us_hi": 38.44,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.6,
+      "p25": 39.8,
+      "p50": 40.6,
+      "p95": 48.0,
+      "p99": 59.0
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.42,
+     "cpu_us_lo": 26.54,
+     "cpu_us_hi": 32.62,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.2,
+      "p25": 40.1,
+      "p50": 41.2,
+      "p95": 52.9,
+      "p99": 75.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7126.26,
+     "cpu_us_lo": 6999.12,
+     "cpu_us_hi": 7259.23,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7017.5,
+      "p25": 7116.2,
+      "p50": 7228.4,
+      "p95": 7402.1,
+      "p99": 7491.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 75.26,
+     "cpu_us_lo": 73.11,
+     "cpu_us_hi": 83.81,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.1,
+      "p25": 97.5,
+      "p50": 99.9,
+      "p95": 134.0,
+      "p99": 158.7
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 28.48,
+     "cpu_us_lo": 27.53,
+     "cpu_us_hi": 30.87,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.6,
+      "p25": 40.6,
+      "p50": 41.6,
+      "p95": 54.6,
+      "p99": 80.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 24.72,
+     "cpu_us_lo": 23.82,
+     "cpu_us_hi": 32.19,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.8,
+      "p25": 37.6,
+      "p50": 38.9,
+      "p95": 49.9,
+      "p99": 68.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 2,
+   "host": {
+    "loadavg": "2.28 2.50 3.14",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.713,
+     "wall_us_row": 3.83,
+     "rows_s": 261075
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.55,
+     "cpu_us_lo": 22.54,
+     "cpu_us_hi": 25.03,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.3,
+      "p25": 38.5,
+      "p50": 39.1,
+      "p95": 46.8,
+      "p99": 54.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 24.87,
+     "cpu_us_lo": 24.14,
+     "cpu_us_hi": 27.02,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.1,
+      "p25": 38.5,
+      "p50": 39.2,
+      "p95": 46.8,
+      "p99": 64.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7351.65,
+     "cpu_us_lo": 7195.55,
+     "cpu_us_hi": 7642.49,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7239.1,
+      "p25": 7308.3,
+      "p50": 7430.3,
+      "p95": 7794.2,
+      "p99": 7934.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.16,
+     "cpu_us_lo": 45.4,
+     "cpu_us_hi": 55.0,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.3,
+      "p25": 72.4,
+      "p50": 74.8,
+      "p95": 94.6,
+      "p99": 164.6
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.76,
+     "cpu_us_lo": 21.7,
+     "cpu_us_hi": 29.05,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 36.5,
+      "p50": 37.0,
+      "p95": 46.9,
+      "p99": 60.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.65,
+     "cpu_us_lo": 21.68,
+     "cpu_us_hi": 24.28,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.3,
+      "p25": 36.7,
+      "p50": 37.4,
+      "p95": 44.3,
+      "p99": 61.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.673,
+     "wall_us_row": 7.95,
+     "rows_s": 125783
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.71,
+     "cpu_us_lo": 23.95,
+     "cpu_us_hi": 38.39,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.0,
+      "p25": 39.6,
+      "p50": 40.4,
+      "p95": 46.7,
+      "p99": 71.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 26.98,
+     "cpu_us_lo": 25.91,
+     "cpu_us_hi": 31.93,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.4,
+      "p25": 40.2,
+      "p50": 41.5,
+      "p95": 52.0,
+      "p99": 82.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6944.71,
+     "cpu_us_lo": 6863.75,
+     "cpu_us_hi": 7094.51,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6870.1,
+      "p25": 6960.2,
+      "p50": 7041.3,
+      "p95": 7305.2,
+      "p99": 7401.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 68.38,
+     "cpu_us_lo": 67.28,
+     "cpu_us_hi": 77.9,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 92.4,
+      "p25": 95.5,
+      "p50": 96.8,
+      "p95": 117.4,
+      "p99": 159.1
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.61,
+     "cpu_us_lo": 26.76,
+     "cpu_us_hi": 28.82,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.1,
+      "p25": 40.5,
+      "p50": 41.3,
+      "p95": 52.0,
+      "p99": 80.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.33,
+     "cpu_us_lo": 22.37,
+     "cpu_us_hi": 25.91,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 37.1,
+      "p50": 38.0,
+      "p95": 44.7,
+      "p99": 62.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 2,
+   "host": {
+    "loadavg": "2.18 2.48 3.13",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 5.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.437,
+     "wall_us_row": 3.56,
+     "rows_s": 280902
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.56,
+     "cpu_us_lo": 22.26,
+     "cpu_us_hi": 23.76,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 35.9,
+      "p25": 38.1,
+      "p50": 38.7,
+      "p95": 44.9,
+      "p99": 52.2
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.35,
+     "cpu_us_lo": 24.86,
+     "cpu_us_hi": 26.96,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.5,
+      "p25": 38.8,
+      "p50": 39.5,
+      "p95": 48.4,
+      "p99": 63.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7036.88,
+     "cpu_us_lo": 6878.63,
+     "cpu_us_hi": 7215.25,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6895.4,
+      "p25": 7030.1,
+      "p50": 7098.0,
+      "p95": 7304.4,
+      "p99": 7318.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 47.24,
+     "cpu_us_lo": 45.7,
+     "cpu_us_hi": 54.14,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.7,
+      "p25": 73.0,
+      "p50": 75.4,
+      "p95": 93.7,
+      "p99": 136.9
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.49,
+     "cpu_us_lo": 21.89,
+     "cpu_us_hi": 24.49,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 36.4,
+      "p50": 36.9,
+      "p95": 44.8,
+      "p99": 57.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.78,
+     "cpu_us_lo": 21.88,
+     "cpu_us_hi": 24.51,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.3,
+      "p25": 36.6,
+      "p50": 37.3,
+      "p95": 45.0,
+      "p99": 60.7
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.552,
+     "wall_us_row": 7.705,
+     "rows_s": 129793
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.44,
+     "cpu_us_lo": 24.13,
+     "cpu_us_hi": 37.92,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.7,
+      "p25": 39.7,
+      "p50": 40.5,
+      "p95": 47.6,
+      "p99": 57.9
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.68,
+     "cpu_us_lo": 26.32,
+     "cpu_us_hi": 33.55,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.4,
+      "p25": 40.1,
+      "p50": 41.1,
+      "p95": 52.6,
+      "p99": 72.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6891.22,
+     "cpu_us_lo": 6793.2,
+     "cpu_us_hi": 7292.73,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6836.5,
+      "p25": 6907.4,
+      "p50": 6966.0,
+      "p95": 7316.3,
+      "p99": 7844.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 72.02,
+     "cpu_us_lo": 70.24,
+     "cpu_us_hi": 80.63,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.4,
+      "p25": 97.6,
+      "p50": 99.6,
+      "p95": 121.1,
+      "p99": 196.7
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.31,
+     "cpu_us_lo": 26.72,
+     "cpu_us_hi": 29.66,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.1,
+      "p25": 40.4,
+      "p50": 41.3,
+      "p95": 53.1,
+      "p99": 76.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.67,
+     "cpu_us_lo": 23.04,
+     "cpu_us_hi": 24.95,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.2,
+      "p25": 37.2,
+      "p50": 38.0,
+      "p95": 46.3,
+      "p99": 63.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 2,
+   "host": {
+    "loadavg": "2.16 2.47 3.12",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.422,
+     "wall_us_row": 3.546,
+     "rows_s": 281982
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.89,
+     "cpu_us_lo": 22.43,
+     "cpu_us_hi": 28.4,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.1,
+      "p25": 38.3,
+      "p50": 38.9,
+      "p95": 47.0,
+      "p99": 55.2
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.4,
+     "cpu_us_lo": 24.29,
+     "cpu_us_hi": 26.67,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.5,
+      "p25": 39.0,
+      "p50": 39.8,
+      "p95": 49.3,
+      "p99": 68.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7236.67,
+     "cpu_us_lo": 6964.88,
+     "cpu_us_hi": 7448.33,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7038.2,
+      "p25": 7247.9,
+      "p50": 7317.8,
+      "p95": 7595.6,
+      "p99": 7644.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 50.42,
+     "cpu_us_lo": 46.93,
+     "cpu_us_hi": 53.81,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.9,
+      "p25": 73.9,
+      "p50": 76.0,
+      "p95": 106.7,
+      "p99": 148.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.19,
+     "cpu_us_lo": 22.3,
+     "cpu_us_hi": 25.26,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.1,
+      "p25": 36.3,
+      "p50": 36.8,
+      "p95": 47.0,
+      "p99": 61.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.61,
+     "cpu_us_lo": 22.03,
+     "cpu_us_hi": 24.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.0,
+      "p25": 36.3,
+      "p50": 37.1,
+      "p95": 45.4,
+      "p99": 60.9
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.704,
+     "wall_us_row": 7.863,
+     "rows_s": 127171
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.76,
+     "cpu_us_lo": 23.66,
+     "cpu_us_hi": 37.41,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 37.0,
+      "p25": 39.7,
+      "p50": 40.5,
+      "p95": 48.8,
+      "p99": 56.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 28.78,
+     "cpu_us_lo": 26.73,
+     "cpu_us_hi": 33.08,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.9,
+      "p25": 40.5,
+      "p50": 41.6,
+      "p95": 55.2,
+      "p99": 76.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7101.61,
+     "cpu_us_lo": 6901.05,
+     "cpu_us_hi": 8240.37,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6963.1,
+      "p25": 7122.2,
+      "p50": 7192.9,
+      "p95": 7923.5,
+      "p99": 8697.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 74.83,
+     "cpu_us_lo": 72.57,
+     "cpu_us_hi": 85.03,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 94.2,
+      "p25": 98.0,
+      "p50": 100.4,
+      "p95": 135.4,
+      "p99": 182.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.95,
+     "cpu_us_lo": 27.2,
+     "cpu_us_hi": 29.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.9,
+      "p25": 40.4,
+      "p50": 41.3,
+      "p95": 54.0,
+      "p99": 81.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.97,
+     "cpu_us_lo": 23.26,
+     "cpu_us_hi": 25.41,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 37.0,
+      "p50": 37.9,
+      "p95": 47.0,
+      "p99": 63.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 3,
+   "host": {
+    "loadavg": "2.06 2.44 3.10",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.551,
+     "wall_us_row": 3.663,
+     "rows_s": 273009
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.39,
+     "cpu_us_lo": 22.82,
+     "cpu_us_hi": 24.53,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 33.2,
+      "p25": 38.9,
+      "p50": 39.5,
+      "p95": 46.0,
+      "p99": 53.5
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.69,
+     "cpu_us_lo": 24.44,
+     "cpu_us_hi": 27.38,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.2,
+      "p25": 38.8,
+      "p50": 39.7,
+      "p95": 48.6,
+      "p99": 69.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7221.27,
+     "cpu_us_lo": 7130.39,
+     "cpu_us_hi": 7402.03,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7153.3,
+      "p25": 7250.1,
+      "p50": 7318.6,
+      "p95": 7463.0,
+      "p99": 7511.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.16,
+     "cpu_us_lo": 45.12,
+     "cpu_us_hi": 51.44,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.4,
+      "p25": 72.7,
+      "p50": 75.0,
+      "p95": 90.5,
+      "p99": 111.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.9,
+     "cpu_us_lo": 22.04,
+     "cpu_us_hi": 24.83,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 36.6,
+      "p50": 37.2,
+      "p95": 46.0,
+      "p99": 66.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.88,
+     "cpu_us_lo": 21.86,
+     "cpu_us_hi": 24.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 36.6,
+      "p50": 37.3,
+      "p95": 44.2,
+      "p99": 61.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.58,
+     "wall_us_row": 7.734,
+     "rows_s": 129294
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.71,
+     "cpu_us_lo": 23.87,
+     "cpu_us_hi": 38.16,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.8,
+      "p25": 39.8,
+      "p50": 40.6,
+      "p95": 47.9,
+      "p99": 58.7
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.57,
+     "cpu_us_lo": 25.59,
+     "cpu_us_hi": 31.13,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.7,
+      "p25": 40.1,
+      "p50": 41.2,
+      "p95": 51.9,
+      "p99": 80.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7018.18,
+     "cpu_us_lo": 6895.6,
+     "cpu_us_hi": 7216.64,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6882.1,
+      "p25": 7025.0,
+      "p50": 7088.0,
+      "p95": 7486.6,
+      "p99": 7489.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 71.39,
+     "cpu_us_lo": 70.22,
+     "cpu_us_hi": 80.21,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.7,
+      "p25": 97.8,
+      "p50": 99.1,
+      "p95": 120.1,
+      "p99": 144.9
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.92,
+     "cpu_us_lo": 26.98,
+     "cpu_us_hi": 30.39,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.9,
+      "p25": 41.0,
+      "p50": 41.9,
+      "p95": 54.3,
+      "p99": 77.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.48,
+     "cpu_us_lo": 22.69,
+     "cpu_us_hi": 25.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 37.1,
+      "p50": 37.9,
+      "p95": 45.2,
+      "p99": 60.4
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 3,
+   "host": {
+    "loadavg": "2.13 2.45 3.10",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.453,
+     "wall_us_row": 3.569,
+     "rows_s": 280160
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.11,
+     "cpu_us_lo": 22.75,
+     "cpu_us_hi": 24.74,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.3,
+      "p25": 38.5,
+      "p50": 39.1,
+      "p95": 45.2,
+      "p99": 54.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.65,
+     "cpu_us_lo": 24.85,
+     "cpu_us_hi": 27.18,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.1,
+      "p25": 39.2,
+      "p50": 40.1,
+      "p95": 49.3,
+      "p99": 66.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6967.89,
+     "cpu_us_lo": 6876.78,
+     "cpu_us_hi": 7228.14,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6907.7,
+      "p25": 6990.5,
+      "p50": 7031.9,
+      "p95": 7458.6,
+      "p99": 7562.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.78,
+     "cpu_us_lo": 45.48,
+     "cpu_us_hi": 54.8,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.4,
+      "p25": 73.3,
+      "p50": 75.5,
+      "p95": 91.9,
+      "p99": 147.3
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.25,
+     "cpu_us_lo": 22.05,
+     "cpu_us_hi": 24.86,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 36.6,
+      "p50": 37.3,
+      "p95": 47.6,
+      "p99": 74.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.57,
+     "cpu_us_lo": 22.14,
+     "cpu_us_hi": 23.91,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.4,
+      "p25": 36.5,
+      "p50": 37.1,
+      "p95": 44.6,
+      "p99": 61.7
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.578,
+     "wall_us_row": 7.732,
+     "rows_s": 129330
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.22,
+     "cpu_us_lo": 23.81,
+     "cpu_us_hi": 37.7,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.9,
+      "p25": 39.5,
+      "p50": 40.3,
+      "p95": 47.5,
+      "p99": 61.9
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 26.87,
+     "cpu_us_lo": 26.03,
+     "cpu_us_hi": 32.14,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.5,
+      "p25": 40.2,
+      "p50": 41.1,
+      "p95": 52.5,
+      "p99": 73.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6835.35,
+     "cpu_us_lo": 6706.11,
+     "cpu_us_hi": 7083.63,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6677.3,
+      "p25": 6838.6,
+      "p50": 6896.5,
+      "p95": 7459.3,
+      "p99": 7476.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 70.9,
+     "cpu_us_lo": 68.76,
+     "cpu_us_hi": 82.46,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 94.2,
+      "p25": 97.2,
+      "p50": 98.7,
+      "p95": 125.8,
+      "p99": 211.1
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.36,
+     "cpu_us_lo": 26.92,
+     "cpu_us_hi": 29.34,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.2,
+      "p25": 40.6,
+      "p50": 41.3,
+      "p95": 51.7,
+      "p99": 76.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.48,
+     "cpu_us_lo": 22.61,
+     "cpu_us_hi": 24.93,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.4,
+      "p25": 37.1,
+      "p50": 38.0,
+      "p95": 46.4,
+      "p99": 62.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 3,
+   "host": {
+    "loadavg": "2.04 2.42 3.09",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 5.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.422,
+     "wall_us_row": 3.544,
+     "rows_s": 282168
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.56,
+     "cpu_us_lo": 22.16,
+     "cpu_us_hi": 23.88,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.1,
+      "p25": 38.3,
+      "p50": 38.9,
+      "p95": 44.2,
+      "p99": 53.2
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.15,
+     "cpu_us_lo": 24.53,
+     "cpu_us_hi": 27.22,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.5,
+      "p25": 38.9,
+      "p50": 39.6,
+      "p95": 46.9,
+      "p99": 64.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7044.7,
+     "cpu_us_lo": 6868.08,
+     "cpu_us_hi": 7121.58,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6914.9,
+      "p25": 7003.1,
+      "p50": 7079.6,
+      "p95": 7304.0,
+      "p99": 7353.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 45.69,
+     "cpu_us_lo": 45.13,
+     "cpu_us_hi": 57.71,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.4,
+      "p25": 72.3,
+      "p50": 74.9,
+      "p95": 98.7,
+      "p99": 129.0
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 22.39,
+     "cpu_us_lo": 21.52,
+     "cpu_us_hi": 23.81,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.0,
+      "p25": 36.0,
+      "p50": 36.6,
+      "p95": 43.8,
+      "p99": 62.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.21,
+     "cpu_us_lo": 21.59,
+     "cpu_us_hi": 23.59,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 33.9,
+      "p25": 36.2,
+      "p50": 36.9,
+      "p95": 44.1,
+      "p99": 57.8
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.401,
+     "wall_us_row": 7.554,
+     "rows_s": 132384
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.61,
+     "cpu_us_lo": 23.25,
+     "cpu_us_hi": 37.96,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.9,
+      "p25": 39.4,
+      "p50": 40.1,
+      "p95": 45.8,
+      "p99": 54.8
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 26.4,
+     "cpu_us_lo": 25.1,
+     "cpu_us_hi": 30.89,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.1,
+      "p25": 39.7,
+      "p50": 40.6,
+      "p95": 51.0,
+      "p99": 79.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6741.74,
+     "cpu_us_lo": 6701.75,
+     "cpu_us_hi": 8596.76,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6681.2,
+      "p25": 6740.2,
+      "p50": 6822.4,
+      "p95": 8360.6,
+      "p99": 10372.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 72.75,
+     "cpu_us_lo": 71.03,
+     "cpu_us_hi": 80.29,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.8,
+      "p25": 97.9,
+      "p50": 99.7,
+      "p95": 124.0,
+      "p99": 180.9
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.7,
+     "cpu_us_lo": 26.94,
+     "cpu_us_hi": 29.72,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.0,
+      "p25": 40.5,
+      "p50": 41.4,
+      "p95": 54.4,
+      "p99": 79.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.3,
+     "cpu_us_lo": 22.51,
+     "cpu_us_hi": 25.16,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 37.0,
+      "p50": 37.9,
+      "p95": 44.5,
+      "p99": 64.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 4,
+   "host": {
+    "loadavg": "1.81 2.36 3.06",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.421,
+     "wall_us_row": 3.544,
+     "rows_s": 282196
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.68,
+     "cpu_us_lo": 22.25,
+     "cpu_us_hi": 24.76,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.2,
+      "p25": 38.2,
+      "p50": 38.8,
+      "p95": 45.0,
+      "p99": 52.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 26.34,
+     "cpu_us_lo": 25.55,
+     "cpu_us_hi": 29.1,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.1,
+      "p25": 39.4,
+      "p50": 40.1,
+      "p95": 51.1,
+      "p99": 69.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7273.94,
+     "cpu_us_lo": 6991.58,
+     "cpu_us_hi": 7425.49,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6985.2,
+      "p25": 7264.4,
+      "p50": 7357.4,
+      "p95": 7543.6,
+      "p99": 7603.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 49.9,
+     "cpu_us_lo": 47.08,
+     "cpu_us_hi": 52.78,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 69.0,
+      "p25": 73.5,
+      "p50": 75.9,
+      "p95": 103.4,
+      "p99": 208.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.3,
+     "cpu_us_lo": 22.26,
+     "cpu_us_hi": 24.17,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.2,
+      "p25": 36.4,
+      "p50": 37.0,
+      "p95": 46.1,
+      "p99": 62.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.11,
+     "cpu_us_lo": 22.56,
+     "cpu_us_hi": 27.6,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.3,
+      "p25": 36.5,
+      "p50": 37.2,
+      "p95": 46.7,
+      "p99": 60.4
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.66,
+     "wall_us_row": 7.824,
+     "rows_s": 127806
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.82,
+     "cpu_us_lo": 24.14,
+     "cpu_us_hi": 37.76,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 37.2,
+      "p25": 39.9,
+      "p50": 40.7,
+      "p95": 49.6,
+      "p99": 58.7
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 28.98,
+     "cpu_us_lo": 27.02,
+     "cpu_us_hi": 36.49,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.9,
+      "p25": 40.7,
+      "p50": 42.4,
+      "p95": 56.5,
+      "p99": 76.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6753.78,
+     "cpu_us_lo": 6668.07,
+     "cpu_us_hi": 7046.24,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6658.7,
+      "p25": 6761.8,
+      "p50": 6818.3,
+      "p95": 7118.8,
+      "p99": 7167.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 71.18,
+     "cpu_us_lo": 68.64,
+     "cpu_us_hi": 78.19,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 93.7,
+      "p25": 97.1,
+      "p50": 99.0,
+      "p95": 120.1,
+      "p99": 168.1
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 27.59,
+     "cpu_us_lo": 26.8,
+     "cpu_us_hi": 28.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.1,
+      "p25": 40.6,
+      "p50": 41.5,
+      "p95": 51.7,
+      "p99": 78.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.48,
+     "cpu_us_lo": 23.04,
+     "cpu_us_hi": 25.4,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 37.2,
+      "p50": 38.0,
+      "p95": 45.3,
+      "p99": 63.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 4,
+   "host": {
+    "loadavg": "1.74 2.34 3.05",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.7,
+     "wall_us_row": 3.817,
+     "rows_s": 261990
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 23.01,
+     "cpu_us_lo": 22.74,
+     "cpu_us_hi": 24.86,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 34.5,
+      "p25": 38.7,
+      "p50": 39.3,
+      "p95": 44.3,
+      "p99": 54.1
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.22,
+     "cpu_us_lo": 24.15,
+     "cpu_us_hi": 26.32,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.3,
+      "p25": 38.6,
+      "p50": 39.3,
+      "p95": 46.7,
+      "p99": 63.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7251.1,
+     "cpu_us_lo": 7146.32,
+     "cpu_us_hi": 7596.74,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7195.9,
+      "p25": 7286.0,
+      "p50": 7325.0,
+      "p95": 7648.5,
+      "p99": 7722.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 46.53,
+     "cpu_us_lo": 45.29,
+     "cpu_us_hi": 53.43,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 68.2,
+      "p25": 72.9,
+      "p50": 75.0,
+      "p95": 93.9,
+      "p99": 140.3
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.26,
+     "cpu_us_lo": 22.57,
+     "cpu_us_hi": 25.48,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.6,
+      "p25": 36.8,
+      "p50": 37.4,
+      "p95": 45.3,
+      "p99": 58.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 22.63,
+     "cpu_us_lo": 22.13,
+     "cpu_us_hi": 23.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.2,
+      "p25": 36.4,
+      "p50": 37.1,
+      "p95": 44.4,
+      "p99": 58.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.68,
+     "wall_us_row": 7.837,
+     "rows_s": 127603
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.6,
+     "cpu_us_lo": 23.93,
+     "cpu_us_hi": 38.05,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 37.5,
+      "p25": 40.2,
+      "p50": 41.0,
+      "p95": 47.1,
+      "p99": 57.9
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.82,
+     "cpu_us_lo": 25.98,
+     "cpu_us_hi": 31.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.4,
+      "p25": 40.3,
+      "p50": 41.4,
+      "p95": 52.7,
+      "p99": 73.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6981.1,
+     "cpu_us_lo": 6860.1,
+     "cpu_us_hi": 7141.2,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6885.4,
+      "p25": 7011.9,
+      "p50": 7069.9,
+      "p95": 7273.3,
+      "p99": 7306.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 70.52,
+     "cpu_us_lo": 68.25,
+     "cpu_us_hi": 83.63,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 92.6,
+      "p25": 95.8,
+      "p50": 97.8,
+      "p95": 119.8,
+      "p99": 187.0
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 28.14,
+     "cpu_us_lo": 27.21,
+     "cpu_us_hi": 29.42,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 38.3,
+      "p25": 40.9,
+      "p50": 41.7,
+      "p95": 53.1,
+      "p99": 80.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.9,
+     "cpu_us_lo": 22.98,
+     "cpu_us_hi": 25.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.9,
+      "p25": 37.6,
+      "p50": 38.5,
+      "p95": 47.7,
+      "p99": 68.5
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 4,
+   "host": {
+    "loadavg": "1.63 2.29 3.03",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 6.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.482,
+     "wall_us_row": 3.599,
+     "rows_s": 277840
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 22.69,
+     "cpu_us_lo": 22.37,
+     "cpu_us_hi": 24.05,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.3,
+      "p25": 38.4,
+      "p50": 39.0,
+      "p95": 44.7,
+      "p99": 52.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 25.05,
+     "cpu_us_lo": 24.18,
+     "cpu_us_hi": 26.59,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 36.6,
+      "p25": 38.5,
+      "p50": 39.2,
+      "p95": 47.6,
+      "p99": 61.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 7113.99,
+     "cpu_us_lo": 6990.48,
+     "cpu_us_hi": 7624.34,
+     "lat_us": {
+      "ops": 40,
+      "p0": 7052.7,
+      "p25": 7110.1,
+      "p50": 7203.2,
+      "p95": 7615.8,
+      "p99": 7817.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 47.26,
+     "cpu_us_lo": 46.0,
+     "cpu_us_hi": 54.61,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 69.1,
+      "p25": 73.4,
+      "p50": 75.8,
+      "p95": 92.1,
+      "p99": 106.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 23.03,
+     "cpu_us_lo": 21.95,
+     "cpu_us_hi": 24.94,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.2,
+      "p25": 36.3,
+      "p50": 36.9,
+      "p95": 46.0,
+      "p99": 61.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.48,
+     "cpu_us_lo": 22.58,
+     "cpu_us_hi": 27.01,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.4,
+      "p25": 36.7,
+      "p50": 37.3,
+      "p95": 48.5,
+      "p99": 86.8
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 7.632,
+     "wall_us_row": 7.79,
+     "rows_s": 128362
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 24.74,
+     "cpu_us_lo": 23.97,
+     "cpu_us_hi": 38.76,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 36.0,
+      "p25": 39.8,
+      "p50": 40.7,
+      "p95": 48.9,
+      "p99": 57.9
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 27.11,
+     "cpu_us_lo": 26.29,
+     "cpu_us_hi": 33.4,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.5,
+      "p25": 40.3,
+      "p50": 41.3,
+      "p95": 52.5,
+      "p99": 76.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 6996.57,
+     "cpu_us_lo": 6733.01,
+     "cpu_us_hi": 7246.22,
+     "lat_us": {
+      "ops": 40,
+      "p0": 6754.1,
+      "p25": 7000.1,
+      "p50": 7073.6,
+      "p95": 7341.0,
+      "p99": 7571.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 74.35,
+     "cpu_us_lo": 70.79,
+     "cpu_us_hi": 81.58,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 94.5,
+      "p25": 98.3,
+      "p50": 100.4,
+      "p95": 134.8,
+      "p99": 156.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 28.19,
+     "cpu_us_lo": 27.22,
+     "cpu_us_hi": 29.53,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 37.9,
+      "p25": 40.5,
+      "p50": 41.5,
+      "p95": 55.2,
+      "p99": 75.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 23.51,
+     "cpu_us_lo": 22.76,
+     "cpu_us_hi": 26.41,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 34.5,
+      "p25": 37.1,
+      "p50": 38.1,
+      "p95": 47.1,
+      "p99": 65.3
+     }
+    }
+   }
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "1.63 2.29 3.03",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 103.6
+}

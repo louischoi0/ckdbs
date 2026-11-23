@@ -1,0 +1,28 @@
+07:25:09 built ref_heap r0 2.7 s read=24.47 update=26.58 delete=23.81
+07:25:14 built int32 r0 3.5 s read=26.32 update=30.07 move=35.96 delete=27.06
+07:25:18 built int32x2 r0 3.5 s read=27.5 update=31.22 move=36.12 delete=28.22
+07:25:23 built varchar64 r0 3.7 s read=25.76 update=30.2 move=35.29 delete=26.3
+07:25:28 built mixed4 r0 4.1 s read=31.29 update=35.32 move=40.36 delete=30.9
+07:25:31 built F0 r0 2.4 s read=23.2 range=46.34 update=25.26 delete=22.19
+07:25:34 built F1 r0 2.6 s read=25.33 range=52.58 update=28.03 delete=24.81
+07:25:38 built P1int r0 3.2 s read=28.67 range=135.32 update=30.58 delete=27.81
+07:25:43 built P1str r0 3.3 s read=26.51 range=134.17 update=30.19 delete=25.38
+07:25:46 built ref_heap r1 2.8 s read=25.02 update=27.82 delete=23.91
+07:25:51 built P1str r1 3.7 s read=26.62 range=133.12 update=28.98 delete=25.6
+07:25:55 built P1int r1 3.2 s read=28.66 range=135.34 update=31.47 delete=28.04
+07:25:59 built F1 r1 2.5 s read=25.11 range=50.74 update=27.11 delete=24.49
+07:26:02 built F0 r1 2.4 s read=22.91 range=46.53 update=25.27 delete=23.05
+07:26:07 built mixed4 r1 4.0 s read=30.0 update=34.44 move=38.84 delete=29.8
+07:26:11 built varchar64 r1 3.7 s read=26.3 update=30.31 move=36.33 delete=27.09
+07:26:16 built int32x2 r1 3.5 s read=27.16 update=30.81 move=35.63 delete=27.81
+07:26:20 built int32 r1 3.4 s read=25.82 update=29.36 move=34.01 delete=26.86
+07:26:25 built int32x2 r2 3.6 s read=27.38 update=31.76 move=36.38 delete=27.76
+07:26:29 built varchar64 r2 3.8 s read=26.22 update=30.32 move=34.82 delete=27.03
+07:26:34 built mixed4 r2 4.0 s read=30.07 update=34.19 move=38.45 delete=30.18
+07:26:38 built F0 r2 2.4 s read=23.54 range=46.32 update=24.95 delete=22.36
+07:26:41 built F1 r2 2.5 s read=24.77 range=51.24 update=26.95 delete=24.39
+07:26:45 built P1int r2 3.2 s read=29.11 range=138.02 update=31.18 delete=29.03
+07:26:50 built P1str r2 3.6 s read=26.41 range=134.11 update=28.2 delete=25.67
+07:26:53 built ref_heap r2 2.7 s read=24.17 update=26.11 delete=23.42
+07:26:58 built int32 r2 3.4 s read=25.77 update=29.22 move=33.87 delete=26.46
+07:26:58 done elapsed_s=112.0

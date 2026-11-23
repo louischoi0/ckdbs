@@ -1320,7 +1320,7 @@ Status CheckEmbeddedKey(const Schema& schema, ClusteredType clustered) {
             "catalog: an embedded primary key is a btree's, over a hidden Keystone");
     }
     for (std::size_t i = 0; i < key.size(); ++i) {
-        if (key[i] == 0 || key[i] >= schema.columns.size() ||
+        if (key[i] >= schema.columns.size() ||
             std::find(key.begin(), key.begin() + i, key[i]) != key.begin() + i) {
             return Status::InvalidArgument(
                 "catalog: an embedded primary key names each of its columns once, at a "
@@ -1337,8 +1337,12 @@ Status CheckEmbeddedKey(const Schema& schema, ClusteredType clustered) {
     return Status::OK();
 }
 
-// `CheckEmbeddedKey` of a relation as the catalog loaded it.
-Status CheckLoadedEmbeddedKey(Oid rel_id, const Schema& schema, ClusteredType clustered) {
+// The key form of a relation as the catalog loaded it: one this build
+// writes (`SysTableRow::CheckKeyForm`), over a key the relation can have.
+Status CheckLoadedEmbeddedKey(const SysTableRow& row, const Schema& schema) {
+    if (Status s = row.CheckKeyForm(); !s.ok()) return s;
+    const Oid rel_id = row.oid;
+    const ClusteredType clustered = row.clustered_type;
     const Status s = CheckEmbeddedKey(schema, clustered);
     if (s.ok()) return s;
     return Status::Corruption("sys.tables row for oid " + std::to_string(rel_id) +
@@ -2693,11 +2697,7 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     if (!table_row.ok()) return table_row.status();
     schema.value().spare_slots = table_row.value().spare_slots;
     schema.value().embedded_key = EmbeddedKeyOf(table_row.value());
-    if (Status s = CheckLoadedEmbeddedKey(rel_id, schema.value(),
-                                          table_row.value().clustered_type);
-        !s.ok()) {
-        return s;
-    }
+    if (Status s = CheckLoadedEmbeddedKey(table_row.value(), schema.value()); !s.ok()) return s;
     return schema;
 }
 
@@ -2779,10 +2779,7 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.schema.spare_slots = table_row.value().spare_slots;
     // And so does the embedded key, the relation's for life (DR-R12).
     access.schema.embedded_key = EmbeddedKeyOf(table_row.value());
-    if (Status s = CheckLoadedEmbeddedKey(oid, access.schema, table_row.value().clustered_type);
-        !s.ok()) {
-        return s;
-    }
+    if (Status s = CheckLoadedEmbeddedKey(table_row.value(), access.schema); !s.ok()) return s;
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;

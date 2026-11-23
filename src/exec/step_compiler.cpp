@@ -2491,8 +2491,9 @@ Status CompileAssignments(const catalog::TableAccess& access,
         // key's column is part of the id, which names the row everywhere.
         // A key that must move is a key over a hidden Keystone - a heap's,
         // or a btree's whose key does not embed.
-        const auto key_column = static_cast<std::uint16_t>(column - access.schema.columns.data());
-        if (access.schema.embedded_key.contains(key_column)) {
+        if (!access.schema.embedded_key.empty() &&
+            access.schema.embedded_key.contains(
+                static_cast<std::uint16_t>(column - access.schema.columns.data()))) {
             return Status::Unsupported(
                 "primary key column '" + a.col_name + "' cannot be updated at byte " +
                 std::to_string(a.byte_offset) +
@@ -3575,29 +3576,6 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             }
         }
 
-        // ---- An embedded primary key (DR-S3e) ----------------------------
-        //
-        // Below the Keystone's own arms and above every other: the key is
-        // the Keystone id, so its whole value is a lookup and a prefix or a
-        // range of it a tuple key range - the tuple key class, by the kinds
-        // that class already has. The conjuncts stay in the residual, so
-        // the step downgraded to a walk answers the same rows.
-        if (tuple_key && step.kind == AccessKind::kScan) {
-            if (auto window = EmbeddedKeyWindowOnStep(rel, step, slot); window.has_value()) {
-                if (window->lo == window->hi) {
-                    Operand id;
-                    id.kind = OperandKind::kLiteral;
-                    id.literal.type = parser::ValueType::kInt;
-                    id.literal.int_val = static_cast<std::int64_t>(window->lo);
-                    step.kind = AccessKind::kLookup;
-                    step.key = id;
-                } else {
-                    step.kind = AccessKind::kRange;
-                    step.range = RangeBounds{window->lo, window->hi};
-                }
-            }
-        }
-
         // ---- Range and filter scans -------------------------------------
         //
         // Only reached when the step did not become a keyed descent: a
@@ -3606,9 +3584,31 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         if (step.kind == AccessKind::kScan) {
             const auto key_range =
                 tuple_key && !heap ? TupleKeyRangeOf(step, slot) : std::nullopt;
+            // **An embedded primary key** (DR-S3e), below the Keystone's own
+            // arms and above every other: the key is the Keystone id, so its
+            // whole value is a lookup and a prefix or a range of it a tuple
+            // key range - the tuple key class, by the kinds that class
+            // already has. The conjuncts stay in the residual, so the step
+            // downgraded to a walk answers the same rows. Asked only of a
+            // step no Keystone arm took, so a relation with no such key pays
+            // one test on a walk and none on a keyed read (DR-R9).
+            const auto embedded =
+                tuple_key && !(key_range.has_value() && !key_range->strict)
+                    ? EmbeddedKeyWindowOnStep(rel, step, slot)
+                    : std::nullopt;
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
+            } else if (embedded.has_value() && embedded->lo == embedded->hi) {
+                Operand id;
+                id.kind = OperandKind::kLiteral;
+                id.literal.type = parser::ValueType::kInt;
+                id.literal.int_val = static_cast<std::int64_t>(embedded->lo);
+                step.kind = AccessKind::kLookup;
+                step.key = id;
+            } else if (embedded.has_value()) {
+                step.kind = AccessKind::kRange;
+                step.range = RangeBounds{embedded->lo, embedded->hi};
             } else if (auto ix = index ? LiteralIndexChoiceOf(scope, rel, step, slot, pin.name,
                                                               cabin ? &gate : nullptr)
                                        : std::nullopt;

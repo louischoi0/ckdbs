@@ -74,6 +74,8 @@ bool KeyEmbeds(std::span<const SysColumnRow> key_cols) {
     if (key_cols.empty() || key_cols.size() > kMaxEmbeddedKeyColumns) return false;
     std::uint32_t total = 0;
     for (const SysColumnRow& col : key_cols) {
+        // A position the catalog row's one byte cannot name does not embed.
+        if (col.pos == 0 || col.pos > 0xFF) return false;
         const std::optional<std::uint32_t> bits = EmbeddedKeyColumnBits(col.type_val);
         if (!bits.has_value()) return false;
         total += *bits;

@@ -28,11 +28,10 @@ namespace kds::catalog {
 // (DR-S3e): at most `kMaxEmbeddedKeyColumns`, each below 256, which is what
 // the `sys.tables` row holds of them.
 //
-// **Five bytes, inline, on purpose** (DR's close): a `Schema` ends in a
-// `uint16_t` and six bytes of padding, and this sits in them. As a vector
-// it grew every `Schema` by 24 bytes and moved every field a `TableAccess`
-// keeps after its schema, and the close measured statements on relations
-// that have no such key 2 % to 7 % dearer for it. `static_assert`ed below.
+// **Five bytes, inline, on purpose** (DR-R9): a `Schema` ends in a
+// `uint16_t` and six bytes of padding, and this sits in them, so a `Schema`
+// is the size it was and no field a `TableAccess` keeps after its schema
+// moved for a relation that has no such key. `static_assert`ed below.
 class EmbeddedKeyColumns {
 public:
     bool empty() const noexcept { return count_ == 0; }

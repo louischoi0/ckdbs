@@ -5112,14 +5112,12 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         // An embedded primary key's column (DR-S3e): the Keystone id of every
         // row is that column's code, and no index stands in the drop's way
         // to say so.
-        {
-            if (access.value()->schema.embedded_key.contains(pos)) {
-                const Status s = Status::InvalidArgument(
-                    "column '" + stmt.old_column +
-                    "' is part of the primary key, which is this relation's Keystone id, and "
-                    "cannot be dropped" + at);
-                return Refused(s);
-            }
+        if (access.value()->schema.embedded_key.contains(pos)) {
+            const Status s = Status::InvalidArgument(
+                "column '" + stmt.old_column +
+                "' is part of the primary key, which is this relation's Keystone id, and "
+                "cannot be dropped" + at);
+            return Refused(s);
         }
         // A heap's last declared column (BZ-Q3): without it the relation has
         // no column a statement can write or read, only its hidden key.
@@ -6757,14 +6755,13 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 key_positions.push_back(static_cast<std::uint16_t>(first_declared + i));
                 key_columns.push_back(schema.columns[first_declared + i]);
             }
-            // A key column at a position the catalog row cannot name (past
-            // 255) does not embed, and the key is indexed.
+            // `KeyEmbeds` has asked every position (a key column past 255
+            // does not embed and the key is indexed), so no `push_back`
+            // here is refused.
             if (!stmt.heap && catalog::KeyEmbeds(key_columns)) {
-                catalog::EmbeddedKeyColumns embedded;
-                const bool named = std::all_of(
-                    key_positions.begin(), key_positions.end(),
-                    [&](std::uint16_t pos) { return embedded.push_back(pos); });
-                if (named) schema.embedded_key = embedded;
+                for (const std::uint16_t pos : key_positions) {
+                    (void)schema.embedded_key.push_back(pos);
+                }
             }
         }
 
@@ -8779,19 +8776,25 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // whether or not it wrote `keyidentity` (`EmbeddedRowId`): the id is
     // settled here, before anything can wait, and the row then takes the
     // named key's path below - its borrow, its duplicate check, its
-    // placement where the id sorts. **One branch for every other relation**:
-    // the derivation and its refusals are out of this function's body, which
-    // the close measured dearer a row with them in it.
+    // placement where the id sorts. **A test and a branch for every other
+    // relation** (DR-R9): the derivation and its refusals are out of this
+    // function's body, and the byte a key's refusal points at is read only
+    // where one is said.
     const bool embedded = !ta.schema.embedded_key.empty();
-    // Where a refusal for the key points: the tuple key's token, or the
-    // first key column's.
-    std::uint32_t key_byte = named_by_row ? values.front().byte_offset : 0;
+    std::uint32_t embedded_key_byte = 0;
     if (embedded) {
-        if (Status s = EmbeddedRowId(oid, ta, body, named_by_row, supplied_id, key_byte);
+        if (named_by_row) embedded_key_byte = values.front().byte_offset;
+        if (Status s = EmbeddedRowId(oid, ta, body, named_by_row, supplied_id, embedded_key_byte);
             !s.ok()) {
             return s;
         }
     }
+    // Where a refusal for the key points: the tuple key's token, or on an
+    // embedded relation that wrote none, the first key column's.
+    const auto key_byte = [&]() -> std::uint32_t {
+        if (embedded) return embedded_key_byte;
+        return named_by_row ? values.front().byte_offset : 0;
+    };
     const bool explicit_key = named_by_row || embedded;
 
     // ---- The forward check (docs/spec/foreign-keys.md §2) ---------------
@@ -8912,9 +8915,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // **A duplicate carries the tuple key token's byte** (BD-R5), as the exhausted
     // refusal above does.
     const auto duplicate_at_tuple_key = [&](const Status& duplicate) {
-        if (embedded) return EmbeddedKeyHeld(ta, body, supplied_id, key_byte);
+        if (embedded) return EmbeddedKeyHeld(ta, body, supplied_id, key_byte());
         return Status::AlreadyExists(duplicate.message() + " (byte " +
-                                     std::to_string(key_byte) + ")");
+                                     std::to_string(key_byte()) + ")");
     };
     // The key's borrow, given back by a statement it protected nothing for
     // (BB-S3's review; AZ-S5's shape for a failed check's `S`): nothing was
@@ -8984,9 +8987,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // lookup that failed, is a wait like any other (a fence over `k`).
         // No mark is consulted (W2 of BZ).
         const auto refuse_if_never_admissible = [&]() -> Status {
-            Status verdict = NamedKeyVerdict(ta, supplied_id, key_byte, scope.txn);
+            Status verdict = NamedKeyVerdict(ta, supplied_id, key_byte(), scope.txn);
             if (embedded && verdict.code() == StatusCode::kAlreadyExists) {
-                return EmbeddedKeyHeld(ta, body, supplied_id, key_byte);
+                return EmbeddedKeyHeld(ta, body, supplied_id, key_byte());
             }
             return verdict;
         };
@@ -9015,7 +9018,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             !s.ok()) {
             give_back(key_unit, held_before);
             if (s.code() == StatusCode::kOutOfRange && heap_rel) {
-                return Status::OutOfRange(s.message() + " (byte " + std::to_string(key_byte) +
+                return Status::OutOfRange(s.message() + " (byte " + std::to_string(key_byte()) +
                                           ")");
             }
             return s;
