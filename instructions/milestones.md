@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| DR | written | 2026-11-23 | 2026-11-23 | - | - | n/a | - | a primary key of any type and column count over an unchanged Keystone | v3.2.0/workorder-dr-primary-key-over-keystone.md |
 | BG | closed-narrow | 2026-11-23 | 2026-10-07 | 2026-10-07 | 2026-11-23 | b27916f3 | v3.1.0 | scan resistance: a scan's frames reclaimed before the hand laps | v3.0.0/workorder-bg-scan-queue.md |
 | BS | closed-narrow | 2026-11-23 | 2026-10-13 | 2026-10-13 | 2026-11-23 | b5928bf2 | v3.4.0 | test hardening: the verification methods of a production engine | v3.0.0/workorder-bs-test-hardening.md |
 | DQ | closed | 2026-11-23 | 2026-11-22 | 2026-11-23 | 2026-11-23 | 38b5aa69 | - | a Cabin's miss answered from a map: the correlated probe's unobserved keys served by the build | v3.2.0/workorder-dq-cabin-miss-build.md |

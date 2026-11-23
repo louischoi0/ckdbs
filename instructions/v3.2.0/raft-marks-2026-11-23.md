@@ -89,3 +89,12 @@ The operator's words of 2026-11-23, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
+
+## 10. DR written as a draft: a primary key over an unchanged Keystone
+
+| | |
+|---|---|
+| **Word** | *"An exploratory milestone approach that leaves the Keystone as it is and can express a primary key with several types and with multiple columns."* and, after CLA's reading of the tree and its three questions (may a declared primary key's value change; is a btree in scope; are the limits documented or lifted), *"Write the draft work order and push."* (given in Korean; recorded in English) |
+| **Mark** | **DR is written as a draft, not opened**: `instructions/v3.2.0/workorder-dr-primary-key-over-keystone.md`, in the main checkout on `main` at `5fdca9e0` (`v3.4.17-127-g5fdca9e0` by `origin`'s tags), documents only, and pushed to `main` on that word. **The operator's marks are two**: DR is exploratory (DR-Q0), and the Keystone is left as it is (DR-R1). The letter DR, the candidates P0 to P6, the rules DR-R2..R8 and the stages are CLA's proposals. **DR-Q1..Q10 are unmarked**: the word to write the draft answered none of CLA's three questions, which stand as DR-Q1 (`[quiet-wrong]`), DR-Q2 and DR-Q3 |
+| **Does not settle** | DR-Q1..Q10; DR's opening; CH's standing (DR-Q8); a tag or a version |
+| **Recorded at** | this file; the DR order's header, §0, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
