@@ -1,6 +1,8 @@
 # Work order BG — scan resistance: a scan's frames are reclaimed before the hand laps the working set
 
-Written 2026-10-07 on `worktree-bg-scan-ring-order` from `cd8ca91e`
+**CLOSED NARROW 2026-11-23 on the operator's word** (*"close BS and BG as closed-narrow for now"*, `instructions/v3.2.0/raft-marks-2026-11-23.md` §8): BG-S0 (the order) and BG-S1 (the premise, measured; the tick's reclaim-step counter `pool_batch_steps_background`, on `main` at `b27916f3`) are its whole build. **BG-S2..S4 are not built**: no scan queue, the slot ring not retired, no close measurement. A scan larger than the pool still laps the hand and displaces a hot set touched fewer times than the laps (`known-gaps.md`, Eviction); every BG-R and BG-Q stays as written, for a later order to take up. §1's survey was read at `cd8ca91e` and the store has changed since (`device_page_store.cpp` has 55 commits after 2026-10-08), so a later order re-reads it.
+
+Before that: Written 2026-10-07 on `worktree-bg-scan-ring-order` from `cd8ca91e`
 (`v2.7.0-678-gcd8ca91e`). It follows the operator's word, verbatim:
 
 - *"write the scan ring work order"*

@@ -69,3 +69,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | a tag or a version; DQ-Q2 (b) or (c); DQ-Q13 (b) or (c) |
 | **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
+
+## 8. BS and BG closed narrow
+
+| | |
+|---|---|
+| **Word** | *"close BS and BG as closed-narrow for now"* (given in Korean), after CLA's list of the open milestones and its recommendation that BS and BG, open for over a month, be closed, closed narrow or paused |
+| **Mark** | **BS and BG are closed narrow, on the operator's own word.** **BS:** S0-S8 are built and on `main` (`b5928bf2`, `v3.4.0`); `workorder-bs-test-hardening.md` §4's bar is not met, its seven consecutive nightly reports among it, and none exists on this host at the close (`crontab -l` lists no entry, and there is no `build-bs-reports` directory); BS's methods stay runnable by hand and out of the push gate. **BG:** BG-S0 and BG-S1 are built (`b27916f3`, `v3.1.0`); BG-S2..S4 - the scan queue, the slot ring's retirement and the close - are not, and the measured displacement stays in `known-gaps.md` (Eviction) |
+| **Does not settle** | an order to build the scan queue (BG-R1..R5 stay as written); installing the BS nightly; a push, a tag or a version |
+| **Recorded at** | this file; each order's header; their rows in `instructions/v3.0.0/index.md` and in `instructions/milestones.md`; `CLAUDE.md`'s test hardening row; `docs/inflight/known-gaps.md` (Eviction) |
+

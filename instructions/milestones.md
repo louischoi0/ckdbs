@@ -68,6 +68,8 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| BG | closed-narrow | 2026-11-23 | 2026-10-07 | 2026-10-07 | 2026-11-23 | b27916f3 | v3.1.0 | scan resistance: a scan's frames reclaimed before the hand laps | v3.0.0/workorder-bg-scan-queue.md |
+| BS | closed-narrow | 2026-11-23 | 2026-10-13 | 2026-10-13 | 2026-11-23 | b5928bf2 | v3.4.0 | test hardening: the verification methods of a production engine | v3.0.0/workorder-bs-test-hardening.md |
 | DQ | closed | 2026-11-23 | 2026-11-22 | 2026-11-23 | 2026-11-23 | 38b5aa69 | - | a Cabin's miss answered from a map: the correlated probe's unobserved keys served by the build | v3.2.0/workorder-dq-cabin-miss-build.md |
 | CW | abandoned | 2026-11-22 | 2026-11-17 | 2026-11-22 | 2026-11-22 | da5d5c05 | - | the optimistic page read, measured before it is built | v3.2.0/workorder-cw-optimistic-page-read.md |
 | DM | abandoned | 2026-11-22 | 2026-11-20 | 2026-11-22 | 2026-11-22 | e3f6bb8b | - | a leaf that knows its own upper bound | v3.2.0/workorder-dm-leaf-upper-bound.md |
@@ -105,7 +107,6 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | BL | closed | 2026-10-22 | 2026-10-11 | 2026-10-12 | 2026-10-22 | 27e9d03a | v3.4.3 | no session is pinned: a session balancer and priority | v3.0.0/workorder-bl-session-balancer-priority-affinity.md |
 | CH | written | 2026-10-21 | 2026-10-21 | - | - | n/a | - | a tuple key change in one transaction: an exploratory concept check | v3.2.0/workorder-ch-tuple-key-update.md |
 | CF | closed | 2026-10-21 | 2026-10-21 | 2026-10-21 | 2026-10-21 | 2a1da9ac | v3.4.1 | Waystone's premise: measure, then remove, default off, or opt in | v3.2.0/workorder-cf-waystone-premise.md |
-| BS | open | 2026-10-21 | 2026-10-13 | 2026-10-13 | - | b5928bf2 | v3.4.0 | test hardening: the verification methods of a production engine | v3.0.0/workorder-bs-test-hardening.md |
 | CE | closed | 2026-10-20 | 2026-10-20 | 2026-10-20 | 2026-10-20 | 244b031c | v3.4.0 | streaming the KWP reply: a result leaves while its statement runs | v3.2.0/workorder-ce-streaming-reply.md |
 | CB | closed | 2026-10-20 | 2026-10-18 | 2026-10-18 | 2026-10-20 | 65dc45c5 | v3.3.0 | a join planner: join order, build side, range bounds via a join key | v3.2.0/workorder-cb-join-planner.md |
 | BZ | closed | 2026-10-20 | 2026-10-17 | 2026-10-17 | 2026-10-20 | b98271a9 | v3.4.0 | the heap redefined: a btree relation with no tuple key column | v3.2.0/workorder-bz-heap-hidden-key.md |
@@ -134,7 +135,6 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | BJ | closed | 2026-10-10 | 2026-10-10 | 2026-10-10 | 2026-10-10 | 683ba291 | v3.1.0 | expressions in UPDATE ... SET | v3.0.0/workorder-bj-expression-update.md |
 | BA | closed | 2026-10-10 | 2026-10-02 | 2026-10-09 | 2026-10-10 | 836b9551 | v3.1.0 | parallelism against the PostgreSQL floor: twelve serialisation points | v3.0.0/workorder-ba-parallelism.md |
 | BH | closed | 2026-10-08 | 2026-10-08 | 2026-10-08 | 2026-10-08 | 4015736d | v3.1.0 | PURGE: a deleted key freed, K1's one named exception | v3.0.0/workorder-bh-purge-key.md |
-| BG | open | 2026-10-08 | 2026-10-07 | 2026-10-07 | - | b27916f3 | v3.1.0 | scan resistance: a scan's frames reclaimed before the hand laps | v3.0.0/workorder-bg-scan-queue.md |
 | BF | closed | 2026-10-08 | 2026-10-07 | 2026-10-07 | 2026-10-08 | 3e53df01 | v3.1.0 | DROP TABLE page reclamation | v3.0.0/workorder-bf-drop-table-page-reclaim.md |
 | BB | closed | 2026-10-08 | 2026-10-06 | 2026-10-06 | 2026-10-08 | 1e3233a5 | v3.1.0 | the id fixed under the leaf it lands on | v3.0.0/workorder-bb-issue-under-the-leaf.md |
 | BE | closed | 2026-10-07 | 2026-10-07 | 2026-10-07 | 2026-10-07 | e9ff9599 | v3.1.0 | a bounded buffer pool: the configured frames are a ceiling | v3.0.0/workorder-be-bounded-pool.md |

@@ -1,6 +1,6 @@
 # Work order BS — test hardening: the verification methods a production engine is expected to carry, measured against SQLite's
 
-**Written 2026-10-13** on `wo-test-hardening` at `ec0c07ef`, on the
+**CLOSED NARROW 2026-11-23 on the operator's word** (*"close BS and BG as closed-narrow for now"*, `instructions/v3.2.0/raft-marks-2026-11-23.md` §8): S0-S8 are built and on `main` (`b5928bf2`, `v3.4.0`), and **§4's bar is not met** - its seven consecutive nightly reports among it. At the close no nightly report exists on this host: `crontab -l` lists no entry, and no `build-bs-reports` directory exists under the repository or its worktrees. Every method BS added stays runnable by hand (`scripts/bs/nightly.sh`, `scripts/bs/mutants.sh`) and out of the push gate (§6.1). Before that: **Written 2026-10-13** on `wo-test-hardening` at `ec0c07ef`, on the
 operator's words W0-W1. **Opened 2026-10-13 for S0 and S1 only** (BS-Q0
 (b), §6); S2-S8 waited for BR's close, which came on 2026-10-20
 (`instructions/v3.2.0/raft-marks-2026-10-20.md` §3). **Every question in §5

@@ -31,7 +31,9 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   re-faulted after a scan four times the pool. The scan drives about eight
   laps of the hand, and each lap lowers every hot counter. BE-Q7 names this
   the case for the scan ring's own order: `workorder-bg-scan-queue.md`,
-  written 2026-10-07 and stopped after BG-S1 (2026-10-08). Owned by
+  written 2026-10-07, stopped after BG-S1 (2026-10-08) and closed narrow
+  on 2026-11-23 with its scan queue not built (BG-S2..S4), so this gap
+  stands as measured. Owned by
   `docs/spec/eviction.md` (EV6, §3.1).
 
 - **A pool whose resident set is mostly dirty refuses point updates, and
