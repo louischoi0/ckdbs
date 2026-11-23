@@ -1,7 +1,10 @@
 # Work order CW - a page read that takes no latch: the optimistic page read, measured before it is built
 
 Status: **CLOSED 2026-11-22 on the operator's standing go-ahead, abandoned at
-V0, with nothing built** (`raft-marks-2026-11-22.md` §13; §7's last entry).
+V0, with nothing built** (`raft-marks-2026-11-22.md` §13; §7's last entry). Its record
+**landed on `main` at `da5d5c05`** on the operator's "push no verify"
+(`raft-marks-2026-11-22.md` §14; the hook skipped, no suite run, no build
+input carried), untagged.
 CW-S0 measured a point read's whole fetch protocol at 2.8 % of its server CPU
 at `cores = 2` and 2.6 % at the clean `cores = 3`, against V0's 5 %. M4's
 shared relation reads -1.3 % stmt/s at worst, inside the runs' own spread

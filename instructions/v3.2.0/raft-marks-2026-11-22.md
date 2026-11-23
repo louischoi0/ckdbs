@@ -126,3 +126,13 @@ The operator's words of 2026-11-22, recorded in English.
 | **Also adopted** | **CW-Q10 (a)**, raised by CW-S0's review, adopted on that standing go-ahead (CLA's proposal, not the operator's mark): the close stands though no cell saturated the server. The reactors were 23-66 % busy in the `point` cells, and the data do not exclude a reversal at saturation (a pessimistic 5.7 %). A saturated clean `cores = 2` cell, about 2 minutes of runs past the spent budget, would reopen CW at S0 on the operator's word (CW-Q10 (b)) |
 | **Does not settle** | a write-side order for the hot-page fetches, the `StillOwned` fold, or the B1 stamp; CW-Q1 (b) (other bars); CW-Q10 (b); a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the CW order's header and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md`; `docs/inflight/known-gaps.md`; `docs/pending/multicore-scaling-cores4-below-cores2.md` §6 |
+
+## 14. CW landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report of CW's close |
+| **Mark** | **CW's record lands on `main`.** First, `origin/main`'s DQ commit `a8a0705f` was merged into `worktree-cw-optimistic-page-read` as `fd4cde15`, in the worktree `sync-stale-records`. That merge renumbered CW's sections §12 and §13 here, since DQ holds §11. The branch was then merged `--no-ff` over `a8a0705f` as `da5d5c05` and pushed with `--no-verify`. The merge carries `bench/`, `docs/`, `instructions/` and `tools/` only, with no build input, and no suite was run on it. This record is documents only. The spike stays on the unpushed `worktree-cw-s0-spike` at `cba85f1f` |
+| **Skipped on that word** | the pre-push hook; no suite was executed |
+| **Does not settle** | CW-Q10 (b); a write-side order for the hot-page fetches; the `StillOwned` fold; the B1 stamp; a tag or a version |
+| **Recorded at** | this file; the CW order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
