@@ -119,3 +119,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | DR-Q1, DR-Q3 to DR-Q15 other than as above; an opening; a push; a tag or a version |
 | **Recorded at** | this file; `workorder-dr-primary-key-over-keystone.md`; its row and this file's row in `instructions/v3.2.0/index.md` |
 
+
+## 13. DR's second amendment landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report of §12's amendment |
+| **Mark** | **§12's amendment lands on `main`**: the branch `worktree-dr-draft-amend` (worktree `dq-cabin-miss-build`; `f4b3cfef` and this record), a fast-forward of `origin/main` `088d7499`, pushed with `--no-verify`. Documents only |
+| **Skipped on that word** | the pre-push hook; no suite was executed, no build input having changed; no `critics-developer` review |
+| **Does not settle** | any unmarked DR-Q item; an opening; a tag or a version |
+| **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
