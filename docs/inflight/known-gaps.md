@@ -654,6 +654,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     tuple-key join among them, whose inner probe takes no branch DQ
     changed; its compile and `RunStep` are DQ's changed code.
 
+  **Accepted by the operator at DQ's close** (*"accept it and close"*,
+  `raft-marks-2026-11-23.md` §6), as a measured cost.
   **Diagnosed on the lifted budget as placement, not instructions**
   (the results file's last section, same binaries):
   - The compile is level on every shape.

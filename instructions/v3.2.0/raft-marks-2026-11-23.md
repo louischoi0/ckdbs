@@ -50,3 +50,12 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | accepting the residue; closing DQ; a push of the records after §4, a tag or a version |
 | **Recorded at** | this file; the DQ order's header, DQ-Q13 and §7; `bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`; `docs/inflight/known-gaps.md`; `instructions/v3.2.0/index.md` |
 
+## 6. DQ closed: the residue accepted
+
+| | |
+|---|---|
+| **Word** | *"accept it and close"* (given in Korean), after CLA's account of the gate-declined cell and of the residue diagnosed as placement (§5) |
+| **Mark** | **The operator's own mark on DQ-Q13: the measured residue is accepted and DQ is closed.** DQ-Q8's gate cell is met. Its converged clause and DQ-R6 are not met, and that is accepted: converged cabined-join statements read 7 % to 35 % dearer in cold cells, and join statements +0.2 to +0.5 us, as placement of memory and code (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`). The residue stays in `known-gaps.md` as an accepted measured cost |
+| **Does not settle** | DQ-Q2 (b) or (c); DQ-Q13 (b) or (c); a push of this record and of `d4a59dd6`; a tag or a version |
+| **Recorded at** | this file; the DQ order's header, DQ-Q13 and §7; `docs/inflight/known-gaps.md`; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
