@@ -59,3 +59,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | DQ-Q2 (b) or (c); DQ-Q13 (b) or (c); a push of this record and of `d4a59dd6`; a tag or a version |
 | **Recorded at** | this file; the DQ order's header, DQ-Q13 and §7; `docs/inflight/known-gaps.md`; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
 
+
+## 7. DQ's close record landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report of DQ's close (§6) |
+| **Mark** | **DQ's diagnosis (`d4a59dd6`), its close record (`f276c939`) and this record land on `main`**: the work branch `worktree-dq-cabin-miss-build` (worktree `dq-cabin-miss-build`), merged `--no-ff` over `origin/main` `38b5aa69` (§4's merge) and pushed with `--no-verify`. They change documents, bench and tools only; the last suite, 0 failed of 5,159 at `7e31d272`, ran on the same build inputs, so the hook was not run |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | a tag or a version; DQ-Q2 (b) or (c); DQ-Q13 (b) or (c) |
+| **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
