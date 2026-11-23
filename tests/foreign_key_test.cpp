@@ -246,16 +246,15 @@ TEST_F(ForeignKeyTest, AnUnknownParentRefusesAndCreatesNothing) {
     EXPECT_FALSE(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades").ok());
 }
 
-// F1 puts the reference on the parent's Keystone id, which a heap hides
-// (BZ-R7), so no client could write a value naming a parent row.
-TEST_F(ForeignKeyTest, AHeapParentIsRefused) {
+// F1 puts the reference on the parent's Keystone id. A heap hides it as a
+// column and names it `keyidentity`, so a hidden-Keystone heap is a parent
+// too (DR-S3c): `tests/primary_key_test.cpp` carries its cells.
+TEST_F(ForeignKeyTest, AHiddenKeystoneHeapIsAParent) {
     ASSERT_EQ(Run("CREATE TABLE accounts (owner varchar) HEAP").substr(0, 7), "CREATED");
 
     const std::string out =
         Run("CREATE TABLE trades (id int64, account_id int64 REFERENCES accounts) BTREE");
-    EXPECT_EQ(out.rfind("ERR UNSUPPORTED", 0), 0u) << out;
-    EXPECT_NE(out.find("is a heap"), std::string::npos) << out;
-    EXPECT_FALSE(boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trades").ok());
+    EXPECT_EQ(out.rfind("CREATED", 0), 0u) << out;
 }
 
 TEST_F(ForeignKeyTest, AColumnThatCannotHoldAKeystoneIdIsRefused) {

@@ -48,10 +48,6 @@ namespace kds::catalog {
 //                    identity a statement about another row; or a column
 //                    whose declared type cannot hold a Keystone id,
 //                    which is a reference that can never be written.
-//   Unsupported      a **heap** parent (BZ-R7 of
-//                    `instructions/v3.2.0/workorder-bz-heap-hidden-key.md`):
-//                    F1 puts the reference on the parent's tuple key, which
-//                    a heap hides, so no child value could name a parent row.
 //   InvalidArgument  a system relation, whose catalog chain has no tuple
 //                    key descent.
 Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow& child_column,

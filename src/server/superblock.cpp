@@ -78,8 +78,9 @@ StatusOr<SuperBlock> SuperBlock::Decode(std::span<const std::byte, kPageSize> pa
             "superblock version " + std::to_string(f.version) + " is not this build's (" +
             std::to_string(kSuperBlockVersion) + ")" +
             (f.version < kSuperBlockVersion
-                 ? "; since version 40 a view is a catalog object with its own sys.views "
-                   "relation (DP), which an older volume has no page for"
+                 ? "; since version 41 a btree may carry a primary key that is not its first "
+                   "column, its sys.tables row saying how the Keystone id is chosen (DR), which "
+                   "an older binary reads as reserved bytes"
                  : ""));
     }
     std::memcpy(&f.log_topology, base + kLogTopologyOffset, sizeof(f.log_topology));

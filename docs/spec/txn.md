@@ -992,7 +992,14 @@ the walk or - since CU-S3 - by one descent per value, and it parks at a
 held value with the values below it written, as the walk parks at a held
 row. A bound on the tuple key beside
 the list (`id IN (1, 7, 42) AND id < 100`) declares its window as it does
-beside anything else, and the descents write under it (CU-S3b). And the wait is the ordinary one: it ends at the
+beside anything else, and the descents write under it (CU-S3b). **A
+unique key named whole names no window either** (DR-S3a, `parser-v2.md`
+I10): `WHERE a = 1 AND b = 2` over a unique index on `(a, b)` - a primary
+key's or any other - declares nothing and takes a row unit per row it
+writes, the rows found by one descent per tuple key the key's run names,
+in ascending tuple key order, and it parks at a held row as the list
+does. A bound on the tuple key beside it declares its window, as beside
+the list. And the wait is the ordinary one: it ends at the
 holder's decide, it is an edge in the wait-for graph, and it is refused
 rather than entered where it would close a cycle.
 
@@ -1059,8 +1066,9 @@ or locking read of a returned row waits.
   key, the window declared in `U` before the walk, and with no `WHERE` the
   whole id space - exactly as the paragraphs above state for an `UPDATE`.
   It reaches rows as an `UPDATE` does: an equality or a list on the tuple
-  key descends, and every other predicate walks the whole relation without
-  yielding its core (`known-gaps.md`, Locks).
+  key descends, a unique key named whole descends by its run (DR-S3a),
+  and every other predicate walks the whole relation without yielding its
+  core (`known-gaps.md`, Locks).
 - **`U` under the spelling `FOR UPDATE`** (DC-Q1 (a), `[quiet-wrong]`). A
   foreign key child's share passes the claim, so a child `INSERT` naming a
   locked parent proceeds and commits, and the holder's later `DELETE` of

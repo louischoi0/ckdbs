@@ -168,8 +168,57 @@ CREATE TABLE [<namespace>.]<name>
   word; a count past 64 or a second `SPARE` is refused with its byte.
 
 - **The storage clause defaults to `BTREE`**: a clustered B+ tree on the
-  tuple key, which is the relation's first column and must be an integer
-  type.
+  tuple key. With no `PRIMARY KEY` that key is the relation's first column,
+  which must be an integer type.
+- **`PRIMARY KEY` declares the relation's key, on either kind** - on one
+  column (`<col> <type> PRIMARY KEY`) or as a list (`PRIMARY KEY (<col>,
+  ...)`), of up to four columns, none `NULL`. What the engine makes of it
+  is decided once, from the declaration, and never changes:
+
+  | the declared key | on a `BTREE` | on a `HEAP` |
+  |---|---|---|
+  | one `int64`, the first column | **the tuple key itself** - the relation exactly as without the keyword | **the tuple key itself**, visible and named by an `INSERT` or issued |
+  | `int8`, `int16`, `int32`, `date` and `bool` columns of 48 bits or less together (`int32`; `(int32, int16)`; `(date, int8)`) | **embedded**: the key is the row's identity, with no index. Rows are stored in key order | a unique index beside a hidden tuple key |
+  | anything else - wider, or a string, an `int64` beside another column, a decimal | a unique index beside a hidden tuple key, **each row placed by a hash of its key** | a unique index beside a hidden tuple key |
+
+  - **Recommended: one `int64` first column.** It is the only form with no
+    second structure and none of the limits below.
+  - **A key that is a unique index** may change: `UPDATE t SET <key
+    column> = ...` moves the key and the row stays the same row. A value
+    is free the moment no live row holds it - after a `DELETE`, or a move
+    off it. A string column of the key is ordered by its first 32 bytes
+    and compared in full, so keys that share those bytes cost each read
+    and each insert a lookup per such key: make keys differ inside them.
+    **On a `BTREE` a row is placed by a hash of its key**, so `WHERE`
+    every key column `=` a value finds it in one descent, where a `HEAP`
+    reads its index and then the row. The price is the insert: rows land
+    across the whole relation instead of at its end. A row keeps its place
+    when its key changes, and a key inserted again before its deleted row
+    is purged takes another place; such rows are found through the index,
+    one descent more. `ANALYZE` shows `home=` on a read that may try the
+    place first: an autocommit `SELECT`, or one in a `READ ONLY`
+    transaction. Inside a read-write transaction the read goes through
+    the index.
+    **Where rows are deleted or keys change often, prefer `HEAP`**: a
+    deleted row's space and its key's dead index entries are reclaimed in
+    the background there, while a `BTREE` keeps both until `PURGE FROM t
+    WHERE keyidentity >= 1` and `PURGE INDEX $pkey_<oid>` (the name
+    `sys.indexes` shows).
+  - **An embedded key** never changes (`UPDATE` of a key column is
+    `UNSUPPORTED`, and the column cannot be dropped), and a deleted key
+    cannot be inserted again until a `PURGE` frees it (`PURGE FROM t WHERE
+    a = 1 AND b = 2`). In return a row is found by its key in one descent,
+    and a range of the key (`a = 1 AND b BETWEEN 10 AND 20`, or `a = 1`
+    alone) reads rows stored side by side. Its largest key - the largest
+    value of every column together, where the key fills all 48 bits - is
+    refused. `ON CONFLICT` is not built for it, and a join by it is not
+    served by the key.
+  - **A statement that names the whole key is found by it**, a write as
+    well as a read: `UPDATE`, `DELETE` and `SELECT ... FOR UPDATE ...
+    WHERE a = 1 AND b = 2` go to the row, as they do for every unique
+    index.
+  - `DESCRIBE` and `sys.columns` show the key: `primary_key` is a column's
+    place in it, from 1, or 0.
 - **`HEAP` declares a relation stored as data pages in no key order**, each
   row at a fixed place for its life, and every key access goes through an
   index that names that place. A full scan reads the pages, in no promised
@@ -193,13 +242,13 @@ CREATE TABLE [<namespace>.]<name>
   `INSERT` column list; it is reserved and names no table, column, index,
   namespace or alias. A deleted row's space is reused once no index names
   it, by a background release. A `HEAP` relation may carry secondary
-  indexes, Cabins, assertions and Transitions and be an FK child. A heap
-  whose key is a declared `int64` `PRIMARY KEY` is also an FK parent and is `PURGE`d by
-  that key; one with a hidden key is neither. `PRIMARY KEY` is a heap's
-  alone: on a `BTREE` the first column is the key and the keyword is refused.
+  indexes, Cabins, assertions and Transitions and be an FK child and an FK
+  parent. A heap whose key is a declared `int64` `PRIMARY KEY` is `PURGE`d
+  by that key; one with a hidden key is not purged at all - its space is
+  the background release's.
   `sys.tables.clustered_type` reads `HEAP`, `BTREE`, or `CHAIN` for a system
-  relation. **A volume made before superblock 39 does not mount** here: its
-  heaps were stored another way.
+  relation. **A volume made before superblock 41 does not mount** here: a
+  `BTREE` could not then declare a key that is not its first column.
 - **There is no key mode.** Every relation takes a caller-named tuple key
   or issues one when `INSERT` omits it, so nothing about keys is declared
   here. `EXPLICIT` is still accepted and **does nothing** — it states what is
@@ -313,10 +362,15 @@ CREATE TABLE orders (id int64, account_id int64 REFERENCES accounts, amount int6
 - No parent column is written **and none may be**: the parent side is always
   the referenced relation's Keystone id. `REFERENCES accounts(id)` is refused
   (`Unsupported`) — it would spell out the only thing it could mean.
-- A `HEAP` parent with a hidden key is refused at declaration (`Unsupported`):
-  the child's column holds the parent's tuple key, and that one is hidden.
-  A `HEAP` whose key is a declared `int64` `PRIMARY KEY` is a parent as a `BTREE` is.
-  A `HEAP` child is fine.
+- **A parent whose tuple key is hidden is referenced by its
+  `keyidentity`.** The child's column always holds the parent's tuple key;
+  where the parent declared another primary key, read that id when you
+  insert the parent (`INSERT ... RETURNING keyidentity`) or afterwards by
+  its key (`SELECT keyidentity FROM accounts WHERE branch = 1 AND no =
+  100`), and store it in the child. The parent's primary key may then
+  change without touching its children, and a key value deleted and
+  inserted again is another parent, which no earlier child references.
+  A reference by the primary key's own value is not built.
 - v1 is RESTRICT-only and fail-fast. INSERT/UPDATE of an fk column checks the
   parent exists; DELETE of a parent checks for live children and stops at the
   first one. Violations answer `ERR FK_VIOLATION retryable=0 ...`.
@@ -578,6 +632,10 @@ other statements on its core run between two batches.
   `NOT_IMPLEMENTED`, and the transaction goes on.
 - **A row being written is passed over**, its entries kept, and counted in
   `skipped_rows=`; running it again later takes them.
+- **A primary key's index is named as `sys.indexes` shows it**: `PURGE
+  INDEX $pkey_4012`. The engine made it and no other statement names it.
+  On a `BTREE` this is what takes out the entries of deleted rows and of
+  key values a row moved off; a `HEAP` purges its own.
 - Queries answer exactly as before. The tree keeps its pages: a leaf left
   thin is refilled by later inserts, and only `REINDEX` returns pages.
 - **Each leaf keeps its first entry**, so at most one dead entry a leaf
@@ -1241,9 +1299,15 @@ is placed as if the key had never been used. It is the one exception to
   While it waits it holds nothing, so DDL on the relation is not delayed.
 - **Autocommit only, declared tuple key only, admin only.** Inside `BEGIN`
   it is refused `NOT_IMPLEMENTED` without poisoning the transaction; a
-  system relation or a `HEAP` with a hidden key is `UNSUPPORTED` (no
-  window can name a hidden key); a `HEAP` whose key is `id int64 PRIMARY
-  KEY` is purged by that key; it needs the admin role.
+  system relation or a `HEAP` with a hidden key is `UNSUPPORTED` (such a
+  heap reclaims its own space); a `HEAP` whose key is `id int64 PRIMARY
+  KEY` is purged by that key; it needs the admin role. **A `BTREE` with a
+  hidden key is purged by `keyidentity`** (`PURGE FROM t WHERE keyidentity
+  >= 1` frees every deleted row), **and one whose key is embedded also by
+  the key**: its leading columns each by one `=`, then one inclusive range
+  on the next (`a = 1 AND b BETWEEN 10 AND 20`, `a = 1`, `a BETWEEN 1 AND
+  9`). Any other condition is refused `NOT_IMPLEMENTED`: it could free
+  more than it says.
 - **Reply:** `PURGED <n>`, the keys freed; `rows_affected` on the wire. It
   is durable as any commit is, under the session's durability class.
 - **Partial outcomes.** The whole window is judged before anything is

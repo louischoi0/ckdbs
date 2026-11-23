@@ -1634,11 +1634,11 @@ TEST_F(RowIdAdmissionTest, EveryNewRelationWritesTheRetiredKeyOrderByteZero) {
 
     auto h_row = reopened.GetSysTableRow(heap_oid);
     ASSERT_TRUE(h_row.ok()) << h_row.status().message();
-    EXPECT_EQ(h_row.value().retired_key_order, 0u);
+    EXPECT_EQ(h_row.value().key_form, kKeyFormIssued);
 
     auto b_row = reopened.GetSysTableRow(btree_oid);
     ASSERT_TRUE(b_row.ok()) << b_row.status().message();
-    EXPECT_EQ(b_row.value().retired_key_order, 0u);
+    EXPECT_EQ(b_row.value().key_form, kKeyFormIssued);
 }
 
 TEST_F(RowIdAdmissionTest, ABtreeAdmissionAdvancesTheMarkOrLeavesItAndNeverRefuses) {
@@ -1698,7 +1698,7 @@ TEST_F(RowIdAdmissionTest, ACatalogRelationWritesTheRetiredKeyOrderByteZero) {
 
     auto row = catalog.GetSysTableRow(kSysTablesTable);
     ASSERT_TRUE(row.ok()) << row.status().message();
-    EXPECT_EQ(row.value().retired_key_order, 0u);
+    EXPECT_EQ(row.value().key_form, kKeyFormIssued);
 }
 
 // ---- The catalog relations chain (docs/rules/keystoneid-k0-findings.md) --------

@@ -384,20 +384,15 @@ txn::LockKey UniqueKeyUnit(const catalog::TableAccess& access,
     return txn::LockKey::IndexKey(access.oid, h);
 }
 
-StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
-                                       const catalog::TableAccess& access,
-                                       const catalog::TableAccess::IndexRef& ix,
-                                       const UniqueKey& key, const txn::ReadView& check_view,
-                                       std::uint64_t self) {
+StatusOr<std::vector<std::uint64_t>> IndexRunTupleKeys(storage::PageStore& store,
+                                                       const catalog::TableAccess::IndexRef& ix,
+                                                       std::span<const std::byte> encoded_key,
+                                                       std::uint64_t* entries_read) {
     const index::IndexLayout layout = IndexLayoutOf(ix);
-
-    // Phase 1: the tuple keys the run names, distinct. The seek is `(key, 0)`
-    // - the tuple key is the sort key's tail (IX4b) - and the walk stops at
-    // the first larger key. Collected before any is resolved, so no
-    // clustered page is fetched under an index leaf's span (`parser-v2.md`
-    // I15's R1).
+    // The seek is `(key, 0)` - the tuple key is the sort key's tail (IX4b) -
+    // and the walk stops at the first larger key.
     std::vector<std::byte> low(layout.sort_key_width(), std::byte{0x00});
-    std::memcpy(low.data(), key.encoded.data(), key.encoded.size());
+    std::memcpy(low.data(), encoded_key.data(), encoded_key.size());
     auto first = index::IndexSeekLeaf(store, ix.root_page_id, layout, low);
     if (!first.ok()) return first.status();
     std::vector<std::uint64_t> named;
@@ -408,15 +403,30 @@ StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
             auto entry = leaf.Entry(at);
             if (!entry.ok()) return entry.status();
             const int order =
-                std::memcmp(entry.value().data(), key.encoded.data(), key.encoded.size());
+                std::memcmp(entry.value().data(), encoded_key.data(), encoded_key.size());
             if (order < 0) return storage::VisitControl::kContinue;
             if (order > 0) return storage::VisitControl::kStop;
             named.push_back(index::GetIndexTupleKey(entry.value().subspan(ix.key_width)));
             return storage::VisitControl::kContinue;
         });
     if (!walked.ok()) return walked;
+    if (entries_read != nullptr) *entries_read = named.size();
     std::sort(named.begin(), named.end());
     named.erase(std::unique(named.begin(), named.end()), named.end());
+    return named;
+}
+
+StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,
+                                       const catalog::TableAccess& access,
+                                       const catalog::TableAccess::IndexRef& ix,
+                                       const UniqueKey& key, const txn::ReadView& check_view,
+                                       std::uint64_t self) {
+    // Phase 1: the tuple keys the run names, distinct. Collected before any
+    // is resolved, so no clustered page is fetched under an index leaf's
+    // span (`parser-v2.md` I15's R1).
+    auto run = IndexRunTupleKeys(store, ix, key.encoded);
+    if (!run.ok()) return run.status();
+    const std::vector<std::uint64_t>& named = run.value();
 
     // Phase 2: each named row at latest state, its key columns compared in
     // full - the encoded key matched at most a prefix (IX6).

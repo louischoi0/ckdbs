@@ -728,7 +728,7 @@ SHOW INDEXES
 
 `CREATE UNIQUE INDEX` declares a unique one (IX11); it is the one spelling
 of a unique key, and `UNIQUE` before anything but `INDEX` is refused
-`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`, and, since the instance started, how often each index served a read: `probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used` (`sys-views.md` §6.2b; a statistic nothing in the engine reads).
+`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`, and, since the instance started, how often each index served a read: `probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used` (`sys-views.md` §6.2b; a statistic nothing in the engine reads). **A write that descends by a unique key counts one probe** (DR-Q23): the key's run is one walk, its entries scanned and its tuple keys resolved, counted at the statement's first collection and not at a resume's. **`PURGE INDEX` takes an engine-named index by the name `sys.indexes` shows** (DR-Q21): `PURGE INDEX $pkey_<oid>`, a primary key's, or `$keystone_<oid>`; the `$` spelling is a name in that statement alone.
 
 > **IX10 — nothing is reserved.** `index` and `covering` follow the rule the
 > aggregate function names settled: a keyword hashes exactly as the

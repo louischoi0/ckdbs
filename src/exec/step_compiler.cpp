@@ -1,4 +1,7 @@
 #include "kds/exec/step_compiler.hpp"
+
+#include "kds/exec/embedded_key.hpp"
+#include "kds/exec/hashed_key.hpp"
 #include "kds/base/function_ref.hpp"
 #include "kds/exec/set_expr.hpp"
 
@@ -1216,6 +1219,53 @@ const parser::AstValue* EqualityOnColumn(const Step& step, std::uint16_t slot,
         return &pred.rhs.literal;
     }
     return nullptr;
+}
+
+// **The ids an embedded primary key's conjuncts name** (DR-S3e,
+// `embedded_key.hpp`), read as an index probe's are (`IndexChoiceOver`):
+// the leading key columns pinned by an equality with a literal, then an
+// inclusive range on the next. The whole key pinned is one id; anything
+// less is the window of every key that begins so, which is a tuple key
+// range because the ids ascend as the keys do. nullopt where no leading
+// column is pinned or ranged, where a value does not encode, or where no
+// key can match: the conjuncts stay in the residual, which answers them.
+std::optional<EmbeddedKeyWindow> EmbeddedKeyWindowOnStep(const catalog::TableAccess& access,
+                                                         const Step& step, std::uint16_t slot) {
+    const catalog::EmbeddedKeyColumns& key = access.schema.embedded_key;
+    if (key.empty()) return std::nullopt;
+    std::vector<parser::AstValue> prefix;
+    std::size_t at = 0;
+    for (; at < key.size(); ++at) {
+        const parser::AstValue* pinned = EqualityOnColumn(step, slot, key[at]);
+        if (pinned == nullptr) break;
+        prefix.push_back(*pinned);
+    }
+    ColumnBounds bounds;
+    const bool ranged = at < key.size() &&
+                        (bounds = BoundsOnColumn(step, slot, key[at])).low != nullptr &&
+                        bounds.high != nullptr;
+    if (prefix.empty() && !ranged) return std::nullopt;
+    auto window = EmbeddedKeyWindowOf(access.schema, prefix, ranged ? bounds.low : nullptr,
+                                      ranged ? bounds.high : nullptr);
+    return window.ok() ? window.value() : std::nullopt;
+}
+
+// **The home a hashed primary key's conjuncts name** (DR-S3f,
+// `hashed_key.hpp`): every key column pinned by an equality with a literal.
+// nullopt on any other relation, where a column is not pinned, or where a
+// value does not coerce or encode - the index answers then, as it answers
+// whatever the home does not.
+std::optional<std::uint64_t> HashedHomeOnStep(const catalog::TableAccess& access,
+                                              const Step& step, std::uint16_t slot) {
+    if (access.schema.key_form != catalog::kKeyFormHashed) return std::nullopt;
+    const std::vector<std::uint16_t> key = access.PrimaryKeyColumns();
+    std::vector<parser::AstValue> values;
+    for (const std::uint16_t pos : key) {
+        const parser::AstValue* pinned = EqualityOnColumn(step, slot, pos);
+        if (pinned == nullptr) return std::nullopt;
+        values.push_back(*pinned);
+    }
+    return HashedKeyHome(access.schema, key, values);
 }
 
 // Everything about a probe that comes from the index alone: the catalog
@@ -2456,6 +2506,18 @@ Status CompileAssignments(const catalog::TableAccess& access,
                                        std::to_string(a.byte_offset) +
                                        "; it is the tuple's identity, not a field of it");
         }
+        // K2 again, where the key is the Keystone id (DR-Q14): an embedded
+        // key's column is part of the id, which names the row everywhere.
+        // A key that must move is a key over a hidden Keystone - a heap's,
+        // or a btree's whose key does not embed.
+        if (!access.schema.embedded_key.empty() &&
+            access.schema.embedded_key.contains(
+                static_cast<std::uint16_t>(column - access.schema.columns.data()))) {
+            return Status::Unsupported(
+                "primary key column '" + a.col_name + "' cannot be updated at byte " +
+                std::to_string(a.byte_offset) +
+                "; this relation's primary key is its Keystone id, the row's identity");
+        }
 
         CompiledAssignment entry;
         entry.column_no = static_cast<std::size_t>(column - access.schema.columns.data());
@@ -2584,12 +2646,17 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
     return out;
 }
 
-std::optional<std::uint64_t> WriteKeyOf(const Step& where) {
+std::optional<std::uint64_t> WriteKeyOf(const catalog::TableAccess& access, const Step& where) {
     if (!where.sub_chains.empty()) return std::nullopt;
     for (const StepPredicate& pred : where.residual) {
         if (pred.op != parser::CompareOp::kEq) continue;
         if (!IsOwnColumn(pred.lhs, /*slot=*/0) || !IsTupleKey(pred.lhs)) continue;
         if (auto key = TupleKeyBound(pred.rhs); key.has_value()) return key;
+    }
+    // An embedded primary key pinned whole is its row's Keystone id (DR-S3e).
+    if (auto window = EmbeddedKeyWindowOnStep(access, where, /*slot=*/0);
+        window.has_value() && window->lo == window->hi) {
+        return window->lo;
     }
     return std::nullopt;
 }
@@ -2597,6 +2664,39 @@ std::optional<std::uint64_t> WriteKeyOf(const Step& where) {
 std::optional<KeySet> WriteKeySetOf(const Step& where) {
     if (!where.sub_chains.empty()) return std::nullopt;
     return TupleKeySetOf(where, /*slot=*/0);
+}
+
+std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
+                                             const Step& where) {
+    if (!where.sub_chains.empty()) return std::nullopt;
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        // A building index's entries are not complete (CI-R1), and a heap's
+        // Keystone index is the tuple key's own arm (`WriteKeyOf`).
+        if (!ix.unique || ix.building || ix.keystone) continue;
+        WriteIndexKey out;
+        out.index = &ix;
+        out.key.assign(ix.key_width, std::byte{0x00});
+        std::size_t at = 0;
+        bool whole = true;
+        for (std::uint16_t col_pos : ix.keys()) {
+            const catalog::SysColumnRow& col = access.schema.columns[col_pos];
+            const parser::AstValue* value = EqualityOnColumn(where, /*slot=*/0, col_pos);
+            auto width = IndexKeyColumnWidth(col);
+            // A value the encoder refuses is not known to match no row
+            // (CU-Q11's reason): this index is passed over and the walk
+            // answers.
+            if (value == nullptr || !width.ok() || at + width.value() > ix.key_width ||
+                !EncodeIndexKeyColumn(col, *value,
+                                      std::span<std::byte>(out.key).subspan(at, width.value()))
+                     .ok()) {
+                whole = false;
+                break;
+            }
+            at += width.value();
+        }
+        if (whole && at == ix.key_width) return out;
+    }
+    return std::nullopt;
 }
 
 StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
@@ -3503,9 +3603,31 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
         if (step.kind == AccessKind::kScan) {
             const auto key_range =
                 tuple_key && !heap ? TupleKeyRangeOf(step, slot) : std::nullopt;
+            // **An embedded primary key** (DR-S3e), below the Keystone's own
+            // arms and above every other: the key is the Keystone id, so its
+            // whole value is a lookup and a prefix or a range of it a tuple
+            // key range - the tuple key class, by the kinds that class
+            // already has. The conjuncts stay in the residual, so the step
+            // downgraded to a walk answers the same rows. Asked only of a
+            // step no Keystone arm took, so a relation with no such key pays
+            // one test on a walk and none on a keyed read (DR-R9).
+            const auto embedded =
+                tuple_key && !(key_range.has_value() && !key_range->strict)
+                    ? EmbeddedKeyWindowOnStep(rel, step, slot)
+                    : std::nullopt;
             if (key_range.has_value() && !key_range->strict) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
+            } else if (embedded.has_value() && embedded->lo == embedded->hi) {
+                Operand id;
+                id.kind = OperandKind::kLiteral;
+                id.literal.type = parser::ValueType::kInt;
+                id.literal.int_val = static_cast<std::int64_t>(embedded->lo);
+                step.kind = AccessKind::kLookup;
+                step.key = id;
+            } else if (embedded.has_value()) {
+                step.kind = AccessKind::kRange;
+                step.range = RangeBounds{embedded->lo, embedded->hi};
             } else if (auto ix = index ? LiteralIndexChoiceOf(scope, rel, step, slot, pin.name,
                                                               cabin ? &gate : nullptr)
                                        : std::nullopt;
@@ -3521,6 +3643,14 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 step.kind = ix->probe.ranged ? AccessKind::kIndexRange : AccessKind::kIndexProbe;
                 step.key_set = std::move(ix->set);
                 step.index = std::move(ix->probe);
+                // A hashed primary key pinned whole is tried at its home
+                // first (DR-S3f). Asked of an index probe only, so a
+                // relation with no such key pays one test where it probes
+                // an index and none elsewhere.
+                if (rel.schema.key_form == catalog::kKeyFormHashed &&
+                    step.kind == AccessKind::kIndexProbe && !step.key_set.has_value()) {
+                    step.index->home = HashedHomeOnStep(rel, step, slot);
+                }
             } else if (auto cx = index ? CorrelatedIndexProbeOf(scope, rel, step, slot, pin.name)
                                        : std::nullopt;
                        cx.has_value()) {

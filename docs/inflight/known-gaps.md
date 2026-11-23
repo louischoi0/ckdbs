@@ -1760,13 +1760,22 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
   for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
   interleaving state moves with transactions, rollbacks and faults is not
   generated.
-- **The sim harness generates no hidden-Keystone heap.** Verified at
-  `bf289a82` (`sim/workload.cpp:87-95`): since DN-S3 (`bc8c9d97`) a table
-  is a heap one time in two, always with its `id` the declared Keystone,
-  because the oracle reconciles rows by tuple key. A hidden-Keystone heap's
-  surface - the hidden column skipped by `*`, `RETURNING *`, `DESCRIBE`,
-  positional `INSERT` - and its crash recovery are covered at unit level
-  only (`tests/heap_hidden_key_test.cpp`), never by a seeded crash workload.
+- **The sim harness generates one hidden-Keystone relation, with the
+  shapes only, in autocommit.** Since DR-S2 (worktree `dq-cabin-miss-build`,
+  branch `worktree-dr-primary-key`) the shapes' stream creates `k0`, a heap
+  or - one seed in two - a btree, with the primary key `(g, id)` as a
+  unique index over a hidden Keystone, and inserts,
+  updates, deletes and reads it by its whole key and moves its keys
+  (`sim/workload.cpp` `KeyedOp`), the oracle reconciling it by `id`
+  (`sim/loop.cpp` `CheckKeyedWrite`). **Not generated**: a keyed write
+  inside an explicit transaction, a hidden-Keystone heap among the main
+  tables (whose ops issue and name tuple keys, drop, purge and cycle
+  columns), a key of another type, **an embedded key** (its rule differs:
+  a deleted key stays bound and no key moves), and a foreign key naming
+  `k0`. A
+  hidden-Keystone heap's surface - the hidden column skipped by `*`,
+  `RETURNING *`, `DESCRIBE`, positional `INSERT` - stays covered at unit
+  level (`tests/heap_hidden_key_test.cpp`).
 - **`CREATE`/`DROP TRANSITION` inside an explicit transaction commit at the
   statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
   them.
@@ -3597,3 +3606,108 @@ Verified on worktree `sync-stale-records`, branch `worktree-dp-view`, at
   TABLE` or `DROP VIEW` of what it reads (the `IS` against the `X`, DP-Q22
   (b)), and an unfiltered RESTRICT scan meeting another core's half-written
   view (skipped, DP-S1's C4).
+
+## A primary key over the Keystone (DR)
+
+Verified on worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`,
+at `e9df68d0` for what the tree does (DR-S0's census, the order's §1.8) and
+by `bench/v3.5.0/results-dr-s0-premise-v3.5.0-114-ge9df68d02.md` for what it
+costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
+`instructions/v3.2.0/workorder-dr-primary-key-over-keystone.md`.
+
+- **A page by key is a walk on every structure** (DR-Q17): `WHERE key >= x
+  ORDER BY key LIMIT n` is a filtered scan from the head on a btree's tuple
+  key (1.0 ms at 100,000 rows) and a scan and a sort on a heap's Keystone
+  and on any index (5.8 ms to 9.0 ms), because a one-sided bound is a range
+  to no arm of the ladder. Served only behind an equality prefix (CV). Not
+  a primary key's gap, and its own order.
+- **A moved key's old entry is purged only beside a retired slot**
+  (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
+  one, which a reader's residual drops and the unique check passes over.
+  The heap's slot release purges its indexes only when it collected a
+  retired slot, so a relation whose keys move and whose rows are never
+  deleted keeps every old entry: space, and a longer run for the value's
+  next holder. `PURGE INDEX $pkey_<oid>` takes them out when asked
+  (DR-Q21; its cell is the btree form's, `btree_primary_key_test.cpp`) and
+  nothing runs it unasked. The remedy named and not built: the release's
+  index purge run with no retired slot.
+- **A join key enters an index by its leading column only**
+  (`CorrelatedIndexProbeOf`): a join on every column of a composite key
+  probes the first and filters the rest, so its cost follows the first
+  column's run, not the key's.
+- **A multi-column `ON CONFLICT` target is refused by the parser**, so a
+  composite primary key arbitrates no upsert (P2c, its own order,
+  DR-Q5 (a)).
+- **A string key's cost grows with the keys sharing its first 32 bytes**
+  (DR-Q3 (a)): 0.25 us a key of the run on a read and 0.66 us on an insert,
+  1.0 ms and 2.7 ms at a run of 4,096. A limit, stated in the spec.
+- **A write by a unique key is not measured above one core**, nor with two
+  sessions racing one key: its units are the walk's, and the cells are the
+  equivalence and the sim's.
+- **A hashed key's home serves one shape** (DR-S3f): a `SELECT` whose
+  `WHERE` pins every key column by an equality with a literal. A write by
+  the whole key, a `SELECT ... FOR UPDATE`, a join on the whole key and a
+  value list read the index and then the row, as before homes. **So does
+  every `SELECT` inside a read-write transaction**: the home is tried only
+  under a view that is a commit point. `READ COMMITTED`'s statement view
+  would be safe by the argument in `heap-and-tuple.md` §3.1c and is not
+  admitted, because a view does not carry its level; the remedy named and
+  not built is that field.
+- **A row off its home stays off it.** A row whose key moved, a row whose
+  key was inserted again while its deleted row was unpurged, and a row
+  whose home another key took are read by two descents for their lives:
+  nothing moves a row to a home that has since come free (K1: an id is
+  not rebound). A workload that deletes and re-inserts its keys without
+  `PURGE` drifts to the indexed cost.
+- **A hashed relation's `SHOW BUDGET` reads half its ids as issued**: its
+  issue mark starts at `2^47`, above every home, and the budget is read
+  off the mark. The ids left to issue are `2^47` less what was issued.
+- **A hashed relation's walk is in hash order**, and its inserts land
+  across the whole tree: a full scan's emission order is no key's (no
+  contract ever said otherwise), and a relation larger than the pool pays
+  a leaf read an insert where the indexed form appended. Not measured
+  above the pool, above one core, or with two sessions racing one home.
+- **A row may name another key's home**: `INSERT ... (keyidentity, ...)`
+  on a hashed relation places the row at the id it wrote. It costs the
+  home's own key its place and no answer.
+- **An embedded key's join is not keyed.** A join whose key is every
+  column of an embedded primary key is no lookup: the id is computed from
+  literals at compile, and nothing computes it from an outer row. The step
+  takes the statement-local build or a walk. Answers are right
+  (`btree_primary_key_test.cpp`); the cost is not measured.
+- **`ORDER BY` an embedded key is sorted, not elided.** The rows of such a
+  relation are in key order, and a range by the key reads them so, but the
+  elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
+  with no range is a walk and a top-N.
+- **`ON CONFLICT` on a relation whose key is embedded is refused
+  `NotImplemented`**, whatever its target - a column of another unique
+  index included, which the insert path could serve: no arbiter computes
+  the id the row's key encodes to, and the refusal is not narrowed to the
+  targets that need it.
+- **An embedded key's literal prefix on a joined relation is a range per
+  outer row.** `... JOIN e ON e.b = o.x WHERE e.a = 1` takes the tuple key
+  range of `a = 1` on `e`'s step, ahead of a correlated index probe and
+  the statement-local build, and walks that range once per outer row. It
+  is the rank an inclusive tuple key range has always had; answers are
+  right, the cost is not measured.
+- **`PURGE` on an embedded key names a live key by its id**: the refusal
+  of a one-key window over a live row says `tuple key N is live`, not the
+  key the statement wrote.
+- **A btree's indexed key keeps its dead entries until a statement purges
+  them.** A heap's slot release purges its indexes; nothing releases a
+  btree's slots, so `$pkey_<oid>`'s entries of deleted and moved rows wait
+  for `PURGE INDEX $pkey_<oid>`, and its delete-marked rows for `PURGE
+  FROM t WHERE keyidentity ...`.
+- **An embedded relation's `next_id` is its highest key's id plus one**,
+  and `SHOW BUDGET` reads it as ids issued: a named key moves the mark, as
+  on any btree, and here every row names its key.
+- **`WAYSTONE ON` over a read by an embedded key is refused
+  `Unsupported`**: the opt-in asks for a tuple key equality in the
+  statement, and an embedded key's lookup is derived from its columns'.
+  No trail is recorded for such a shape.
+- **Not tested**: a KWP load into either btree form; the embedded form in
+  the sim (`k0` is an indexed key on a heap or a hashed one on a btree);
+  a park and a resume through a key loop after its first descent declined
+  on a heap, the case `WriteWalk::WriteByKeys`' guard is for - the decline
+  itself is `KeySetWriteHoldTest`'s, the park after it needs a failed
+  fetch and a second session together.

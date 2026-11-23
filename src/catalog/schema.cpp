@@ -55,6 +55,50 @@ StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
     return &columns[matches.front()];
 }
 
+std::optional<std::uint32_t> EmbeddedKeyColumnBits(std::uint32_t type_val) {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValBool:
+            return 8;
+        case kTypeValInt16:
+            return 16;
+        case kTypeValInt32:
+        case kTypeValDate:
+            return 32;
+        default:
+            return std::nullopt;
+    }
+}
+
+bool KeyEmbeds(std::span<const SysColumnRow> key_cols) {
+    if (key_cols.empty() || key_cols.size() > kMaxEmbeddedKeyColumns) return false;
+    std::uint32_t total = 0;
+    for (const SysColumnRow& col : key_cols) {
+        // A position the catalog row's one byte cannot name does not embed.
+        if (col.pos == 0 || col.pos > 0xFF) return false;
+        const std::optional<std::uint32_t> bits = EmbeddedKeyColumnBits(col.type_val);
+        if (!bits.has_value()) return false;
+        total += *bits;
+    }
+    return total <= kEmbeddedKeyMaxBits;
+}
+
+std::string PrimaryKeyIndexName(Oid table_oid) { return "$pkey_" + std::to_string(table_oid); }
+
+std::vector<std::uint16_t> TableAccess::PrimaryKeyColumns() const {
+    if (schema.columns.empty()) return {};
+    if (!schema.hidden_keystone()) return {0};
+    // An embedded key has no index: it is the Keystone id (DR-S3e).
+    if (!schema.embedded_key.empty()) {
+        return {schema.embedded_key.begin(), schema.embedded_key.end()};
+    }
+    const std::string name = PrimaryKeyIndexName(oid);
+    for (const IndexRef& ix : indexes) {
+        if (ix.name == name) return {ix.keys().begin(), ix.keys().end()};
+    }
+    return {};
+}
+
 SysColumnRow HiddenTupleKeyColumn() {
     SysColumnRow row{};
     row.pos = 0;

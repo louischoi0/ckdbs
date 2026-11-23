@@ -251,7 +251,8 @@ namespace is *declared* to belong with the namespace's other relations, and
 that declaration is all a namespace says about execution. **Nothing reads
 it today**: D18 keeps affinity as a statistic and an optimizer hint at
 weight 0 (AR0 D10) until AS-E, and no statistic is stored —
-`sys.tables.owner_core` is a reserved word, written 0 and never read. When
+`sys.tables.owner_core` is retired, its bytes another field's since
+superblock 41 (`heap-and-tuple.md` §3.1c). When
 a consumer arrives, the declaration it reads is the namespace a relation
 was created in, which is already on the relation's row. A namespace selects
 no core: every core reads every page, and the `placement` config key is

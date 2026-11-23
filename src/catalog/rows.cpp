@@ -44,6 +44,23 @@ StatusOr<SysObjectRow> SysObjectRow::Decode(std::span<const std::byte> bytes) {
 
 // ---- sys.tables --------------------------------------------------------
 
+Status SysTableRow::CheckKeyForm() const {
+    const bool has_cols = embedded_key_cols[0] != 0;
+    // Positions are written first to last with 0 past the last: a position
+    // after a 0 is no key this build wrote.
+    bool gap = false;
+    for (std::size_t i = 1; i < embedded_key_cols.size(); ++i) {
+        gap = gap || (embedded_key_cols[i] != 0 && embedded_key_cols[i - 1] == 0);
+    }
+    if (key_form <= kKeyFormHashed && has_cols == (key_form == kKeyFormEmbedded) && !gap) {
+        return Status::OK();
+    }
+    return Status::Corruption("sys.tables row for oid " + std::to_string(oid) +
+                              " carries key form " + std::to_string(key_form) +
+                              (has_cols ? " with" : " without") +
+                              " embedded key columns, which this build never writes");
+}
+
 std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::array<std::byte, kOnDiskSize> buf{};
     std::byte* base = buf.data();
@@ -54,7 +71,9 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
     std::memcpy(base + kNextIdOffset, &next_id, sizeof(next_id));
     std::memcpy(base + kVarHeapPageIdOffset, &varheap_page_id, sizeof(varheap_page_id));
-    std::memcpy(base + kRetiredKeyOrderOffset, &retired_key_order, sizeof(retired_key_order));
+    std::memcpy(base + kEmbeddedKeyColsOffset, embedded_key_cols.data(),
+                embedded_key_cols.size());
+    std::memcpy(base + kKeyFormOffset, &key_form, sizeof(key_form));
     std::memcpy(base + kAnchorPageIdOffset, &anchor_page_id, sizeof(anchor_page_id));
     std::memcpy(base + kSpareSlotsOffset, &spare_slots, sizeof(spare_slots));
     return buf;
@@ -73,8 +92,14 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     row.clustered_type = static_cast<ClusteredType>(ct);
     std::memcpy(&row.next_id, base + kNextIdOffset, sizeof(row.next_id));
     std::memcpy(&row.varheap_page_id, base + kVarHeapPageIdOffset, sizeof(row.varheap_page_id));
-    std::memcpy(&row.retired_key_order, base + kRetiredKeyOrderOffset,
-                sizeof(row.retired_key_order));
+    std::memcpy(row.embedded_key_cols.data(), base + kEmbeddedKeyColsOffset,
+                row.embedded_key_cols.size());
+    std::memcpy(&row.key_form, base + kKeyFormOffset, sizeof(row.key_form));
+    // **Not checked here** (`CheckKeyForm`): every insert that names or is
+    // issued an id decodes the `sys.tables` rows before its relation's
+    // (`ForFirstRow`), so this function is on each inserted row's path once
+    // a row passed, and a relation with no such key owes it nothing
+    // (DR-R9). The form is checked where a relation is loaded for use.
     std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
     std::memcpy(&row.spare_slots, base + kSpareSlotsOffset, sizeof(row.spare_slots));
     return row;

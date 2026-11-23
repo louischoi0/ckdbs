@@ -38,7 +38,11 @@ Decisions fixed here:
     reclaims nothing.
 - **K2 — Immutable.** A tuple's Keystone id never changes after
   insert. An UPDATE that targets the super column is **Unsupported**
-  (hard rejection at compile, no slow path).
+  (hard rejection at compile, no slow path). **So is one that targets a
+  column of an embedded primary key** (DR-S3e, `heap-and-tuple.md` §3.1c):
+  there the id is the key's code, and the columns are the id spelled out.
+  A primary key that is a unique index over a hidden Keystone is not the
+  id, and its value may change (`heap-and-tuple.md` §3.1b).
 - **K3 — No density promise, and order only for issued keys within one
   relation.** Gaps are legal and expected (bump-ahead recovery, aborted
   inserts); nothing may rely on ids being

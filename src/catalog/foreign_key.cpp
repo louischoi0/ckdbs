@@ -18,17 +18,16 @@ Status CheckForeignKeyDeclaration(const TableAccess& parent, const SysColumnRow&
         return Status::InvalidArgument("column '" + column +
                                        "' cannot hold a Keystone id, so it cannot reference one");
     }
-    if (parent.schema.hidden_keystone()) {
-        // BZ-R7: the child's column holds the parent's tuple key (F1), and a
-        // heap's tuple key is hidden - no statement reads or names it, so no
-        // client could write a value this constraint would accept.
-        return Status::Unsupported(
-            "the parent relation is a heap: its tuple key is hidden, so no child value could "
-            "name a parent row - reference a relation with a declared tuple key");
-    }
-    // DN-Q5 (a): a heap whose Keystone is its declared `int64` primary key
-    // is a parent as a btree is - F1's Keystone, found through the Keystone
-    // index (`exec::LocateRow`); a hidden Keystone's heap is refused above.
+    // **A parent whose Keystone is hidden is a parent as any other is**
+    // (DR-S3c, DR-Q4 (a)): F1 is unchanged - the child's column holds the
+    // parent's Keystone id - and a client reads that id by name, at the
+    // parent's insert (`RETURNING keyidentity`) and by its key afterwards
+    // (`SELECT keyidentity`), which is what BZ-R7's refusal said no
+    // statement could do. A reference by the parent's primary key *value*
+    // is not this and is not built: that value can move (DR-R3).
+    //
+    // DN-Q5 (a): a heap is a parent as a btree is - F1's Keystone, found
+    // through the Keystone index (`exec::LocateRow`).
     if (parent.clustered_type != ClusteredType::kBtree &&
         parent.clustered_type != ClusteredType::kHeap) {
         // A system relation's catalog chain has no descent to check against.

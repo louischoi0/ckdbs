@@ -3627,9 +3627,19 @@ StatusOr<PurgeStmt> Parser::ParsePurge() {
         lexer_.Next();
         stmt.index = true;
         stmt.table_byte_offset = lexer_.Peek().byte_offset;
-        auto name = ParseIdent();
-        if (!name.ok()) return name.status();
-        stmt.table_name = std::move(name.value());
+        // **An engine-named index is named as `sys.indexes` shows it**
+        // (DR-Q21): `$pkey_<oid>`, a primary key's, or `$keystone_<oid>`, a
+        // heap's. The `$` spelling lexes as a parameter, which every other
+        // production refuses; here, and only here, it is the name. A btree's
+        // indexes are purged by nothing unasked (DD), and no statement could
+        // otherwise name the one `CREATE TABLE` built.
+        if (lexer_.Peek().type == TokenType::kNamedParam) {
+            stmt.table_name = "$" + std::string(lexer_.Next().text);
+        } else {
+            auto name = ParseIdent();
+            if (!name.ok()) return name.status();
+            stmt.table_name = std::move(name.value());
+        }
         ConsumeOptionalSemicolon();
         if (lexer_.Peek().type != TokenType::kEof) {
             return Status::InvalidArgument("PURGE INDEX takes an index name and nothing after it" +

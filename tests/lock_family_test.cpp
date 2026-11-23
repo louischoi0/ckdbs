@@ -2806,6 +2806,37 @@ TEST_F(MidWalkWaitTest, AListWhoseFirstValueIsHeldWaitsHavingWrittenNothingAndRu
     EXPECT_EQ(Local("SELECT id, v FROM tb WHERE v > 0"), "id,v\\n3,10\\n5,1");
 }
 
+// DR-S3a: a write that names a unique key whole descends by the key's run
+// (`WriteWalk::WriteKeys`) and meets a held row as the list does. A unique
+// key names at most one row a statement can write, so the row it parks on
+// is the first it would have written: it waits having written nothing and
+// is run again under a fresh snapshot.
+TEST_F(MidWalkWaitTest, AWriteByAUniqueKeyWaitsOnItsHeldRowAndRunsAgain) {
+    ASSERT_EQ(Local("CREATE TABLE uk (id int64, u int64, v int64) BTREE").rfind("CREATED", 0), 0u);
+    ASSERT_EQ(Local("INSERT INTO uk VALUES (1, 10, 0), (2, 20, 0), (3, 30, 0)").rfind("INSERTED", 0),
+              0u);
+    ASSERT_EQ(Local("CREATE UNIQUE INDEX uk_u ON uk (u)").rfind("CREATED INDEX", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(dispatcher_->Dispatch("UPDATE uk SET v = 9 WHERE id = 2", &holder)
+                  .response.rfind("UPDATED", 0),
+              0u);
+
+    Session w;
+    Started keyed = Start("UPDATE uk SET v = v + 1 WHERE u = 20", w);
+    Pump();
+    ASSERT_FALSE(*keyed.done) << "the keyed write answered instead of waiting: "
+                              << keyed.out->response;
+
+    ASSERT_EQ(dispatcher_->Dispatch("COMMIT", &holder).response.rfind("COMMIT", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*keyed.done) << "the wait never ended";
+    EXPECT_EQ(keyed.out->response.rfind("UPDATED 1", 0), 0u) << keyed.out->response;
+    // The holder's 9, then this statement's own increment: written once.
+    EXPECT_EQ(Local("SELECT id, v FROM uk WHERE v > 0"), "id,v\\n2,10");
+}
+
 // CU-S3b: the same park with a conjunct beside the list. The held row's
 // head fails `v < 5` and the version the statement's snapshot sees passes
 // it (F4), so the row is wanted and the statement parks there. `v < 5`

@@ -380,6 +380,16 @@ struct IndexProbe {
     // single authority for the key source: the plan printer renders it,
     // and `Step::key` keeps its two-kind contract.
     std::optional<ColumnRef> key_from;
+
+    // **A hashed primary key's home** (DR-S3f, `exec/hashed_key.hpp`): set
+    // on a literal `kIndexProbe` over a hashed relation whose residual pins
+    // every primary key column by an equality, whichever index the ladder
+    // chose. The executor descends to this tuple key first and, where the
+    // row there passes the step's residual, is done: the residual holds the
+    // key's equalities, the key is unique, so no other row can pass it. Any
+    // other outcome runs the probe as if this were unset (DR-R11) - an
+    // annotation over the probe, as the probe is over the residual.
+    std::optional<std::uint64_t> home;
 };
 
 // The walked-join annotation (docs/spec/join-inner-build.md §5): the

@@ -104,13 +104,22 @@ the relation is created, so a refusable declaration writes nothing
 foreign key comes through — the argument `CreateCabin` already makes
 about `NO CABIN`.
 
-**A heap parent whose Keystone is hidden is refused, `Unsupported`** at
-`REFERENCES` (`catalog::CheckForeignKeyDeclaration`). F1 puts the
-reference on the parent's Keystone id, and that heap's Keystone is the
-engine's hidden column (`heap-and-tuple.md` §3.1b). **A heap whose
-Keystone is its declared single `int64` primary key is a parent as a btree
-relation is** (DN-Q5 (a)), its row found through its Keystone index. **A heap child is
-admitted**: its foreign-key column is a declared column like any other.
+**A relation whose Keystone is hidden is a parent as any other is**
+(DR-S3c, DR-Q4 (a); `catalog::CheckForeignKeyDeclaration`). F1 is
+unchanged: the child's column holds the parent's Keystone id, which such
+a relation names `keyidentity` (`heap-and-tuple.md` §3.1b) - read at the
+parent's insert by `RETURNING keyidentity` and by its key afterwards
+(`SELECT keyidentity FROM p WHERE <the key>`). So a parent with a declared
+primary key that is not its Keystone is referenced by its Keystone, never
+by its key's value: **the value may move under its children** (an
+`UPDATE` of a key column changes no reference), and a value deleted and
+inserted again names another parent, which no child of the first
+references. A reference by the key's value is not built (DR-R3). The
+child's value is an id the engine issued, so a load that carries its own
+parent keys reads each parent's `keyidentity` first. **A heap is a parent
+as a btree relation is** (DN-Q5 (a)), its row found through its Keystone
+index. **A heap child is admitted**: its foreign-key column is a declared
+column like any other.
 A system relation as parent is refused `InvalidArgument`.
 
 **A self-referencing key is refused, `NotImplemented`**

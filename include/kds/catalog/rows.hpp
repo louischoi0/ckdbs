@@ -82,6 +82,22 @@ static_assert(offsetof(SysObjectRow, name) == SysObjectRow::kNameOffset);
 
 // ---- sys.tables -----------------------------------------------------------
 
+// `SysTableRow::key_form`'s values, and how many columns an embedded key may
+// have: its positions are one byte each in the four bytes the row has for
+// them. Four is also a unique index's cap (`kMaxIndexKeyColumns`), so no
+// primary key has more.
+//
+// `kKeyFormHashed` (DR-S3f): the key is the unique index `$pkey_<oid>` over a
+// hidden Keystone, and a row's id is its key's home where that is free
+// (`exec/hashed_key.hpp`), else an issued id at or above
+// `kHashedKeyIssuedBase` - where such a relation's `next_id` starts, so no
+// issued id is ever a home.
+inline constexpr std::uint8_t kKeyFormIssued = 0;
+inline constexpr std::uint8_t kKeyFormEmbedded = 1;
+inline constexpr std::uint8_t kKeyFormHashed = 2;
+inline constexpr std::uint64_t kHashedKeyIssuedBase = std::uint64_t{1} << 47;
+inline constexpr std::size_t kMaxEmbeddedKeyColumns = 4;
+
 struct SysTableRow {
     Oid oid;
     Oid namespace_oid;
@@ -92,6 +108,17 @@ struct SysTableRow {
     // before keeps a stale name there that nothing reads.
     PageId desc_page_id;
     ClusteredType clustered_type;
+
+    // **How the relation's Keystone id is chosen** (DR-S3e, DR-R12; fixed at
+    // `CREATE TABLE`): `kKeyFormIssued` - a row names its id or the engine
+    // issues one, every relation's until superblock 41 - or
+    // `kKeyFormEmbedded` - the id is the code of the row's primary key
+    // columns (`exec/embedded_key.hpp`) - or `kKeyFormHashed` - the id is
+    // the key's home where free, else issued (`exec/hashed_key.hpp`). The byte was the retired key-order
+    // byte, written 0 since BD-R8's superblock 20, so every row from before
+    // reads as `kKeyFormIssued`. `CheckKeyForm` refuses any other value.
+    std::uint8_t key_form = kKeyFormIssued;
+
     // Next Keystone id this relation will issue. The relation's tuple key is
     // system-generated and autoincrement (heap-and-tuple.md section 4,
     // CLAUDE.md invariant 10), and the sequence has to be *persistent*
@@ -110,18 +137,6 @@ struct SysTableRow {
     // would be a fact changing without DDL, which catalog_cache.hpp's rule
     // says may not be cached, and this one is cached on every TableAccess.
     PageId varheap_page_id;
-
-    // **No `owner_core`** (AT-S9, D17). The four bytes after
-    // `varheap_page_id` are `kReservedOffset`: written 0, never read, so the
-    // row keeps its size. Catalog rows are fixed-length tuples (invariant
-    // 13), so removing the bytes would be a rewrite of every row at mount
-    // rather than a format event. Nothing on this row names a core.
-
-    // **The retired key-order byte**: written 0 and never read. BB-R11's
-    // mount refusal of a relation still marked out of key order read it
-    // until BD-R8's superblock 20, which no volume holding such a relation
-    // can carry (`superblock.hpp`).
-    std::uint8_t retired_key_order = 0;
 
     // The relation's anchor page (storage/anchor_page.hpp; PW2-1,
     // workplan-peer-writer.md §7a), or kInvalidPageId for a **system**
@@ -145,6 +160,16 @@ struct SysTableRow {
     // before slots existed. Appended after the anchor (superblock 25).
     std::uint16_t spare_slots = 0;
 
+    // **The embedded key's columns** (DR-S3e, superblock 41): where
+    // `key_form` is `kKeyFormEmbedded`, the positions of the primary key's
+    // columns, in key order, one byte each, 0 past the last - position 0 is
+    // the hidden Keystone, never a key column. All 0 for every other
+    // relation. The four bytes after `varheap_page_id`
+    // (`kEmbeddedKeyColsOffset`) were the retired `owner_core` word (AT-S9,
+    // D17), written 0 and never read, so every row from before reads as no
+    // embedded key. Nothing on this row names a core.
+    std::array<std::uint8_t, kMaxEmbeddedKeyColumns> embedded_key_cols{};
+
     static constexpr std::size_t kOidOffset = 0;
     static constexpr std::size_t kNamespaceOidOffset = 8;
     static constexpr std::size_t kRetiredNameOffset = 16;
@@ -154,14 +179,21 @@ struct SysTableRow {
     // streams read through memcpy, never overlaid on the buffer.
     static constexpr std::size_t kNextIdOffset = kClusteredTypeOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kVarHeapPageIdOffset = kNextIdOffset + sizeof(std::uint64_t);
-    static constexpr std::size_t kReservedOffset = kVarHeapPageIdOffset + sizeof(PageId);
-    static constexpr std::size_t kRetiredKeyOrderOffset = kReservedOffset + sizeof(std::uint32_t);
-    static constexpr std::size_t kAnchorPageIdOffset = kRetiredKeyOrderOffset + sizeof(std::uint8_t);
+    static constexpr std::size_t kEmbeddedKeyColsOffset = kVarHeapPageIdOffset + sizeof(PageId);
+    static constexpr std::size_t kKeyFormOffset = kEmbeddedKeyColsOffset + kMaxEmbeddedKeyColumns;
+    static constexpr std::size_t kAnchorPageIdOffset = kKeyFormOffset + sizeof(std::uint8_t);
     static constexpr std::size_t kSpareSlotsOffset = kAnchorPageIdOffset + sizeof(PageId);
     static constexpr std::size_t kOnDiskSize = kSpareSlotsOffset + sizeof(std::uint16_t);
 
     std::array<std::byte, kOnDiskSize> Encode() const;
     static StatusOr<SysTableRow> Decode(std::span<const std::byte> bytes);
+
+    // **A key form this build never writes is `Corruption`** (DR-R12): a
+    // form it does not know, or key columns without the form that carries
+    // them. Asked where a relation's row is loaded for use
+    // (`Catalog::InitTableAccess`, `BuildSchemaFromColumns`), never in
+    // `Decode`, which the insert path runs over rows that are not its own.
+    Status CheckKeyForm() const;
 };
 
 // **The on-disk layout, pinned** (AT-S9, AT-R7). The row is a packed byte
@@ -173,8 +205,8 @@ static_assert(SysTableRow::kDescPageIdOffset == 80);
 static_assert(SysTableRow::kClusteredTypeOffset == 84);
 static_assert(SysTableRow::kNextIdOffset == 85);
 static_assert(SysTableRow::kVarHeapPageIdOffset == 93);
-static_assert(SysTableRow::kReservedOffset == 97, "the retired owner_core word; its bytes stay");
-static_assert(SysTableRow::kRetiredKeyOrderOffset == 101, "the retired key-order byte; it stays");
+static_assert(SysTableRow::kEmbeddedKeyColsOffset == 97, "where the owner_core word was");
+static_assert(SysTableRow::kKeyFormOffset == 101, "where the key-order byte was");
 static_assert(SysTableRow::kAnchorPageIdOffset == 102);
 static_assert(SysTableRow::kSpareSlotsOffset == 106);
 static_assert(SysTableRow::kOnDiskSize == 108);
@@ -182,8 +214,10 @@ static_assert(SysTableRow::kOnDiskSize == 108);
 static_assert(offsetof(SysTableRow, oid) == SysTableRow::kOidOffset);
 static_assert(offsetof(SysTableRow, namespace_oid) == SysTableRow::kNamespaceOidOffset);
 // No field from `desc_page_id` on gets an offsetof assert: the retired name
-// and the reserved word have no member, and everything from `next_id` on
-// sits behind the compiler's alignment padding, so its in-memory offset
+// has no member, the members are not in on-disk order (`key_form` and
+// `embedded_key_cols` sit where the struct had padding, so the row a
+// catalog scan copies did not grow for them), and everything from `next_id`
+// on sits behind the compiler's alignment padding, so its in-memory offset
 // and its on-disk offset are different numbers by design. Encode/Decode
 // address the buffer through the constants above, field by field, which is
 // what makes that difference harmless - this file's discipline, stated at

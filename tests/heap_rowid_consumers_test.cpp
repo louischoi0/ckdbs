@@ -56,8 +56,10 @@ TEST_F(HeapConsumersTest, ADeclaredKeystoneHeapIsAForeignKeyParent) {
     Ok("DELETE FROM xfer WHERE id = 1", "DELETED");
     Ok("DELETE FROM acct WHERE id = 10", "DELETED");
 
+    // A hidden Keystone's heap is a parent too since DR-S3c, by its
+    // `keyidentity` (`primary_key_test.cpp`).
     Ok("CREATE TABLE hid (v int64) HEAP", "CREATED");
-    Refused("CREATE TABLE child (id int64, hid_id int64 REFERENCES hid)", "heap");
+    Ok("CREATE TABLE child (id int64, hid_id int64 REFERENCES hid)", "CREATED");
 }
 
 // DN-Q6 (a): PURGE by Keystone on a declared-Keystone heap frees the key,

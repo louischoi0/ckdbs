@@ -1,0 +1,1766 @@
+{
+ "binary": "/home/louis/dr-bench/s0/kds_server_e9df68d0",
+ "sha256_16": "e33a55473f81fade",
+ "args": {
+  "bin": "/home/louis/dr-bench/s0/kds_server_e9df68d0",
+  "workdir": "/home/louis/dr-bench/s0f/w",
+  "out": "/home/louis/dr-bench/s0f/heap.json",
+  "measure": "heap",
+  "forms": "ref_btree,ref_heap,nopk_heap,int32,int32x2,varchar64,mixed4",
+  "arms": "F0,F2e,P1e",
+  "runs": "1,16,256,4096",
+  "rows": 100000,
+  "reads": 20000,
+  "ranges": 1000,
+  "updates": 500,
+  "prefix_rows": 8192,
+  "prefix_reads": 4000,
+  "rounds": 3,
+  "frames": 131072,
+  "port": 15881,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "heartbeat": "/home/louis/dr-bench/s0f/run.beat"
+ },
+ "host_before": {
+  "loadavg": "0.84 1.28 1.57",
+  "cc1plus": "0"
+ },
+ "started_utc": "2026-11-23 05:19:21",
+ "cells": [
+  {
+   "arm": "ref_btree",
+   "round": 0,
+   "host": {
+    "loadavg": "0.77 1.26 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.1,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 3.506,
+    "wall_us_row": 3.638,
+    "rows_s": 274895
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 23.4,
+    "wall_us": 41.08,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 36.3,
+     "p25": 38.8,
+     "p50": 39.4,
+     "p95": 45.9,
+     "p99": 59.6
+    }
+   },
+   "m1_step": "step 0 Lookup t opens=1 examined=1 matched=1 sel=100% pages=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 46.32,
+    "wall_us": 77.53,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 68.2,
+     "p25": 72.6,
+     "p50": 74.9,
+     "p95": 90.6,
+     "p99": 138.0
+    }
+   },
+   "m3_range_step": "step 0 Range t opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 1013.88,
+    "wall_us": 1098.66,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 105.8,
+     "p25": 640.6,
+     "p50": 1084.0,
+     "p95": 1960.6,
+     "p99": 2143.7
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=75565 matched=100 sel=0% pages=456",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 38.06,
+    "wall_us": 68.38,
+    "lat_us": {
+     "ops": 200,
+     "p0": 62.4,
+     "p25": 64.3,
+     "p50": 65.4,
+     "p95": 84.9,
+     "p99": 100.1
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100 matched=100 sel=100% pages=1",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 27.12,
+    "wall_us": 44.23,
+    "lat_us": {
+     "ops": 500,
+     "p0": 37.7,
+     "p25": 39.7,
+     "p50": 40.9,
+     "p95": 54.6,
+     "p99": 96.3
+    }
+   },
+   "m4_move_refused": "tuple key column 'id' cannot be updated at byte 13; it is the tuple's identity, not a field of it"
+  },
+  {
+   "arm": "ref_heap",
+   "round": 0,
+   "host": {
+    "loadavg": "0.80 1.25 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 10.1,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 7.689,
+    "wall_us_row": 7.823,
+    "rows_s": 127829
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 25.3,
+    "wall_us": 43.16,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 37.1,
+     "p25": 40.1,
+     "p50": 41.2,
+     "p95": 50.5,
+     "p99": 60.6
+    }
+   },
+   "m1_step": "step 0 Lookup t opens=1 examined=1 matched=1 sel=100% pages=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 67.41,
+    "wall_us": 97.88,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 90.5,
+     "p25": 93.3,
+     "p50": 94.6,
+     "p95": 115.4,
+     "p99": 131.3
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 5821.02,
+    "wall_us": 5932.51,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2050.8,
+     "p25": 4021.0,
+     "p50": 6043.5,
+     "p95": 9232.7,
+     "p99": 9528.5
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=98134 sel=98% pages=603",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 8197.19,
+    "wall_us": 8310.87,
+    "lat_us": {
+     "ops": 200,
+     "p0": 8084.3,
+     "p25": 8192.0,
+     "p50": 8263.4,
+     "p95": 8614.6,
+     "p99": 8969.3
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100000 matched=100000 sel=100% pages=603",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 31.47,
+    "wall_us": 48.19,
+    "lat_us": {
+     "ops": 500,
+     "p0": 38.2,
+     "p25": 42.9,
+     "p50": 45.7,
+     "p95": 56.5,
+     "p99": 142.6
+    }
+   },
+   "m4_move_refused": "tuple key column 'id' cannot be updated at byte 13; it is the tuple's identity, not a field of it"
+  },
+  {
+   "arm": "nopk_heap",
+   "round": 0,
+   "host": {
+    "loadavg": "0.82 1.24 1.55",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 1.3,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 7.128,
+    "wall_us_row": 7.282,
+    "rows_s": 137332
+   },
+   "settle_s": 0.5
+  },
+  {
+   "arm": "int32",
+   "round": 0,
+   "host": {
+    "loadavg": "0.86 1.23 1.54",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 16.6,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 11.737,
+    "wall_us_row": 12.514,
+    "rows_s": 79908
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 26.49,
+    "wall_us": 44.07,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 38.7,
+     "p25": 41.7,
+     "p50": 42.8,
+     "p95": 49.9,
+     "p99": 59.0
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 89.98,
+    "wall_us": 120.95,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 106.1,
+     "p25": 115.0,
+     "p50": 117.5,
+     "p95": 137.5,
+     "p99": 166.6
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 6875.86,
+    "wall_us": 6990.84,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2200.1,
+     "p25": 5140.5,
+     "p50": 7502.1,
+     "p95": 10079.3,
+     "p99": 10478.4
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=25655 sel=25% pages=654",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 79.52,
+    "wall_us": 113.79,
+    "lat_us": {
+     "ops": 200,
+     "p0": 97.3,
+     "p25": 99.7,
+     "p50": 101.2,
+     "p95": 186.2,
+     "p99": 393.9
+    }
+   },
+   "m3_bare_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=331 index_resolved=100",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 6483.75,
+    "wall_us": 6562.66,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6353.6,
+     "p25": 6482.4,
+     "p50": 6536.7,
+     "p95": 6720.8,
+     "p99": 7091.2
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 6585.46,
+    "wall_us": 6665.0,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6402.5,
+     "p25": 6513.7,
+     "p50": 6577.8,
+     "p95": 7168.1,
+     "p99": 8038.3
+    }
+   }
+  },
+  {
+   "arm": "int32x2",
+   "round": 0,
+   "host": {
+    "loadavg": "1.32 1.32 1.57",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 10.6,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 11.935,
+    "wall_us_row": 12.324,
+    "rows_s": 81143
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 27.45,
+    "wall_us": 45.26,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 39.8,
+     "p25": 42.7,
+     "p50": 43.6,
+     "p95": 51.4,
+     "p99": 62.0
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 96.78,
+    "wall_us": 127.19,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 111.9,
+     "p25": 120.2,
+     "p50": 123.4,
+     "p95": 145.8,
+     "p99": 171.4
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 181.95,
+    "wall_us": 233.02,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 112.1,
+     "p25": 180.7,
+     "p50": 228.5,
+     "p95": 338.5,
+     "p99": 384.0
+    }
+   },
+   "m3_page_step": "step 0 IndexProbe t opens=1 examined=124 matched=100 sel=80% pages=127 index_scanned=233 index_resolved=124",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 73.7,
+    "wall_us": 104.62,
+    "lat_us": {
+     "ops": 200,
+     "p0": 96.3,
+     "p25": 99.1,
+     "p50": 101.0,
+     "p95": 121.1,
+     "p99": 172.1
+    }
+   },
+   "m3_bare_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=191 index_resolved=100",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7296.22,
+    "wall_us": 7373.85,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7056.2,
+     "p25": 7240.7,
+     "p50": 7306.3,
+     "p95": 7982.4,
+     "p99": 8539.5
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7253.2,
+    "wall_us": 7329.14,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7040.7,
+     "p25": 7171.4,
+     "p50": 7239.0,
+     "p95": 7978.8,
+     "p99": 8666.1
+    }
+   }
+  },
+  {
+   "arm": "varchar64",
+   "round": 0,
+   "host": {
+    "loadavg": "1.27 1.31 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 22.8,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 12.41,
+    "wall_us_row": 14.122,
+    "rows_s": 70811
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 26.56,
+    "wall_us": 44.15,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 38.7,
+     "p25": 41.6,
+     "p50": 42.5,
+     "p95": 51.6,
+     "p99": 59.1
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 99.62,
+    "wall_us": 131.78,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 102.6,
+     "p25": 120.6,
+     "p50": 124.9,
+     "p95": 165.8,
+     "p99": 220.7
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 9027.58,
+    "wall_us": 9147.0,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2605.6,
+     "p25": 6170.7,
+     "p50": 9587.9,
+     "p95": 13958.9,
+     "p99": 14879.5
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=28030 sel=28% pages=1389",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 12194.23,
+    "wall_us": 12316.1,
+    "lat_us": {
+     "ops": 200,
+     "p0": 11982.4,
+     "p25": 12162.1,
+     "p50": 12269.4,
+     "p95": 12753.8,
+     "p99": 13326.1
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100000 matched=100000 sel=100% pages=1389",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7919.73,
+    "wall_us": 7999.41,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7410.9,
+     "p25": 7618.6,
+     "p50": 7791.1,
+     "p95": 9252.3,
+     "p99": 13263.1
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7878.93,
+    "wall_us": 7959.68,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7413.8,
+     "p25": 7712.2,
+     "p50": 7808.6,
+     "p95": 8954.1,
+     "p99": 10495.9
+    }
+   }
+  },
+  {
+   "arm": "mixed4",
+   "round": 0,
+   "host": {
+    "loadavg": "1.44 1.35 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 13.0,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 12.903,
+    "wall_us_row": 14.403,
+    "rows_s": 69431
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 30.7,
+    "wall_us": 48.61,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 43.3,
+     "p25": 46.0,
+     "p50": 46.9,
+     "p95": 55.2,
+     "p99": 66.6
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 9554.37,
+    "wall_us": 9646.6,
+    "lat_us": {
+     "ops": 500,
+     "p0": 9162.8,
+     "p25": 9368.9,
+     "p50": 9462.5,
+     "p95": 10273.4,
+     "p99": 13246.0
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 9761.13,
+    "wall_us": 9835.19,
+    "lat_us": {
+     "ops": 500,
+     "p0": 9163.8,
+     "p25": 9387.1,
+     "p50": 9592.8,
+     "p95": 11227.8,
+     "p99": 14924.5
+    }
+   }
+  },
+  {
+   "arm": "ref_btree",
+   "round": 1,
+   "host": {
+    "loadavg": "1.40 1.34 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.1,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 3.588,
+    "wall_us_row": 3.728,
+    "rows_s": 268238
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 22.93,
+    "wall_us": 40.77,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 36.4,
+     "p25": 38.7,
+     "p50": 39.4,
+     "p95": 45.4,
+     "p99": 53.0
+    }
+   },
+   "m1_step": "step 0 Lookup t opens=1 examined=1 matched=1 sel=100% pages=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 46.2,
+    "wall_us": 75.8,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 68.5,
+     "p25": 72.2,
+     "p50": 74.8,
+     "p95": 83.0,
+     "p99": 99.1
+    }
+   },
+   "m3_range_step": "step 0 Range t opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 990.58,
+    "wall_us": 1072.49,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 102.3,
+     "p25": 591.0,
+     "p50": 1028.9,
+     "p95": 1967.5,
+     "p99": 2191.3
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=14729 matched=100 sel=0% pages=89",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 37.5,
+    "wall_us": 69.37,
+    "lat_us": {
+     "ops": 200,
+     "p0": 62.1,
+     "p25": 64.1,
+     "p50": 65.1,
+     "p95": 77.5,
+     "p99": 211.0
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100 matched=100 sel=100% pages=1",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 24.95,
+    "wall_us": 41.22,
+    "lat_us": {
+     "ops": 500,
+     "p0": 36.6,
+     "p25": 38.9,
+     "p50": 39.6,
+     "p95": 45.8,
+     "p99": 63.5
+    }
+   },
+   "m4_move_refused": "tuple key column 'id' cannot be updated at byte 13; it is the tuple's identity, not a field of it"
+  },
+  {
+   "arm": "mixed4",
+   "round": 1,
+   "host": {
+    "loadavg": "1.34 1.33 1.55",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 12.9,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 13.099,
+    "wall_us_row": 14.539,
+    "rows_s": 68781
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 30.43,
+    "wall_us": 48.47,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 43.2,
+     "p25": 45.9,
+     "p50": 46.8,
+     "p95": 55.7,
+     "p99": 67.0
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 9551.2,
+    "wall_us": 9627.69,
+    "lat_us": {
+     "ops": 500,
+     "p0": 9132.4,
+     "p25": 9383.3,
+     "p50": 9471.2,
+     "p95": 10346.4,
+     "p99": 11477.3
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 9556.52,
+    "wall_us": 9630.78,
+    "lat_us": {
+     "ops": 500,
+     "p0": 9148.3,
+     "p25": 9373.1,
+     "p50": 9457.2,
+     "p95": 10497.6,
+     "p99": 12868.8
+    }
+   }
+  },
+  {
+   "arm": "varchar64",
+   "round": 1,
+   "host": {
+    "loadavg": "1.43 1.35 1.55",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 22.6,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 12.381,
+    "wall_us_row": 14.054,
+    "rows_s": 71154
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 25.96,
+    "wall_us": 43.49,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 38.6,
+     "p25": 41.1,
+     "p50": 41.9,
+     "p95": 49.0,
+     "p99": 60.8
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 93.96,
+    "wall_us": 123.71,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 104.0,
+     "p25": 118.0,
+     "p50": 121.1,
+     "p95": 138.5,
+     "p99": 162.3
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 9040.97,
+    "wall_us": 9165.9,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2697.7,
+     "p25": 6299.3,
+     "p50": 9564.7,
+     "p95": 13955.5,
+     "p99": 14782.4
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=34395 sel=34% pages=1389",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 12162.17,
+    "wall_us": 12284.88,
+    "lat_us": {
+     "ops": 200,
+     "p0": 11877.6,
+     "p25": 12067.6,
+     "p50": 12175.2,
+     "p95": 12957.7,
+     "p99": 15609.1
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100000 matched=100000 sel=100% pages=1389",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7690.16,
+    "wall_us": 7770.36,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7417.7,
+     "p25": 7650.0,
+     "p50": 7728.7,
+     "p95": 8011.2,
+     "p99": 8233.7
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7832.26,
+    "wall_us": 7910.75,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7413.9,
+     "p25": 7657.0,
+     "p50": 7793.1,
+     "p95": 8717.5,
+     "p99": 9372.9
+    }
+   }
+  },
+  {
+   "arm": "int32x2",
+   "round": 1,
+   "host": {
+    "loadavg": "1.51 1.37 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 10.6,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 12.084,
+    "wall_us_row": 13.262,
+    "rows_s": 75405
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 27.18,
+    "wall_us": 44.68,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 39.7,
+     "p25": 42.6,
+     "p50": 43.5,
+     "p95": 49.5,
+     "p99": 58.3
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 99.22,
+    "wall_us": 132.1,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 112.9,
+     "p25": 120.6,
+     "p50": 123.7,
+     "p95": 162.3,
+     "p99": 320.6
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 169.14,
+    "wall_us": 213.42,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 107.6,
+     "p25": 163.6,
+     "p50": 209.5,
+     "p95": 311.4,
+     "p99": 364.6
+    }
+   },
+   "m3_page_step": "step 0 IndexProbe t opens=1 examined=732 matched=100 sel=13% pages=741 index_scanned=931 index_resolved=732",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 72.53,
+    "wall_us": 103.35,
+    "lat_us": {
+     "ops": 200,
+     "p0": 96.4,
+     "p25": 98.3,
+     "p50": 100.3,
+     "p95": 114.0,
+     "p99": 179.0
+    }
+   },
+   "m3_bare_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=212 index_resolved=100",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7234.13,
+    "wall_us": 7309.01,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6990.3,
+     "p25": 7175.9,
+     "p50": 7245.7,
+     "p95": 7866.1,
+     "p99": 8248.5
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7248.3,
+    "wall_us": 7325.42,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7012.0,
+     "p25": 7191.1,
+     "p50": 7249.8,
+     "p95": 7883.0,
+     "p99": 8499.5
+    }
+   }
+  },
+  {
+   "arm": "int32",
+   "round": 1,
+   "host": {
+    "loadavg": "1.36 1.35 1.54",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 16.5,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 11.722,
+    "wall_us_row": 11.967,
+    "rows_s": 83566
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 25.89,
+    "wall_us": 43.93,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 38.7,
+     "p25": 41.6,
+     "p50": 42.6,
+     "p95": 49.5,
+     "p99": 59.1
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 92.31,
+    "wall_us": 123.92,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 107.1,
+     "p25": 116.3,
+     "p50": 118.9,
+     "p95": 147.4,
+     "p99": 204.2
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 6723.74,
+    "wall_us": 6836.28,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2230.1,
+     "p25": 4811.8,
+     "p50": 7268.8,
+     "p95": 9968.0,
+     "p99": 10377.1
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=69068 sel=69% pages=654",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 77.28,
+    "wall_us": 113.59,
+    "lat_us": {
+     "ops": 200,
+     "p0": 98.6,
+     "p25": 101.3,
+     "p50": 102.5,
+     "p95": 162.2,
+     "p99": 329.7
+    }
+   },
+   "m3_bare_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=349 index_resolved=100",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 6488.22,
+    "wall_us": 6562.61,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6354.3,
+     "p25": 6482.9,
+     "p50": 6527.7,
+     "p95": 6770.6,
+     "p99": 7113.2
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 6807.81,
+    "wall_us": 6883.38,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6381.9,
+     "p25": 6510.3,
+     "p50": 6568.5,
+     "p95": 8845.2,
+     "p99": 14618.2
+    }
+   }
+  },
+  {
+   "arm": "nopk_heap",
+   "round": 1,
+   "host": {
+    "loadavg": "1.36 1.35 1.54",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 1.4,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 7.274,
+    "wall_us_row": 7.828,
+    "rows_s": 127751
+   },
+   "settle_s": 0.5
+  },
+  {
+   "arm": "ref_heap",
+   "round": 1,
+   "host": {
+    "loadavg": "1.35 1.35 1.54",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 10.1,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 7.438,
+    "wall_us_row": 7.577,
+    "rows_s": 131982
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 23.87,
+    "wall_us": 41.37,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 36.6,
+     "p25": 39.5,
+     "p50": 40.3,
+     "p95": 45.5,
+     "p99": 53.8
+    }
+   },
+   "m1_step": "step 0 Lookup t opens=1 examined=1 matched=1 sel=100% pages=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 66.16,
+    "wall_us": 96.42,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 89.7,
+     "p25": 93.0,
+     "p50": 94.3,
+     "p95": 104.9,
+     "p99": 120.7
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 5742.36,
+    "wall_us": 5850.63,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2078.9,
+     "p25": 3939.6,
+     "p50": 5832.2,
+     "p95": 9155.3,
+     "p99": 9452.9
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=50493 sel=50% pages=603",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 9090.71,
+    "wall_us": 9222.18,
+    "lat_us": {
+     "ops": 200,
+     "p0": 8137.6,
+     "p25": 8233.5,
+     "p50": 8300.8,
+     "p95": 16156.2,
+     "p99": 17383.3
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100000 matched=100000 sel=100% pages=603",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 30.4,
+    "wall_us": 47.11,
+    "lat_us": {
+     "ops": 500,
+     "p0": 38.0,
+     "p25": 41.6,
+     "p50": 44.8,
+     "p95": 53.8,
+     "p99": 131.6
+    }
+   },
+   "m4_move_refused": "tuple key column 'id' cannot be updated at byte 13; it is the tuple's identity, not a field of it"
+  },
+  {
+   "arm": "nopk_heap",
+   "round": 2,
+   "host": {
+    "loadavg": "1.35 1.35 1.54",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 1.4,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 7.37,
+    "wall_us_row": 7.759,
+    "rows_s": 128887
+   },
+   "settle_s": 0.5
+  },
+  {
+   "arm": "int32",
+   "round": 2,
+   "host": {
+    "loadavg": "1.82 1.47 1.58",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 16.6,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 11.833,
+    "wall_us_row": 12.065,
+    "rows_s": 82887
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 25.76,
+    "wall_us": 43.62,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 36.2,
+     "p25": 41.2,
+     "p50": 42.2,
+     "p95": 48.5,
+     "p99": 58.5
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 88.24,
+    "wall_us": 120.16,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 100.7,
+     "p25": 111.1,
+     "p50": 114.2,
+     "p95": 143.4,
+     "p99": 223.4
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 6730.18,
+    "wall_us": 6840.81,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2186.8,
+     "p25": 5049.2,
+     "p50": 7222.8,
+     "p95": 9861.4,
+     "p99": 10147.1
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=27353 sel=27% pages=654",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 75.63,
+    "wall_us": 107.32,
+    "lat_us": {
+     "ops": 200,
+     "p0": 93.1,
+     "p25": 95.8,
+     "p50": 98.5,
+     "p95": 121.5,
+     "p99": 341.9
+    }
+   },
+   "m3_bare_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=195 index_resolved=100",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 6539.09,
+    "wall_us": 6623.09,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6322.2,
+     "p25": 6481.1,
+     "p50": 6532.1,
+     "p95": 7076.2,
+     "p99": 9491.6
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 6866.87,
+    "wall_us": 6947.57,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6374.9,
+     "p25": 6798.0,
+     "p50": 6888.7,
+     "p95": 7499.3,
+     "p99": 8409.3
+    }
+   }
+  },
+  {
+   "arm": "int32x2",
+   "round": 2,
+   "host": {
+    "loadavg": "1.70 1.45 1.57",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 10.7,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 11.775,
+    "wall_us_row": 13.462,
+    "rows_s": 74284
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 27.27,
+    "wall_us": 45.15,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 39.5,
+     "p25": 42.5,
+     "p50": 43.4,
+     "p95": 52.0,
+     "p99": 65.1
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 95.95,
+    "wall_us": 127.4,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 112.9,
+     "p25": 120.5,
+     "p50": 123.1,
+     "p95": 147.2,
+     "p99": 193.0
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 177.76,
+    "wall_us": 230.45,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 112.2,
+     "p25": 177.6,
+     "p50": 224.1,
+     "p95": 336.3,
+     "p99": 391.8
+    }
+   },
+   "m3_page_step": "step 0 IndexProbe t opens=1 examined=620 matched=100 sel=16% pages=627 index_scanned=723 index_resolved=620",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 73.79,
+    "wall_us": 106.21,
+    "lat_us": {
+     "ops": 200,
+     "p0": 97.3,
+     "p25": 99.8,
+     "p50": 101.2,
+     "p95": 124.4,
+     "p99": 189.9
+    }
+   },
+   "m3_bare_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=228 index_resolved=100",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7208.03,
+    "wall_us": 7282.79,
+    "lat_us": {
+     "ops": 500,
+     "p0": 6944.9,
+     "p25": 7137.6,
+     "p50": 7216.6,
+     "p95": 7876.7,
+     "p99": 8450.0
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7228.5,
+    "wall_us": 7310.6,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7005.3,
+     "p25": 7162.0,
+     "p50": 7227.0,
+     "p95": 7933.9,
+     "p99": 8706.3
+    }
+   }
+  },
+  {
+   "arm": "varchar64",
+   "round": 2,
+   "host": {
+    "loadavg": "2.26 1.58 1.61",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 22.7,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 12.419,
+    "wall_us_row": 14.111,
+    "rows_s": 70868
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 26.51,
+    "wall_us": 44.41,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 38.8,
+     "p25": 41.5,
+     "p50": 42.5,
+     "p95": 51.9,
+     "p99": 61.9
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 99.06,
+    "wall_us": 134.42,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 106.7,
+     "p25": 120.7,
+     "p50": 123.7,
+     "p95": 167.3,
+     "p99": 241.9
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 9083.11,
+    "wall_us": 9200.61,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2546.3,
+     "p25": 6476.2,
+     "p50": 9695.0,
+     "p95": 13922.5,
+     "p99": 15587.6
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=37103 sel=37% pages=1389",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 12083.92,
+    "wall_us": 12201.98,
+    "lat_us": {
+     "ops": 200,
+     "p0": 11893.8,
+     "p25": 12047.9,
+     "p50": 12142.9,
+     "p95": 12589.3,
+     "p99": 13239.3
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100000 matched=100000 sel=100% pages=1389",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7671.11,
+    "wall_us": 7749.5,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7381.8,
+     "p25": 7619.6,
+     "p50": 7716.8,
+     "p95": 7969.2,
+     "p99": 8604.2
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 7765.86,
+    "wall_us": 7868.98,
+    "lat_us": {
+     "ops": 500,
+     "p0": 7447.7,
+     "p25": 7609.5,
+     "p50": 7701.5,
+     "p95": 8757.8,
+     "p99": 10153.0
+    }
+   }
+  },
+  {
+   "arm": "mixed4",
+   "round": 2,
+   "host": {
+    "loadavg": "2.30 1.61 1.62",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 12.9,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 13.251,
+    "wall_us_row": 14.698,
+    "rows_s": 68034
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 30.47,
+    "wall_us": 48.03,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 42.9,
+     "p25": 45.7,
+     "p50": 46.5,
+     "p95": 54.3,
+     "p99": 64.3
+    }
+   },
+   "m1_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 9603.39,
+    "wall_us": 9678.64,
+    "lat_us": {
+     "ops": 500,
+     "p0": 9163.8,
+     "p25": 9375.8,
+     "p50": 9683.7,
+     "p95": 10214.5,
+     "p99": 10802.2
+    }
+   },
+   "m4_move": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 9481.48,
+    "wall_us": 9562.08,
+    "lat_us": {
+     "ops": 500,
+     "p0": 9159.0,
+     "p25": 9319.4,
+     "p50": 9399.7,
+     "p95": 10278.8,
+     "p99": 12318.5
+    }
+   }
+  },
+  {
+   "arm": "ref_btree",
+   "round": 2,
+   "host": {
+    "loadavg": "2.11 1.58 1.61",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.1,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 3.477,
+    "wall_us_row": 3.617,
+    "rows_s": 276501
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 22.79,
+    "wall_us": 40.16,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 36.2,
+     "p25": 38.4,
+     "p50": 39.0,
+     "p95": 45.0,
+     "p99": 53.2
+    }
+   },
+   "m1_step": "step 0 Lookup t opens=1 examined=1 matched=1 sel=100% pages=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 69.05,
+    "wall_us": 107.15,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 69.8,
+     "p25": 94.2,
+     "p50": 101.4,
+     "p95": 126.3,
+     "p99": 196.8
+    }
+   },
+   "m3_range_step": "step 0 Range t opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 1043.74,
+    "wall_us": 1124.76,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 123.8,
+     "p25": 684.4,
+     "p50": 1131.3,
+     "p95": 1962.9,
+     "p99": 2127.7
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=87051 matched=100 sel=0% pages=525",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 36.88,
+    "wall_us": 69.82,
+    "lat_us": {
+     "ops": 200,
+     "p0": 62.4,
+     "p25": 63.8,
+     "p50": 64.9,
+     "p95": 94.9,
+     "p99": 220.4
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100 matched=100 sel=100% pages=1",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 24.73,
+    "wall_us": 41.03,
+    "lat_us": {
+     "ops": 500,
+     "p0": 36.7,
+     "p25": 38.4,
+     "p50": 39.1,
+     "p95": 47.7,
+     "p99": 77.0
+    }
+   },
+   "m4_move_refused": "tuple key column 'id' cannot be updated at byte 13; it is the tuple's identity, not a field of it"
+  },
+  {
+   "arm": "ref_heap",
+   "round": 2,
+   "host": {
+    "loadavg": "2.09 1.60 1.61",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 10.1,
+   "m2_load": {
+    "rows": 100000,
+    "cpu_us_row": 7.478,
+    "wall_us_row": 7.613,
+    "rows_s": 131358
+   },
+   "settle_s": 0.5,
+   "m1_read": {
+    "stmts": 20000,
+    "rows": 20000,
+    "cpu_us": 25.74,
+    "wall_us": 43.43,
+    "lat_us": {
+     "ops": 20000,
+     "p0": 36.9,
+     "p25": 39.7,
+     "p50": 40.6,
+     "p95": 53.5,
+     "p99": 62.7
+    }
+   },
+   "m1_step": "step 0 Lookup t opens=1 examined=1 matched=1 sel=100% pages=1",
+   "m3_range": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 67.19,
+    "wall_us": 97.34,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 90.2,
+     "p25": 92.9,
+     "p50": 94.3,
+     "p95": 106.6,
+     "p99": 140.4
+    }
+   },
+   "m3_range_step": "step 0 IndexRange t opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+   "m3_page": {
+    "stmts": 1000,
+    "rows": 100000,
+    "cpu_us": 5828.36,
+    "wall_us": 5937.77,
+    "lat_us": {
+     "ops": 1000,
+     "p0": 2095.8,
+     "p25": 4095.9,
+     "p50": 5896.9,
+     "p95": 9418.3,
+     "p99": 10372.3
+    }
+   },
+   "m3_page_step": "step 0 Scan t opens=1 examined=100000 matched=74022 sel=74% pages=603",
+   "m3_bare": {
+    "stmts": 200,
+    "rows": 20000,
+    "cpu_us": 8361.35,
+    "wall_us": 8475.41,
+    "lat_us": {
+     "ops": 200,
+     "p0": 8164.9,
+     "p25": 8306.6,
+     "p50": 8362.2,
+     "p95": 9031.8,
+     "p99": 12329.7
+    }
+   },
+   "m3_bare_step": "step 0 Scan t opens=1 examined=100000 matched=100000 sel=100% pages=603",
+   "m4_plain": {
+    "stmts": 500,
+    "rows": 0,
+    "cpu_us": 31.67,
+    "wall_us": 47.94,
+    "lat_us": {
+     "ops": 500,
+     "p0": 38.2,
+     "p25": 42.2,
+     "p50": 45.7,
+     "p95": 59.8,
+     "p99": 119.6
+    }
+   },
+   "m4_move_refused": "tuple key column 'id' cannot be updated at byte 13; it is the tuple's identity, not a field of it"
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "2.09 1.60 1.61",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 251.3
+}

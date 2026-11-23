@@ -211,6 +211,19 @@ bool SameOwedEntry(const catalog::TableAccess& access, const catalog::TableAcces
 // `Corruption`, as `Catalog::InitTableAccess` refuses it (BY-R10).
 StatusOr<PageId> SlotRoot(storage::PageStore& store, PageId anchor, std::uint64_t index_oid);
 
+// The tuple keys `ix`'s run for `encoded_key` names, ascending and distinct:
+// every entry whose first `encoded_key.size()` bytes are the key's. A
+// superset of the rows holding the key, as an index's entries always are
+// (IX1, IX2) - a row that moved off the key, was deleted or rolled back,
+// and with a string key a row sharing only its indexed prefix (IX6) - so a
+// caller resolves each and tests the row it finds. `entries_read`, where
+// given, is how many entries the run holds, before the tuple keys are made
+// distinct. **Called holding no page**, and it returns holding none.
+StatusOr<std::vector<std::uint64_t>> IndexRunTupleKeys(storage::PageStore& store,
+                                                       const catalog::TableAccess::IndexRef& ix,
+                                                       std::span<const std::byte> encoded_key,
+                                                       std::uint64_t* entries_read = nullptr);
+
 // ---- Unique indexes (BX, `instructions/v3.2.0/workorder-bx-unique-index.md`)
 //
 // A unique index refuses a write that would give two live rows one key

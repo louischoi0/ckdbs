@@ -86,7 +86,12 @@ A view may declare one key column (`sys_views.hpp`):
   name that resolves to nothing is refused, never answered with no rows
   (`[quiet-wrong]` otherwise: a refusal turned into an empty answer). A
   bare name takes its namespace from a `namespace = '<literal>'` conjunct
-  when there is one, else from the session (NS5).
+  when there is one, else from the session (NS5). Its last column,
+  `primary_key` (DR-Q24), is the column's place in the relation's primary
+  key, from 1, and 0 for a column outside it: the first column where the
+  key is the Keystone, the declared key's columns in key order where it is
+  not, and no column of a relation with a hidden Keystone and no declared
+  key. `tuple_key` stays what it was: 1 on a visible Keystone column.
 
 The builder takes the first key conjunct as a bound on what it reads and
 returns only what it names, so that conjunct is not compared again.

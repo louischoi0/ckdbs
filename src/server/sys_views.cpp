@@ -503,7 +503,12 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                   {"tuple_key", kInt},
                   {"cabin", kStr},
                   {"references_namespace", kStr},
-                  {"references", kStr}});
+                  {"references", kStr},
+                  // The column's place in the relation's primary key, from
+                  // 1, or 0 (DR-Q24; `TableAccess::PrimaryKeyColumns`).
+                  // Last, so a reader of the columns before it reads what
+                  // it read.
+                  {"primary_key", kInt}});
 
     std::vector<catalog::SysObjectRow> relations;
     if (rel_name != nullptr) {
@@ -532,7 +537,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                                      labels.value().Spelling(def.value().namespace_oid),
                                      Str(def.value().name), Int(i), Str(c.name),
                                      Int(c.type.type_val), Str(type), Bool(false),
-                                     Bool(false), Null(), Null(), Null()});
+                                     Bool(false), Null(), Null(), Null(), Int(0)});
             }
             return view;
         }
@@ -561,6 +566,8 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
             return schema.status();
         }
         auto access = catalog_.InitTableAccess(object.oid);
+        const std::vector<std::uint16_t> key =
+            access.ok() ? access.value()->PrimaryKeyColumns() : std::vector<std::uint16_t>{};
         const std::string rel(catalog::NameView(object.name));
         const parser::AstValue ns = labels.value().Spelling(object.namespace_oid);
         for (std::size_t i = 0; i < schema.value().columns.size(); ++i) {
@@ -592,11 +599,14 @@ StatusOr<exec::CatalogView> CommandDispatcher::ColumnsView(const txn::ReadView* 
                     }
                 }
             }
+            const auto in_key = std::find(key.begin(), key.end(), static_cast<std::uint16_t>(i));
+            const std::int64_t key_place = in_key == key.end() ? 0 : 1 + (in_key - key.begin());
             view.rows.push_back({Int(column.rel_id), ns, Str(rel), Int(column.pos),
                                  Str(catalog::NameView(column.name)), Int(column.type_val),
                                  Str(catalog::ColumnTypeText(column, base)),
                                  Bool(column.notnull), Bool(tuple_key), std::move(cabin),
-                                 std::move(references_namespace), std::move(references)});
+                                 std::move(references_namespace), std::move(references),
+                                 Int(key_place)});
         }
     }
     return view;

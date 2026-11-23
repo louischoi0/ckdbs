@@ -280,7 +280,21 @@ inline constexpr std::uint64_t kSuperBlockMagic = 0x3153424458444B43ULL;  // "CK
 // version-39 binary would read a view's name as no relation and drop the
 // relations a view reads with no RESTRICT. Refused by the version, naming
 // DP's format event, with no migration, the standing order of 2026-10-07.
-inline constexpr std::uint32_t kSuperBlockVersion = 40;
+//
+// 41 (DR-S3d, `instructions/v3.2.0/workorder-dr-primary-key-over-keystone.md`
+// DR-Q22): **a btree may carry a primary key that is not its first
+// column.** A btree relation's column 0 may be the engine's hidden Keystone
+// (`kColumnHidden`, until now a heap's alone), and its `sys.tables` row
+// says how the Keystone's value is chosen: `key_form`, the byte that was
+// the retired key-order byte, 0 for an issued or named id and 1 for an id
+// embedded from the key's columns, whose positions fill the four bytes
+// that were the retired `owner_core` word. A version-40 binary reads both
+// as reserved: it would issue ids for an embedded relation's rows, which
+// this build would then look for at the ids their keys encode to. A
+// version-40 volume holds no such relation, so nothing in it changes
+// meaning - and it is refused all the same, by the version, naming DR's
+// format event, with no migration, the standing order of 2026-10-07.
+inline constexpr std::uint32_t kSuperBlockVersion = 41;
 
 // ---- How many WAL streams this database's log is (AR0 M0) --------------
 //

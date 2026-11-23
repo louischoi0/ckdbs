@@ -129,3 +129,44 @@ The operator's words of 2026-11-23, recorded in English.
 | **Skipped on that word** | the pre-push hook; no suite was executed, no build input having changed; no `critics-developer` review |
 | **Does not settle** | any unmarked DR-Q item; an opening; a tag or a version |
 | **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
+
+## 14. DR opened on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone DR`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | **DR is opened** at `e9df68d0` (`v3.5.0-114-ge9df68d02`), on worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`. **DR-Q9 (a) is adopted on that standing go-ahead**, CLA's proposal and not the operator's per-item mark: the standing measurement budget, DR-S0's measurement in three runs, each inside 20 minutes. DR-Q0 (exploratory), DR-Q2 (a btree carries the key), DR-R1, DR-R9 and DR-R10 stay the operator's own |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DR order's header, §4a and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 15. DR-S1's verdict on the standing go-ahead; DR-Q1, Q3 to Q8, Q10, Q11, Q14 to Q24 adopted
+
+| | |
+|---|---|
+| **Word** | the same `/go-ahead-achieving-milestone DR` (§14) |
+| **Mark** | **DR-S1's verdict is CLA's reading of its own census and measurement** at `e9df68d0` (`bench/v3.5.0/results-dr-s0-premise-v3.5.0-114-ge9df68d02.md`, its second run; the order's §1.8, §4a, §5a): a read by a primary key that is not the Keystone costs 0.6 us to 5.2 us over a read by the Keystone, and **a write by it walks the relation** (6,488 us to 9,554 us against 31.5 us at 100,000 rows), because a write has no index arm. **Go**: P7 (new: a write that names a unique key whole descends by it), P3 (a key's value may change, as the engine already does), P2a (a hidden-Keystone relation is a foreign key's parent by `keyidentity`), F0's keyword on a btree, F1 (a key of integer, date and bool columns of 48 bits or less embedded in the Keystone id) and P1 (a hidden Keystone and `$pkey_<oid>` on a btree). **Not built**: F2, the hashed home, with P2b, P2c, P2d on a heap, P5 and P8. **F2's ground**: its point read is ahead of P1's, 0.9 us at 100,000 rows and 1.8 us at 1,000,000 by the client's p50 (3 % and 6 % of the statement), so DR-Q11 (a)'s first condition is met; its insert is 23 % and 27 % dearer, and **the bar DR-S1 set is 10 %**, a number CLA chose after the cells were read. At a break-even bar of two keyed reads an insert F2 would pass at 1,000,000 rows. **Adopted (a) on that standing go-ahead, each CLA's proposal and none the operator's own mark**: DR-Q1 (`[quiet-wrong]`), Q3, Q4, Q5, Q6, Q8, Q10, Q11, Q16 (`[quiet-wrong]`) to Q24; **(a) as revised against the tree**: DR-Q7 (a `char` key is left to P1) and DR-Q14 (P1 in F2's place). DR-Q15's proposal was to put the format events to the operator, as DR-R5 asks; under the standing word it is written out as DR-Q22 and adopted with no other word behind it: **one format event, superblock 41** |
+| **`[quiet-wrong]` re-read** | DR-Q1 (a) rests on a moved key changing no identity and no stored reference: read at `e9df68d0` (the order's §1.8 item 2), it holds. DR-Q16 (a) rests on a unique key's run naming every row a walk of the same WHERE could write: the run is the superset a read through the index resolves and the unique check walks (`src/exec/index_maintain.cpp`, `CheckUniqueKey`), every row is tested against the whole WHERE where it is found, and a WHERE with no tuple key bound declares no window for either path (`DeclaredWriteBorrow`), so it holds. **DR-Q12 and DR-Q13 are not adopted**: they decide details of F2, which is not built |
+| **Does not settle** | DR-Q11 (b), F2 whatever the cells say, and the 10 % bar itself, which is CLA's; DR-Q22 as the operator's own word on a format event; P2c's and P8's orders; CH's standing (DR-Q8); a relation larger than the pool, which no cell measured; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DR order's header, §1.8, §2, §4a, §5a and §7; its row in `instructions/v3.2.0/index.md` |
+
+## 16. DR: an insert 50 % or more dearer is accepted for a btree's multi-type, multi-column key, where no other path is affected
+
+| | |
+|---|---|
+| **Word** | *"Even if supporting multiple types and multiple columns on a btree makes an insert 50 % or more slower, it must be accepted and implemented, as long as other paths are not affected."* Given in the session of §14, while DR-S4's close was being reviewed |
+| **Mark** | **DR-Q11's insert bar is the operator's**: an insert 50 % or more dearer is accepted for the btree's key of several types and columns, on the condition that no other path is affected. It replaces the 10 % bar DR-S1 set, which was CLA's (§15, "does not settle") |
+| **CLA's reading, not the operator's words** | The one form withheld on an insert's cost was F2, the hashed home: DR-S0c measured its point read 0.9 us to 1.8 us ahead of P1's and its insert 23 % to 27 % dearer. Under the operator's bar both of DR-Q11 (a)'s conditions are met, so **F2 is the form a wide key takes on a btree** and is built as DR-S3f; P1, the indexed form with rows in issue order, is no longer created on a btree. "No other path is affected" is read as DR-R9 extended to every form but the hashed one: F0, F1 and every heap gain no structure and no step from F2. CLA stated this reading in its reply when the word arrived |
+| **Adopted with it, on the standing go-ahead of §14** | DR-Q12 `[quiet-wrong]` (a): a colliding row takes an issued id in `[2^47, 2^48)`, nothing stored for the flag, no second structure. DR-Q13 `[quiet-wrong]` (a): an absent key is two descents, the home and then the index. Each CLA's proposal and not the operator's per-item mark; their premises as re-read are in the DR order's §4a |
+| **Does not settle** | whether F2 stays if a relation larger than the pool, or more than one core, prices its insert past what the operator meant; the format detail (`key_form` 2 and `Hash47` join superblock 41, DR-Q22, which is itself adopted on the standing word alone); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DR order's header, §4a, §5a and §7; `docs/spec/heap-and-tuple.md` §3.1c; the order's row in `instructions/v3.2.0/index.md` |
+
+## 17. DR: push the work so far, the gate run, and go on
+
+| | |
+|---|---|
+| **Word** | *"First, push the work so far, with the verify."* and then *"And after that, continue the work."* Given in the session of §14 while DR-S3f's review was running |
+| **Mark** | **DR lands open on `main`**: every commit of `worktree-dr-primary-key` through DR-S3f, merged with `--no-ff` and pushed with the pre-push hook run, not skipped. The milestone stays open and the session goes on to its close |
+| **What goes out, as it stands** | DR-S2 to DR-S3e; DR-S4's first close with its remedies and their review; **DR-S3f, the hashed home, with its `critics-developer` review not yet returned** and the close's re-measurement on it not yet taken. Superblock 41 goes out with it, which DR-R5 put to the operator's own word and which is adopted on the standing go-ahead alone (§15) |
+| **Does not settle** | DR's close; a tag or a version |
+| **Recorded at** | this file; the DR order's §7; its row in `instructions/v3.2.0/index.md` |
+

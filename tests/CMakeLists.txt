@@ -52,6 +52,8 @@ add_executable(kds_tests
     read_only_txn_test.cpp
     heap_chain_test.cpp
     heap_hidden_key_test.cpp
+    primary_key_test.cpp
+    btree_primary_key_test.cpp
     heap_rowid_test.cpp
     heap_rowid_consumers_test.cpp
     btree_test.cpp
@@ -60,6 +62,8 @@ add_executable(kds_tests
     fk_parent_hold_test.cpp
     btree_race_test.cpp
     index_key_test.cpp
+    embedded_key_test.cpp
+    hashed_key_test.cpp
     index_tree_test.cpp
     index_race_test.cpp
     index_ddl_test.cpp

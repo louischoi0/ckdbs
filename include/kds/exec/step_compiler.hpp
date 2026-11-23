@@ -166,8 +166,32 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 // exclusive, so such a statement collects its rows in a read walk first
 // (`CommandDispatcher::WriteWalk::CollectTargets`), and that pass is not
 // keyed (`docs/pending/keyed-write-beside-a-subquery.md`).
-std::optional<std::uint64_t> WriteKeyOf(const Step& where);
+//
+// **An embedded primary key pinned whole names one key too** (DR-S3e): on a
+// relation whose key is its Keystone id, `a = 1 AND b = 2` is the id those
+// values encode to (`exec/embedded_key.hpp`), found by the same descent.
+std::optional<std::uint64_t> WriteKeyOf(const catalog::TableAccess& access, const Step& where);
 std::optional<KeySet> WriteKeySetOf(const Step& where);
+
+// **A write that names a unique key whole descends too** (DR-S3a): where
+// the WHERE pins every key column of a unique index by an equality with a
+// literal, the rows it can write are the ones that key's run names
+// (`IndexRunTupleKeys`, index_maintain.hpp) - a superset, as every index
+// run is (IX1), each row tested against the whole WHERE where it is found
+// (CU-R1). This is what makes a primary key that is not the Keystone a key
+// a write is found by: without it the statement walks the relation.
+//
+// The lowest `index_oid` whose key the WHERE pins whole; nullopt where
+// there is none, where the WHERE holds a subquery (`WriteKeyOf`'s reason)
+// or where a value does not encode, and the walk answers. A unique index
+// alone: its run for one key is short by the check that keeps it unique,
+// where any other index's may be the relation.
+struct WriteIndexKey {
+    const catalog::TableAccess::IndexRef* index = nullptr;  // into `access.indexes`
+    std::vector<std::byte> key;                             // `index->key_width` bytes
+};
+std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
+                                             const Step& where);
 
 // **The select list of a statement over one relation, as `Compile` resolves
 // a chain's**: each written column's reference, heading, type and type mod,

@@ -92,9 +92,11 @@ TEST_F(HeapRowidTest, AnInt64PrimaryKeyNotDeclaredFirstIsRefused) {
     Refused("CREATE TABLE p (v int64, id int64, PRIMARY KEY (id)) HEAP", "declared first");
 }
 
-TEST_F(HeapRowidTest, PrimaryKeyIsAHeapsAlone) {
-    Refused("CREATE TABLE b (id int64 PRIMARY KEY, v int64) BTREE", "PRIMARY KEY is a heap's");
-    Refused("CREATE TABLE b (id int64, v int64, PRIMARY KEY (id))", "PRIMARY KEY is a heap's");
+TEST_F(HeapRowidTest, ABtreeTakesTheKeywordOnItsInt64FirstColumn) {
+    // A btree takes the keyword too since DR-S3d (`btree_primary_key_test.cpp`):
+    // on its `int64` first column it is a spelling of the relation it is.
+    Ok("CREATE TABLE b (id int64 PRIMARY KEY, v int64) BTREE", "CREATED");
+    Ok("CREATE TABLE b2 (id int64, v int64, PRIMARY KEY (id))", "CREATED");
 }
 
 // DN-D3: any other primary key is a unique index beside a hidden Keystone.
