@@ -602,6 +602,30 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   "never probed". Sharpening it needs a per-value record of which unresolved
   transactions could contradict a build, a structure §6a does not have.
   Re-verified at `7dd9b789` by reading. Owner: `docs/spec/cabin.md` §6a.
+  **What it costs a join** was measured by DQ-S0 at `68e5a69f`
+  (`bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`): with one
+  write held open, a join on a cabined inner column walks the inner relation
+  once per outer row in every statement, 120x to 190x the same join with the
+  Cabin dropped.
+
+- **A cabined join whose misses are all recording touches walks once per
+  outer row, and can be refused for its budget where the uncabined join
+  answers** (DQ-Q11). A correlated Cabin probe's recording touch (a key's
+  second, `n = 2`) is a whole walk of the inner relation. A statement whose
+  outer keys are all at that touch pays one walk an outer row: the second
+  run of a join over 1,000 keys seen once before. DQ-S0 at `68e5a69f`
+  measured it. At 100,000 inner rows and 1,000 outer rows that is
+  100,000,000 row touches, so the default `max_rows_touched` refuses the
+  statement. The same join with no Cabin answers in 25 ms, and every later
+  run of it is served from the sets. That is the "accelerator turning a
+  rows-returning statement into a budget refusal" `cabin.md` §4a says §1
+  forbids, on a top-level join. DQ's E1 leaves this case open by its own
+  rule (DQ-Q2 (a): a recording touch walks and records, so the Cabin
+  converges). DQ-Q2 (b) and (c) remain the operator's:
+  - (b) the recording touch probes the map, and joins stop converging their
+    Cabin;
+  - (c) a bounded number of recording walks a statement.
+  Owner: `docs/spec/cabin.md` §4a.
 
 ## Foreign keys
 

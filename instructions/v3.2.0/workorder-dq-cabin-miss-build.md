@@ -1,6 +1,11 @@
 # Work order DQ - a Cabin's miss answered from a map: the correlated Cabin probe's unobserved keys served by the statement-local build, one walk for the statement in place of one walk a miss
 
-Status: **WRITTEN 2026-11-22 (UTC), not opened.** Written in the main
+Status: **OPENED 2026-11-23 on the operator's standing go-ahead**
+(`/go-ahead-achieving-milestone DQ`, `raft-marks-2026-11-23.md` §1), at
+`68e5a69f` (`v3.5.0-96-g68e5a69f`) on worktree `dq-cabin-miss-build`, branch
+`worktree-dq-cabin-miss-build`. **DQ-Q0..Q8 adopted (a) on that go-ahead** -
+CLA's proposals, not the operator's per-item mark (§4). Before that:
+**WRITTEN 2026-11-22 (UTC), not opened.** Written in the main
 checkout on `main` at `56b44964` (`v3.4.17-107-g56b44964` as a clone without
 the local `v3.5.0` tag describes it) on the operator's words of that
 conversation (`raft-marks-2026-11-22.md` §11). The letter DQ is CLA's
@@ -291,7 +296,9 @@ from any walk (§0); a Cabin made where none is declared (the plan is
 
 ## 4. Items for the operator (DQ-Q), CLA's proposals
 
-Unmarked. (a) is CLA's proposal in each.
+(a) is CLA's proposal in each. **DQ-Q0..Q8 (a) adopted on the operator's
+standing go-ahead of 2026-11-23 (go-ahead-achieving-milestone)**
+(`raft-marks-2026-11-23.md` §1); none is the operator's own mark.
 
 | | the question | (a) | other |
 |---|---|---|---|
@@ -304,6 +311,16 @@ Unmarked. (a) is CLA's proposal in each.
 | DQ-Q6 | The cost model | **Unchanged in DQ**: the fallback is a run-time guard, no order moves, no capture moves; the unpriced miss goes to `known-gaps.md` with DQ-S0's numbers | (b) E4, the miss priced, under `planned` only |
 | DQ-Q7 | A value list over a Cabin with one value unobserved (CU-Q12 walks the relation whole) | **Out of DQ**: a set's all-or-nothing rule is CU's, and a literal list has no outer rows for a map to serve | (b) a stage of DQ |
 | DQ-Q8 | The bar a built stage must meet | **At DQ-S0's gate-refusing cell, server CPU within 1.5x of the same join with the Cabin dropped; on a converged join, no cell slower than today outside the control's range; DQ-R6 met** - the 1.5 is provisional and is replaced by what DQ-S0 measures | the operator's number |
+
+**Raised by DQ-S0 and DQ-S1, adopted (a) on the same standing go-ahead**
+(`raft-marks-2026-11-23.md` §2); none is the operator's own mark.
+
+| | the question | (a) | other |
+|---|---|---|---|
+| DQ-Q9 | A step an administrator's plan pins `ACCESS <relation> CABIN [(<column>)]`: the walk class is not admitted (`walk` is false, `step_compiler.cpp:3407`) | **It keeps the fallback**: the fallback is not a ladder rank but the Cabin step's own miss path, and a controller-made Cabin is read only through such a pin (PO11), so denying it there would leave exactly the pinned join with the per-miss walk. `BUILD OFF` alone takes it (DQ-Q5) | (b) a keyed pin keeps today's per-miss walk |
+| DQ-Q10 | The plan statistics' decline record (`command_dispatcher.cpp`, the fold after a keyed run): a step carrying `Step::build` that opened and published no map is folded as a decline, which the cost model reads for a walked step | **A Cabin step's decline is a fallback that bucketed rows and published no map** (`build_rows > 0`, `inner_builds = 0`): an opening its set served built nothing and declined nothing. A walked step keeps its rule | (b) a Cabin step never records a decline |
+| DQ-Q11 | DQ-S0 measured a refusal: at the default `max_rows_touched` a 100,000-row cabined join with 1,000 unobserved outer keys is refused where the uncabined one answers in 25 ms. E1 removes it for every non-recording miss and every declined recording, but not for a statement whose misses are all recording touches (DQ-Q2 (a) keeps each a whole walk) | **Recorded in `known-gaps.md` (Cabin)**, with DQ-Q2 (b) and (c) the remedies the operator may take; DQ keeps DQ-Q2 (a) | (b) take DQ-Q2 (c), a bounded number of recording walks a statement, into DQ |
+| DQ-Q12 | A correlated Cabin step that also carries an unindexed literal equality (`HasUnindexedEqualityFilter`): its uncabined twin is a filter scan with no build (`join-inner-build.md` §8) | **The fallback is declined there**, as the build is, so the miss's worst case is exactly the uncabined step's (§0) and the map keeps one rule (DQ-R4) | (b) annotate it anyway: cheaper than the uncabined step, and a second rule |
 
 ## 5. Stages
 
@@ -366,3 +383,72 @@ In the main checkout on `main` at `56b44964`, from a claude.ai conversation
 session with no build tree: §1.2 read in that checkout, nothing built,
 nothing run. Not reviewed by `critics-developer`. The premise is unmeasured
 and the order says so in every place it states a cost.
+
+### DQ-S0 - census and premise (2026-11-23)
+
+On worktree `dq-cabin-miss-build` at `68e5a69f` (`v3.5.0-96-g68e5a69fd`).
+No engine change. Results:
+`bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`.
+
+**(i) §1.2 re-read at `68e5a69f`: every claim holds, line for line.** No
+build input changed between `56b44964` and `68e5a69f`. The census found
+five more readers of `Step::build`, each relevant to DQ:
+
+- `step_compiler.cpp:3407`: a keyed pin makes `walk` false and so takes
+  the build's rank. This is DQ-Q9.
+- `command_dispatcher.cpp`, the plan statistics' fold: a step that carries
+  the annotation, opened, and published no map is folded as a decline. Read
+  unchanged, every Cabin step its set served would be folded as a decline.
+  This is DQ-Q10.
+- `join_order.cpp:255`: the cost model reads the annotation only under the
+  walked kinds, so DQ-Q6 (a) needs no code.
+- `plan_printer.cpp:206` and `:549`: the plan and `ANALYZE` print the
+  annotation and `inner_built=` for every step that carries one, so DQ-S1's
+  display needs no new code (DQ-R8).
+- `step_compiler.cpp:2296-2297` and `:2521`: `inner_build` is false under
+  `CompileWhere` and for a scalar sub-chain, so DQ-R4's SELECT-only rule
+  holds by construction.
+
+One comment is stale: `WalkAndRecord`'s "the miss path and the heap
+hint-failure path both end here" names two callers, and it has one
+(`step_vm.cpp:991`).
+
+**(ii) The two stop rules: E1 composes with both, E2 does not compose
+with the prefix map.**
+
+- E1 composes because the two rules never meet in one walk:
+  - A recording walk (`WalkAndRecord`, `cabin.md` §4a's completion
+    license) runs through the stop, touches no map, and leaves the prefix
+    map's state and mark as they were.
+  - A fallback walk is `WalkPrefixAndProbe`'s: it replays the bucket,
+    resumes at the mark, and extends the map. It carries no recording,
+    since the fallback is reached only where no recording is live (DQ-R2).
+  - A hit serves the set and touches neither.
+  - So each walk keeps its own rule whole, and interleaving them changes
+    neither.
+- E2 would put both rules in one walk. The completion license visits the
+  rows after the stop for the recording alone and returns before the
+  bucketing (`step_vm.cpp`, the recording block's `if (stopped_) return`).
+  So the map would cover a prefix ending at the stop while the walk ends at
+  the relation's end, and `WalkPrefix`'s mark has no position for that.
+- E2 is also not built (iii). DQ-Q4 (a) therefore stands, and **DQ-S3 runs**.
+
+**(iii) The premise holds, and is worse than §1.3 stated.**
+
+- Where the banking gate declines, the cabined join costs 120x (10,000
+  inner rows) to 190x (100,000 inner rows) what the uncabined one costs, in
+  every statement: 445 ms against 3.5 ms, and 4.5 s against 19 to 25 ms.
+- At the default `max_rows_touched` the 100,000-row cabined join is
+  refused, and the uncabined one answers (DQ-Q11).
+- Converged, the Cabin is 4.6x to 25x cheaper than the build.
+- **The verdict:** E1, without E2. E2 saves 0 walks in every measured cell
+  and at most one walk a statement by construction, so DQ-S4 does not run.
+- DQ-Q8's 1.5x is kept on a measured basis: Agate under E1 is predicted at
+  1.3x (10,000 rows) and 1.05x (100,000 rows) of B.
+
+**Raised:** DQ-Q9 and DQ-Q11 here, DQ-Q10 by (i), and DQ-Q12 at DQ-S1's
+compile rule. All four are adopted (a) on the standing go-ahead
+(`raft-marks-2026-11-23.md` §2).
+
+Time: building 5 minutes, running 8, quiet hold 0 s. No suite: no build
+input changed (`tools/`, `bench/`, `instructions/` only).

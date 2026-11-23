@@ -1,0 +1,851 @@
+{
+ "binary": "/home/louis/dqbench/kds_server_A_68e5a69f",
+ "sha256_16": "45eb735a8626c211",
+ "args": {
+  "bin": "/home/louis/dqbench/kds_server_A_68e5a69f",
+  "workdir": "/home/louis/dqbench/work",
+  "out": "/home/louis/dqbench/s0-100k-default.json",
+  "sizes": "100000",
+  "dists": "unique,repeat,skewed",
+  "rounds": 1,
+  "stmts": 3,
+  "outer": 1000,
+  "port": 15991,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "hold_renew_s": 40.0,
+  "heartbeat": "/home/louis/dqbench/s0.heartbeat",
+  "max_rows_touched": null
+ },
+ "host_before": {
+  "loadavg": "0.47 1.10 0.72",
+  "cc1plus": "0"
+ },
+ "started_utc": "2026-11-23 00:22:22",
+ "cells": [
+  {
+   "arm": "A",
+   "n": 100000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "0.71 1.13 0.73",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4611313.7,
+     "wall_us": 4611524.2
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4909201.3,
+     "wall_us": 4909402.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=2601 cabin_hits=999 cabin_misses=1 cabin_entries=999 hint_hits=999 cabin_recorded=1",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 999,
+     "cabin_misses": 1,
+     "cabin_recorded": 1,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 1.01,
+     "cpu_us": 3253.8,
+     "wall_us": 6298.7
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "Agate",
+   "n": 100000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "0.91 1.15 0.75",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4662459.7,
+     "wall_us": 4662765.6
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4664902.5,
+     "wall_us": 4665122.4
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4683773.7,
+     "wall_us": 4687451.6
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "B",
+   "n": 100000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "1.00 1.17 0.75",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 24545.3,
+     "wall_us": 24524.0
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 18514.5,
+     "wall_us": 18652.7
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 18746.2,
+     "wall_us": 18882.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "A",
+   "n": 100000,
+   "dist": "repeat",
+   "round": 0,
+   "host": {
+    "loadavg": "1.00 1.17 0.75",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=20000800 matched=1000 sel=0% pages=122200 cabin_hits=800 cabin_misses=200 cabin_entries=800 hint_hits=800 cabin_recorded=100",
+     "opens": 1000,
+     "examined": 20000800,
+     "matched": 1000,
+     "cabin_hits": 800,
+     "cabin_misses": 200,
+     "cabin_recorded": 100,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 200.01,
+     "cpu_us": 946943.0,
+     "wall_us": 947015.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.01,
+     "cpu_us": 783.3,
+     "wall_us": 945.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.01,
+     "cpu_us": 981.0,
+     "wall_us": 1116.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "Agate",
+   "n": 100000,
+   "dist": "repeat",
+   "round": 0,
+   "host": {
+    "loadavg": "1.00 1.16 0.76",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4497680.4,
+     "wall_us": 4499678.5
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4503166.5,
+     "wall_us": 4503295.8
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4497030.9,
+     "wall_us": 4499500.9
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "B",
+   "n": 100000,
+   "dist": "repeat",
+   "round": 0,
+   "host": {
+    "loadavg": "1.00 1.16 0.76",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 24746.1,
+     "wall_us": 23396.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 17336.8,
+     "wall_us": 17491.7
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 18864.5,
+     "wall_us": 19001.5
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "A",
+   "n": 100000,
+   "dist": "skewed",
+   "round": 0,
+   "host": {
+    "loadavg": "1.00 1.15 0.76",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=54000460 matched=1000 sel=0% pages=326540 cabin_hits=460 cabin_misses=540 cabin_entries=460 hint_hits=460 cabin_recorded=20",
+     "opens": 1000,
+     "examined": 54000460,
+     "matched": 1000,
+     "cabin_hits": 460,
+     "cabin_misses": 540,
+     "cabin_recorded": 20,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 540.0,
+     "cpu_us": 2483977.2,
+     "wall_us": 2484628.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=50000500 matched=1000 sel=0% pages=302500 cabin_hits=500 cabin_misses=500 cabin_entries=500 hint_hits=500 cabin_recorded=500",
+     "opens": 1000,
+     "examined": 50000500,
+     "matched": 1000,
+     "cabin_hits": 500,
+     "cabin_misses": 500,
+     "cabin_recorded": 500,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 500.0,
+     "cpu_us": 2520356.2,
+     "wall_us": 2523124.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.01,
+     "cpu_us": 4785.6,
+     "wall_us": 2450.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "Agate",
+   "n": 100000,
+   "dist": "skewed",
+   "round": 0,
+   "host": {
+    "loadavg": "1.20 1.19 0.78",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4597874.0,
+     "wall_us": 4598359.5
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4580280.6,
+     "wall_us": 4580297.6
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4675179.8,
+     "wall_us": 4676674.6
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "B",
+   "n": 100000,
+   "dist": "skewed",
+   "round": 0,
+   "host": {
+    "loadavg": "1.20 1.19 0.78",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 24136.8,
+     "wall_us": 24143.8
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 17767.8,
+     "wall_us": 17927.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=100999 matched=1000 sel=0% pages=1602 inner_built=1 build_rows=100000 build_probes=999",
+     "opens": 1000,
+     "examined": 100999,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 100000,
+     "build_probes": 999,
+     "walks": 1.01,
+     "cpu_us": 20161.3,
+     "wall_us": 20292.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "1.20 1.19 0.78",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 66.2,
+ "summary": {
+  "100000/unique/A/s1": {
+   "cpu_ms_median": 4611.31,
+   "cpu_ms_min": 4611.31,
+   "cpu_ms_max": 4611.31,
+   "refused": 1
+  },
+  "100000/unique/A/s2": {
+   "cpu_ms_median": 4909.2,
+   "cpu_ms_min": 4909.2,
+   "cpu_ms_max": 4909.2,
+   "refused": 1
+  },
+  "100000/unique/A/s3": {
+   "cpu_ms_median": 3.25,
+   "cpu_ms_min": 3.25,
+   "cpu_ms_max": 3.25,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 999,
+   "misses": 1,
+   "recorded": 1,
+   "inner_built": 0
+  },
+  "100000/unique/Agate/s1": {
+   "cpu_ms_median": 4662.46,
+   "cpu_ms_min": 4662.46,
+   "cpu_ms_max": 4662.46,
+   "refused": 1
+  },
+  "100000/unique/Agate/s2": {
+   "cpu_ms_median": 4664.9,
+   "cpu_ms_min": 4664.9,
+   "cpu_ms_max": 4664.9,
+   "refused": 1
+  },
+  "100000/unique/Agate/s3": {
+   "cpu_ms_median": 4683.77,
+   "cpu_ms_min": 4683.77,
+   "cpu_ms_max": 4683.77,
+   "refused": 1
+  },
+  "100000/unique/B/s1": {
+   "cpu_ms_median": 24.55,
+   "cpu_ms_min": 24.55,
+   "cpu_ms_max": 24.55,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/unique/B/s2": {
+   "cpu_ms_median": 18.51,
+   "cpu_ms_min": 18.51,
+   "cpu_ms_max": 18.51,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/unique/B/s3": {
+   "cpu_ms_median": 18.75,
+   "cpu_ms_min": 18.75,
+   "cpu_ms_max": 18.75,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/repeat/A/s1": {
+   "cpu_ms_median": 946.94,
+   "cpu_ms_min": 946.94,
+   "cpu_ms_max": 946.94,
+   "refused": 0,
+   "walks": 200.01,
+   "hits": 800,
+   "misses": 200,
+   "recorded": 100,
+   "inner_built": 0
+  },
+  "100000/repeat/A/s2": {
+   "cpu_ms_median": 0.78,
+   "cpu_ms_min": 0.78,
+   "cpu_ms_max": 0.78,
+   "refused": 0,
+   "walks": 0.01,
+   "hits": 1000,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 0
+  },
+  "100000/repeat/A/s3": {
+   "cpu_ms_median": 0.98,
+   "cpu_ms_min": 0.98,
+   "cpu_ms_max": 0.98,
+   "refused": 0,
+   "walks": 0.01,
+   "hits": 1000,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 0
+  },
+  "100000/repeat/Agate/s1": {
+   "cpu_ms_median": 4497.68,
+   "cpu_ms_min": 4497.68,
+   "cpu_ms_max": 4497.68,
+   "refused": 1
+  },
+  "100000/repeat/Agate/s2": {
+   "cpu_ms_median": 4503.17,
+   "cpu_ms_min": 4503.17,
+   "cpu_ms_max": 4503.17,
+   "refused": 1
+  },
+  "100000/repeat/Agate/s3": {
+   "cpu_ms_median": 4497.03,
+   "cpu_ms_min": 4497.03,
+   "cpu_ms_max": 4497.03,
+   "refused": 1
+  },
+  "100000/repeat/B/s1": {
+   "cpu_ms_median": 24.75,
+   "cpu_ms_min": 24.75,
+   "cpu_ms_max": 24.75,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/repeat/B/s2": {
+   "cpu_ms_median": 17.34,
+   "cpu_ms_min": 17.34,
+   "cpu_ms_max": 17.34,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/repeat/B/s3": {
+   "cpu_ms_median": 18.86,
+   "cpu_ms_min": 18.86,
+   "cpu_ms_max": 18.86,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/skewed/A/s1": {
+   "cpu_ms_median": 2483.98,
+   "cpu_ms_min": 2483.98,
+   "cpu_ms_max": 2483.98,
+   "refused": 0,
+   "walks": 540.0,
+   "hits": 460,
+   "misses": 540,
+   "recorded": 20,
+   "inner_built": 0
+  },
+  "100000/skewed/A/s2": {
+   "cpu_ms_median": 2520.36,
+   "cpu_ms_min": 2520.36,
+   "cpu_ms_max": 2520.36,
+   "refused": 0,
+   "walks": 500.0,
+   "hits": 500,
+   "misses": 500,
+   "recorded": 500,
+   "inner_built": 0
+  },
+  "100000/skewed/A/s3": {
+   "cpu_ms_median": 4.79,
+   "cpu_ms_min": 4.79,
+   "cpu_ms_max": 4.79,
+   "refused": 0,
+   "walks": 0.01,
+   "hits": 1000,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 0
+  },
+  "100000/skewed/Agate/s1": {
+   "cpu_ms_median": 4597.87,
+   "cpu_ms_min": 4597.87,
+   "cpu_ms_max": 4597.87,
+   "refused": 1
+  },
+  "100000/skewed/Agate/s2": {
+   "cpu_ms_median": 4580.28,
+   "cpu_ms_min": 4580.28,
+   "cpu_ms_max": 4580.28,
+   "refused": 1
+  },
+  "100000/skewed/Agate/s3": {
+   "cpu_ms_median": 4675.18,
+   "cpu_ms_min": 4675.18,
+   "cpu_ms_max": 4675.18,
+   "refused": 1
+  },
+  "100000/skewed/B/s1": {
+   "cpu_ms_median": 24.14,
+   "cpu_ms_min": 24.14,
+   "cpu_ms_max": 24.14,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/skewed/B/s2": {
+   "cpu_ms_median": 17.77,
+   "cpu_ms_min": 17.77,
+   "cpu_ms_max": 17.77,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  },
+  "100000/skewed/B/s3": {
+   "cpu_ms_median": 20.16,
+   "cpu_ms_min": 20.16,
+   "cpu_ms_max": 20.16,
+   "refused": 0,
+   "walks": 1.01,
+   "hits": 0,
+   "misses": 0,
+   "recorded": 0,
+   "inner_built": 1
+  }
+ }
+}
