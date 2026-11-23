@@ -1,6 +1,8 @@
 # Work order DQ - a Cabin's miss answered from a map: the correlated Cabin probe's unobserved keys served by the statement-local build, one walk for the statement in place of one walk a miss
 
-Status: **BUILT 2026-11-23 and STOPPED at DQ-S5 on a measured regression,
+Status: **LANDED on `main` open at DQ-S5** on the operator's "push no
+verify" (`raft-marks-2026-11-23.md` §4; the hook skipped, the suite 0 failed
+of 5,159 at `7e31d272`, the same build inputs). **BUILT 2026-11-23 and STOPPED at DQ-S5 on a measured regression,
 not closed** (DQ-Q13 (a), CLA's proposal as revised at DQ-S5's review,
 not the operator's mark; `raft-marks-2026-11-23.md` §3; §7's DQ-S5). E1 is
 built on top-level chains and sub-chains; E2 is not (DQ-S0). Everything is

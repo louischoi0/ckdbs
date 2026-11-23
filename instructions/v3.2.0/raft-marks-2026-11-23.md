@@ -30,3 +30,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | DQ-Q2 (b) or (c); DQ-Q13 (b) or (c); the residue's diagnosis budget; a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the DQ order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md`; `docs/inflight/known-gaps.md` |
 
+
+## 4. DQ landed, open at DQ-S5: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report that DQ was built and stopped at DQ-S5 on a measured regression |
+| **Mark** | **DQ's work branch lands on `main` as it stands**: built (DQ-S1..S3), stopped at DQ-S5, **open, not closed**. The branch `worktree-dq-cabin-miss-build` (worktree `dq-cabin-miss-build`; record `e7f733f0` and this record) is merged `--no-ff` over `origin/main` `68e5a69f` and pushed with `--no-verify`. The full suite ran 0 failed of 5,159 at `7e31d272`, and nothing after it changed a build input (the S5 record and this one are documents, bench and tools only), so the hook was not run again |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | DQ's close: the push word is not read as accepting the residue (DQ-Q13); DQ-Q2 (b) or (c); a tag or a version |
+| **Recorded at** | this file; the DQ order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
