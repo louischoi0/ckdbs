@@ -195,10 +195,10 @@ CREATE TABLE [<namespace>.]<name>
     across the whole relation instead of at its end. A row keeps its place
     when its key changes, and a key inserted again before its deleted row
     is purged takes another place; such rows are found through the index,
-    one descent more. `ANALYZE` shows `home=` on a read that may try the
-    place first: an autocommit `SELECT`, or one in a `READ ONLY`
-    transaction. Inside a read-write transaction the read goes through
-    the index.
+    one descent more. `ANALYZE` shows `home=` on a read whose `WHERE`
+    names the whole key. The place is tried first by an autocommit
+    `SELECT` and inside a `READ ONLY` transaction; inside a read-write
+    transaction the same plan reads the index.
     **Where rows are deleted or keys change often, prefer `HEAP`**: a
     deleted row's space and its key's dead index entries are reclaimed in
     the background there, while a `BTREE` keeps both until `PURGE FROM t

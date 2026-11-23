@@ -1265,3 +1265,71 @@ the standing go-ahead (§4a).
   the operator asked for the push, §17) and the close's re-measurement.
   Overhead not measured; measured at the milestone's close.
 
+### The landing of DR-S3f open, and its review, 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`.
+
+- **Landed open on the operator's word** (`raft-marks-2026-11-23.md`
+  §17): `origin/main` = `38d743da`, a `--no-ff` merge of `52b71189` onto
+  `e9df68d0`, its tree the branch head's. **The pre-push hook did not
+  run**, although the word asked for it: this clone has no
+  `core.hooksPath`, which CLA had not checked before pushing. The suite
+  had run 0 failed of 5,221 on the same sources before the push, and the
+  hook's own check (`scripts/test.sh`) was run on the pushed tree after
+  it: 0 failed of 5,221, exit 0.
+- **The review of DR-S3f** (`critics-developer`, report only, on the tree
+  as pushed): **no path found where the home changes a row set or leaves
+  a lock, a spill, a reservation or a hold behind.** It recomputed the
+  five pinned vectors in a program of its own, and traced, with the
+  reason each is closed: the `rows_matched` read-back (step ids are
+  unique across a statement, sub-chains included, and nothing before the
+  increment runs another step); the residual holding every key equality;
+  the view gate (every read-write transaction has its id from `BEGIN`, so
+  a view with none is a commit-LSN cut); the unique check's promise (a
+  named row whose latest writer is undecided answers busy whatever its
+  key); the steps that never carry a home; the write side's holds.
+- **Applied**:
+  - **A refused home borrow left its wake registered.** `BorrowChain`
+    keeps a refusal's wake for a statement that ends on it, and the home
+    is the one refusal a statement goes on from; a later wait of the same
+    statement that records none of its own would have parked on the
+    home's holder until the fault net. Nothing reached it; the wake is
+    dropped where the home is refused.
+  - `IndexProbe::home` is an id with 0 for none, not an `optional` (8
+    bytes fewer in every step of every chain); one helper gathers a key's
+    values for the insert and the read (`exec::HashedKeyHomeOf`); the
+    descent that asks whether a home is bound builds no status; one name
+    for the boundary between homes and issued ids.
+  - Documents: uniqueness is checked before an id is chosen, not after
+    the placement; `heap-and-tuple.md` §4.1 and §4.1c and `CLAUDE.md`'s
+    invariant 11 and tuple key row said an omitted key is the mark, which
+    a hashed relation's is not; the manual on where `home=` prints;
+    `known-gaps.md` on the shape the home serves and on `READ COMMITTED`.
+  - Three cells it found missing: a subquery that judges the home's row;
+    the relation as a join's inner step; a held `READ ONLY` view read
+    both ways across a later delete, re-insert and move of its keys.
+- **Rejected**:
+  - **Dropping the tag and the length from a fixed-width column's
+    canonical bytes.** It is a change of a persisted format that is on
+    `main` (DR-R12), for a few bytes hashed a key; the tag keeps the
+    bytes self-describing if a type's encoding ever changes width.
+  - `if (!at_home) for (;;)` for the issue loop: its condition is read
+    once on the path that places at the first round, as the `if` would be.
+  - One test for "embedded" in place of `key_form` and
+    `embedded_key.empty()`: the first is the discriminator and the second
+    the data, and `CheckEmbeddedKey` refuses a relation where they
+    disagree, at the door and at the load.
+  - A hashed relation in the index contract suite with `indexes = off`:
+    not built; `known-gaps.md` says so.
+- **What a relation that is not hashed pays for the form** (DR-R9 as the
+  operator's condition of §16), from the review: no instruction more on
+  an insert's form test, which replaced the embedded form's; **one
+  compare a row whose key is omitted** (`home != 0`), on every relation;
+  **one load and branch an index step executed** (`home != 0`), on every
+  relation with a secondary index, per outer row where the step is a
+  join's inner; one compare where a literal index probe is chosen at
+  compile; 8 bytes a step. Each is the test that asks whether there is a
+  home. Removing them needs a separate access kind and a separate issue
+  path, which nothing built.
+- **Suite**: 0 failed of 5,224.
+

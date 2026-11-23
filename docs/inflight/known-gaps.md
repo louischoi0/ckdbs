@@ -3645,14 +3645,19 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
   sessions racing one key: its units are the walk's, and the cells are the
   equivalence and the sim's.
 - **A hashed key's home serves one shape** (DR-S3f): a `SELECT` whose
-  `WHERE` pins every key column by an equality with a literal. A write by
+  `WHERE` pins every key column by an equality with a literal, where the
+  ladder takes an index probe for it with no range and no value list,
+  and `indexes` is on (off, the step walks before a home is tried). A write by
   the whole key, a `SELECT ... FOR UPDATE`, a join on the whole key and a
   value list read the index and then the row, as before homes. **So does
   every `SELECT` inside a read-write transaction**: the home is tried only
   under a view that is a commit point. `READ COMMITTED`'s statement view
-  would be safe by the argument in `heap-and-tuple.md` §3.1c and is not
-  admitted, because a view does not carry its level; the remedy named and
-  not built is that field.
+  would be safe - CLA's reading, not a spec's: another transaction's row
+  of the key waits on this transaction's own, so a view minted at the
+  statement shows one - and is not admitted, because a view does not
+  carry its level; the remedy named and not built is that field.
+- **Not tested on the hashed form**: the index contract suite's
+  byte-for-byte comparison with `indexes = off`.
 - **A row off its home stays off it.** A row whose key moved, a row whose
   key was inserted again while its deleted row was unpurged, and a row
   whose home another key took are read by two descents for their lives:
