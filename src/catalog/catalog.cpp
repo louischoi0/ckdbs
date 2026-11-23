@@ -7,6 +7,7 @@
 #include <tuple>
 #include <array>
 #include <cctype>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <optional>
@@ -226,17 +227,21 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
 }
 
 // `ForFirstRow` for the one row whose oid is `oid`: every other row is
-// passed over on the four bytes at `RowT::kOidOffset`, undecoded.
+// passed over on the oid's eight bytes at `RowT::kOidOffset`, undecoded.
 //
 // **For the two scans an `INSERT` runs per row** (`AllocateRowId`,
 // `AdmitExplicitRowId`). They read `sys.tables` from its head to the
-// relation's row, so each row inserted paid a full decode of every relation
-// created before its own, and DR's close read a load dearer by the decode's
-// growth times that count. A row that is not the relation's now costs a
-// compare, whatever a `SysTableRow` comes to hold. A payload too short to
-// carry an oid is handed to `Decode`, which refuses it; a row passed over
-// is not read, so one this build could not decode no longer stops an
-// insert into another relation.
+// relation's row - the system relations' rows at least - and decoded every
+// one; a row that is not the relation's now costs one compare. DR's close
+// read a multi-row load -0.01 us to -0.09 us a row against the opening
+// commit with this, where seven builds without it read +0.08 us to
+// +0.34 us (`bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md`). **It
+// does not show where that cost came from**: what the milestone added to
+// `Decode` is one four-byte copy a row, which does not account for it, and
+// this removes the decode as a whole. A payload too short to carry an oid
+// is handed to `Decode`, which refuses it; any other row passed over is not
+// read, so one this build could not decode no longer stops an insert into
+// another relation.
 template <typename RowT, typename Fn>
 StatusOr<bool> ForRowOfOid(storage::PageStore& store, PageId root, Oid oid, Fn&& fn,
                             PageId* acted_page = nullptr,

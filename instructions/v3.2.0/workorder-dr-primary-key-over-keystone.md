@@ -1,18 +1,36 @@
 # Work order DR - a primary key of any type and column count over an unchanged Keystone: the declared key as a name the engine resolves to the row's identity, priced on every relation before anything is built
 
-Status: **OPENED 2026-11-23 on the operator's standing go-ahead**
-(`/go-ahead-achieving-milestone DR`, `raft-marks-2026-11-23.md` §14), at
-`e9df68d0` (`v3.5.0-114-ge9df68d02`), on worktree `dq-cabin-miss-build`,
-branch `worktree-dr-primary-key`. **DR-S0, DR-S0b and DR-S0c are run**
-(§1.8, `bench/v3.5.0/results-dr-s0-premise-v3.5.0-114-ge9df68d02.md`) and
-**DR-S1's verdict is written** (§5a): P3, P7 (new: a write by a unique key
-descends), P2a, F0's keyword, F1 and P1 go; F2 is not built (DR-Q11 (a):
-its point read is 0.9 us to 1.8 us ahead of P1's and its insert 23 % to
-27 % dearer, past the 10 % bar DR-S1 set). **Every DR-Q item but DR-Q0 and
-DR-Q2 (the operator's marks) and DR-Q12 and DR-Q13 (not reached) is
-adopted on that standing go-ahead and is CLA's proposal, not the
-operator's per-item mark** (§4a). The stage log is §7. What follows is the
-header as the draft carried it.
+Status: **CLOSED 2026-11-23 on the operator's standing go-ahead** - CLA's
+close under `/go-ahead-achieving-milestone DR`, not the operator's own word
+for it (`raft-marks-2026-11-23.md` §14, §18). Opened at `e9df68d0`
+(`v3.5.0-114-ge9df68d02`) on worktree `dq-cabin-miss-build`, branch
+`worktree-dr-primary-key`; measured closed at `e0d86ec6`
+(`v3.5.0-124-ge0d86ec62`,
+`bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md`). **Landed open on
+`main` through DR-S3f at `38d743da`** on the operator's word (§17); what
+followed it - DR-S3f's review, the catalog scan and this close - is on the
+branch and waits for the word.
+
+**What is built** (§5a, §7): a write that names a unique key whole descends
+by it (P7); a primary key's contract, its value free to move (P3); a
+hidden-Keystone relation as a foreign key's parent (P2a); on a btree, the
+keyword on an `int64` first column (F0), the embedded key (F1) and **the
+hashed home (F2)**, under superblock 41. **F2 is built on the operator's
+bar** (§16: an insert 50 % or more dearer is accepted where no other path
+is affected); measured, its insert is 17.5 % and 18.7 % dearer than the
+indexed form's and its point read 2.8 us and 1.6 us cheaper. Not built:
+P2b, P2d on a heap, P5; P2c and P8 are their own orders.
+
+**The operator's own marks are DR-Q0, DR-Q2, DR-R1, DR-R9, DR-R10 and
+DR-Q11's bar. Every other DR-Q item, the format event (DR-Q22, which
+DR-R5 put to the operator's own word) and the reading of DR-R9 at the
+close (DR-Q25) are CLA's proposals, adopted on the standing go-ahead**
+(§4a). DR-R9 at the close: the chains are identical and the delta is
+inside the control in 13 of 14 phases over 15 server lifetimes, the one
+outside a saving; **"no instruction added" is not met to the letter**, and
+§7's close entry lists what a relation whose key is one `int64` first
+column still executes for the other forms. The stage log is §7. What
+follows is the header as the draft carried it.
 
 Draft status: **DRAFT, WRITTEN 2026-11-23, not opened.** Written in the main
 checkout on `main` at `5fdca9e0` (`v3.4.17-127-g5fdca9e0` by `origin`'s
@@ -1332,4 +1350,92 @@ On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`.
   home. Removing them needs a separate access kind and a separate issue
   path, which nothing built.
 - **Suite**: 0 failed of 5,224.
+
+### DR-S4, the close, 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`.
+
+- **The run at `824acfbe`** (`v3.5.0-123-g824acfbed`,
+  `bench/v3.5.0/results-dr-close-v3.5.0-123-g824acfbed.md`), over DR-S3f:
+  - **The hashed form against the indexed form it replaced**, the same
+    cells on the two binaries, 100,000 rows arriving shuffled: the load
+    **+17.5 %** (`(int32, int32)`, 8.35 us to 9.81 us a row) and
+    **+18.7 %** (`varchar(64)`, 8.31 us to 9.87 us), against the operator's
+    bar of 50 %; the point read -2.78 us and -1.58 us (one descent,
+    `pages=1`, where the indexed form read `pages=2`); the range, the
+    update and the delete by the whole key level; the data file 27.8 %
+    larger, its inserts dividing leaves across the tree. Two sequential
+    runs, their floor read off the cells both binaries serve alike.
+  - **The relations with no key of their own**: 11 of 14 phases inside
+    the control, the btree's walked update faster, and **the two loads
+    outside it**, +0.18 us a row on the btree and +0.13 us on the heap -
+    the delta that had been positive in every build since the first.
+- **The catalog scan, `e0d86ec6`.** An insert's two scans of `sys.tables`
+  (`AllocateRowId`, `AdmitExplicitRowId`) decoded every relation's row on
+  the way to its own; they pass the others over on their oid bytes
+  (`ForRowOfOid`). The load reads -0.01 us and -0.08 us a row against the
+  opening commit with it. **It does not show where the cost came from**:
+  what the milestone added to the decode is one four-byte copy a row, and
+  this removes the decode as a whole, so the cost may be offset and not
+  found. Reviewed (`critics-developer`, report only): the row acted on is
+  the row acted on before in every state it traced; the one refusal an
+  insert loses - another relation's undecodable row ahead of its own - was
+  positional and guards nothing a mount, a catalog load or a view read
+  does not check. **Applied**: the comment's causal claim reduced to what
+  the run shows, two comments the change made false, the missing include.
+  **Rejected**: deleting the callbacks' own oid test and the helper's
+  unused parameters - behaviour-neutral cuts in code the close had
+  already measured. Not tested: an insert going ahead past another
+  relation's undecodable row.
+- **The close's run, at `e0d86ec6`** (`v3.5.0-124-ge0d86ec62`,
+  `bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md`), opening commit
+  against closing commit on a btree and a declared-Keystone heap, with a
+  same-binary control:
+  - **Five rounds**: 11 of 14 phases inside; both loads inside (-0.01 us
+    and -0.08 us a row); outside, all on the btree, the walked update
+    (-277 us, a saving), the point read (+0.32 us, past a control of
+    -0.26 us to +0.27 us by 0.05 us) and the range (+0.22 us, against a
+    control that lay below zero).
+  - **Fifteen rounds**, to tell a cost from five deltas' width: **13 of 14
+    inside**; the read +0.00 us and the range -0.53 us; the one outside is
+    the btree's walked update, **-415 us (-5.9 %), below the opening
+    commit in 15 of 15 rounds**, unexplained (no hardware counters on the
+    host); the loads -0.08 us and -0.09 us a row. Inside the control and
+    leaning one way: the heap's range (+1.51 us, +2.1 %, above in 12 of 15
+    rounds), delete (+0.22 us, 11 of 15) and insert (+0.16 us, 10 of 15).
+  - Not re-measured at this commit: the hashed form against the indexed
+    one, whose other binary does not carry the scan change.
+- **DR-R9 at the close** (DR-Q25, adopted on the standing go-ahead; the
+  rule is the operator's):
+  - *Its statements compile to the chains they compiled to*: by
+    construction, and by `btree_primary_key_test.cpp`'s first cell on one
+    build; **no cell compares a chain with the opening commit's**.
+  - *A delta inside the control's range*: as above.
+  - ***No instruction added* is not met to the letter.** What a relation
+    whose key is one `int64` first column executes at `e0d86ec6` that it
+    did not at `e9df68d0`, each a test that asks whether another form is
+    there: one compare of the key form a row inserted, and one of the
+    row's home where its key is omitted; one test a walked step compiled
+    (the embedded arm), none on a keyed read; one compare where a literal
+    index probe is chosen, and a load and a branch each time an index
+    step runs (the home), on a relation that has a secondary index; one
+    test an `UPDATE`'s assignment compiled; on a write that is not by the
+    tuple key, `WriteKeyOf`'s tail, `WriteByKeys`' cursor test and P7's
+    loop over the relation's indexes, which is DR-Q16's feature; a
+    four-byte copy when its own `sys.tables` row is decoded;
+    `DESCRIBE`'s `primary_key` column (DR-Q24); 8 bytes a step. An insert
+    executes less than it did: the catalog scan.
+- **The sim**: 290 runs, 0 failures, the release build at `e0d86ec6`; its
+  keyed relation is a heap or a hashed btree by the seed.
+- **The suite**: 0 failed of 5,224 at `e0d86ec6`; run again on the close's
+  tree, whose only source change is comments and an include (the count
+  is in the commit that carries this entry).
+- **`origin/main`** was `38d743da` at the close, this branch's own merge
+  of `52b71189`; nothing else had landed, so there was nothing to merge
+  in.
+- **Left for the operator**: the push of what follows `38d743da`; DR-R9's
+  list above, under the operator's own rule; superblock 41 as the
+  operator's own word (DR-R5); whether F2 stays where a relation larger
+  than the pool or more than one core prices its insert differently (not
+  measured); whether this clone's pre-push hook is to be enabled.
 

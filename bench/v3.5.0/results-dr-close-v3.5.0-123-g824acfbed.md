@@ -1,5 +1,7 @@
 # DR close - what the hashed home (F2) costs and buys a btree's wide primary key, and what it left to the statements that did not ask for it
 
+> The close of DR is `bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md` (at `e0d86ec62`); this file stands as the record of the hashed form (F2) against the indexed form (its section 2, F2 against P1) and of the run that found the loads outside the control.
+
 Measured 2026-11-23 between 09:08 and 09:14 UTC on worktree
 `dq-cabin-miss-build`, branch `worktree-dr-primary-key`, at `824acfbed`
 (`v3.5.0-123-g824acfbed`), the commit DR closes at. Order:

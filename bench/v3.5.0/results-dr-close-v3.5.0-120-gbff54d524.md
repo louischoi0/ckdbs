@@ -1,6 +1,6 @@
 # DR close - what a primary key over an unchanged Keystone cost the statements that did not ask for it, and what it bought the ones that did
 
-> The close of DR is `bench/v3.5.0/results-dr-close-v3.5.0-123-g824acfbed.md` (the hashed home, F2, at `824acfbed`); this file stands as the record of the first close, at `bff54d524`, and of its diagnostic builds.
+> The close of DR is `bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md` (at `e0d86ec62`); this file stands as the record of the first close, at `bff54d524`, and of its diagnostic builds.
 
 Measured 2026-11-23 between 07:23 and 07:27 UTC on worktree
 `dq-cabin-miss-build`, branch `worktree-dr-primary-key`, at `bff54d524`
