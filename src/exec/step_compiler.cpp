@@ -1250,24 +1250,6 @@ std::optional<EmbeddedKeyWindow> EmbeddedKeyWindowOnStep(const catalog::TableAcc
     return window.ok() ? window.value() : std::nullopt;
 }
 
-// **The home a hashed primary key's conjuncts name** (DR-S3f,
-// `hashed_key.hpp`): every key column pinned by an equality with a literal.
-// nullopt on any other relation, where a column is not pinned, or where a
-// value does not coerce or encode - the index answers then, as it answers
-// whatever the home does not.
-std::optional<std::uint64_t> HashedHomeOnStep(const catalog::TableAccess& access,
-                                              const Step& step, std::uint16_t slot) {
-    if (access.schema.key_form != catalog::kKeyFormHashed) return std::nullopt;
-    const std::vector<std::uint16_t> key = access.PrimaryKeyColumns();
-    std::vector<parser::AstValue> values;
-    for (const std::uint16_t pos : key) {
-        const parser::AstValue* pinned = EqualityOnColumn(step, slot, pos);
-        if (pinned == nullptr) return std::nullopt;
-        values.push_back(*pinned);
-    }
-    return HashedKeyHome(access.schema, key, values);
-}
-
 // Everything about a probe that comes from the index alone: the catalog
 // fields, the column lists, and the padding templates the bounds are built
 // on top of - `low` all 0x00 and `high` all 0xFF, the true tail bounds
@@ -3649,7 +3631,14 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // an index and none elsewhere.
                 if (rel.schema.key_form == catalog::kKeyFormHashed &&
                     step.kind == AccessKind::kIndexProbe && !step.key_set.has_value()) {
-                    step.index->home = HashedHomeOnStep(rel, step, slot);
+                    // 0 where a key column is not pinned by an equality
+                    // with a literal, or a value does not coerce or encode:
+                    // the index answers, as it answers whatever the home
+                    // does not.
+                    step.index->home =
+                        HashedKeyHomeOf(rel, [&](std::uint16_t pos) -> const parser::AstValue* {
+                            return EqualityOnColumn(step, slot, pos);
+                        });
                 }
             } else if (auto cx = index ? CorrelatedIndexProbeOf(scope, rel, step, slot, pin.name)
                                        : std::nullopt;

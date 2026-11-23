@@ -360,6 +360,83 @@ TEST_F(WideKeyTest, AReadInsideAReadWriteTransactionIsTheIndexsAlone) {
     in_txn("COMMIT");
 }
 
+// The home's row is judged by the step's sub-chains as the probe's would be:
+// `rows_matched` moves before them, and a row they refuse is refused once.
+TEST_F(WideKeyTest, ASubqueryJudgesTheHomesRowAsItWouldTheProbes) {
+    Ok("INSERT INTO w VALUES ('ann', 1, 10), ('ann', 2, 20), ('bob', 1, 30)", "INSERTED");
+    Ok("CREATE TABLE seen (id int64, n int64)", "CREATED");
+    Ok("INSERT INTO seen VALUES (1, 2)", "INSERTED");
+    const std::string exists = " AND EXISTS (SELECT 1 FROM seen WHERE seen.n = w.n)";
+    for (const char* n : {"1", "2"}) {
+        const std::string by_key =
+            "SELECT v FROM w WHERE k = 'ann' AND n = " + std::string(n) + exists;
+        const std::string by_range = "SELECT v FROM w WHERE k = 'ann' AND n >= " +
+                                     std::string(n) + " AND n <= " + n + exists;
+        EXPECT_EQ(Rows(by_key).rows, Rows(by_range).rows) << n;
+    }
+    EXPECT_EQ(Rows("SELECT v FROM w WHERE k = 'ann' AND n = 2" + exists).rows, (Table{{"20"}}));
+    EXPECT_TRUE(Rows("SELECT v FROM w WHERE k = 'ann' AND n = 1" + exists).rows.empty());
+}
+
+// A hashed relation as a join's inner step, each outer row pinning the whole
+// key by literals and its own column: the answers are the range form's.
+TEST_F(WideKeyTest, AJoinOverTheRelationAnswersWhatItsRangeFormAnswers) {
+    Ok("INSERT INTO w VALUES ('ann', 1, 10), ('ann', 2, 20), ('bob', 1, 30)", "INSERTED");
+    Ok("CREATE TABLE o (id int64, n int64)", "CREATED");
+    Ok("INSERT INTO o VALUES (1, 1), (2, 2), (3, 2), (4, 7)", "INSERTED");
+    EXPECT_EQ(Rows("SELECT o.id, w.v FROM o JOIN w ON w.n = o.n WHERE w.k = 'ann' "
+                   "ORDER BY o.id")
+                  .rows,
+              (Table{{"1", "10"}, {"2", "20"}, {"3", "20"}}));
+    // The whole key by literals beside a join: the home is tried per outer row.
+    EXPECT_EQ(Rows("SELECT o.id, w.v FROM o JOIN w ON w.v >= o.n WHERE w.k = 'ann' AND w.n = 2 "
+                   "ORDER BY o.id")
+                  .rows,
+              Rows("SELECT o.id, w.v FROM o JOIN w ON w.v >= o.n WHERE w.k = 'ann' AND "
+                   "w.n >= 2 AND w.n <= 2 ORDER BY o.id")
+                  .rows);
+}
+
+// A READ ONLY transaction's view is a commit point and is held: after a
+// later commit deletes a key's row and another inserts the key again, and
+// after one moves a key, the home's row reaches the old view through undo
+// or not at all, and both reads agree with what the view saw.
+TEST_F(WideKeyTest, AHeldReadOnlyViewReadsThroughTheHomeWhatItReadsThroughTheIndex) {
+    Ok("INSERT INTO w VALUES ('ann', 1, 10), ('ann', 2, 20), ('bob', 1, 30)", "INSERTED");
+    Session reader;
+    const auto held = [&](const std::string& sql) {
+        return testing_view::ReadViewText(db_->dispatcher().Dispatch(sql, &reader).response).rows;
+    };
+    const auto both = [&](const std::string& k, int n) {
+        const std::string at = "SELECT v FROM w WHERE k = '" + k + "' AND n ";
+        const Table by_key = held(at + "= " + std::to_string(n));
+        EXPECT_EQ(by_key, held(at + ">= " + std::to_string(n) + " AND n <= " +
+                               std::to_string(n)))
+            << k << ' ' << n;
+        return by_key;
+    };
+    ASSERT_EQ(db_->dispatcher()
+                  .Dispatch("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", &reader)
+                  .response.rfind("BEGIN", 0),
+              0u);
+    EXPECT_EQ(both("ann", 2), (Table{{"20"}}));
+
+    Ok("DELETE FROM w WHERE k = 'ann' AND n = 2", "DELETED 1");
+    Ok("INSERT INTO w VALUES ('ann', 2, 21)", "INSERTED");       // off its home
+    Ok("UPDATE w SET n = 9 WHERE k = 'bob' AND n = 1", "UPDATED 1");  // moved
+    Ok("UPDATE w SET v = 11 WHERE k = 'ann' AND n = 1", "UPDATED 1");
+
+    EXPECT_EQ(both("ann", 2), (Table{{"20"}}));  // the deleted row, as the view saw it
+    EXPECT_EQ(both("bob", 1), (Table{{"30"}}));  // before the move
+    EXPECT_TRUE(both("bob", 9).empty());
+    EXPECT_EQ(both("ann", 1), (Table{{"10"}}));
+    db_->dispatcher().Dispatch("COMMIT", &reader);
+
+    EXPECT_EQ(Rows("SELECT v FROM w WHERE k = 'ann' AND n = 2").rows, (Table{{"21"}}));
+    EXPECT_EQ(Rows("SELECT v FROM w WHERE k = 'bob' AND n = 9").rows, (Table{{"30"}}));
+    EXPECT_TRUE(Rows("SELECT v FROM w WHERE k = 'bob' AND n = 1").rows.empty());
+}
+
 // DR-Q19, DR-Q21: such a btree keeps its delete-marked rows and its key's
 // dead entries as any btree does, and both are purged by statement.
 TEST_F(WideKeyTest, ItsDeletedRowsAndItsKeysDeadEntriesArePurgedByStatement) {

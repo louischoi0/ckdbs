@@ -192,7 +192,7 @@ struct SysTableRow {
     // form it does not know, or key columns without the form that carries
     // them. Asked where a relation's row is loaded for use
     // (`Catalog::InitTableAccess`, `BuildSchemaFromColumns`), never in
-    // `Decode`, which the insert path runs over rows that are not its own.
+    // `Decode`.
     Status CheckKeyForm() const;
 };
 

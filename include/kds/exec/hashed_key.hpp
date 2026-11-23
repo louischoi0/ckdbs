@@ -13,7 +13,8 @@
 // away - is issued an id in `[2^47, 2^48)`, which no home ever is.
 //
 // **The home is a fast path and never an authority** (`[quiet-wrong]`,
-// DR-R11): uniqueness is the index's check on full values (BX), a missing
+// DR-R11): uniqueness is the index's check on full values (BX), made before
+// an id is chosen, a missing
 // row at a home says nothing, and a row found there answers only through
 // the statement's whole residual. So a home computed differently for two
 // spellings of one key value costs a second descent and no answer.
@@ -28,18 +29,15 @@
 #include <optional>
 #include <span>
 
+#include "kds/base/function_ref.hpp"
 #include "kds/catalog/schema.hpp"
 #include "kds/parser/ast.hpp"
 
 namespace kds::exec {
 
-// Homes are `[1, kHashedKeyHomes]`; `catalog::kHashedKeyIssuedBase` is the
-// first id above them, where such a relation's issue mark starts.
-inline constexpr std::uint64_t kHashedKeyHomes = (std::uint64_t{1} << 47) - 1;
-static_assert(kHashedKeyHomes + 1 == catalog::kHashedKeyIssuedBase);
-
 // FNV-1a over `canonical`, finished by MurmurHash3's 64-bit mix, folded to
-// `[1, kHashedKeyHomes]`.
+// `[1, catalog::kHashedKeyIssuedBase)`: every id below the first one such
+// a relation issues.
 std::uint64_t Hash47(std::span<const std::byte> canonical) noexcept;
 
 // The home of the key whose columns are `key_cols` (positions in `schema`,
@@ -47,11 +45,20 @@ std::uint64_t Hash47(std::span<const std::byte> canonical) noexcept;
 // an `INSERT`'s is. The canonical bytes are, per column, a tag byte, the
 // value's length as four little-endian bytes and the value: a string's
 // whole text (tag 2), any other type's index key encoding (tag 1), which
-// is the value in full for every type but a string. nullopt where a value
-// is NULL, does not coerce or does not encode: the row is then issued an id
-// and the read takes the index.
-std::optional<std::uint64_t> HashedKeyHome(const catalog::Schema& schema,
-                                           std::span<const std::uint16_t> key_cols,
-                                           std::span<const parser::AstValue> values);
+// is the value in full for every type but a string. **0, which is no id,
+// where the key has no home**: a value that is NULL, does not coerce or
+// does not encode, or a column list that is not the values'. The row is
+// then issued an id and the read takes the index.
+std::uint64_t HashedKeyHome(const catalog::Schema& schema,
+                            std::span<const std::uint16_t> key_cols,
+                            std::span<const parser::AstValue> values);
+
+// The same over `access`'s primary key (`TableAccess::PrimaryKeyColumns`),
+// each column's value asked of `value_of` by its position: an `INSERT`'s
+// row, a step's equality literals. 0 where `value_of` has none for a key
+// column, or the relation has no key.
+std::uint64_t HashedKeyHomeOf(
+    const catalog::TableAccess& access,
+    FunctionRef<const parser::AstValue*(std::uint16_t)> value_of);
 
 }  // namespace kds::exec

@@ -8805,7 +8805,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                 return s;
             }
         } else if (!named_by_row) {
-            home = HashedRowHome(ta, body);
+            home = exec::HashedKeyHomeOf(ta, [&](std::uint16_t pos) -> const parser::AstValue* {
+                return pos == 0 || pos > body.size() ? nullptr : &body[pos - 1];
+            });
         }
     }
     // Where a refusal for the key points: the tuple key's token, or on an
@@ -9053,8 +9055,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // holds, a live or deleted row keeps, or another key hashed to
         // costs this row nothing but its place - it is issued an id below,
         // as every row of the indexed form was before homes. The home
-        // decides nothing else: the key's uniqueness is the index's check,
-        // after the placement, as for any row (DR-R11).
+        // decides nothing else: the key's uniqueness was the index's check,
+        // made above before any id was chosen, as for any row (DR-R11).
         bool at_home = false;
         if (home != 0) {
             const txn::LockKey unit = txn::LockKey::Tuple(ta.oid, home);
@@ -9067,13 +9069,26 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                                  return Status::AlreadyExists("the home is another writer's");
                              });
             if (busy.has_value() && busy->code() != StatusCode::kAlreadyExists) return *busy;
-            if (!busy.has_value()) {
-                Status bound = [&]() -> Status {
-                    auto present = exec::LocateRow(page_store_, ta, home);
-                    return present.ok() ? Status::AlreadyExists("the home is bound")
-                                        : present.status();
-                }();
-                if (bound.code() == StatusCode::kNotFound) {
+            if (busy.has_value()) {
+                // **The refusal's wake goes with it.** `BorrowChain` leaves
+                // one for a statement that ends on its refusal, and this is
+                // the one refusal a statement goes on from: left registered,
+                // a later wait of this statement that records none of its
+                // own would park on the home's holder.
+                if (blocking_wake_.has_value()) {
+                    locks_->DropWake(blocking_wake_->key, blocking_wake_->slot);
+                    blocking_wake_.reset();
+                }
+            } else {
+                // The descent's hold ends with this statement, before
+                // anything is encoded or placed.
+                const Status bound = exec::LocateRow(page_store_, ta, home).status();
+                if (bound.ok()) {
+                    give_back(unit, held_before);  // bound: a live row, or a deleted one
+                } else if (bound.code() != StatusCode::kNotFound) {
+                    give_back(unit, held_before);
+                    return bound;
+                } else {
                     row_id = home;
                     if (Status s = encode(); !s.ok()) {
                         give_back(unit, held_before);
@@ -9084,9 +9099,6 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
                     at_home = attempt->ok() ||
                               attempt->status().code() != StatusCode::kAlreadyExists;
                     if (!attempt->ok()) give_back(unit, held_before);
-                } else {
-                    give_back(unit, held_before);
-                    if (bound.code() != StatusCode::kAlreadyExists) return bound;
                 }
             }
         }
@@ -11355,17 +11367,6 @@ StatusOr<std::optional<exec::EmbeddedKeyWindow>> CommandDispatcher::EmbeddedPurg
     auto window = exec::EmbeddedKeyWindowOf(ta.schema, prefix, low, high);
     if (!window.ok()) return window.status().WithContext("PURGE's primary key window");
     return window;
-}
-
-std::uint64_t CommandDispatcher::HashedRowHome(const catalog::TableAccess& ta,
-                                               const std::vector<parser::AstValue>& body) {
-    const std::vector<std::uint16_t> key = ta.PrimaryKeyColumns();
-    std::vector<parser::AstValue> values;
-    for (const std::uint16_t pos : key) {
-        if (pos == 0 || pos > body.size()) return 0;
-        values.push_back(body[pos - 1]);
-    }
-    return exec::HashedKeyHome(ta.schema, key, values).value_or(0);
 }
 
 Status CommandDispatcher::EmbeddedRowId(catalog::Oid oid, const catalog::TableAccess& ta,

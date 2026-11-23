@@ -95,11 +95,8 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     std::memcpy(row.embedded_key_cols.data(), base + kEmbeddedKeyColsOffset,
                 row.embedded_key_cols.size());
     std::memcpy(&row.key_form, base + kKeyFormOffset, sizeof(row.key_form));
-    // **Not checked here** (`CheckKeyForm`): every insert that names or is
-    // issued an id decodes the `sys.tables` rows before its relation's
-    // (`ForFirstRow`), so this function is on each inserted row's path once
-    // a row passed, and a relation with no such key owes it nothing
-    // (DR-R9). The form is checked where a relation is loaded for use.
+    // **Not checked here** (`CheckKeyForm`): the form is checked where a
+    // relation is loaded for use, and this function is a copy.
     std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
     std::memcpy(&row.spare_slots, base + kSpareSlotsOffset, sizeof(row.spare_slots));
     return row;

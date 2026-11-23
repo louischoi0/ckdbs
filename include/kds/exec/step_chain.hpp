@@ -388,8 +388,10 @@ struct IndexProbe {
     // row there passes the step's residual, is done: the residual holds the
     // key's equalities, the key is unique, so no other row can pass it. Any
     // other outcome runs the probe as if this were unset (DR-R11) - an
-    // annotation over the probe, as the probe is over the residual.
-    std::optional<std::uint64_t> home;
+    // annotation over the probe, as the probe is over the residual. Tried
+    // only under a view that is a commit point (`RunIndexStep`). 0, which
+    // is no id, on every other step.
+    std::uint64_t home = 0;
 };
 
 // The walked-join annotation (docs/spec/join-inner-build.md §5): the

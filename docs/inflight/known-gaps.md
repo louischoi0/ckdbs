@@ -3610,11 +3610,34 @@ Verified on worktree `sync-stale-records`, branch `worktree-dp-view`, at
 ## A primary key over the Keystone (DR)
 
 Verified on worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`,
-at `e9df68d0` for what the tree does (DR-S0's census, the order's §1.8) and
-by `bench/v3.5.0/results-dr-s0-premise-v3.5.0-114-ge9df68d02.md` for what it
-costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
+at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
+§1.8, `bench/v3.5.0/results-dr-s0-premise-v3.5.0-114-ge9df68d02.md`) and at
+`e0d86ec6` for what DR built and what it costs
+(`bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md`,
+`bench/v3.5.0/results-dr-close-v3.5.0-123-g824acfbed.md`). The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
 `instructions/v3.2.0/workorder-dr-primary-key-over-keystone.md`.
 
+- **A relation whose key is one `int64` first column executes tests for
+  the other key forms** (DR-R9, the operator's rule, says none; DR-Q25):
+  one compare of the key form a row inserted and one of its home where
+  its key is omitted; one test a walked step compiled; one compare where
+  a literal index probe is chosen and a load and a branch each time an
+  index step runs; one test an `UPDATE`'s assignment compiled; on a write
+  not by the tuple key, the keyed write's tests and its loop over the
+  relation's indexes. Measured at the close: 13 of 14 phases inside the
+  same-binary control over 15 server lifetimes, the one outside a saving.
+  Removing the tests needs the forms dispatched apart (a separate access
+  kind, a separate issue path), which nothing built. No cell compares
+  such a relation's chains with the commit DR opened from.
+- **The cost the close found on a multi-row load was offset, not found.**
+  Seven builds read a load dearer by 0.08 us to 0.34 us a row on
+  relations with no key of their own; an insert's catalog scan now
+  passes other relations' rows over undecoded and the load reads level
+  or cheaper. What the milestone added to that decode does not account
+  for the cost, and no instruction was counted (`perf` is absent on the
+  host).
+- **The btree's walked `UPDATE` reads 5.9 % cheaper than at the commit DR
+  opened from**, in 15 of 15 rounds, and nothing in DR accounts for it.
 - **A page by key is a walk on every structure** (DR-Q17): `WHERE key >= x
   ORDER BY key LIMIT n` is a filtered scan from the head on a btree's tuple
   key (1.0 ms at 100,000 rows) and a scan and a sort on a heap's Keystone
@@ -3645,14 +3668,19 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
   sessions racing one key: its units are the walk's, and the cells are the
   equivalence and the sim's.
 - **A hashed key's home serves one shape** (DR-S3f): a `SELECT` whose
-  `WHERE` pins every key column by an equality with a literal. A write by
+  `WHERE` pins every key column by an equality with a literal, where the
+  ladder takes an index probe for it with no range and no value list,
+  and `indexes` is on (off, the step walks before a home is tried). A write by
   the whole key, a `SELECT ... FOR UPDATE`, a join on the whole key and a
   value list read the index and then the row, as before homes. **So does
   every `SELECT` inside a read-write transaction**: the home is tried only
   under a view that is a commit point. `READ COMMITTED`'s statement view
-  would be safe by the argument in `heap-and-tuple.md` §3.1c and is not
-  admitted, because a view does not carry its level; the remedy named and
-  not built is that field.
+  would be safe - CLA's reading, not a spec's: another transaction's row
+  of the key waits on this transaction's own, so a view minted at the
+  statement shows one - and is not admitted, because a view does not
+  carry its level; the remedy named and not built is that field.
+- **Not tested on the hashed form**: the index contract suite's
+  byte-for-byte comparison with `indexes = off`.
 - **A row off its home stays off it.** A row whose key moved, a row whose
   key was inserted again while its deleted row was unpurged, and a row
   whose home another key took are read by two descents for their lives:

@@ -170,3 +170,14 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | DR's close; a tag or a version |
 | **Recorded at** | this file; the DR order's §7; its row in `instructions/v3.2.0/index.md` |
 
+## 18. DR closed on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the `/go-ahead-achieving-milestone DR` of §14, and §17's "continue the work". **No word of the operator's closes DR**: the close is CLA's, under the standing go-ahead |
+| **Mark** | **DR is closed** at `e0d86ec6` (`v3.5.0-124-ge0d86ec62`) as measured, on worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`. Built: P7, P3, P2a, F0's keyword, F1 and F2 on a btree, superblock 41. The close's file is `bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md` |
+| **Adopted at the close, CLA's proposal and not the operator's mark** | **DR-Q25**: DR-R9's bar is read as its last sentence states it - the chains identical, the review's list of remaining instructions stated, the delta inside the control - and the list is put to the operator as it stands. Measured: 13 of 14 phases inside the control over 15 server lifetimes, the one outside a saving of 5.9 % on the btree's walked update. **"No instruction added" is not met to the letter**: a relation whose key is one `int64` first column executes a handful of tests that ask whether another key form is there (the DR order's §7, the close) |
+| **Measured against the operator's bar of §16** | the hashed form's insert is 17.5 % and 18.7 % dearer than the indexed form's at 100,000 rows with every page resident (`bench/v3.5.0/results-dr-close-v3.5.0-123-g824acfbed.md`); its point read 2.8 us and 1.6 us cheaper. Not measured: a relation larger than the pool, more than one core |
+| **Does not settle** | whether DR-R9's list is acceptable under the operator's own rule; superblock 41 as the operator's own word (DR-R5); the push of the commits after `38d743da`; a tag or a version |
+| **Recorded at** | this file; the DR order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md`; `docs/inflight/known-gaps.md` |
+

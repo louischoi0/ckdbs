@@ -88,11 +88,11 @@ TEST(HashedKeyTest, AStringIsHashedPastTheIndexPrefix) {
     const std::string prefix(40, 'x');
     const std::vector<parser::AstValue> a = {Str(prefix + "a")};
     const std::vector<parser::AstValue> b = {Str(prefix + "b")};
-    const auto home_a = HashedKeyHome(schema, key, a);
-    const auto home_b = HashedKeyHome(schema, key, b);
-    ASSERT_TRUE(home_a.has_value());
-    ASSERT_TRUE(home_b.has_value());
-    EXPECT_NE(*home_a, *home_b);
+    const std::uint64_t home_a = HashedKeyHome(schema, key, a);
+    const std::uint64_t home_b = HashedKeyHome(schema, key, b);
+    ASSERT_NE(home_a, 0u);
+    ASSERT_NE(home_b, 0u);
+    EXPECT_NE(home_a, home_b);
 }
 
 TEST(HashedKeyTest, EveryHomeIsBelowTheIssuedIds) {
@@ -101,31 +101,30 @@ TEST(HashedKeyTest, EveryHomeIsBelowTheIssuedIds) {
     std::set<std::uint64_t> homes;
     for (std::int64_t v = -2000; v < 2000; ++v) {
         const std::vector<parser::AstValue> value = {Int(v)};
-        const auto home = HashedKeyHome(schema, key, value);
-        ASSERT_TRUE(home.has_value());
-        EXPECT_GE(*home, 1u);
-        EXPECT_LT(*home, catalog::kHashedKeyIssuedBase);
-        homes.insert(*home);
+        const std::uint64_t home = HashedKeyHome(schema, key, value);
+        EXPECT_GE(home, 1u);
+        EXPECT_LT(home, catalog::kHashedKeyIssuedBase);
+        homes.insert(home);
     }
     EXPECT_EQ(homes.size(), 4000u);  // no two of these keys share a home
 }
 
-// A key with no home is no error: its row is issued an id and its read is
-// the index's.
+// A key with no home is no error: 0, which is no id. Its row is issued an
+// id and its read is the index's.
 TEST(HashedKeyTest, AKeyThatDoesNotEncodeHasNoHome) {
     const catalog::Schema schema = Keyed({catalog::kTypeValInt8, catalog::kTypeValInt64});
     const std::vector<std::uint16_t> key = {1, 2};
     const std::vector<parser::AstValue> wide = {Int(1000), Int(1)};  // past an int8
-    EXPECT_FALSE(HashedKeyHome(schema, key, wide).has_value());
+    EXPECT_EQ(HashedKeyHome(schema, key, wide), 0u);
     parser::AstValue null;
     const std::vector<parser::AstValue> with_null = {null, Int(1)};
-    EXPECT_FALSE(HashedKeyHome(schema, key, with_null).has_value());
+    EXPECT_EQ(HashedKeyHome(schema, key, with_null), 0u);
     const std::vector<parser::AstValue> short_row = {Int(1)};
-    EXPECT_FALSE(HashedKeyHome(schema, key, short_row).has_value());
+    EXPECT_EQ(HashedKeyHome(schema, key, short_row), 0u);
     const std::vector<std::uint16_t> past = {1, 9};
     const std::vector<parser::AstValue> fits = {Int(1), Int(1)};
-    EXPECT_FALSE(HashedKeyHome(schema, past, fits).has_value());
-    EXPECT_TRUE(HashedKeyHome(schema, key, fits).has_value());
+    EXPECT_EQ(HashedKeyHome(schema, past, fits), 0u);
+    EXPECT_NE(HashedKeyHome(schema, key, fits), 0u);
 }
 
 }  // namespace
