@@ -1,12 +1,22 @@
 # Work order CW - a page read that takes no latch: the optimistic page read, measured before it is built
 
-Status: **WRITTEN 2026-11-17, not opened.** Written on worktree
+Status: **CLOSED 2026-11-22 on the operator's standing go-ahead, abandoned at
+V0, with nothing built** (`raft-marks-2026-11-22.md` §13; §7's last entry).
+CW-S0 measured a point read's whole fetch protocol at 2.8 % of its server CPU
+at `cores = 2` and 2.6 % at the clean `cores = 3`, against V0's 5 %. M4's
+shared relation reads -1.3 % stmt/s at worst, inside the runs' own spread
+(-3.2 % at the widest pairing). CW-Q0 (a) closes the order there:
+CW-S1..S4 do not run, and no engine code lands. Before that: **OPENED 2026-11-22 on the operator's standing go-ahead**
+(`/go-ahead-achieving-milestone CW`, `raft-marks-2026-11-22.md` §12), at
+`56b44964` (`v3.5.0-90-g56b44964`) on branch
+`worktree-cw-optimistic-page-read` in the worktree `sync-stale-records`.
+**CW-Q0..Q9 adopted (a) on that go-ahead** - CLA's proposals, not the
+operator's per-item mark (§4). Before that: **written 2026-11-17** on worktree
 `cw-optimistic-page-read` from `7aa75760` (`v3.4.11-28-g7aa75760`) on the
 operator's word of 2026-11-17 (`raft-marks-2026-11-17.md` §1): *"Then write
 a milestone for the optimistic page read - the measurement, the validity
-verdict, the implementation and so on."* No stage is started; CW-S0 waits
-for the operator's word and for the marks on §4's items. Every
-`[source-read]` claim below was read at `7aa75760`.
+verdict, the implementation and so on."* Every `[source-read]` claim in §1
+was read at `7aa75760`; CW-S0 re-reads them at its own commit (§7).
 
 **Exploratory, and the measurement comes first.** The one number the tree
 holds on this path argues against the premise (§1.1), so CW-S0 and CW-S1
@@ -213,7 +223,11 @@ Binding from CW-S2 on, if the order reaches it.
 
 ## 4. Items for the operator (CW-Q), CLA's proposals
 
-None is marked. (a) is CLA's proposal in each.
+(a) is CLA's proposal in each. **CW-Q0..Q9 (a) adopted on the operator's
+standing go-ahead of 2026-11-22 (go-ahead-achieving-milestone)**
+(`raft-marks-2026-11-22.md` §12); none is the operator's own mark.
+**CW-Q10, raised by CW-S0's review, adopted (a) on the same go-ahead**
+(`raft-marks-2026-11-22.md` §13); it is not the operator's mark either.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -227,6 +241,7 @@ None is marked. (a) is CLA's proposal in each.
 | CW-Q7 | The pending `cores = 4` question. | S0 uses its option 1 (the clean cell) and option 2 (the `contention_*` deltas) for the read shapes and writes what it finds into that entry; the entry stays the operator's | (b) CW does not touch it |
 | CW-Q8 | Fairness of the page latch (no queue, no writer preference; `page.md` §6 says it is owed). | out of CW | (b) in |
 | CW-Q9 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file | (b) lifted for S0 |
+| CW-Q10 | V0 was read at half load. ba_census's closed-loop clients kept every `point` cell's reactors 23-66 % busy, and no cell saturated the server. Does the close stand? | **yes**. V0 names the clean multi-core cell, not a load, and the order's driver loaded it. Every measured cell reads under 5 %, the busiest (c3i, 55-62 %) at 3.3 %. CW-Q9 (a)'s budget is spent (19 min 44 s). **The data do not exclude a reversal at saturation**: the dearest per-fetch protocol measured (c3i's, 1.13 us a statement) over the cheapest statement measured (19.65 us at `cores = 1`) is 5.7 %, and 6.8 % with no bracket floor. So a saturated clean `cores = 2` cell is named as the one measurement that could reopen CW at S0 | (b) CW stays open at S0 until the operator lifts the budget for one saturated cell, about 2 minutes of runs |
 
 ## 5. Stages
 
@@ -290,3 +305,129 @@ proposal. No review was run and no suite was executed: the commit
 changes no build input. Pushed to `main` with `--no-verify` on the
 operator's word given while the order was being written
 (`raft-marks-2026-11-17.md` §2).
+
+### Opened 2026-11-22
+
+Opened at `56b44964` (`v3.5.0-90-g56b44964`) on branch
+`worktree-cw-optimistic-page-read`, worktree `sync-stale-records`, on the
+operator's standing go-ahead (`/go-ahead-achieving-milestone CW`,
+`raft-marks-2026-11-22.md` §12). CW-Q0..Q9 adopted (a) on that go-ahead,
+CLA's proposals and not the operator's mark. The worktree is the session's
+own: a second worktree cannot be entered from inside one, so the branch is
+made in place, as DM's was.
+
+### CW-S0 done 2026-11-22: V0 fails, CW closes with nothing built
+
+Measured and read at `6ddcae43` (`v3.5.0-91-g6ddcae43`), branch
+`worktree-cw-optimistic-page-read`, worktree `sync-stale-records`:
+`bench/v3.5.0/results-cw-s0-premise-v3.5.0-91-g6ddcae43.md`. 54 timed runs in
+19 min 44 s (CW-Q9 (a)'s budget, cuts in its §5). The census is its archive's
+`census.md`. The instrument is a spike on the unpushed branch
+`worktree-cw-s0-spike` at `cba85f1f`, never landed. No engine code changed
+on this branch.
+
+- **M1, counted.** A read hit is 2 structure-latch holds and 2 page-latch
+  compare-and-swaps. A `point` read makes 4 shared fetches: the anchor and
+  the root for the bind's ownership check, the root again for the descent,
+  and the leaf. An `insert1` makes 5 fetches, 2 of them shared, with 18.1
+  holds; the census had read 4 fetches and 1 shared off the code.
+- **M2 and M3, timed.** A `point` read's whole fetch protocol is:
+  - 155 ns unarmed;
+  - 397 ns armed on one core;
+  - **626 ns at `cores = 2`, 2.8 % of its 22.2 us of server CPU**;
+  - 675 ns (2.6 %) at the clean `cores = 3`;
+  - 1,128 ns (3.3 %) at the unclean `cores = 3`.
+
+  Net of the unarmed path it is 2.1 % at `cores = 2`, which is not the words
+  alone: the unarmed hit takes three lookups to the armed hit's one (census
+  C1). With no bracket floor subtracted the protocol is 3.8 %. A sampled
+  profile (`tools/kds_sampler.c`) bounds every mutex in the process with the
+  fetch functions at 3.6 %. No cell saturated the server: a `point` cell's
+  reactors were 23-66 % busy.
+- **M4.** One shared relation against a relation per session: -1.3 %,
+  -0.4 % and -0.1 % stmt/s at the three multi-core cells, each inside its
+  runs' spread.
+- **M5.** One core armed against unarmed: +0.46 us (+2.3 %) a `point`
+  statement and +0.27 us (+1.5 %) an `insert1`, in a spike build whose
+  release binary reads `KDS_TEST_PAGE_LATCH`. A release server at
+  `6ddcae43` cannot arm one core; only a harness calling `SetLatchArmed`
+  can (census C1).
+- **The order's clean cell is redrawn.** On 2026-11-22 the SMT pairs are
+  (0,4) (1,5) (2,6) (3,7), so §5's `cores = 3` on 0, 2 and 4 shares a
+  physical core. The clean cell is reactors 0, 1 and 2 with every client on
+  3 and 7, client-limited.
+- **§1.2 re-read at `6ddcae43`.** DO's tree takes 2 holds a read hit, not 3.
+  `FetchAndPin` is at `device_page_store.cpp:2757`. A hit also adds a
+  store-wide `hits_` `fetch_add` and the store-wide pin gauge (census C2).
+- **V0 (CW-Q1 (a)) fails on both counts**: 2.6-2.8 % against 5 % at the
+  clean cells (3.4-3.8 % with no floor), and M4 -1.3 % at worst (-3.2 % at
+  the widest run pairing) against 5 %. **CW-Q0 (a): CW closes at
+  V0 with nothing built**, C0 the candidate. CW-S1..S4 do not run.
+- **CW-Q10 (a) adopted: the close stands on cells read at half load.** No
+  cell saturated the server; the reactors were 23-66 % busy. The data do
+  not exclude a reversal at saturation: the dearest per-fetch cost over the
+  cheapest statement gives 5.7 %. A saturated clean `cores = 2` cell is the
+  measurement that would reopen CW at S0 (CW-Q10 (b)), on the operator's
+  word for the budget.
+- **Found on the way, not acted on:**
+  - **The write path's fetches are 6.0 % of an `insert1` at `cores = 2`
+    and 7.0 % at the clean `cores = 3`.** These are exclusive fetches: page
+    7 and the rightmost leaf, which every core's sessions write, and the
+    core's own undo tail. CW leaves writers latched (§6).
+  - **`StillOwned`'s two fetches are half a point read's** (`[design]`:
+    folded into the descent, about 0.3 us a statement). No order covers it.
+  - **Writeback stamps the checksum into the live frame under a shared
+    latch** (census B1). It is entered in `known-gaps.md` (Eviction).
+  - **`tools/ba_census.py`'s clean-map text was wrong** for this host's
+    topology and is corrected.
+  - **The pending `cores = 4` entry has a §6** with what S0 read for the
+    read shapes (CW-Q7 (a)).
+
+**CW-S0's review** (`critics-developer`, on the uncommitted step at
+`6ddcae43`). It recomputed every table from the 54 archived JSONs and found
+each exact. The verdict holds.
+
+**Applied:**
+- "Words net of the unarmed path" is not the words alone, nor C3's
+  ceiling. The unarmed hit takes three lookups, so C3's ceiling is the
+  whole protocol.
+- No cell saturated the server. This raised **CW-Q10**, adopted (a).
+- The bracket floor's caveat is now a measured no-floor reading (3.4-3.9 %).
+- The undo tail is per core, not shared.
+- M4's "at most 1.3 %" is a point estimate inside the run spread. The
+  widest pairing is -3.2 %.
+- The B1 entry contradicted census B2b and B2c, and missed
+  `ReadPageHeader`'s loads of the field. "Value-benign" was re-checked at
+  the source and holds.
+- The "grows with the core count" claim leaned on the unclean cell.
+- The pending §6's harness attribution ignored the unclean cell's double
+  load.
+- `ba_census.py`:
+  - `server_cpu_ns` is `None`, not 0, where nothing was read;
+  - `--sample`'s dump wait sits after the span's last `SHOW META`;
+  - the usage example's CPU map is corrected;
+  - three comments that said more than the code does are corrected.
+- Also applied:
+  - `--sample` is refused without a preloaded sampler, since SIGUSR1 would
+    end the server;
+  - the binary copy is named by its hash, which removes the cause of the
+    first symbolization's failure;
+  - `tables_s0.py` reads the archive and is cited;
+  - the dead `analyze_s0.py` is dropped;
+  - B1's owner gains `page.md` §10.
+
+**Rejected, with the reason:**
+- **The figures restated in six records.** The project's index rows and
+  raft-marks carry a close's figures, as DM's do, and the drift the review
+  found is corrected.
+- **Folding `pointN` into `point`'s table path.** It would save about six
+  lines and change the `point` and `pkmix` setup earlier runs are compared
+  against.
+- **Moving the docstring's dated host map out.** The date makes the claim
+  checkable beside the flag it governs.
+- **`insert1`'s 0.006 pool misses inside the write-fetch bracket.** About
+  21 ns a statement at a page-cache read's 3.5 us, 1.5 % of the 1,392 ns,
+  and no verdict rests on it.
+
+**No suite was executed and no close A/B was taken.** The branch changes no
+build input: `tools/`, `bench/`, `docs/` and `instructions/` only.

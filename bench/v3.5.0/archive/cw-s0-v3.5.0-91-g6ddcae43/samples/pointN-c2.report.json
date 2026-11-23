@@ -1,0 +1,125 @@
+{
+ "samples": 1739,
+ "parts": {
+  "other": 1687,
+  "mutex-other": 20,
+  "mutex-under-fetch": 7,
+  "fetch-release-self": 25
+ },
+ "self": [
+  [
+   "sem_trywait",
+   595
+  ],
+  [
+   "malloc",
+   69
+  ],
+  [
+   "__libc_free",
+   52
+  ],
+  [
+   "[vdso]+0xc19",
+   48
+  ],
+  [
+   "kds::parser::FingerprintAccumulator::Feed",
+   40
+  ],
+  [
+   "_dl_mcount_wrapper",
+   31
+  ],
+  [
+   "kds::parser::Lexer::ScanToken",
+   28
+  ],
+  [
+   "pthread_mutex_trylock",
+   24
+  ],
+  [
+   "std::__detail::__variant::__gen_vtable_impl::__visit_invoke",
+   19
+  ],
+  [
+   "tolower",
+   18
+  ],
+  [
+   "timer_settime",
+   17
+  ],
+  [
+   "kds::server::KwpSession::OnBind",
+   17
+  ],
+  [
+   "kds::exec::::CompileBound",
+   16
+  ],
+  [
+   "std::__cxx11::basic_string::operator= [clone .isra.0]",
+   15
+  ]
+ ],
+ "inclusive": [
+  [
+   "kds::sched::Scheduler::Run",
+   1588
+  ],
+  [
+   "kds::sched::Scheduler::RunOnce",
+   1585
+  ],
+  [
+   "kds::sched::Scheduler::RunReadyTasks",
+   1170
+  ],
+  [
+   "kds::sched::CoroTask::Poll",
+   1140
+  ],
+  [
+   "std::error_code::default_error_condition const",
+   824
+  ],
+  [
+   "kds::server::CoreRuntime::Run",
+   824
+  ],
+  [
+   "__libc_init_first",
+   766
+  ],
+  [
+   "main",
+   766
+  ],
+  [
+   "kds::server::Expeditor::Serve",
+   766
+  ],
+  [
+   "kds::server::Expeditor::RunUntilStopped",
+   766
+  ],
+  [
+   "kds::server::CommandDispatcher::DispatchAsync [clone .actor]",
+   656
+  ],
+  [
+   "kds::server::CommandDispatcher::DispatchAndStage",
+   604
+  ],
+  [
+   "kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement",
+   601
+  ],
+  [
+   "sem_trywait",
+   595
+  ]
+ ]
+}

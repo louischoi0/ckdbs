@@ -62,6 +62,29 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
   Owned by `docs/spec/eviction.md` (§3.3, EV8).
 
+- **Writeback writes a page's checksum into the live frame under a shared
+  page latch.** Read at `6ddcae43` by CW-S0's census
+  (`bench/v3.5.0/archive/cw-s0-v3.5.0-91-g6ddcae43/census.md`, Part B, B1):
+  - `WriteBack` stamps the CRC into `*page.frame->bytes`
+    (`device_page_store.cpp:2228`), not into its scratch copy, holding the
+    structure latch and the page latch shared;
+  - every other byte write to a resident frame holds the page latch
+    exclusive, but for two `page_lsn` stamps made after release under the
+    structure latch alone (census B2b, B2c), which the copy also holds;
+  - a whole-page copy under a shared hold can therefore read a torn
+    checksum field (`LogBtreeSplit`'s copy of a page the split created,
+    `log_page_image.hpp:93-96`), and so can every `ReadPageHeader` of a
+    resident frame (`page_header.cpp:46` loads the field).
+
+  It is value-benign: no reader interprets the field of a resident frame
+  (nothing outside `page_header.cpp` reads `PageHeaderFields::checksum`, and
+  `VerifyPageChecksum` runs on device bytes only - a fault-in, a device
+  probe, a map page, a restore), and writeback stamps again before every
+  write. It is a data race by the
+  language's rule, which a `tsan` cell would report if it reached the
+  overlap. Stamping the scratch copy after the `memcpy` would remove it, and
+  that is not built. Owned by `docs/spec/page.md` (§6, §8, §10).
+
 - **The executor does not scan through EV6's ring, by decision.** Re-read
   at `0205444b`: `OpenScanRing`'s only caller is `cabin_optimizer_exec.cpp`
   (the relayout planner, its other caller, is deleted since BZ). A `SELECT`'s outermost walk faults cold
@@ -1530,7 +1553,8 @@ order's §7 names it). Owned by `docs/spec/page.md` §8 and §12 and
 - **A fetch can still wait milliseconds with no long hold**: up to 4.4 ms
   at 1 Mi frames and 2.3 ms at 64 Ki under three readers - the one mutex's
   unfairness between fetches (and against the walker's re-take, which the
-  handover bounds but does not remove). CW's C1.
+  handover bounds but does not remove). CW's C1, not built: CW closed at
+  V0.
 - **The fuzzy table rests on a premise the code states and does not
   enforce**: no core yields between an append and its stamp (the one-hold
   table rested on it too). The crash cells run the window's write on the
@@ -1538,8 +1562,16 @@ order's §7 names it). Owned by `docs/spec/page.md` §8 and §12 and
   by any cell.
 - **The per-fetch holds are still the instance's one latch**: two a read
   hit, three a write hit, each a cache line moving between cores above one
-  core. DO measured one reader on one thread; what the holds cost under
-  contention is CW's C1, priced against DO's tree (DO-Q8 (a)).
+  core. CW-S0 priced them against DO's tree at `6ddcae43`
+  (`bench/v3.5.0/results-cw-s0-premise-v3.5.0-91-g6ddcae43.md`):
+  - a point read's whole fetch protocol, both holds and both page-latch
+    compare-and-swaps of each of its 4 fetches with the lookup and the pin,
+    is 626 ns, or 2.8 % of its server CPU at `cores = 2`;
+  - an `insert1`'s is 1,392 ns (6.0 %), most of it three exclusive
+    fetches: page 7 and the rightmost leaf, which every core's sessions
+    write, and the core's own undo tail.
+
+  CW closed at V0 with nothing built, so C1 is not built either.
 - **The scan ring's and the writeback's unpins, and `PageRef::MarkDirty`,
   still look the frame up by page id**, two holds an unpin (outside E4d).
 - **A stale fetch of a claimed id given back unpublished** would now be

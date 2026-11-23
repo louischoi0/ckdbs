@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| CW | abandoned | 2026-11-22 | 2026-11-17 | 2026-11-22 | 2026-11-22 | - | - | the optimistic page read, measured before it is built | v3.2.0/workorder-cw-optimistic-page-read.md |
 | DQ | written | 2026-11-22 | 2026-11-22 | - | - | n/a | - | a Cabin's miss answered from a map: the correlated probe's unobserved keys served by the build | v3.2.0/workorder-dq-cabin-miss-build.md |
 | DM | abandoned | 2026-11-22 | 2026-11-20 | 2026-11-22 | 2026-11-22 | e3f6bb8b | - | a leaf that knows its own upper bound | v3.2.0/workorder-dm-leaf-upper-bound.md |
 | DP | closed | 2026-11-22 | 2026-11-22 | 2026-11-22 | 2026-11-22 | 8fef04fa | - | VIEW: a stored SELECT absorbed by text before any plan | v3.2.0/workorder-dp-view.md |
@@ -89,7 +90,6 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | CZ | closed | 2026-11-19 | 2026-11-18 | 2026-11-18 | 2026-11-18 | 0f4edbd5 | v3.4.14 | a checkpoint that does not hold its reactor on a segment roll | v3.2.0/workorder-cz-checkpoint-roll-wait.md |
 | CY | closed | 2026-11-19 | 2026-11-18 | 2026-11-18 | 2026-11-18 | 647ad6d4 | v3.4.13 | managed statistics | v3.2.0/workorder-cy-managed-statistics.md |
 | CX | closed | 2026-11-19 | 2026-11-18 | 2026-11-18 | 2026-11-18 | 828899f6 | v3.4.13 | the plan as a managed object | v3.2.0/workorder-cx-managed-plans.md |
-| CW | written | 2026-11-17 | 2026-11-17 | - | - | n/a | - | the optimistic page read, measured before it is built | v3.2.0/workorder-cw-optimistic-page-read.md |
 | CU | closed | 2026-11-17 | 2026-11-15 | 2026-11-16 | 2026-11-17 | a0672010 | v3.4.12 | a value list as a key: IN (...) served by one descent per value | v3.2.0/workorder-cu-key-set-access.md |
 | CS | closed | 2026-11-16 | 2026-11-15 | 2026-11-15 | 2026-11-15 | 1edf5c54 | v3.4.12 | BEGIN READ ONLY: no id, nothing logged, a held snapshot | v3.2.0/workorder-cs-read-only-transaction.md |
 | CR | written | 2026-11-12 | 2026-11-12 | - | - | n/a | - | a READ COMMITTED write that lost to a newer version is run again | v3.2.0/workorder-cr-read-committed-rerun.md |

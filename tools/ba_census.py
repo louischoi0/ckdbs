@@ -10,6 +10,8 @@ started at a common instant and run for `--seconds` after `--warmup` seconds.
 Shapes:
   point      a pk point read of a preloaded relation (`--rows` rows), a key
              drawn uniformly per statement
+  pointN     the same, each client on a relation of its own (`--rows` rows
+             each): no two sessions share a root or a leaf (CW-S0's M4)
   trade      scenario 0's trade: two INSERTs into `trades` and two pk
              UPDATEs of `accounts`, autocommit, each client trading among its
              own accounts (no two clients write one account)
@@ -38,9 +40,13 @@ Pinning:
                        inherits the mask (BA-R0: the reactors' CPUs). The pin
                        outlives the tool.
   --client-cpus LIST   client i runs under `taskset -c LIST[i % len]`.
-  On this host (BA-Q2) the clean map is --server-cpus 0,2 --client-cpus 4,5,6,7,
-  and `cores = 2` is the largest cell whose reactors and clients share no
-  physical core; a larger cell is indicative only, and its file says so.
+  A clean map puts no two reactors and no reactor and client on one physical
+  core: read the pairs from /sys/devices/system/cpu/cpu*/topology/
+  thread_siblings_list at run time, never from a document. On this host on
+  2026-11-22 the pairs were (0,4) (1,5) (2,6) (3,7), so the clean `cores = 2`
+  map is --server-cpus 0,1 --client-cpus 2,3,6,7, and `cores = 3` on 0,1,2 is
+  clean only with every client on 3,7 (client-limited); a cell that is not
+  clean is indicative only, and its file says so (CW-S0).
 
 The client-bound mark: each client's CPU time over its measured span. A cell
 any of whose clients ran above 80 % of one CPU is marked `client_bound`: its
@@ -49,14 +55,18 @@ throughput is a floor on the engine, never its ceiling.
 Per run the JSON holds: statements/s, per-statement latency p0/p25/p50/p95/p99
 over every client, refusals (KDS `TXN_CONFLICT retryable=1`, retried; a
 PostgreSQL serialization or deadlock error, retried), errors, each client's CPU
-share and the client-bound mark, each KDS session's core, and for KDS the delta
+share and the client-bound mark, each KDS session's core at connect (the
+load placer may move a session at any transaction's head, so it is not
+where the session ran), and for KDS the delta
 of every numeric `SHOW META` field across the measured span - the
 `contention_*` block (BA-S2) among them. **The contention fields are summed
 over every core, but `sched_*` describes only the core the control session
 landed on** (`meta_session_core`), so an item's share at `cores = k` is its
 wait over k times the span, not over `sched_wall_us`. `*_longest_us` fields
 are maxima since the server started and are reported as read
-(`meta_longest`), never as a delta. Each run also records its server
+(`meta_longest`), never as a delta. For KDS the server's CPU over the span
+is every thread's `/proc/<pid>/task/*/schedstat` run time (`server_cpu_ns`;
+a thread that exits inside the span is not counted). Each run also records its server
 binary's sha256 and the data file's device (bench/README.md rules 2 and 3);
 every server runs from one copy of `--bin` made at start.
 
@@ -66,7 +76,7 @@ refused.
 
     tools/ba_census.py --engine kds --bin build-release/kds_server --port P \\
         --shape point --durability group --cores 2 --sessions 4 \\
-        --server-cpus 0,2 --client-cpus 4,5,6,7 --out bench/.../archive
+        --server-cpus 0,1 --client-cpus 2,3,6,7 --out bench/.../archive
     tools/ba_census.py --engine pg --pg-port Q --shape trade --durability on ...
     tools/ba_census.py --dry-run --bin build/kds_server --port P --pg --pg-port Q
                                                               # BA-S3's exit
@@ -80,6 +90,7 @@ import random
 import re
 import resource
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -89,7 +100,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_common import nearest_rank  # noqa: E402
 from bb_overhead_benchmark import host_state, meta_all, wait_for_load  # noqa: E402
 
-SHAPES = ("point", "trade", "insert1", "insertN", "recent", "pkmix")
+SHAPES = ("point", "pointN", "trade", "insert1", "insertN", "recent", "pkmix")
 KDS_DURABILITY = ("relaxed", "group", "strict")
 PG_DURABILITY = ("off", "on")
 CLIENT_BOUND = 0.80
@@ -187,6 +198,7 @@ def tables(args, suffix):
     t = {"point": f"ba_point{suffix}", "trades": f"ba_trades{suffix}",
          "accounts": f"ba_accounts{suffix}", "recent": f"ba_recent{suffix}"}
     t["inserts"] = [f"ba_ins{suffix}_{i}" for i in range(args.sessions if args.shape == "insertN" else 1)]
+    t["points"] = [f"ba_pt{suffix}_{i}" for i in range(args.sessions if args.shape == "pointN" else 0)]
     return t
 
 
@@ -196,6 +208,10 @@ def setup(args, be, suffix):
     if args.shape in ("point", "pkmix"):
         must(ddl(args.engine, t["point"], ["c0", "c1"]))
         preload(args.engine, be, t["point"], [[i, i] for i in range(args.rows)])
+    elif args.shape == "pointN":
+        for name in t["points"]:
+            must(ddl(args.engine, name, ["c0", "c1"]))
+            preload(args.engine, be, name, [[i, i] for i in range(args.rows)])
     elif args.shape == "trade":
         must(ddl(args.engine, t["accounts"], ["c0", "c1", "c2"]))  # balance, qty, trade count
         must(ddl(args.engine, t["trades"], ["c0", "c1", "c2", "c3", "c4", "c5"]))
@@ -218,7 +234,7 @@ def _must(be, sql):
 
 def drop(args, be, suffix):
     t = tables(args, suffix)
-    for name in [t["point"], t["trades"], t["accounts"], t["recent"]] + t["inserts"]:
+    for name in [t["point"], t["trades"], t["accounts"], t["recent"]] + t["inserts"] + t["points"]:
         be.run(f"DROP TABLE IF EXISTS {name}")
 
 
@@ -231,6 +247,10 @@ def statements(args, t, index, rng, last):
     if args.shape == "point":
         while True:
             yield [(f"SELECT * FROM {t['point']} WHERE id = {rng.randint(1, args.rows)}", "read")]
+    if args.shape == "pointN":
+        name = t["points"][index]
+        while True:
+            yield [(f"SELECT * FROM {name} WHERE id = {rng.randint(1, args.rows)}", "read")]
     if args.shape == "pkmix":
         while True:
             if rng.random() < 0.5:
@@ -353,7 +373,11 @@ def start_kds(args, wd, port, log_level="warn"):
         if s.connect_ex(("127.0.0.1", port)) == 0:
             raise SystemExit(f"port {port} is already in use; choose another with --port")
     err = open(os.path.join(wd, "s.stderr"), "w")
-    proc = subprocess.Popen([args.bin, "--config", conf], stdout=err, stderr=subprocess.STDOUT)
+    env = dict(os.environ)
+    for kv in getattr(args, "server_env", None) or []:
+        k, _, v = kv.partition("=")
+        env[k] = v
+    proc = subprocess.Popen([args.bin, "--config", conf], stdout=err, stderr=subprocess.STDOUT, env=env)
     deadline = time.time() + 30
     while True:
         try:
@@ -363,6 +387,26 @@ def start_kds(args, wd, port, log_level="warn"):
                 err.close()
                 raise SystemExit(f"server did not listen; see {wd}/s.stderr")
             time.sleep(0.1)
+
+
+def server_cpu_ns(pid):
+    """Run time of every thread of the server, by thread name
+    (`/proc/<pid>/task/*/schedstat`, nanoseconds): CW-S0's server CPU."""
+    out = {}
+    try:
+        tids = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return out
+    for t in tids:
+        try:
+            with open(f"/proc/{pid}/task/{t}/schedstat") as f:
+                ns = int(f.read().split()[0])
+            with open(f"/proc/{pid}/task/{t}/comm") as f:
+                comm = f.read().strip()
+        except (OSError, ValueError):
+            continue
+        out[f"{comm}:{t}"] = ns
+    return out
 
 
 def pg_data_directory(ctl):
@@ -456,13 +500,24 @@ def run_one(args, run):
         # and just after the clients stop.
         time.sleep(max(0.0, start_at + args.warmup - time.time()))
         m_from = meta_all(ctl.conn) if args.engine == "kds" else {}
+        c_from = server_cpu_ns(proc.pid) if proc is not None else {}
+        # CW-S0's M3: `tools/kds_sampler.c` under LD_PRELOAD (`--server-env`),
+        # sampling the measured span to the last client's exit.
+        if proc is not None and args.sample:
+            os.kill(proc.pid, signal.SIGUSR1)
         time.sleep(max(0.0, start_at + args.warmup + args.seconds / 2 - time.time()))
         m_mid = meta_all(ctl.conn) if args.engine == "kds" else {}
         outs = []
         for p in procs:
             o, _ = p.communicate(timeout=args.warmup + args.seconds + 600)
             outs.append(json.loads(o.strip().splitlines()[-1]))
+        c_to = server_cpu_ns(proc.pid) if proc is not None else {}
         m1 = meta_all(ctl.conn) if args.engine == "kds" else {}
+        # After `m1`, so the dump's wait is outside the `meta_delta` span.
+        if proc is not None and args.sample:
+            os.kill(proc.pid, signal.SIGUSR2)
+            time.sleep(1.0)  # the dump is written by the handler's thread
+        cpu = {k: c_to[k] - c_from.get(k, 0) for k in c_to}
         after = host_state()
         lat = sorted(x for o in outs for xs in o["lat"].values() for x in xs)
         kinds = sorted({k for o in outs for k in o["lat"]})
@@ -512,6 +567,12 @@ def run_one(args, run):
             "meta_gauges_mid": {k: v for k, v in m_mid.items() if is_gauge(k)},
             "meta_longest": {k: v for k, v in m1.items() if k.endswith("_longest_us")},
             "meta_session_core": m1.get("core"),  # whose sched_* the block is
+            # CW-S0: the server's CPU over the measured span, every thread,
+            # and per `comm:tid` (the server names no thread, so a reactor is
+            # told from the WAL writer or a page reader by its share only).
+            # None where nothing was read: PostgreSQL, or no schedstat.
+            "server_cpu_ns": sum(cpu.values()) if cpu else None,
+            "server_cpu_ns_by_thread": {k: v for k, v in cpu.items() if v > 0},
             "bin_sha256": bin_sha256,
             "data_device": data_device(wd if args.engine == "kds" else pg_data_directory(ctl)),
             "setup_meta": {k: m0[k] for k in ("recovery_checkpoint_us",) if k in m0},
@@ -584,6 +645,11 @@ def main():
     p.add_argument("--port", type=int, default=None,
                    help="KDS port, required: no default (bench/README.md rule 5)")
     p.add_argument("--frames", type=int, default=65536, help="KDS buffer_pool_frames")
+    p.add_argument("--sample", action="store_true",
+                   help="signal the server SIGUSR1/SIGUSR2 around the measured span "
+                        "(tools/kds_sampler.c, preloaded through --server-env)")
+    p.add_argument("--server-env", action="append", default=[],
+                   help="KEY=VALUE added to the KDS server's environment (repeatable)")
     p.add_argument("--pg", action="store_true", help="dry run: include PostgreSQL")
     p.add_argument("--pg-port", type=int, default=None, help="PostgreSQL port, required for --engine pg")
     p.add_argument("--pg-database", default="bench")
@@ -614,11 +680,20 @@ def main():
         p.error("KDS needs --bin and --port")
     if (args.engine == "pg" or args.pg) and not args.pg_port:
         p.error("PostgreSQL needs --pg-port")
+    if args.sample and not any(kv.startswith("LD_PRELOAD=") for kv in args.server_env):
+        # SIGUSR1's default action ends the process: without the sampler
+        # preloaded, `--sample` would kill the server at the span's start.
+        p.error("--sample needs --server-env LD_PRELOAD=<kds_sampler.so>")
     if args.bin:
         # bench/README.md rule 3: run from a copy, so a rebuild of --bin
-        # mid-matrix cannot change what the later runs measure.
+        # mid-matrix cannot change what the later runs measure. Named by its
+        # hash, so a later invocation with another binary in the same
+        # workdir leaves this one's copy - the path a sampler dump names -
+        # in place (CW-S0).
         os.makedirs(args.workdir, exist_ok=True)
-        copy = os.path.join(args.workdir, "kds_server.census")
+        with open(args.bin, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()[:12]
+        copy = os.path.join(args.workdir, f"kds_server.census.{digest}")
         shutil.copy2(args.bin, copy)
         args.bin = copy
     if args.dry_run:
