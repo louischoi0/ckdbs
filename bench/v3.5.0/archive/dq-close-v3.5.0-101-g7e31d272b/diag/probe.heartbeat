@@ -1,0 +1,13 @@
+03:28:27 round 1 of 8
+03:28:29 round 2 of 8
+03:28:31 round 3 of 8
+03:28:33 round 4 of 8
+03:28:35 round 5 of 8
+03:28:37 round 6 of 8
+03:28:39 round 7 of 8
+03:28:41 round 8 of 8
+03:28:41 c_cabin: A compile=5.542us cpu=21.718us  A2 compile=5.467us cpu=21.752us  B compile=5.556us cpu=21.962us
+03:28:41 d_tuplekey: A compile=5.432us cpu=21.389us  A2 compile=5.389us cpu=21.482us  B compile=5.396us cpu=21.451us
+03:28:41 b_build: A compile=5.708us cpu=128.746us  A2 compile=5.793us cpu=130.332us  B compile=5.689us cpu=126.502us
+03:28:41 done
+driver exit=0

@@ -654,11 +654,22 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     tuple-key join among them, whose inner probe takes no branch DQ
     changed; its compile and `RunStep` are DQ's changed code.
 
-  It reads as memory or cache state - the map freed at the first
-  statement's end, or where the second statement's sets land - but it is
-  not isolated. What would isolate it: per-thread CPU by thread id, the
-  allocator's state after a freed map, and a stage bisect of the join
-  residue. That waits for the operator's word on a measurement budget.
+  **Accepted by the operator at DQ's close** (*"accept it and close"*,
+  `raft-marks-2026-11-23.md` §6), as a measured cost.
+  **Diagnosed on the lifted budget as placement, not instructions**
+  (the results file's last section, same binaries):
+  - The compile is level on every shape.
+  - The served path's functions are the same size in both binaries, and
+    the new `MissWalk` moves every function after it.
+  - The 1,000 sets the second statement records land in the memory the
+    first statement's freed map left: that statement faults 74 pages
+    against 265. Statement #3 then pays reading them, on the reactor
+    thread, with no page faults.
+  - With the fallback off, the binary still reads +100 us at #3.
+  - Each placement remedy measured trades the cost onto another shape.
+    Keeping the helpers out of line costs 1 % to 2 % on whole-relation
+    walks; a fixed mmap threshold costs 150 us on every statement that
+    builds a map.
   Owner: `docs/spec/join-inner-build.md` §5a.
 
 ## Foreign keys

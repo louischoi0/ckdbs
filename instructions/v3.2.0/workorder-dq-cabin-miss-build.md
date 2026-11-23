@@ -1,6 +1,13 @@
 # Work order DQ - a Cabin's miss answered from a map: the correlated Cabin probe's unobserved keys served by the statement-local build, one walk for the statement in place of one walk a miss
 
-Status: **LANDED on `main` open at DQ-S5** on the operator's "push no
+Status: **CLOSED 2026-11-23 on the operator's word, with its measured
+residue accepted** (*"accept it and close"*, `raft-marks-2026-11-23.md`
+§6; DQ-Q13's acceptance is the operator's own mark). DQ-Q8's converged
+clause and DQ-R6 are not met: converged cabined-join statements read 7 % to
+35 % dearer in cold cells, and join statements +0.2 to +0.5 us. That
+residue is placement, not instructions (§7). The gate-declined cabined join
+is 108x to 251x cheaper than before DQ. Before that: **LANDED on `main`
+open at DQ-S5** on the operator's "push no
 verify" (`raft-marks-2026-11-23.md` §4; the hook skipped, the suite 0 failed
 of 5,159 at `7e31d272`, the same build inputs). **BUILT 2026-11-23 and STOPPED at DQ-S5 on a measured regression,
 not closed** (DQ-Q13 (a), CLA's proposal as revised at DQ-S5's review,
@@ -13,7 +20,11 @@ statement's refusal stays (DQ-Q11). Converged cabined-join statements read
 7 % to 35 % dearer in cold cells, and join statements +0.2 to +0.5 us,
 with the causes not isolated inside the spent measurement budget. The
 operator's word either lifts the budget for a diagnosis and a remedy, or
-accepts the residue and closes DQ. Before that: **OPENED 2026-11-23 on the operator's standing go-ahead**
+accepts the residue and closes DQ. **On the lifted budget the residue was
+diagnosed as placement** - memory (the sets a statement records land where
+the previous statement's freed map was) and code (a new function moves the
+code after it) - and each placement remedy measured trades the cost onto
+another shape (`raft-marks-2026-11-23.md` §5). Before that: **OPENED 2026-11-23 on the operator's standing go-ahead**
 (`/go-ahead-achieving-milestone DQ`, `raft-marks-2026-11-23.md` §1), at
 `68e5a69f` (`v3.5.0-96-g68e5a69f`) on worktree `dq-cabin-miss-build`, branch
 `worktree-dq-cabin-miss-build`. **DQ-Q0..Q8 adopted (a) on that go-ahead** -
@@ -346,7 +357,7 @@ raised at DQ-S5, adopted (a) on the same go-ahead** (`raft-marks-2026-11-23.md`
 | DQ-Q10 | The plan statistics' decline record (`command_dispatcher.cpp`, the fold after a keyed run): a step carrying `Step::build` that opened and published no map is folded as a decline, which the cost model reads for a walked step | **A Cabin step's decline is a fallback that bucketed rows and published no map** (`build_rows > 0`, `inner_builds = 0`): an opening its set served built nothing and declined nothing. A walked step keeps its rule | (b) a Cabin step never records a decline |
 | DQ-Q11 | DQ-S0 measured a refusal: at the engine's defaults (`max_rows_touched` 100,000,000, `join_build_max_rows` 65,536) a 60,000-row cabined join with 2,000 unobserved outer keys is refused where the uncabined one answers in 10.7 to 14.6 ms; the window is an inner relation within the cap and k x N above the budget, since past the cap the build declines and walks too. E1 removes it for every non-recording miss and every declined recording, but not for a statement whose misses are all recording touches (DQ-Q2 (a) keeps each a whole walk) | **Recorded in `known-gaps.md` (Cabin)**, with DQ-Q2 (b) and (c) the remedies the operator may take; DQ keeps DQ-Q2 (a) | (b) take DQ-Q2 (c), a bounded number of recording walks a statement, into DQ |
 | DQ-Q12 | A correlated Cabin step that also carries an unindexed literal equality (`HasUnindexedEqualityFilter`): its uncabined twin is a filter scan with no build (`join-inner-build.md` §8) | **The fallback is declined there**, as the build is, so the miss's worst case is exactly the uncabined step's (§0) and the map keeps one rule (DQ-R4) | (b) annotate it anyway: cheaper than the uncabined step, and a second rule |
-| DQ-Q13 | The close's residue (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`). Converged cabined-join statements read 7 % to 35 % dearer on B than on A where the state is cold or in a run whose first statement the fallback answered: about 0.1 to 0.3 ms on a statement of about 1 ms, with the cause not isolated. Join statements read +0.2 to +0.5 us (0.5 % to 1.2 %), unattributed, within about 1 us of the noise. So DQ-Q8's converged clause is not met in those cells, and DQ-R6 is not shown met. The close's measurement budget is spent | **DQ stays open at DQ-S5, stopped** (revised at DQ-S5's review from closing it with the residue. That proposal set aside the bar CLA itself set, DQ-Q8 (a), and under the standing word a regression measured at the close is work, and a spent budget is a stop, not a close). Everything is built, reviewed, suite-green and committed on the work branch, and the residue is in `known-gaps.md`. The operator's word either **lifts the measurement budget** for the diagnosis and a remedy (per-thread CPU by thread id, the allocator's state after a freed map, a stage bisect of the join residue), or **accepts the residue and closes DQ**, which the push word would then land. Basis: the gain is bounded below by 108x on every gate-declined cell, with a refusal at the defaults answered at the first statement; the residue is bounded above at 0.1 to 0.3 ms on a converged statement and +0.5 us on a join; and the one remedy tried (B2) traded statement #3's binary part for 1 % to 2 % on whole-relation walks, so a remedy needs the cause first | (b) close DQ with the residue recorded as a measured cost, not declared met (the proposal as first written); (c) withdraw E1 |
+| DQ-Q13 | The close's residue (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`). Converged cabined-join statements read 7 % to 35 % dearer on B than on A where the state is cold or in a run whose first statement the fallback answered: about 0.1 to 0.3 ms on a statement of about 1 ms, with the cause not isolated. Join statements read +0.2 to +0.5 us (0.5 % to 1.2 %), unattributed, within about 1 us of the noise. So DQ-Q8's converged clause is not met in those cells, and DQ-R6 is not shown met. The close's measurement budget is spent | **DQ stays open at DQ-S5, stopped** (revised at DQ-S5's review from closing it with the residue. That proposal set aside the bar CLA itself set, DQ-Q8 (a), and under the standing word a regression measured at the close is work, and a spent budget is a stop, not a close). Everything is built, reviewed, suite-green and committed on the work branch, and the residue is in `known-gaps.md`. The operator's word either **lifts the measurement budget** for the diagnosis and a remedy (per-thread CPU by thread id, the allocator's state after a freed map, a stage bisect of the join residue), or **accepts the residue and closes DQ**, which the push word would then land. Basis: the gain is bounded below by 108x on every gate-declined cell, with a refusal at the defaults answered at the first statement; the residue is bounded above at 0.1 to 0.3 ms on a converged statement and +0.5 us on a join; and the one remedy tried (B2) traded statement #3's binary part for 1 % to 2 % on whole-relation walks, so a remedy needs the cause first **Diagnosed on the operator's lifted budget** (`raft-marks-2026-11-23.md` §5): the residue is placement, not instructions. The sets a statement records land in the memory the previous statement's freed map left, and the code after the new `MissWalk` moves. Each placement remedy measured trades the cost onto another shape. **CLA's proposal for the operator's word: accept the residue and close DQ.** This is not adopted on the standing word, because it would set aside the bar CLA set **Marked by the operator 2026-11-23: accept the residue and close DQ** (*"accept it and close"*, `raft-marks-2026-11-23.md` §6), the operator's own mark | (b) close DQ with the residue recorded as a measured cost, not declared met (the proposal as first written); (c) withdraw E1 |
 
 ## 5. Stages
 
@@ -805,3 +816,49 @@ DQ opened from, so the merge brings nothing.
     driver is archived with the results it measured;
   - keying `thread_cpu` by thread id now. That is the diagnosis's first
     step, and the diagnosis waits for the operator's word.
+
+### DQ-S5 - the diagnosis on the lifted budget (2026-11-23)
+
+The operator's word "lift the measurement budget" (`raft-marks-2026-11-23.md`
+§5) came with no figure, and CLA read it as one more hour. On worktree
+`dq-cabin-miss-build` over `3e615f39`, with the binaries of the close, the
+runs took 03:25 to 03:35 UTC, with a quiet hold of 0 s. Results:
+`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`, last section.
+
+- **The compile is level.** `sys.statement_stats`' `compile_us` reads the
+  same on A, A2 and B for every M1 shape. The served Cabin join's +0.24 us is
+  execution, and the served path's functions are the same size in both
+  binaries. It is code placement.
+- **Statement #3's excess is placement of two kinds.**
+  - The sets the recording statement banks land in the memory the first
+    statement's freed map left (74 page faults against 265).
+  - The rest belongs to the binary with the fallback off (+100 us).
+- **No remedy without a trade.** Keeping the helpers out of line, and
+  fixing glibc's mmap threshold, each move the cost onto another shape.
+- **DQ stays open at DQ-S5.** CLA proposes accepting the residue, for the
+  operator's word. It is not adopted on the standing word, which would set
+  aside the bar CLA set.
+
+The driver changes are recorded in the results file: `thread_cpu` keyed by
+thread id, `faults`, and the new `tools/dq_compile_probe.py`. No build input
+changed, so no suite ran.
+
+### DQ closed (2026-11-23)
+
+**Closed on the operator's word** *"accept it and close"*
+(`raft-marks-2026-11-23.md` §6): the residue DQ-S5 measured and diagnosed
+is accepted. DQ-Q13 is the operator's own mark.
+
+- **The bars:** DQ-Q8's gate cell is met (0.79x to 1.15x against 1.5x).
+  Its converged clause and DQ-R6 are not met: converged cabined-join
+  statements read 7 % to 35 % dearer in cold cells, and join statements
+  +0.2 to +0.5 us, as placement of memory and code.
+- **What stays open, all recorded in `known-gaps.md` for the operator:**
+  - DQ-Q2 (b) and (c): the recording statement's refusal at the defaults
+    (DQ-Q11);
+  - DQ-Q13 (b) and (c);
+  - the residue itself, as a measured cost.
+- **Landing:** the code is on `main` at `38b5aa69` (§4). This close
+  record and the diagnosis (`d4a59dd6`) are on the work branch and wait
+  for the push word.
+

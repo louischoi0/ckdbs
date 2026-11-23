@@ -40,3 +40,32 @@ The operator's words of 2026-11-23, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | DQ's close: the push word is not read as accepting the residue (DQ-Q13); DQ-Q2 (b) or (c); a tag or a version |
 | **Recorded at** | this file; the DQ order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 5. The measurement budget lifted; the residue diagnosed as placement
+
+| | |
+|---|---|
+| **Word** | *"lift the measurement budget"*, given after CLA's report of the stop at DQ-S5, together with the "push no verify" of §4 |
+| **Mark** | **The measurement budget for DQ-S5's diagnosis is lifted**, with no figure. CLA read it as one more hour, and that reading is CLA's. The diagnosis ran 03:25 to 03:35 UTC on the close's binaries, and the residue is placement, not instructions. The served path's compile is level, and its functions are the same size in both binaries, so the +0.24 us on a served Cabin join is code placement. Statement #3's excess is the sets landing in the memory the previous statement's freed map left (74 page faults against 265), plus code placement (+100 us with the fallback off). The two placement remedies measured (keeping the helpers out of line, fixing glibc's mmap threshold) each trade the cost onto another shape. **DQ stays open at DQ-S5.** CLA's proposal for the operator's word is to accept the residue and close DQ. It is not adopted on the standing word |
+| **Does not settle** | accepting the residue; closing DQ; a push of the records after §4, a tag or a version |
+| **Recorded at** | this file; the DQ order's header, DQ-Q13 and §7; `bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`; `docs/inflight/known-gaps.md`; `instructions/v3.2.0/index.md` |
+
+## 6. DQ closed: the residue accepted
+
+| | |
+|---|---|
+| **Word** | *"accept it and close"* (given in Korean), after CLA's account of the gate-declined cell and of the residue diagnosed as placement (§5) |
+| **Mark** | **The operator's own mark on DQ-Q13: the measured residue is accepted and DQ is closed.** DQ-Q8's gate cell is met. Its converged clause and DQ-R6 are not met, and that is accepted: converged cabined-join statements read 7 % to 35 % dearer in cold cells, and join statements +0.2 to +0.5 us, as placement of memory and code (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`). The residue stays in `known-gaps.md` as an accepted measured cost |
+| **Does not settle** | DQ-Q2 (b) or (c); DQ-Q13 (b) or (c); a push of this record and of `d4a59dd6`; a tag or a version |
+| **Recorded at** | this file; the DQ order's header, DQ-Q13 and §7; `docs/inflight/known-gaps.md`; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+
+## 7. DQ's close record landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report of DQ's close (§6) |
+| **Mark** | **DQ's diagnosis (`d4a59dd6`), its close record (`f276c939`) and this record land on `main`**: the work branch `worktree-dq-cabin-miss-build` (worktree `dq-cabin-miss-build`), merged `--no-ff` over `origin/main` `38b5aa69` (§4's merge) and pushed with `--no-verify`. They change documents, bench and tools only; the last suite, 0 failed of 5,159 at `7e31d272`, ran on the same build inputs, so the hook was not run |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | a tag or a version; DQ-Q2 (b) or (c); DQ-Q13 (b) or (c) |
+| **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
