@@ -5113,8 +5113,7 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
         // row is that column's code, and no index stands in the drop's way
         // to say so.
         {
-            const std::vector<std::uint16_t>& key = access.value()->schema.embedded_key;
-            if (std::find(key.begin(), key.end(), pos) != key.end()) {
+            if (access.value()->schema.embedded_key.contains(pos)) {
                 const Status s = Status::InvalidArgument(
                     "column '" + stmt.old_column +
                     "' is part of the primary key, which is this relation's Keystone id, and "
@@ -6758,7 +6757,15 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 key_positions.push_back(static_cast<std::uint16_t>(first_declared + i));
                 key_columns.push_back(schema.columns[first_declared + i]);
             }
-            if (!stmt.heap && catalog::KeyEmbeds(key_columns)) schema.embedded_key = key_positions;
+            // A key column at a position the catalog row cannot name (past
+            // 255) does not embed, and the key is indexed.
+            if (!stmt.heap && catalog::KeyEmbeds(key_columns)) {
+                catalog::EmbeddedKeyColumns embedded;
+                const bool named = std::all_of(
+                    key_positions.begin(), key_positions.end(),
+                    [&](std::uint16_t pos) { return embedded.push_back(pos); });
+                if (named) schema.embedded_key = embedded;
+            }
         }
 
         // ---- REFERENCES, checked before anything is created -----------------
@@ -8768,64 +8775,24 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
 
     // ---- An embedded key names the id (DR-S3e) ----------------------------
     //
-    // On a relation whose primary key is embedded the Keystone id is the
-    // code of the row's key columns (`exec/embedded_key.hpp`), so every row
-    // names its key, whether or not it wrote `keyidentity`: the id is
-    // computed here, before anything can wait, and the row then takes the
+    // On a relation whose primary key is embedded every row names its key,
+    // whether or not it wrote `keyidentity` (`EmbeddedRowId`): the id is
+    // settled here, before anything can wait, and the row then takes the
     // named key's path below - its borrow, its duplicate check, its
-    // placement where the id sorts. A row that does write `keyidentity`
-    // must write the id its key encodes to; any other would place the row
-    // where no read by its key looks (`[quiet-wrong]`), so it is refused.
+    // placement where the id sorts. **One branch for every other relation**:
+    // the derivation and its refusals are out of this function's body, which
+    // the close measured dearer a row with them in it.
     const bool embedded = !ta.schema.embedded_key.empty();
     // Where a refusal for the key points: the tuple key's token, or the
     // first key column's.
     std::uint32_t key_byte = named_by_row ? values.front().byte_offset : 0;
     if (embedded) {
-        std::vector<parser::AstValue> key_values;
-        for (const std::uint16_t pos : ta.schema.embedded_key) {
-            parser::AstValue value = body[pos - 1];
-            const catalog::SysColumnRow& column = ta.schema.columns[pos];
-            const std::string at = " (byte " + std::to_string(value.byte_offset) + ")";
-            if (value.type == parser::ValueType::kNull) {
-                return Status::InvalidArgument("primary key column '" +
-                                               std::string(catalog::NameView(column.name)) +
-                                               "' is NULL; a primary key is never NULL" + at);
-            }
-            if (Status coerced = exec::CoerceLiteralToColumn(column, value); !coerced.ok()) {
-                return coerced.WithContext("primary key column '" +
-                                           std::string(catalog::NameView(column.name)) + "'" + at);
-            }
-            key_values.push_back(std::move(value));
+        if (Status s = EmbeddedRowId(oid, ta, body, named_by_row, supplied_id, key_byte);
+            !s.ok()) {
+            return s;
         }
-        const std::uint32_t first_key_byte =
-            body[ta.schema.embedded_key.front() - 1].byte_offset;
-        auto id = exec::EmbeddedKeyId(ta.schema, key_values);
-        if (!id.ok()) {
-            return id.status().WithContext("primary key (byte " +
-                                           std::to_string(first_key_byte) + ")");
-        }
-        if (named_by_row && supplied_id != id.value()) {
-            return Status::InvalidArgument(
-                "keyidentity " + std::to_string(supplied_id) + " is not this row's: on '" +
-                RelationNameOf(oid) + "' the Keystone id is its primary key's code, " +
-                std::to_string(id.value()) + " for this row (byte " + std::to_string(key_byte) +
-                ")");
-        }
-        supplied_id = id.value();
-        if (!named_by_row) key_byte = first_key_byte;
     }
     const bool explicit_key = named_by_row || embedded;
-    // A key refused as a duplicate, said as what the client wrote: on an
-    // embedded relation that is the primary key, which a live row holds or
-    // a deleted one keeps bound until a `PURGE` (K1).
-    const auto as_key_refusal = [&](Status refused) {
-        if (!embedded || refused.code() != StatusCode::kAlreadyExists) return refused;
-        return Status::AlreadyExists(
-            "primary key " + EmbeddedKeyText(ta, body) +
-            " is already held: by a live row, or by a deleted one until a PURGE frees its key "
-            "(tuple key " + std::to_string(supplied_id) + ") (byte " + std::to_string(key_byte) +
-            ")");
-    };
 
     // ---- The forward check (docs/spec/foreign-keys.md §2) ---------------
     //
@@ -8945,8 +8912,9 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // **A duplicate carries the tuple key token's byte** (BD-R5), as the exhausted
     // refusal above does.
     const auto duplicate_at_tuple_key = [&](const Status& duplicate) {
-        return as_key_refusal(Status::AlreadyExists(duplicate.message() + " (byte " +
-                                                    std::to_string(key_byte) + ")"));
+        if (embedded) return EmbeddedKeyHeld(ta, body, supplied_id, key_byte);
+        return Status::AlreadyExists(duplicate.message() + " (byte " +
+                                     std::to_string(key_byte) + ")");
     };
     // The key's borrow, given back by a statement it protected nothing for
     // (BB-S3's review; AZ-S5's shape for a failed check's `S`): nothing was
@@ -9016,7 +8984,11 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // lookup that failed, is a wait like any other (a fence over `k`).
         // No mark is consulted (W2 of BZ).
         const auto refuse_if_never_admissible = [&]() -> Status {
-            return as_key_refusal(NamedKeyVerdict(ta, supplied_id, key_byte, scope.txn));
+            Status verdict = NamedKeyVerdict(ta, supplied_id, key_byte, scope.txn);
+            if (embedded && verdict.code() == StatusCode::kAlreadyExists) {
+                return EmbeddedKeyHeld(ta, body, supplied_id, key_byte);
+            }
+            return verdict;
         };
         const bool held_before =
             scope.txn != nullptr &&
@@ -11241,7 +11213,7 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
 StatusOr<std::optional<exec::EmbeddedKeyWindow>> CommandDispatcher::EmbeddedPurgeWindow(
     const catalog::TableAccess& ta, const std::vector<parser::Condition>& where,
     std::uint32_t where_byte) {
-    const std::vector<std::uint16_t>& key = ta.schema.embedded_key;
+    const catalog::EmbeddedKeyColumns& key = ta.schema.embedded_key;
     // Read exactly, as PU1 reads a tuple key's window: a conjunct this does
     // not fold is refused, never skipped - a skipped one would widen what
     // is freed.
@@ -11316,6 +11288,56 @@ StatusOr<std::optional<exec::EmbeddedKeyWindow>> CommandDispatcher::EmbeddedPurg
     auto window = exec::EmbeddedKeyWindowOf(ta.schema, prefix, low, high);
     if (!window.ok()) return window.status().WithContext("PURGE's primary key window");
     return window;
+}
+
+Status CommandDispatcher::EmbeddedRowId(catalog::Oid oid, const catalog::TableAccess& ta,
+                                        const std::vector<parser::AstValue>& body,
+                                        bool named_by_row, std::uint64_t& id,
+                                        std::uint32_t& key_byte) {
+    std::vector<parser::AstValue> key_values;
+    for (const std::uint16_t pos : ta.schema.embedded_key) {
+        parser::AstValue value = body[pos - 1];
+        const catalog::SysColumnRow& column = ta.schema.columns[pos];
+        const std::string at = " (byte " + std::to_string(value.byte_offset) + ")";
+        if (value.type == parser::ValueType::kNull) {
+            return Status::InvalidArgument("primary key column '" +
+                                           std::string(catalog::NameView(column.name)) +
+                                           "' is NULL; a primary key is never NULL" + at);
+        }
+        if (Status coerced = exec::CoerceLiteralToColumn(column, value); !coerced.ok()) {
+            return coerced.WithContext("primary key column '" +
+                                       std::string(catalog::NameView(column.name)) + "'" + at);
+        }
+        key_values.push_back(std::move(value));
+    }
+    const std::uint32_t first_key_byte = body[ta.schema.embedded_key.front() - 1].byte_offset;
+    auto encoded = exec::EmbeddedKeyId(ta.schema, key_values);
+    if (!encoded.ok()) {
+        return encoded.status().WithContext("primary key (byte " +
+                                            std::to_string(first_key_byte) + ")");
+    }
+    // A row that writes `keyidentity` must write the id its key encodes to:
+    // any other would place the row where no read by its key looks
+    // (`[quiet-wrong]`), so it is refused.
+    if (named_by_row && id != encoded.value()) {
+        return Status::InvalidArgument(
+            "keyidentity " + std::to_string(id) + " is not this row's: on '" +
+            RelationNameOf(oid) + "' the Keystone id is its primary key's code, " +
+            std::to_string(encoded.value()) + " for this row (byte " +
+            std::to_string(key_byte) + ")");
+    }
+    id = encoded.value();
+    if (!named_by_row) key_byte = first_key_byte;
+    return Status::OK();
+}
+
+Status CommandDispatcher::EmbeddedKeyHeld(const catalog::TableAccess& ta,
+                                          const std::vector<parser::AstValue>& body,
+                                          std::uint64_t id, std::uint32_t key_byte) {
+    return Status::AlreadyExists(
+        "primary key " + EmbeddedKeyText(ta, body) +
+        " is already held: by a live row, or by a deleted one until a PURGE frees its key "
+        "(tuple key " + std::to_string(id) + ") (byte " + std::to_string(key_byte) + ")");
 }
 
 std::string CommandDispatcher::EmbeddedKeyText(const catalog::TableAccess& ta,

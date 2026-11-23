@@ -2461,6 +2461,22 @@ private:
     // `body` is the row's columns after the Keystone.
     static std::string EmbeddedKeyText(const catalog::TableAccess& ta,
                                        const std::vector<parser::AstValue>& body);
+    // **An embedded relation's row names its id by its key** (DR-S3e): `id`
+    // becomes the code of `body`'s key columns (`exec::EmbeddedKeyId`) and
+    // `key_byte` the first key column's byte, where the row wrote no
+    // `keyidentity`. Refuses a NULL or unstorable key value, the one key
+    // the form cannot name, and a `keyidentity` (`named_by_row`, in `id`)
+    // that is not the row's. Out of `InsertOneRow`'s body on purpose: a
+    // relation with no such key pays one branch for it.
+    Status EmbeddedRowId(catalog::Oid oid, const catalog::TableAccess& ta,
+                         const std::vector<parser::AstValue>& body, bool named_by_row,
+                         std::uint64_t& id, std::uint32_t& key_byte);
+    // The duplicate's refusal on an embedded relation, said as the key the
+    // client wrote: a live row holds it, or a deleted one keeps it bound
+    // until a `PURGE` (K1).
+    static Status EmbeddedKeyHeld(const catalog::TableAccess& ta,
+                                  const std::vector<parser::AstValue>& body, std::uint64_t id,
+                                  std::uint32_t key_byte);
     // **`PURGE`'s window on an embedded key, written in the key's own
     // comparisons** (DR-Q20): the inclusive ids of the leading columns'
     // values and an inclusive range on the next; nullopt where no key can

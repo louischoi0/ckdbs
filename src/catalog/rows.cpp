@@ -44,6 +44,19 @@ StatusOr<SysObjectRow> SysObjectRow::Decode(std::span<const std::byte> bytes) {
 
 // ---- sys.tables --------------------------------------------------------
 
+namespace {
+
+// `SysTableRow::Decode`'s refusal of a key form this build never writes,
+// kept out of its body (see there).
+[[gnu::noinline]] Status UnwrittenKeyForm(Oid oid, std::uint8_t key_form, bool has_cols) {
+    return Status::Corruption("sys.tables row for oid " + std::to_string(oid) +
+                              " carries key form " + std::to_string(key_form) +
+                              (has_cols ? " with" : " without") +
+                              " embedded key columns, which this build never writes");
+}
+
+}  // namespace
+
 std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::array<std::byte, kOnDiskSize> buf{};
     std::byte* base = buf.data();
@@ -81,12 +94,16 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     // A form this build does not know, or key columns the form does not
     // carry, is a row this build did not write (DR-R12): refused, never
     // read as the nearest form it does know.
+    //
+    // **One branch here, the refusal out of line** (DR's close): a named
+    // key's insert decodes every `sys.tables` row before its relation's
+    // (`Catalog::AdmitExplicitRowId`), so this function is on every such
+    // row's path, and the refusal's string building inside it measured as a
+    // dearer load on relations that have no embedded key.
     const bool has_cols = row.embedded_key_cols[0] != 0;
-    if (row.key_form > kKeyFormEmbedded || has_cols != (row.key_form == kKeyFormEmbedded)) {
-        return Status::Corruption("sys.tables row for oid " + std::to_string(row.oid) +
-                                  " carries key form " + std::to_string(row.key_form) +
-                                  (has_cols ? " with" : " without") +
-                                  " embedded key columns, which this build never writes");
+    if (row.key_form > kKeyFormEmbedded || has_cols != (row.key_form == kKeyFormEmbedded))
+        [[unlikely]] {
+        return UnwrittenKeyForm(row.oid, row.key_form, has_cols);
     }
     std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
     std::memcpy(&row.spare_slots, base + kSpareSlotsOffset, sizeof(row.spare_slots));

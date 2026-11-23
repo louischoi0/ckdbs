@@ -1230,7 +1230,7 @@ const parser::AstValue* EqualityOnColumn(const Step& step, std::uint16_t slot,
 // key can match: the conjuncts stay in the residual, which answers them.
 std::optional<EmbeddedKeyWindow> EmbeddedKeyWindowOnStep(const catalog::TableAccess& access,
                                                          const Step& step, std::uint16_t slot) {
-    const std::vector<std::uint16_t>& key = access.schema.embedded_key;
+    const catalog::EmbeddedKeyColumns& key = access.schema.embedded_key;
     if (key.empty()) return std::nullopt;
     std::vector<parser::AstValue> prefix;
     std::size_t at = 0;
@@ -2492,8 +2492,7 @@ Status CompileAssignments(const catalog::TableAccess& access,
         // A key that must move is a key over a hidden Keystone - a heap's,
         // or a btree's whose key does not embed.
         const auto key_column = static_cast<std::uint16_t>(column - access.schema.columns.data());
-        if (std::find(access.schema.embedded_key.begin(), access.schema.embedded_key.end(),
-                      key_column) != access.schema.embedded_key.end()) {
+        if (access.schema.embedded_key.contains(key_column)) {
             return Status::Unsupported(
                 "primary key column '" + a.col_name + "' cannot be updated at byte " +
                 std::to_string(a.byte_offset) +

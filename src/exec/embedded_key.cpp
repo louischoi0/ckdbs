@@ -65,7 +65,7 @@ StatusOr<std::uint64_t> EmbeddedKeyId(const catalog::Schema& schema,
 StatusOr<std::optional<EmbeddedKeyWindow>> EmbeddedKeyWindowOf(
     const catalog::Schema& schema, std::span<const parser::AstValue> prefix,
     const parser::AstValue* low, const parser::AstValue* high) {
-    const std::vector<std::uint16_t>& key = schema.embedded_key;
+    const catalog::EmbeddedKeyColumns& key = schema.embedded_key;
     const bool ranged = low != nullptr && high != nullptr;
     if ((low == nullptr) != (high == nullptr) ||
         prefix.size() + (ranged ? 1 : 0) > key.size() || (prefix.empty() && !ranged)) {

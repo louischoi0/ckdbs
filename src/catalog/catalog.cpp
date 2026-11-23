@@ -1313,23 +1313,18 @@ namespace {
 // says otherwise is not one this build wrote, and the load refuses it
 // `Corruption` rather than index a column that is not there.
 Status CheckEmbeddedKey(const Schema& schema, ClusteredType clustered) {
-    const std::vector<std::uint16_t>& key = schema.embedded_key;
+    const EmbeddedKeyColumns& key = schema.embedded_key;
     if (key.empty()) return Status::OK();
     if (clustered != ClusteredType::kBtree || !schema.hidden_keystone()) {
         return Status::InvalidArgument(
             "catalog: an embedded primary key is a btree's, over a hidden Keystone");
     }
-    if (key.size() > kMaxEmbeddedKeyColumns) {
-        return Status::InvalidArgument("catalog: an embedded primary key has at most " +
-                                       std::to_string(kMaxEmbeddedKeyColumns) + " columns");
-    }
     for (std::size_t i = 0; i < key.size(); ++i) {
-        if (key[i] == 0 || key[i] >= schema.columns.size() || key[i] > 0xFF ||
-            std::find(key.begin(), key.begin() + static_cast<std::ptrdiff_t>(i), key[i]) !=
-                key.begin() + static_cast<std::ptrdiff_t>(i)) {
+        if (key[i] == 0 || key[i] >= schema.columns.size() ||
+            std::find(key.begin(), key.begin() + i, key[i]) != key.begin() + i) {
             return Status::InvalidArgument(
                 "catalog: an embedded primary key names each of its columns once, at a "
-                "declared position below 256");
+                "declared position");
         }
     }
     std::vector<SysColumnRow> columns;
@@ -1352,8 +1347,8 @@ Status CheckLoadedEmbeddedKey(Oid rel_id, const Schema& schema, ClusteredType cl
 }
 
 // The embedded key a `sys.tables` row carries, as `Schema::embedded_key`.
-std::vector<std::uint16_t> EmbeddedKeyOf(const SysTableRow& row) {
-    std::vector<std::uint16_t> key;
+EmbeddedKeyColumns EmbeddedKeyOf(const SysTableRow& row) {
+    EmbeddedKeyColumns key;
     if (row.key_form != kKeyFormEmbedded) return key;
     for (const std::uint8_t pos : row.embedded_key_cols) {
         if (pos == 0) break;
@@ -1368,7 +1363,7 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_i
                                    ClusteredType clustered_type, PageId varheap_page_id,
                                    PageId anchor_page_id, std::uint64_t trx_id,
                                    CatalogRowRef* where, std::uint16_t spare_slots,
-                                   std::span<const std::uint16_t> embedded_key) {
+                                   const EmbeddedKeyColumns& embedded_key) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -1378,12 +1373,9 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_i
     row.varheap_page_id = varheap_page_id;
     row.anchor_page_id = anchor_page_id;
     row.spare_slots = spare_slots;
-    // `CheckEmbeddedKey` admitted the positions: each fits its byte.
     if (!embedded_key.empty()) {
         row.key_form = kKeyFormEmbedded;
-        for (std::size_t i = 0; i < embedded_key.size(); ++i) {
-            row.embedded_key_cols[i] = static_cast<std::uint8_t>(embedded_key[i]);
-        }
+        std::copy(embedded_key.begin(), embedded_key.end(), row.embedded_key_cols.begin());
     }
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;

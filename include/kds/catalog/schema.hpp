@@ -24,6 +24,42 @@ struct CompiledCabinExpr;
 
 namespace kds::catalog {
 
+// The positions of an embedded primary key's columns, in key order
+// (DR-S3e): at most `kMaxEmbeddedKeyColumns`, each below 256, which is what
+// the `sys.tables` row holds of them.
+//
+// **Five bytes, inline, on purpose** (DR's close): a `Schema` ends in a
+// `uint16_t` and six bytes of padding, and this sits in them. As a vector
+// it grew every `Schema` by 24 bytes and moved every field a `TableAccess`
+// keeps after its schema, and the close measured statements on relations
+// that have no such key 2 % to 7 % dearer for it. `static_assert`ed below.
+class EmbeddedKeyColumns {
+public:
+    bool empty() const noexcept { return count_ == 0; }
+    std::size_t size() const noexcept { return count_; }
+    std::uint16_t operator[](std::size_t i) const noexcept { return cols_[i]; }
+    std::uint16_t front() const noexcept { return cols_[0]; }
+    const std::uint8_t* begin() const noexcept { return cols_.data(); }
+    const std::uint8_t* end() const noexcept { return cols_.data() + count_; }
+    bool contains(std::uint16_t pos) const noexcept {
+        for (const std::uint8_t col : *this) {
+            if (col == pos) return true;
+        }
+        return false;
+    }
+    // False, and nothing added, where the key is full or `pos` is not a
+    // position this can hold: such a key does not embed.
+    bool push_back(std::uint16_t pos) noexcept {
+        if (count_ == cols_.size() || pos == 0 || pos > 0xFF) return false;
+        cols_[count_++] = static_cast<std::uint8_t>(pos);
+        return true;
+    }
+
+private:
+    std::array<std::uint8_t, kMaxEmbeddedKeyColumns> cols_{};
+    std::uint8_t count_ = 0;
+};
+
 struct Schema {
     // Every physical column in `pos` order, a dropped one included: the
     // vector index is the position every index, foreign key, Cabin,
@@ -39,8 +75,9 @@ struct Schema {
     // positions of the key's columns, in key order, where the relation's
     // Keystone id is the code of its key - a btree with a hidden Keystone
     // and no index for the key. Empty for every other relation. From the
-    // `sys.tables` row, fixed at `CREATE TABLE` (DR-R12).
-    std::vector<std::uint16_t> embedded_key;
+    // `sys.tables` row, fixed at `CREATE TABLE` (DR-R12). **After
+    // `spare_slots`, in the struct's padding** (`EmbeddedKeyColumns`).
+    EmbeddedKeyColumns embedded_key;
 
     // A hidden Keystone (DN-D3; BZ-R1 before it): column 0 is the engine's
     // own `int64`, no statement names it but by `keyidentity`, and the
@@ -370,6 +407,11 @@ struct ForeignKeyRef {
     std::uint16_t column_no = 0;
     std::uint16_t flags = 0;
 };
+
+// A `Schema` is its columns, its slot count and - in what was padding - its
+// embedded key: the size it had before DR (`EmbeddedKeyColumns`).
+static_assert(sizeof(Schema) == sizeof(std::vector<SysColumnRow>) + 8,
+              "Schema grew: every TableAccess field after it moves");
 
 // One Transition on a relation, parsed from its `sys.transitions` row
 // (`exec/transition.hpp` builds it, BV-S2). Every state is held as its

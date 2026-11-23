@@ -1308,7 +1308,7 @@ public:
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr,
                               std::uint16_t spare_slots = 0,
-                              std::span<const std::uint16_t> embedded_key = {});
+                              const EmbeddedKeyColumns& embedded_key = {});
 
     // ---- Secondary indexes (docs/spec/index.md §12) --------------------
 
