@@ -1,0 +1,129 @@
+{
+ "args": {
+  "binA": "/home/louis/dqbench/kds_server_A_68e5a69f",
+  "binB": "/home/louis/dqbench/kds_server_B_7e31d272",
+  "workdir": "/home/louis/dqbench/diag/work",
+  "out": "/home/louis/dqbench/diag/probe.json",
+  "rounds": 8,
+  "k": 2000,
+  "port": 15861,
+  "cpus": "1,2,3",
+  "heartbeat": "/home/louis/dqbench/diag/probe.heartbeat"
+ },
+ "quiet_hold_s": 0.0,
+ "stats": {
+  "A": {
+   "c_cabin": [
+    16005,
+    88706,
+    16005,
+    347596
+   ],
+   "d_tuplekey": [
+    16002,
+    86930,
+    16002,
+    342266
+   ],
+   "b_build": [
+    16002,
+    91334,
+    16002,
+    2060195
+   ]
+  },
+  "A2": {
+   "c_cabin": [
+    16005,
+    87502,
+    16005,
+    348137
+   ],
+   "d_tuplekey": [
+    16002,
+    86231,
+    16002,
+    343759
+   ],
+   "b_build": [
+    16002,
+    92692,
+    16002,
+    2085572
+   ]
+  },
+  "B": {
+   "c_cabin": [
+    16005,
+    88923,
+    16005,
+    351507
+   ],
+   "d_tuplekey": [
+    16002,
+    86342,
+    16002,
+    343257
+   ],
+   "b_build": [
+    16002,
+    91040,
+    16002,
+    2024280
+   ]
+  }
+ },
+ "per_call": {
+  "c_cabin": {
+   "A": {
+    "calls": 16005,
+    "compile_us": 5.542,
+    "cpu_us": 21.718
+   },
+   "A2": {
+    "calls": 16005,
+    "compile_us": 5.467,
+    "cpu_us": 21.752
+   },
+   "B": {
+    "calls": 16005,
+    "compile_us": 5.556,
+    "cpu_us": 21.962
+   }
+  },
+  "d_tuplekey": {
+   "A": {
+    "calls": 16002,
+    "compile_us": 5.432,
+    "cpu_us": 21.389
+   },
+   "A2": {
+    "calls": 16002,
+    "compile_us": 5.389,
+    "cpu_us": 21.482
+   },
+   "B": {
+    "calls": 16002,
+    "compile_us": 5.396,
+    "cpu_us": 21.451
+   }
+  },
+  "b_build": {
+   "A": {
+    "calls": 16002,
+    "compile_us": 5.708,
+    "cpu_us": 128.746
+   },
+   "A2": {
+    "calls": 16002,
+    "compile_us": 5.793,
+    "cpu_us": 130.332
+   },
+   "B": {
+    "calls": 16002,
+    "compile_us": 5.689,
+    "cpu_us": 126.502
+   }
+  }
+ }
+}

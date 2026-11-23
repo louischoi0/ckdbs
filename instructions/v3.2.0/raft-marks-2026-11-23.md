@@ -40,3 +40,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Skipped on that word** | the pre-push hook |
 | **Does not settle** | DQ's close: the push word is not read as accepting the residue (DQ-Q13); DQ-Q2 (b) or (c); a tag or a version |
 | **Recorded at** | this file; the DQ order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 5. The measurement budget lifted; the residue diagnosed as placement
+
+| | |
+|---|---|
+| **Word** | *"lift the measurement budget"*, given after CLA's report of the stop at DQ-S5, together with the "push no verify" of §4 |
+| **Mark** | **The measurement budget for DQ-S5's diagnosis is lifted**, with no figure. CLA read it as one more hour, and that reading is CLA's. The diagnosis ran 03:25 to 03:35 UTC on the close's binaries, and the residue is placement, not instructions. The served path's compile is level, and its functions are the same size in both binaries, so the +0.24 us on a served Cabin join is code placement. Statement #3's excess is the sets landing in the memory the previous statement's freed map left (74 page faults against 265), plus code placement (+100 us with the fallback off). The two placement remedies measured (keeping the helpers out of line, fixing glibc's mmap threshold) each trade the cost onto another shape. **DQ stays open at DQ-S5.** CLA's proposal for the operator's word is to accept the residue and close DQ. It is not adopted on the standing word |
+| **Does not settle** | accepting the residue; closing DQ; a push of the records after §4, a tag or a version |
+| **Recorded at** | this file; the DQ order's header, DQ-Q13 and §7; `bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`; `docs/inflight/known-gaps.md`; `instructions/v3.2.0/index.md` |
+

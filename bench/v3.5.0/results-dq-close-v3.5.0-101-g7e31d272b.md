@@ -626,3 +626,75 @@ run stalled: every heartbeat file runs to its `end` or `done` line.
   cells are all CPU on one session.
 - The test suite was not run by this measurement (nothing under `src/`,
   `include/` or `tests/` changed here).
+
+## Diagnosis on the lifted budget (2026-11-23, 03:25 to 03:35 UTC)
+
+The operator lifted the measurement budget after the stop ("lift the
+measurement budget"). No figure came with it, and CLA read it as one more
+hour. These runs are CLA's own, on the same binaries A
+(`45eb735a8626c211`) and B (`9a5ac8d83af20781`), host quiet (the
+`/proc/*/comm` gate held 0 s). Raw output and scripts:
+`archive/dq-close-v3.5.0-101-g7e31d272b/diag/`.
+
+**1. M1's join residue is in the execution, not the compile.**
+`tools/dq_compile_probe.py` read `sys.statement_stats` after 16,000
+statements of each shape on A, A2 and B, up at once and rotated
+(`compile_us` per call, and `cpu_us` per timed call):
+
+| shape | compile, A / A2 / B | statement CPU, A / A2 / B |
+|---|---|---|
+| c_cabin (all served) | 5.542 / 5.467 / 5.556 us | 21.718 / 21.752 / 21.962 us |
+| d_tuplekey | 5.432 / 5.389 / 5.396 us | 21.389 / 21.482 / 21.451 us |
+| b_build | 5.708 / 5.793 / 5.689 us | 128.746 / 130.332 / 126.502 us |
+
+- The compile is level on every shape, so the extra `BuildAnnotationOf`
+  and `BuildKeyOf` work the S5 review named does not show.
+- c_cabin's execution reads +0.24 us on B (+0.21 us beyond the floor).
+  d_tuplekey's +0.06 us is inside it.
+- The hot functions are the same size in A and B (`nm -S`):
+  `RunCabinStep` 0xd9d bytes in both, `ServeFromCabin` 0x108c in both,
+  `RunStep` 0xc37 against 0xc44.
+- B adds `MissWalk` (0x223 bytes), which moves every function after it.
+- The residue reads as code placement: no instruction on the served path
+  changed.
+
+**2. Statement #3's excess: part memory placement, part code placement.**
+The driver now records, per statement, each server thread's CPU keyed by
+thread id and the process's page faults (`tools/dq_s0_premise.py`'s
+`thread_cpu` and `faults`). The Cabin arm, `unique`, 10,000 rows, 2 passes
+of 6 rounds per configuration, medians with p25 to p75:
+
+| config | #1 faults | #2 faults | #3 CPU | #3 busiest thread | #3 other threads | #4 CPU | #5 CPU |
+|---|---|---|---|---|---|---|---|
+| A | 115 | 265 | 912 us (868-941) | 912 us | 0 us | 685 us | 718 us |
+| B | 482 | 74 | 1,092 us (1,025-1,160) | 1,048 us | 26 us | 793 us | 689 us |
+| B with `join_build_max_rows = 0` | 116 | 265 | 1,012 us (940-1,027) | 1,012 us | 0 us | 702 us | 672 us |
+| A, `glibc.malloc.mmap_threshold=131072` | 139 | 245 | 894 us (876-981) | - | - | 688 us | 661 us |
+| B, `glibc.malloc.mmap_threshold=131072` | 709 | 232 | 1,034 us (990-1,097) | - | - | 734 us | 692 us |
+
+- **The map's memory is reused by the next statement's sets.**
+  - B's statement #1 faults 482 pages building the map. Its #2 then faults
+    74 against A's 265: the 1,000 sets #2 records land in memory the
+    freed map left behind.
+  - #3, the first statement to read all of them, pays on the reactor
+    thread (+136 us), with no page faults (1 against 0).
+  - With glibc's dynamic mmap threshold fixed, the map is unmapped rather
+    than reused (B #2 faults 232). B's #3 excess falls from +180 us to
+    +140 us, but B's #1 rises by 150 us (4,264 against 4,114 us), because
+    the map's pages fault anew in every build.
+- **The rest is the binary's, the fallback aside.** With the fallback off,
+  B's #3 is still +100 us over A.
+- **Neither part is an instruction DQ added to the served path.** Both are
+  placement: where the sets land, and where the code lands.
+
+**What the remedies trade.** Each placement remedy measured moves cost
+onto another shape:
+
+| remedy | gain | cost |
+|---|---|---|
+| B2, the helpers kept out of line | 75 us off #3 | 1 % to 2 % on every whole-relation walk |
+| a fixed mmap threshold (environment only) | 40 to 80 us off #3 | 150 us on every statement that builds a map |
+
+No remedy that removes an instruction exists, because no instruction on
+the served path changed. The residue is recorded as placement in
+`known-gaps.md`. The order's DQ-Q13 carries what it leaves to the operator.

@@ -89,18 +89,24 @@ def settled_cpu_ns(pid, limit_s=0.05):
 
 
 def thread_cpu(pid):
-    """CPU ns per server thread, summed by the thread's comm name."""
+    """CPU ns per server thread, keyed by thread id: every server thread has
+    the binary's name as its comm, so a comm key folds them into one."""
     out = {}
     for t in os.listdir(f"/proc/{pid}/task"):
         try:
-            with open(f"/proc/{pid}/task/{t}/comm") as f:
-                comm = f.read().strip()
             with open(f"/proc/{pid}/task/{t}/schedstat") as f:
-                ns = int(f.read().split()[0])
+                out[t] = int(f.read().split()[0])
         except (OSError, ValueError):
             continue
-        out[comm] = out.get(comm, 0) + ns
     return out
+
+
+def faults(pid):
+    """The process's (minor, major) page faults so far, /proc/<pid>/stat
+    fields 10 and 12."""
+    with open(f"/proc/{pid}/stat") as f:
+        rest = f.read().rpartition(")")[2].split()
+    return int(rest[7]), int(rest[9])
 
 
 class Server:
@@ -252,6 +258,7 @@ def cell(a, binary, arm, n, dist, rnd, beat):
             if a.gap_s:
                 time.sleep(a.gap_s)  # outside the timed window
             th0 = thread_cpu(srv.proc.pid)
+            f0 = faults(srv.proc.pid)
             t0 = settled_cpu_ns(srv.proc.pid)
             w0 = time.perf_counter()
             try:
@@ -275,6 +282,8 @@ def cell(a, binary, arm, n, dist, rnd, beat):
             got["cpu_us"] = round(cpu_us, 1)
             th1 = thread_cpu(srv.proc.pid)
             got["threads_us"] = {k: round((th1[k] - th0.get(k, 0)) / 1000.0, 1) for k in th1}
+            f1 = faults(srv.proc.pid)
+            got["minflt"], got["majflt"] = f1[0] - f0[0], f1[1] - f0[1]
             got["wall_us"] = round(wall * 1e6, 1)
             stmts.append(got)
             beat(f"{arm} n={n} {dist} r{rnd} s{s + 1} cpu_ms={cpu_us / 1000:.1f} "
