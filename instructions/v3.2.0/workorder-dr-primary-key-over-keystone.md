@@ -11,7 +11,11 @@ the operator before writing and the operator answered with the word to
 write the draft, which marks none of them. Every `[source-read]` claim in
 §1 was read at `5a7dfb92`; the two commits from there to `5fdca9e0`
 change records and `known-gaps.md` only; §1.5's `known-gaps.md` line is
-cited as it stands at `5fdca9e0`.
+cited as it stands at `5fdca9e0`. **Amended 2026-11-23 on the operator's
+word** (`raft-marks-2026-11-23.md` §11), from a review of the draft and a
+probe of the engine: §1.7 is new, and §1.5, §1.6, P2a, P2c, P3, DR-Q1,
+DR-Q4, DR-Q5, DR-Q9 and DR-S0's measurement are amended to it. Still a
+draft, still unopened, DR-Q1..Q10 still unmarked.
 
 **Exploratory, and the census and the measurement come first.** DR-S0 can
 close the order with nothing built, and that is a result, not a failure.
@@ -152,7 +156,11 @@ What DR is not: a change to the Keystone, to the tuple header, to
 - **`ON CONFLICT`.** The arbiter is the tuple key or "the one column of a
   unique index": the search admits `ix.unique && ix.nkeys == 1` only
   (`command_dispatcher.cpp:8300-8303`, `:8305-8311`). A multi-column
-  primary key cannot arbitrate.
+  primary key cannot arbitrate. **The refusal a client meets is earlier,
+  in the parser**: a conflict target of more than one column is
+  `NotImplemented` at its byte (`src/parser/parser.cpp:2724`), and the
+  target the parser hands on is one column (`IndexColumnRef`), so the
+  dispatcher's search is never reached with two.
 - **`PURGE`.** A heap whose Keystone is its declared primary key is purged
   by Keystone; the hidden Keystone's heap is refused
   (`command_dispatcher.cpp:16274-16282`, DN-Q6 (a)). A hidden-Keystone
@@ -172,13 +180,45 @@ Named so DR-S0 reads them and no one takes them from this section:
   equality is given, and whether it is the same on every path that
   chooses an index (IX9);
 - whether an `UPDATE` of a `$pkey_<oid>` column on a heap takes BX's key
-  move and nothing else. A search of `src/` and `include/` for the
-  primary key's spellings found no site that refuses it, which is not the
-  same as having read the path;
-- `RETURNING`, the KWP load stream's field 0, CU's value list and CV's
-  ordered walk over a `$pkey_<oid>` index;
+  move and nothing else. §1.7 ran it: the statement succeeds and the
+  unique check holds. What is still unread is the path itself - which
+  records it logs, what it leaves in the index, and whether a foreign key
+  child or an assertion on the relation changes it;
+- the KWP load stream's field 0, CU's value list and CV's ordered walk
+  over a `$pkey_<oid>` index. `RETURNING keyidentity` is run in §1.7;
+  `RETURNING` over the query layer and under `ON CONFLICT` is not;
 - the range of an `int64` named key against the 48-bit Keystone (K4),
   which P4 depends on.
+
+### 1.7 What the engine does today `[measured]`
+
+Run 2026-11-23 against a release `kds_server` built at `7e31d272`
+(`v3.5.0-101-g7e31d272b`; no file under `src/` or `include/` changed from
+there to `c176c5d1`), `cores = 1`, one session, a throwaway data file. It
+is a probe of behaviour, eight statements, not a test and not a
+measurement of cost; the script is not in the tree. DR-S0 turns each row
+into a cell.
+
+| statement | what happened |
+|---|---|
+| `CREATE TABLE h (a int32, b int32, v int64, PRIMARY KEY (a, b)) HEAP`, then a duplicate `(1, 2)` | created; the duplicate refused: `unique index '$pkey_4000' on (a, b): (1, 2) is already held by tuple key 2` |
+| `UPDATE h SET b = 7 WHERE a = 1 AND b = 1` | **`UPDATED 1`: a primary key's value moves today** |
+| the same row moved onto the live key `(1, 2)` | refused by the same unique check |
+| `SELECT v FROM h WHERE a = 1 AND b = 2` under `ANALYZE` | `IndexProbe`, `pages=2 index_scanned=1 index_resolved=1` |
+| `INSERT ... RETURNING keyidentity`; `SELECT keyidentity ... WHERE a = 1 AND b = 2` | the issued id returned (1), and read back by key (2); `RETURNING *` returns the three declared columns |
+| `INSERT ... ON CONFLICT (a, b) DO NOTHING` | refused by the parser: `a conflict target of more than one column is not supported` |
+| `CREATE TABLE ch (id int64 PRIMARY KEY, p int64 REFERENCES h) HEAP` | refused: the parent's tuple key is hidden (§1.5's text) |
+| `PRIMARY KEY (a, b)` on a `BTREE` | refused (§1.3's text) |
+| two `varchar(64)` keys sharing their first 32 bytes; then one of them again | both inserted; the true duplicate refused on the full value |
+
+What follows for the candidates:
+
+- **P3 is not a build on a heap.** The move works and is checked. What
+  DR can add is the contract and its cells, or a refusal (DR-Q1).
+- **P2a's premise holds.** A client can learn a hidden Keystone at the
+  insert (`RETURNING keyidentity`) and by key afterwards, which the
+  refusal's comment says no client can.
+- **P2c starts in the parser**, not at the arbiter's index search.
 
 ## 2. The candidates `[design]`
 
@@ -198,24 +238,30 @@ None is built, none is measured, and DR-S0 can strike any of them.
   - **P2a - a foreign key to a hidden-Keystone heap, the child holding
     the parent's `keyidentity`.** F1 is unchanged: the child's column
     holds a Keystone. What changes is that the refusal's reason no longer
-    holds, since a client reads the value by name. No new check, no new
-    structure.
+    holds, since a client reads the value by name: at the parent's insert
+    by `RETURNING keyidentity`, and afterwards by its key (§1.7). No new
+    check, no new structure. The child's value is an engine-issued id, so
+    a load that names its own parent keys cannot use this form.
   - **P2b - a foreign key by primary key value.** The child's columns
     hold the parent's key values and the check is a probe of
     `$pkey_<oid>` under F1's latest-state rule. This is a new foreign key
     form, and it is sound only while a parent's key value cannot move
     under a child (DR-R3, DR-Q1). Its own order if it is taken (DR-Q4).
   - **P2c - a multi-column arbiter.** `ON CONFLICT (a, b)` names a unique
-    index by its whole column list.
+    index by its whole column list. Three sites change, not one: the
+    parser's one-column target (`parser.cpp:2724`), the dispatcher's
+    search (`nkeys == 1`), and `DO UPDATE`'s path over the row the
+    arbiter found (CG).
   - **P2d - `PURGE` by primary key.** No consumer is known (§1.5).
     Proposed not built (DR-Q6).
 - **P3 - a primary key's value may change.** `UPDATE t SET <pk column> =
   ...` is BX's key move: the entry under the old value is superseded, the
   new value is checked, and the row keeps its Keystone, its rowid, its
   undo chain and every reference held by Keystone. K1 and K2 are not
-  touched. If DR-S0 finds the path already does this on a heap, P3 is a
-  statement in the spec and a test, not a build. **P3 and P2b cannot both
-  be taken as written** (DR-R3).
+  touched. **It already does this on a heap** (§1.7), so P3 is a
+  statement in the spec and its cells, not a build - and declining it
+  (DR-Q1 (b)) is the build: a new refusal of a statement that succeeds
+  today. **P3 and P2b cannot both be taken as written** (DR-R3).
 - **P4 - an embedded primary key (direction B), on paper only.** A
   single-column key of a type whose every value maps one-to-one and
   order-preserving into the Keystone's named-key range is the Keystone,
@@ -282,22 +328,23 @@ Q10 are unmarked.**
 | | item | (a) | other |
 |---|---|---|---|
 | DR-Q0 | Is DR exploratory - may DR-S0 close it with nothing built? | **yes - marked, the operator's word** (`raft-marks-2026-11-23.md` §10) | |
-| DR-Q1 `[quiet-wrong]` | **May a declared primary key's value change?** | **yes (P3)**: the identity is the Keystone, the change is a unique key move, and every stored reference is a Keystone. P2b is then not built | (b) immutable, as the Keystone is: P2b is admissible and CH's demand stays unanswered; (c) mutable only while no foreign key names the relation by value |
+| DR-Q1 `[quiet-wrong]` | **May a declared primary key's value change?** It does today on a heap (§1.7), so the question is whether that stands as the contract | **yes (P3)**: the identity is the Keystone, the change is a unique key move, and every stored reference is a Keystone. What exists is written into the spec and given its cells. P2b is then not built | (b) immutable, as the Keystone is: a statement that succeeds today is refused from then on, P2b is admissible and CH's demand stays unanswered; (c) mutable only while no foreign key names the relation by value |
 | DR-Q2 | A btree with a primary key (P1). | **decided at DR-S1 from DR-S0**: struck unless the census names a consumer the heap cannot serve and M1 to M3 show a cell where it leads. Until then the refusal stays | (b) built for symmetry, whatever the cells say; (c) struck now |
 | DR-Q3 | The limits (P6). | **documented as a primary key's constraints**: four columns, a 32-byte prefix decided on full values, no `NULL`, a per-row check | (b) a longer prefix; (c) more columns; each a format event (DR-R5) |
-| DR-Q4 | A foreign key to a relation whose Keystone is hidden. | **P2a**: the child holds the parent's `keyidentity`, F1 unchanged, DN-Q5's refusal lifted for it | (b) P2b, by value, as its own order and only under DR-Q1 (b) or (c); (c) neither, DN-Q5 stands |
-| DR-Q5 | A multi-column `ON CONFLICT` arbiter (P2c). | **in DR if DR-S0 finds the arbiter's path needs only the column list matched**; else its own order | (b) not in DR |
+| DR-Q4 | A foreign key to a relation whose Keystone is hidden. | **P2a**: the child holds the parent's `keyidentity`, F1 unchanged, DN-Q5's refusal lifted for it. Its premise, that a client can read that id, holds (§1.7); DR-S0 reads `RETURNING` on the paths §1.6 still names | (b) P2b, by value, as its own order and only under DR-Q1 (b) or (c); (c) neither, DN-Q5 stands |
+| DR-Q5 | A multi-column `ON CONFLICT` arbiter (P2c). | **its own order**: the refusal is the parser's, and the change runs through the parsed target, the arbiter's search and `DO UPDATE`'s path (§1.5, §1.7), which is CG's surface and not a column list matched. DR-S0's census still names every site | (b) a stage of DR, after P3 and P2a |
 | DR-Q6 | `PURGE` by primary key (P2d). | **not built**: a hidden-Keystone heap releases its own slots, and no consumer is known | (b) built |
 | DR-Q7 | The embedded key (P4). | **on paper only**: the trade written into §7, nothing built | (b) built for `int32` and `date`; (c) struck |
 | DR-Q8 | DR and CH. | **CH stays written and unopened**; DR-S1 records whether P3 answers CH's demand, and CH's standing is then the operator's to mark | (b) CH abandoned now; (c) CH folded into DR |
-| DR-Q9 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file | (b) lifted for DR-S0 |
+| DR-Q9 | The measurement budget. | the standing one: 20 minutes a stage, about an hour at the close, cuts named in the results file. M1 to M5 as first written do not fit 20 minutes (five measurements over four key forms and two references; DQ-S0 spent 9 minutes on one cell design), so DR-S0 measures M1 and M4 and DR-S0b the rest, each inside its own 20 minutes | (b) lifted for DR-S0, M1 to M5 in one stage |
 | DR-Q10 | Which relation kind the manual recommends for a non-`int64` key. | **`HEAP`, stated in the manual at the close**, unless DR-S1 takes P1 | (b) no recommendation |
 
 ## 5. Stages
 
 | stage | what | ends in |
 |---|---|---|
-| **DR-S0 - census and premise** | No engine code on `main`; drivers and counters live on a branch that is not landed. **Census**: §1.6's four unread paths; every site that takes "the tuple key" from a statement where a user would mean the primary key (the foreign key's two sides, the arbiter, `PURGE`, `RETURNING`, the load stream, CU, CV, the `ORDER BY` elision, `DESCRIBE` and the `sys` views); every site that reads `columns.front()` or column 0 as the user's key; what a btree with a hidden Keystone would meet that BZ's heap did not. **Measurement**: M1 to M5 below, `build-release`, inside the budget. | a results file; each candidate go, struck or on paper |
+| **DR-S0 - census and premise** | No engine code on `main`; drivers and counters live on a branch that is not landed. **Census**: §1.6's four unread paths; every site that takes "the tuple key" from a statement where a user would mean the primary key (the foreign key's two sides, the arbiter, `PURGE`, `RETURNING`, the load stream, CU, CV, the `ORDER BY` elision, `DESCRIBE` and the `sys` views); every site that reads `columns.front()` or column 0 as the user's key; what a btree with a hidden Keystone would meet that BZ's heap did not. **Measurement**: M1 and M4 below, `build-release`, inside the budget. | a results file; each candidate go, struck or on paper, or held for DR-S0b |
+| **DR-S0b - the rest of the cells, if the verdict needs them** | M2, M3 and M5, each run only where DR-S0 left a candidate undecided on it: M2 and M3 decide P1 (DR-Q2), M5 decides the prefix (DR-Q3). Inside its own 20 minutes, cut to the cells the open candidates need. Skipped, and said so, where DR-S0 struck them. | a results file, or a line in DR-S1 saying why it did not run |
 | **DR-S1 - the verdict, on paper** | Which candidates go, against P0. DR-Q1 to Q10 put to the operator with the numbers beside them; any format event named apart (DR-R5). The amendments owed are listed by file: `heap-and-tuple.md` §3.1b, `index.md` §10.2, `foreign-keys.md` F1, `parser-v2.md`, `keystoneid-invariant.md`, the manual. | the operator's marks, or the close with nothing built |
 | **DR-S2 - the sim learns the form** | The workload generates a heap with a non-Keystone primary key and the oracle reconciles by it (DR-R8); `known-gaps.md`'s entry is closed or narrowed. Runs before any build stage, and stands on its own if DR closes after it. | a branch at the push gate |
 | **DR-S3 - what was taken** | One stage a candidate, in this order where taken: P3, P2a, P2c, P1 (with P5 only on its own word). Review and the full suite each; the contract tests of every structure that resolves a row (DR-R2). | a branch at the push gate, a stage each |
@@ -308,6 +355,11 @@ reference, beside a heap with a hidden Keystone and the key under test:
 `int32`; `(int32, int32)`; `varchar(64)` whose values differ inside the
 first 32 bytes; four columns of mixed type. A btree relation read by its
 tuple key stands beside them as the second reference.
+
+**DR-S0 runs M1 and M4** at `cores = 1`: they price the frame itself (a
+read by key, a key that moves) on every key form, and P0, P2a and P3 are
+decided on them. **DR-S0b runs M2, M3 and M5** where a candidate still
+needs them.
 
 - **M1** - a point read naming the whole key: latency and throughput,
   with fetches and descents counted, not inferred.
@@ -347,3 +399,29 @@ else are CLA's proposals, DR-Q1..Q10 unmarked. §1 is a reading of the
 specs and of the sites they name, not a census: §1.6 lists what was not
 read. Nothing was built or measured. No review was run and no suite was
 executed: the commit changes no build input.
+
+### Amended 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-draft-amend`, over
+`c176c5d1`, on the operator's word (`raft-marks-2026-11-23.md` §11), from
+a session other than the one that wrote the draft.
+
+- **§1's citations were checked** against the tree at `5fdca9e0`: the
+  nine sites read (the btree refusal, the two indexes' creation, the
+  arbiter's search, `PURGE`'s refusal, `kMaxIndexKeyColumns`,
+  `kIndexStringKeyBytes`, the foreign key refusal, the sim's known gap,
+  the marks' §10) say what the draft says they say.
+- **A probe of the engine** (§1.7) answered two of §1.6's unread paths
+  and corrected one citation:
+  - a primary key's value already moves on a heap, so P3 is a contract
+    and its cells, and DR-Q1 (b) is the build;
+  - `RETURNING keyidentity` returns a hidden Keystone, so P2a's premise
+    holds;
+  - a multi-column conflict target is refused by the parser, before the
+    search §1.5 cited, so DR-Q5's proposal is now its own order.
+- **DR-S0's measurement is cut to the budget**: M1 and M4 in DR-S0, the
+  rest in DR-S0b where the verdict needs them (DR-Q9).
+
+No DR-Q item is marked by this amendment. Nothing was built; no suite
+was executed, since no build input changed; no `critics-developer`
+review was run.

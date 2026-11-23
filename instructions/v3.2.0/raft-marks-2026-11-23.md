@@ -98,3 +98,14 @@ The operator's words of 2026-11-23, recorded in English.
 | **Mark** | **DR is written as a draft, not opened**: `instructions/v3.2.0/workorder-dr-primary-key-over-keystone.md`, in the main checkout on `main` at `5fdca9e0` (`v3.4.17-127-g5fdca9e0` by `origin`'s tags), documents only, and pushed to `main` on that word. **The operator's marks are two**: DR is exploratory (DR-Q0), and the Keystone is left as it is (DR-R1). The letter DR, the candidates P0 to P6, the rules DR-R2..R8 and the stages are CLA's proposals. **DR-Q1..Q10 are unmarked**: the word to write the draft answered none of CLA's three questions, which stand as DR-Q1 (`[quiet-wrong]`), DR-Q2 and DR-Q3 |
 | **Does not settle** | DR-Q1..Q10; DR's opening; CH's standing (DR-Q8); a tag or a version |
 | **Recorded at** | this file; the DR order's header, §0, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 11. DR's draft amended, and pushed with no verify
+
+| | |
+|---|---|
+| **Word** | *"write the amendments and push no verify"* (given in Korean), after CLA's reading of the DR draft: its citations checked, a probe of what the engine does today with a non-Keystone primary key, and five points on the draft |
+| **Mark** | **The DR draft is amended** on worktree `dq-cabin-miss-build`, branch `worktree-dr-draft-amend`, over `c176c5d1`, and pushed with `--no-verify`. A new §1.7 records the probe: a primary key's value already moves on a heap, `RETURNING keyidentity` returns a hidden Keystone, and a multi-column conflict target is refused by the parser. P3, P2a, P2c, DR-Q1, DR-Q4, DR-Q5 and DR-Q9 are reworded to it, and DR-S0's measurement is cut to M1 and M4, with DR-S0b for the rest. **Every change is CLA's proposal.** DR stays a draft, unopened, and DR-Q1..Q10 stay unmarked |
+| **Skipped on that word** | the pre-push hook; no suite was executed, the commit changing no build input; no `critics-developer` review |
+| **Does not settle** | any DR-Q item; an opening; a tag or a version |
+| **Recorded at** | this file; `workorder-dr-primary-key-over-keystone.md`; its row and this file's row in `instructions/v3.2.0/index.md` |
+
