@@ -156,10 +156,14 @@ StatusOr<std::vector<RowT>> ScanAll(storage::PageStore& store, PageId root,
 // which is not `root` once a catalog relation has overflowed onto a
 // chained page, and is what a rollback needs to address the row again
 // (workplan-ddl-transactional.md DT5).
-template <typename RowT, typename Fn>
-StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
-                            PageId* acted_page = nullptr,
-                            storage::PageAccess access = storage::PageAccess::kWrite) {
+//
+// `wanted` is asked of each row's payload before it is decoded: a row it
+// declines is passed over as bytes. `ForFirstRow` wants every row;
+// `ForRowOfOid` wants one.
+template <typename RowT, typename Wanted, typename Fn>
+StatusOr<bool> ForFirstRowWhere(storage::PageStore& store, PageId root, Wanted&& wanted,
+                                 Fn&& fn, PageId* acted_page = nullptr,
+                                 storage::PageAccess access = storage::PageAccess::kWrite) {
     // **Its own page walk, not `heap::ChainVisit`.** The walk is four lines
     // and the difference is measurable: ChainVisit takes a `std::function`,
     // so every slot costs an indirect call plus a `StatusOr<VisitControl>`
@@ -194,6 +198,7 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
                 if (tuple.status().code() == StatusCode::kNotFound) continue;
                 return tuple.status();
             }
+            if (!wanted(tuple.value().payload)) continue;
             auto row = RowT::Decode(tuple.value().payload);
             if (!row.ok()) return row.status();
 
@@ -209,6 +214,42 @@ StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
         if (next == kInvalidPageId) return false;
         current = next;
     }
+}
+
+template <typename RowT, typename Fn>
+StatusOr<bool> ForFirstRow(storage::PageStore& store, PageId root, Fn&& fn,
+                            PageId* acted_page = nullptr,
+                            storage::PageAccess access = storage::PageAccess::kWrite) {
+    return ForFirstRowWhere<RowT>(
+        store, root, [](std::span<const std::byte>) { return true; }, std::forward<Fn>(fn),
+        acted_page, access);
+}
+
+// `ForFirstRow` for the one row whose oid is `oid`: every other row is
+// passed over on the four bytes at `RowT::kOidOffset`, undecoded.
+//
+// **For the two scans an `INSERT` runs per row** (`AllocateRowId`,
+// `AdmitExplicitRowId`). They read `sys.tables` from its head to the
+// relation's row, so each row inserted paid a full decode of every relation
+// created before its own, and DR's close read a load dearer by the decode's
+// growth times that count. A row that is not the relation's now costs a
+// compare, whatever a `SysTableRow` comes to hold. A payload too short to
+// carry an oid is handed to `Decode`, which refuses it; a row passed over
+// is not read, so one this build could not decode no longer stops an
+// insert into another relation.
+template <typename RowT, typename Fn>
+StatusOr<bool> ForRowOfOid(storage::PageStore& store, PageId root, Oid oid, Fn&& fn,
+                            PageId* acted_page = nullptr,
+                            storage::PageAccess access = storage::PageAccess::kWrite) {
+    return ForFirstRowWhere<RowT>(
+        store, root,
+        [oid](std::span<const std::byte> payload) {
+            if (payload.size() < RowT::kOidOffset + sizeof(Oid)) return true;
+            Oid got;
+            std::memcpy(&got, payload.data() + RowT::kOidOffset, sizeof(got));
+            return got == oid;
+        },
+        std::forward<Fn>(fn), acted_page, access);
 }
 
 // ---- RV3: catalog writes log the ordinary record types --------------------
@@ -3012,8 +3053,8 @@ StatusOr<SysTypeRow> Catalog::ResolveTypeByVal(std::uint32_t type_val) {
 
 StatusOr<std::uint64_t> Catalog::AllocateRowId(Oid table_oid) {
     std::uint64_t issued = 0;
-    auto acted = ForFirstRow<SysTableRow>(
-        store_, kCatalogPageTables,
+    auto acted = ForRowOfOid<SysTableRow>(
+        store_, kCatalogPageTables, table_oid,
         [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
         if (row.oid != table_oid) return false;
@@ -3083,8 +3124,8 @@ Status Catalog::AdmitExplicitRowId(Oid table_oid, std::uint64_t id, bool above_m
     // caller.
     if (Status s = CheckNamedRowIdSpellable(id); !s.ok()) return s;
 
-    auto acted = ForFirstRow<SysTableRow>(
-        store_, kCatalogPageTables,
+    auto acted = ForRowOfOid<SysTableRow>(
+        store_, kCatalogPageTables, table_oid,
         [&](SysTableRow& row, heap::PageView& page, PageId page_id, std::uint16_t i,
             const heap::PageView::Tuple& tuple) -> StatusOr<bool> {
             if (row.oid != table_oid) return false;
