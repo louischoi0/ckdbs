@@ -1,0 +1,55 @@
+05:19:25 heap ref_btree r0 3.1 s m1_read=23.4 m3_range=46.32 m3_page=1013.88 m3_bare=38.06 m4_plain=27.12
+05:19:36 heap ref_heap r0 10.1 s m1_read=25.3 m3_range=67.41 m3_page=5821.02 m3_bare=8197.19 m4_plain=31.47
+05:19:38 heap nopk_heap r0 1.3 s 
+05:19:56 heap int32 r0 16.6 s m1_read=26.49 m3_range=89.98 m3_page=6875.86 m3_bare=79.52 m4_plain=6483.75 m4_move=6585.46
+05:20:07 heap int32x2 r0 10.6 s m1_read=27.45 m3_range=96.78 m3_page=181.95 m3_bare=73.7 m4_plain=7296.22 m4_move=7253.2
+05:20:31 heap varchar64 r0 22.8 s m1_read=26.56 m3_range=99.62 m3_page=9027.58 m3_bare=12194.23 m4_plain=7919.73 m4_move=7878.93
+05:20:45 heap mixed4 r0 13.0 s m1_read=30.7 m4_plain=9554.37 m4_move=9761.13
+05:20:49 heap ref_btree r1 3.1 s m1_read=22.93 m3_range=46.2 m3_page=990.58 m3_bare=37.5 m4_plain=24.95
+05:21:03 heap mixed4 r1 12.9 s m1_read=30.43 m4_plain=9551.2 m4_move=9556.52
+05:21:26 heap varchar64 r1 22.6 s m1_read=25.96 m3_range=93.96 m3_page=9040.97 m3_bare=12162.17 m4_plain=7690.16 m4_move=7832.26
+05:21:38 heap int32x2 r1 10.6 s m1_read=27.18 m3_range=99.22 m3_page=169.14 m3_bare=72.53 m4_plain=7234.13 m4_move=7248.3
+05:21:55 heap int32 r1 16.5 s m1_read=25.89 m3_range=92.31 m3_page=6723.74 m3_bare=77.28 m4_plain=6488.22 m4_move=6807.81
+05:21:58 heap nopk_heap r1 1.4 s 
+05:22:09 heap ref_heap r1 10.1 s m1_read=23.87 m3_range=66.16 m3_page=5742.36 m3_bare=9090.71 m4_plain=30.4
+05:22:11 heap nopk_heap r2 1.4 s 
+05:22:28 heap int32 r2 16.6 s m1_read=25.76 m3_range=88.24 m3_page=6730.18 m3_bare=75.63 m4_plain=6539.09 m4_move=6866.87
+05:22:40 heap int32x2 r2 10.7 s m1_read=27.27 m3_range=95.95 m3_page=177.76 m3_bare=73.79 m4_plain=7208.03 m4_move=7228.5
+05:23:04 heap varchar64 r2 22.7 s m1_read=26.51 m3_range=99.06 m3_page=9083.11 m3_bare=12083.92 m4_plain=7671.11 m4_move=7765.86
+05:23:18 heap mixed4 r2 12.9 s m1_read=30.47 m4_plain=9603.39 m4_move=9481.48
+05:23:22 heap ref_btree r2 3.1 s m1_read=22.79 m3_range=69.05 m3_page=1043.74 m3_bare=36.88 m4_plain=24.73
+05:23:33 heap ref_heap r2 10.1 s m1_read=25.74 m3_range=67.19 m3_page=5828.36 m3_bare=8361.35 m4_plain=31.67
+05:23:33 done elapsed_s=251.3
+05:23:34 prefix 1 r0 0.8 s m5_read=25.36
+05:23:36 prefix 16 r0 1.0 s m5_read=30.77
+05:23:40 prefix 256 r0 2.6 s m5_read=100.69
+05:24:08 prefix 4096 r0 27.8 s m5_read=1029.01
+05:24:10 prefix 1 r1 0.8 s m5_read=26.51
+05:24:39 prefix 4096 r1 28.0 s m5_read=1044.15
+05:24:43 prefix 256 r1 2.6 s m5_read=103.6
+05:24:45 prefix 16 r1 1.0 s m5_read=32.19
+05:24:48 prefix 256 r2 2.6 s m5_read=101.16
+05:25:17 prefix 4096 r2 28.0 s m5_read=1065.01
+05:25:19 prefix 1 r2 0.8 s m5_read=25.93
+05:25:21 prefix 16 r2 1.0 s m5_read=31.52
+05:25:21 done elapsed_s=108.1
+05:25:26 btree F0 r0 4.6 s m7_present=24.37 m9_range=46.48 m9_page=1203.98 m9_bare=36.61
+05:25:45 btree F2e r0 17.8 s m7_present=25.73 m9_range=135.53 m9_page=10000.35 m9_bare=14032.1
+05:26:01 btree P1e r0 15.2 s m7_present=26.85 m9_range=136.05 m9_page=8956.99 m9_bare=12081.08
+05:26:06 btree F0 r1 4.4 s m7_present=22.85 m9_range=45.55 m9_page=1075.35 m9_bare=36.77
+05:26:23 btree P1e r1 15.6 s m7_present=26.93 m9_range=146.73 m9_page=9107.82 m9_bare=13059.33
+05:26:42 btree F2e r1 17.7 s m7_present=26.62 m9_range=144.24 m9_page=9880.76 m9_bare=13727.94
+05:26:57 btree P1e r2 15.0 s m7_present=26.98 m9_range=137.05 m9_page=8758.5 m9_bare=12024.76
+05:27:03 btree F0 r2 4.4 s m7_present=23.21 m9_range=45.76 m9_page=1099.64 m9_bare=35.82
+05:27:21 btree F2e r2 17.4 s m7_present=25.65 m9_range=137.43 m9_page=9748.16 m9_bare=13501.56
+05:27:21 done elapsed_s=120.4
+05:27:36 btree F0 r0 14.1 s m7_present=23.14 m9_range=46.84 m9_page=12261.56 m9_bare=40.64
+05:28:17 btree F2e r0 39.8 s m7_present=31.58 m9_range=308.57 m9_page=134783.27 m9_bare=194500.96
+05:28:49 btree P1e r0 30.8 s m7_present=27.64 m9_range=222.67 m9_page=97451.16 m9_bare=135165.78
+05:29:04 btree F0 r1 14.4 s m7_present=23.27 m9_range=47.24 m9_page=14290.49 m9_bare=39.8
+05:29:34 btree P1e r1 29.2 s m7_present=31.61 m9_range=218.22 m9_page=97198.46 m9_bare=132991.79
+05:30:13 btree F2e r1 38.4 s m7_present=27.21 m9_range=210.68 m9_page=130930.87 m9_bare=195743.55
+05:30:44 btree P1e r2 29.9 s m7_present=26.93 m9_range=202.91 m9_page=94252.96 m9_bare=130631.92
+05:30:59 btree F0 r2 14.0 s m7_present=23.59 m9_range=47.16 m9_page=11745.3 m9_bare=41.98
+05:31:38 btree F2e r2 38.3 s m7_present=30.89 m9_range=212.74 m9_page=127341.54 m9_bare=182114.32
+05:31:38 done elapsed_s=257.1

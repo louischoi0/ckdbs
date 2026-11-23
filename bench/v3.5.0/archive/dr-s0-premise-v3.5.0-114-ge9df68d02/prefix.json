@@ -1,0 +1,434 @@
+{
+ "binary": "/home/louis/dr-bench/s0/kds_server_e9df68d0",
+ "sha256_16": "e33a55473f81fade",
+ "args": {
+  "bin": "/home/louis/dr-bench/s0/kds_server_e9df68d0",
+  "workdir": "/home/louis/dr-bench/s0f/w",
+  "out": "/home/louis/dr-bench/s0f/prefix.json",
+  "measure": "prefix",
+  "forms": "ref_btree,ref_heap,nopk_heap,int32,int32x2,varchar64,mixed4",
+  "arms": "F0,F2e,P1e",
+  "runs": "1,16,256,4096",
+  "rows": 100000,
+  "reads": 20000,
+  "ranges": 1000,
+  "updates": 500,
+  "prefix_rows": 8192,
+  "prefix_reads": 4000,
+  "rounds": 3,
+  "frames": 131072,
+  "port": 15881,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "heartbeat": "/home/louis/dr-bench/s0f/run.beat"
+ },
+ "host_before": {
+  "loadavg": "2.09 1.60 1.61",
+  "cc1plus": "0"
+ },
+ "started_utc": "2026-11-23 05:23:33",
+ "cells": [
+  {
+   "arm": 1,
+   "round": 0,
+   "host": {
+    "loadavg": "1.92 1.57 1.60",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 0.8,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 10.932,
+    "wall_us_row": 11.092,
+    "rows_s": 90155
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 25.36,
+    "wall_us": 42.79,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 38.5,
+     "p25": 40.9,
+     "p50": 41.5,
+     "p95": 48.9,
+     "p99": 56.4
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00001981-zzzzzzzzzzzzzzzzzzz000000) is already held by tuple key 3723 (byte 32)"
+  },
+  {
+   "arm": 16,
+   "round": 0,
+   "host": {
+    "loadavg": "1.92 1.57 1.60",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 1.0,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 21.974,
+    "wall_us_row": 22.071,
+    "rows_s": 45308
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 30.77,
+    "wall_us": 48.53,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 43.3,
+     "p25": 46.3,
+     "p50": 47.3,
+     "p95": 53.9,
+     "p99": 64.9
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=16 matched=1 sel=6% pages=17 index_scanned=16 index_resolved=16",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000143-zzzzzzzzzzzzzzzzzzz000010) is already held by tuple key 1646 (byte 32)"
+  },
+  {
+   "arm": 256,
+   "round": 0,
+   "host": {
+    "loadavg": "1.85 1.56 1.60",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.6,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 185.032,
+    "wall_us_row": 185.082,
+    "rows_s": 5403
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 100.69,
+    "wall_us": 120.85,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 107.4,
+     "p25": 113.4,
+     "p50": 116.3,
+     "p95": 137.8,
+     "p99": 176.5
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=256 matched=1 sel=0% pages=257 index_scanned=256 index_resolved=256",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000003-zzzzzzzzzzzzzzzzzzz000250) is already held by tuple key 1068 (byte 32)"
+  },
+  {
+   "arm": 4096,
+   "round": 0,
+   "host": {
+    "loadavg": "1.44 1.49 1.58",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 27.8,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 2725.633,
+    "wall_us_row": 2726.173,
+    "rows_s": 367
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 1029.01,
+    "wall_us": 1097.29,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 994.8,
+     "p25": 1058.5,
+     "p50": 1083.7,
+     "p95": 1170.1,
+     "p99": 1339.6
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=4096 matched=1 sel=0% pages=4097 index_scanned=4096 index_resolved=4096",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000001-zzzzzzzzzzzzzzzzzzz002072) is already held by tuple key 4585 (byte 32)"
+  },
+  {
+   "arm": 1,
+   "round": 1,
+   "host": {
+    "loadavg": "1.44 1.49 1.58",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 0.8,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 11.096,
+    "wall_us_row": 11.245,
+    "rows_s": 88930
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 26.51,
+    "wall_us": 44.65,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 39.1,
+     "p25": 41.6,
+     "p50": 42.4,
+     "p95": 52.4,
+     "p99": 63.5
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000675-zzzzzzzzzzzzzzzzzzz000000) is already held by tuple key 7024 (byte 32)"
+  },
+  {
+   "arm": 4096,
+   "round": 1,
+   "host": {
+    "loadavg": "1.46 1.49 1.57",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 28.0,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 2748.937,
+    "wall_us_row": 2749.225,
+    "rows_s": 364
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 1044.15,
+    "wall_us": 1107.44,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 998.0,
+     "p25": 1072.0,
+     "p50": 1099.7,
+     "p95": 1182.4,
+     "p99": 1319.0
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=4096 matched=1 sel=0% pages=4097 index_scanned=4096 index_resolved=4096",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000001-zzzzzzzzzzzzzzzzzzz002542) is already held by tuple key 3698 (byte 32)"
+  },
+  {
+   "arm": 256,
+   "round": 1,
+   "host": {
+    "loadavg": "1.46 1.49 1.57",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.6,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 187.239,
+    "wall_us_row": 187.279,
+    "rows_s": 5340
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 103.6,
+    "wall_us": 122.89,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 107.6,
+     "p25": 114.9,
+     "p50": 118.1,
+     "p95": 147.7,
+     "p99": 184.9
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=256 matched=1 sel=0% pages=257 index_scanned=256 index_resolved=256",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000007-zzzzzzzzzzzzzzzzzzz000136) is already held by tuple key 2079 (byte 32)"
+  },
+  {
+   "arm": 16,
+   "round": 1,
+   "host": {
+    "loadavg": "1.34 1.46 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 1.0,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 22.882,
+    "wall_us_row": 22.972,
+    "rows_s": 43531
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 32.19,
+    "wall_us": 50.18,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 43.9,
+     "p25": 46.8,
+     "p50": 48.2,
+     "p95": 59.3,
+     "p99": 69.1
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=16 matched=1 sel=6% pages=17 index_scanned=16 index_resolved=16",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000182-zzzzzzzzzzzzzzzzzzz000007) is already held by tuple key 1486 (byte 32)"
+  },
+  {
+   "arm": 256,
+   "round": 2,
+   "host": {
+    "loadavg": "1.34 1.46 1.56",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.6,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 187.658,
+    "wall_us_row": 187.697,
+    "rows_s": 5328
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 101.16,
+    "wall_us": 119.62,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 107.5,
+     "p25": 114.0,
+     "p50": 116.7,
+     "p95": 138.7,
+     "p99": 164.7
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=256 matched=1 sel=0% pages=257 index_scanned=256 index_resolved=256",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000021-zzzzzzzzzzzzzzzzzzz000155) is already held by tuple key 883 (byte 32)"
+  },
+  {
+   "arm": 4096,
+   "round": 2,
+   "host": {
+    "loadavg": "1.33 1.45 1.55",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 28.0,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 2722.782,
+    "wall_us_row": 2723.254,
+    "rows_s": 367
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 1065.01,
+    "wall_us": 1140.27,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 993.3,
+     "p25": 1071.0,
+     "p50": 1102.4,
+     "p95": 1403.9,
+     "p99": 1760.2
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=4096 matched=1 sel=0% pages=4097 index_scanned=4096 index_resolved=4096",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000000-zzzzzzzzzzzzzzzzzzz003997) is already held by tuple key 5495 (byte 32)"
+  },
+  {
+   "arm": 1,
+   "round": 2,
+   "host": {
+    "loadavg": "1.22 1.43 1.55",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 0.8,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 11.159,
+    "wall_us_row": 11.314,
+    "rows_s": 88388
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 25.93,
+    "wall_us": 44.21,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 38.7,
+     "p25": 41.1,
+     "p50": 42.0,
+     "p95": 51.8,
+     "p99": 86.3
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00006121-zzzzzzzzzzzzzzzzzzz000000) is already held by tuple key 2426 (byte 32)"
+  },
+  {
+   "arm": 16,
+   "round": 2,
+   "host": {
+    "loadavg": "1.22 1.43 1.55",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 1.0,
+   "m5_load": {
+    "rows": 8192,
+    "cpu_us_row": 22.448,
+    "wall_us_row": 22.541,
+    "rows_s": 44363
+   },
+   "settle_s": 0.5,
+   "m5_read": {
+    "stmts": 4000,
+    "rows": 4000,
+    "cpu_us": 31.52,
+    "wall_us": 49.42,
+    "lat_us": {
+     "ops": 4000,
+     "p0": 43.5,
+     "p25": 46.3,
+     "p50": 47.3,
+     "p95": 56.6,
+     "p99": 84.0
+    }
+   },
+   "m5_step": "step 0 IndexProbe t opens=1 examined=16 matched=1 sel=6% pages=17 index_scanned=16 index_resolved=16",
+   "m5_duplicate": "unique index '$pkey_4000' on (s): (run-00000361-zzzzzzzzzzzzzzzzzzz000009) is already held by tuple key 6308 (byte 32)"
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "1.22 1.43 1.55",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 108.1
+}
