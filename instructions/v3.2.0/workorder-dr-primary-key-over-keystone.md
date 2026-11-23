@@ -936,3 +936,85 @@ standing go-ahead (`raft-marks-2026-11-23.md` §14).
   the marks, the results file, its archive and two tools.
 - **Overhead**: not measured; measured at the milestone's close.
 
+### DR-S2, the sim learns the form, 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`, over
+`a8283443`.
+
+- **Built**: with the shapes, the stream creates `k0`, a heap with the
+  primary key `(g, id)` over a hidden Keystone (`sim/workload.cpp`
+  `KeyedOp`, its own stream, in autocommit): inserts that name the key,
+  updates and deletes by the whole key and by value, key moves, and reads
+  by the key and by a range of it. The oracle's key for it is the `id`
+  column, and `sim/loop.cpp` `CheckKeyedWrite` owes each insert and move
+  exactly one answer: placed, refused because a live row holds the key,
+  one row moved, or none. A deleted or moved-off value is free at once,
+  which is where the oracle's rule for it differs from a tuple key's.
+  Reconciliation after a crash reads it by `id` as every relation.
+- **What it reaches**: before DR-S3a every keyed write of `k0` walked; it
+  is the relation the keyed write's descents then run under seeded
+  crashes (DR-R8).
+- **Not generated**: `known-gaps.md`'s entry says what (a keyed write in
+  an explicit transaction, a hidden-Keystone heap among the main tables,
+  another key type, a foreign key naming `k0`).
+- **Cells**: `SimWorkload.TheShapesWriteARelationByItsPrimaryKey` and
+  `SimLoop.ARunWithTheShapesReconcilesTheKeyedRelation` (a clean run and
+  twelve crash iterations; keys placed, held and moved each counted). The
+  shapes-off corpus draws what it drew: the stream is label-forked.
+- **Suite**: 0 failed of 5,184, run on the tree holding this stage and
+  DR-S3a to S3c together.
+- **Review**: `critics-developer`, with DR-S3a to S3c; its findings are in
+  the entry after that one.
+- **Overhead**: not measured; measured at the milestone's close.
+
+### DR-S3a, S3b and S3c, 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`, one
+commit over DR-S2's: the three steps share `command_dispatcher.cpp` and
+were built, suite-run and reviewed together.
+
+- **DR-S3a, P7 (DR-Q16)**: an `UPDATE`, a `DELETE` and a locking read
+  whose WHERE pins every key column of a unique index by an equality with
+  a literal descend by that key's run. `exec::WriteIndexKeyOf` names the
+  index and encodes the key; `exec::IndexRunTupleKeys`, factored out of
+  the unique check's first phase, names the rows; `WriteWalk::WriteKeys`
+  offers each tuple key, ascending, to the statement's own point arm, so
+  the whole WHERE is asked of every row found (CU-R1, DR-R4). Each run is
+  one probe in `sys.indexes` (DR-Q23).
+- **The decline rule, and the defect fixed beside it**:
+  `WriteWalk::DescentDeclined` is what both key loops do when a descent
+  fails for a reason other than absence. A btree's walk resumes by key. A
+  heap's resumes by place, so a list write (CU) that declined mid-list
+  used to hand the walk a cursor with a key and no page, and the walk
+  wrote none of the rows left: now the walk runs from the head where
+  nothing was offered, and the statement is refused `TxnConflict` after a
+  row was.
+- **DR-S3b, P3's contract (DR-Q1 (a)) and DR-Q24**: nothing built for the
+  move - it is what the engine did (§1.7) - and now stated in
+  `heap-and-tuple.md` §3.1b and pinned by cells: a key's value moves and
+  the row keeps its Keystone; a deleted, moved-off or rolled-back value is
+  free at once; the key is unique on full values. `sys.columns` and
+  `DESCRIBE` gain `primary_key` (`TableAccess::PrimaryKeyColumns`,
+  `catalog::PrimaryKeyIndexName`). **A refusal corrected**: a primary key
+  column declared `NULL` in the first position was refused as a tuple
+  key's, which on such a heap it is not; the key's own refusal now comes
+  first.
+- **DR-S3c, P2a (DR-Q4 (a))**: `catalog::CheckForeignKeyDeclaration` no
+  longer refuses a parent whose Keystone is hidden. F1 is unchanged.
+  Cells: a child names its parent by `keyidentity`; a referenced parent is
+  not deleted; a parent's key moves under its children; a value taken
+  again is another parent.
+- **Cells**: `tests/primary_key_test.cpp` (23 cells), among them the
+  equivalence cell - one instance writes by the key, the other the same
+  rows by a WHERE that names no key whole, and every statement must leave
+  the same relation - and the string-prefix cell (`[quiet-wrong]` if a run
+  were trusted). Three cells that pinned the old parent refusal now pin
+  the admission.
+- **Specs**: `parser-v2.md` I10, `txn.md` §5, `index.md` §10,
+  `foreign-keys.md` §3, `heap-and-tuple.md` §3.1b, `sys-views.md` §4,
+  `stats/index_stats.hpp`; `known-gaps.md` gains DR's section and narrows
+  the sim's entry.
+- **Suite**: 0 failed of 5,184.
+- **Review**: `critics-developer` on a snapshot of the two diffs; its
+  findings and what was done with them are the next entry.
+- **Overhead**: not measured; measured at the milestone's close.

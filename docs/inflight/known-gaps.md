@@ -1760,13 +1760,19 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
   for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
   interleaving state moves with transactions, rollbacks and faults is not
   generated.
-- **The sim harness generates no hidden-Keystone heap.** Verified at
-  `bf289a82` (`sim/workload.cpp:87-95`): since DN-S3 (`bc8c9d97`) a table
-  is a heap one time in two, always with its `id` the declared Keystone,
-  because the oracle reconciles rows by tuple key. A hidden-Keystone heap's
-  surface - the hidden column skipped by `*`, `RETURNING *`, `DESCRIBE`,
-  positional `INSERT` - and its crash recovery are covered at unit level
-  only (`tests/heap_hidden_key_test.cpp`), never by a seeded crash workload.
+- **The sim harness generates one hidden-Keystone heap, with the shapes
+  only, in autocommit.** Since DR-S2 (worktree `dq-cabin-miss-build`,
+  branch `worktree-dr-primary-key`) the shapes' stream creates `k0`, a heap
+  with the primary key `(g, id)` over a hidden Keystone, and inserts,
+  updates, deletes and reads it by its whole key and moves its keys
+  (`sim/workload.cpp` `KeyedOp`), the oracle reconciling it by `id`
+  (`sim/loop.cpp` `CheckKeyedWrite`). **Not generated**: a keyed write
+  inside an explicit transaction, a hidden-Keystone heap among the main
+  tables (whose ops issue and name tuple keys, drop, purge and cycle
+  columns), a key of another type, and a foreign key naming `k0`. A
+  hidden-Keystone heap's surface - the hidden column skipped by `*`,
+  `RETURNING *`, `DESCRIBE`, positional `INSERT` - stays covered at unit
+  level (`tests/heap_hidden_key_test.cpp`).
 - **`CREATE`/`DROP TRANSITION` inside an explicit transaction commit at the
   statement**, as `CREATE`/`DROP ASSERTION` do. A `ROLLBACK` does not undo
   them.
@@ -3597,3 +3603,39 @@ Verified on worktree `sync-stale-records`, branch `worktree-dp-view`, at
   TABLE` or `DROP VIEW` of what it reads (the `IS` against the `X`, DP-Q22
   (b)), and an unfiltered RESTRICT scan meeting another core's half-written
   view (skipped, DP-S1's C4).
+
+## A primary key over the Keystone (DR)
+
+Verified on worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`,
+at `e9df68d0` for what the tree does (DR-S0's census, the order's §1.8) and
+by `bench/v3.5.0/results-dr-s0-premise-v3.5.0-114-ge9df68d02.md` for what it
+costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
+`instructions/v3.2.0/workorder-dr-primary-key-over-keystone.md`.
+
+- **A page by key is a walk on every structure** (DR-Q17): `WHERE key >= x
+  ORDER BY key LIMIT n` is a filtered scan from the head on a btree's tuple
+  key (1.0 ms at 100,000 rows) and a scan and a sort on a heap's Keystone
+  and on any index (5.8 ms to 9.0 ms), because a one-sided bound is a range
+  to no arm of the ladder. Served only behind an equality prefix (CV). Not
+  a primary key's gap, and its own order.
+- **A moved key's old entry is purged only beside a retired slot**
+  (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
+  one, which a reader's residual drops and the unique check passes over.
+  The heap's slot release purges its indexes only when it collected a
+  retired slot, so a relation whose keys move and whose rows are never
+  deleted keeps every old entry: space, and a longer run for the value's
+  next holder. `PURGE INDEX` cannot name `$pkey_<oid>`. The remedy named
+  and not built: the release's index purge run with no retired slot.
+- **A join key enters an index by its leading column only**
+  (`CorrelatedIndexProbeOf`): a join on every column of a composite key
+  probes the first and filters the rest, so its cost follows the first
+  column's run, not the key's.
+- **A multi-column `ON CONFLICT` target is refused by the parser**, so a
+  composite primary key arbitrates no upsert (P2c, its own order,
+  DR-Q5 (a)).
+- **A string key's cost grows with the keys sharing its first 32 bytes**
+  (DR-Q3 (a)): 0.25 us a key of the run on a read and 0.66 us on an insert,
+  1.0 ms and 2.7 ms at a run of 4,096. A limit, stated in the spec.
+- **A write by a unique key is not measured above one core**, nor with two
+  sessions racing one key: its units are the walk's, and the cells are the
+  equivalence and the sim's.

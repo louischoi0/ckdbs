@@ -114,10 +114,10 @@ TEST_F(HeapHiddenKeyTest, NoStatementNamesTheHiddenKey) {
     EXPECT_NE(purge.find("tuple key is hidden"), std::string::npos) << purge;
 }
 
-TEST_F(HeapHiddenKeyTest, AHeapIsNoForeignKeyParentButMayBeAChild) {
+TEST_F(HeapHiddenKeyTest, AHeapIsAForeignKeyParentAndMayBeAChild) {
+    // A parent by its `keyidentity` since DR-S3c (`primary_key_test.cpp`).
     const std::string parent = Run("CREATE TABLE c (id int64, p int64 REFERENCES h)");
-    EXPECT_EQ(parent.rfind("ERR", 0), 0u) << parent;
-    EXPECT_NE(parent.find("is a heap"), std::string::npos) << parent;
+    EXPECT_EQ(parent.rfind("CREATED", 0), 0u) << parent;
 
     ASSERT_EQ(Run("CREATE TABLE acct (id int64, v int64)").substr(0, 7), "CREATED");
     ASSERT_EQ(Run("INSERT INTO acct VALUES (1, 0)").substr(0, 8), "INSERTED");

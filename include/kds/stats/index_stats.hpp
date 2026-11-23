@@ -30,11 +30,14 @@
 // any other, and each relation walk of a query-layer statement is a run of
 // its own - so a layer statement refused after a walk finished has folded
 // that walk, and a write's own read through the layer (`INSERT ... SELECT`'s
-// source) is counted. **What is not a step is not counted**: a unique
-// index's check descents, a foreign key's, an index's own maintenance by a
-// write, the dispatcher's walk of an `UPDATE`'s or a `DELETE`'s `WHERE`,
-// and the chain a write's `WHERE` subquery runs, whose counters are dropped
-// where it runs (the order's §7, DF-S0 item 2). An index a build has
+// source) is counted. **A write that descends by a unique key is counted
+// as a probe** (DR-Q23, `CommandDispatcher::UniqueKeyRun`): one walk, the
+// run's entries scanned and its tuple keys resolved, whether or not a row
+// was then written. **What is neither is not counted**: a unique index's
+// check descents, a foreign key's, an index's own maintenance by a write,
+// the dispatcher's walk of an `UPDATE`'s or a `DELETE`'s `WHERE`, and the
+// chain a write's `WHERE` subquery runs, whose counters are dropped where
+// it runs (the order's §7, DF-S0 item 2). An index a build has
 // flagged `building` is chosen by no read and stays at 0.
 //
 // ---- Where the rows live, and the protocol ----------------------------------

@@ -69,6 +69,12 @@ struct Schema {
 inline constexpr std::string_view kHiddenTupleKeyName = "$tuple_key";
 SysColumnRow HiddenTupleKeyColumn();
 
+// The name of the unique index `CREATE TABLE` builds for a declared primary
+// key that is not the Keystone (DN-Q22): a parameter's spelling, which no
+// statement can write as an index name, so the index is created, dropped
+// and found only as the relation's key (`TableAccess::PrimaryKeyColumns`).
+std::string PrimaryKeyIndexName(Oid table_oid);
+
 // **The reserved word that reads a relation's Keystone** (DN-D6, DN-R5,
 // DN-Q1 (a)): column 0 on every relation, hidden or declared. No relation,
 // column, index, namespace or alias is declared with it (the parser's
@@ -578,6 +584,15 @@ struct TableAccess {
         }
         return nullptr;
     }
+
+    // **The relation's primary key, as column positions in key order**
+    // (DR-Q24): the first column where it is the Keystone - a btree's tuple
+    // key, a heap's declared `int64` key - else the key columns of the
+    // unique index `CREATE TABLE` built for a declared key
+    // (`PrimaryKeyIndexName`), and empty where the Keystone is hidden and no
+    // key was declared. The catalog stores a primary key nowhere else: it
+    // is that index, found by the name no statement can write.
+    std::vector<std::uint16_t> PrimaryKeyColumns() const;
 };
 
 // A pattern as the cache holds it (docs/spec/waystone-concpets.md section 4):

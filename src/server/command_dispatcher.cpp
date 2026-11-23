@@ -6665,6 +6665,16 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 "PRIMARY KEY is a heap's (byte " + std::to_string(primary_at) +
                 "); a btree relation's tuple key is its first column, with no keyword"));
         }
+        // Before the Keystone probe, which builds the column at position 0
+        // and would refuse its NULL as a tuple key's - which it may not be.
+        for (std::size_t i : primary) {
+            if (!stmt.columns[i].notnull) {
+                return Refused(Status::InvalidArgument(
+                    "primary key column '" + stmt.columns[i].name + "' is declared NULL (byte " +
+                    std::to_string(stmt.columns[i].null_byte_offset) +
+                    "); a primary key is never NULL"));
+            }
+        }
         bool keystone_declared = false;
         if (primary.size() == 1) {
             catalog::SysColumnRow probe{};
@@ -6677,14 +6687,6 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 return Refused(Status::InvalidArgument(
                     "a heap's single int64 primary key is its Keystone, which is declared first "
                     "(byte " + std::to_string(primary_at) + ")"));
-            }
-        }
-        for (std::size_t i : primary) {
-            if (!stmt.columns[i].notnull) {
-                return Refused(Status::InvalidArgument(
-                    "primary key column '" + stmt.columns[i].name + "' is declared NULL (byte " +
-                    std::to_string(stmt.columns[i].null_byte_offset) +
-                    "); a primary key is never NULL"));
             }
         }
 
@@ -6863,7 +6865,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 for (std::size_t i : primary) {
                     cols.push_back(static_cast<std::uint16_t>(first_declared + i));
                 }
-                made = index_of("$pkey_" + std::to_string(oid.value()), std::move(cols),
+                made = index_of(catalog::PrimaryKeyIndexName(oid.value()), std::move(cols),
                                 catalog::kIndexFlagUnique);
             }
             if (!made.ok()) {
@@ -11120,18 +11122,39 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
         // that walked its relation instead (`StepStats::index_walks`) used
         // nothing.
         if (counts.index_walks == 0) return true;
-        const catalog::Oid oid = step.index->index_oid;
-        IndexUseSlot& slot = index_use_cache_[oid % index_use_cache_.size()];
-        if (slot.oid != oid) {
-            stats::IndexUse* const found = index_stats_->CountsOf(core_id_, oid);
-            if (found == nullptr) return true;  // the part is full: dropped, counted
-            slot = {oid, found};
+        if (stats::IndexUse* const use = IndexUseOf(step.index->index_oid); use != nullptr) {
+            use->Add(step.kind == exec::AccessKind::kIndexRange, counts.index_walks,
+                     counts.index_entries_scanned, counts.index_rows_resolved,
+                     static_cast<std::uint64_t>(statement_head_ns_));
         }
-        slot.counts->Add(step.kind == exec::AccessKind::kIndexRange, counts.index_walks,
-                         counts.index_entries_scanned, counts.index_rows_resolved,
-                         static_cast<std::uint64_t>(statement_head_ns_));
         return true;
     });
+}
+
+stats::IndexUse* CommandDispatcher::IndexUseOf(catalog::Oid index_oid) {
+    IndexUseSlot& slot = index_use_cache_[index_oid % index_use_cache_.size()];
+    if (slot.oid != index_oid) {
+        stats::IndexUse* const found = index_stats_->CountsOf(core_id_, index_oid);
+        if (found == nullptr) return nullptr;  // the part is full: dropped, counted
+        slot = {index_oid, found};
+    }
+    return slot.counts;
+}
+
+StatusOr<std::vector<std::uint64_t>> CommandDispatcher::UniqueKeyRun(
+    const exec::WriteIndexKey& by_key) {
+    std::uint64_t entries = 0;
+    auto keys = exec::IndexRunTupleKeys(page_store_, *by_key.index, by_key.key, &entries);
+    if (!keys.ok()) return keys;
+    // A use of the index like a read's probe of it (DR-Q23,
+    // `stats/index_stats.hpp`): one walk, the entries it read and the tuple
+    // keys the write then descends for.
+    const StatisticsRecordScope recording("sys.indexes' usage");
+    if (stats::IndexUse* const use = IndexUseOf(by_key.index->index_oid); use != nullptr) {
+        use->Add(/*range=*/false, /*walks=*/1, entries, keys.value().size(),
+                 static_cast<std::uint64_t>(statement_head_ns_));
+    }
+    return keys;
 }
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
@@ -12780,16 +12803,17 @@ public:
     // row is offered twice either way.
     //
     // True when every value was offered or is absent. False with `cursor`
-    // at the value it stopped on: `parked_on_row` says a held row, and
-    // otherwise a descent declined and the walk answers from `cursor`.
+    // at the value it stopped on where `parked_on_row` says a held row, and
+    // otherwise a descent declined and the walk answers (`DescentDeclined`).
     //
     // **CU-R1 holds by construction**: the row a descent finds goes through
     // `Qualify` like a walked one, the list its WHERE. The leaf whose value
     // made the descent is asked first (CU-Q9, `first_leaf_`).
     template <typename WriteAt>
     StatusOr<bool> WriteKeySet(const exec::KeySet& set, WalkCursor& cursor, WriteAt&& write_at) {
+        const bool resumed = cursor.active;
         auto item = set.items.begin();
-        if (cursor.active) {
+        if (resumed) {
             item = std::lower_bound(set.items.begin(), set.items.end(), cursor.tuple_key,
                                     [](const exec::KeySet::Item& i, std::uint64_t key) {
                                         return i.key < key;
@@ -12804,11 +12828,76 @@ public:
             if (wrote.value() == PointWrite::kOffered || wrote.value() == PointWrite::kAbsent) {
                 continue;
             }
+            if (wrote.value() == PointWrite::kScan) {
+                return DescentDeclined(item->key, resumed || item != set.items.begin(), cursor);
+            }
             cursor.tuple_key = item->key;
             cursor.active = true;
             return false;
         }
         return true;
+    }
+
+    // **A unique key named whole** (DR-S3a; `exec::WriteIndexKeyOf`):
+    // `write_at` once per tuple key the key's run names, ascending - the
+    // order `WriteKeySet` offers a list in, and its contract: true when
+    // every key was offered or is absent, false with `parked_on_row` and
+    // `cursor` at the key a held row stopped it on, and the resume collects
+    // the run again and starts at the first key at or above it. A run
+    // collected again may name more rows than the first did; a row placed
+    // since is invisible to the statement's view, minted before the park,
+    // and `Qualify` passes it over.
+    //
+    // **DR-R4 and CU-R1 hold by construction**: the run is a superset on
+    // the encoded key, a prefix for a string (IX6), and every row it names
+    // goes through `Qualify` on the whole WHERE, full values and all.
+    template <typename WriteAt>
+    StatusOr<bool> WriteKeys(std::span<const std::uint64_t> keys, WalkCursor& cursor,
+                             WriteAt&& write_at) {
+        const bool resumed = cursor.active;
+        auto key = keys.begin();
+        if (resumed) key = std::lower_bound(keys.begin(), keys.end(), cursor.tuple_key);
+        for (; key != keys.end(); ++key) {
+            StatusOr<PointWrite> wrote = write_at(*key);
+            if (!wrote.ok()) return wrote.status();
+            if (wrote.value() == PointWrite::kOffered || wrote.value() == PointWrite::kAbsent) {
+                continue;
+            }
+            if (wrote.value() == PointWrite::kScan) {
+                return DescentDeclined(*key, resumed || key != keys.begin(), cursor);
+            }
+            cursor.tuple_key = *key;
+            cursor.active = true;
+            return false;
+        }
+        return true;
+    }
+
+    // **A key loop's descent declined at `key`** - a damaged descent or an
+    // unreadable page, never the key's absence (`LocateByTupleKey`) - and
+    // the walk answers from there. False, for the caller to walk; or the
+    // statement's refusal.
+    //
+    // **A btree's walk resumes by key**, so `cursor` is set at `key` and the
+    // walk skips every key below it: the rows this loop finished.
+    //
+    // **A heap's walk resumes by place** (`WalkCursor`), which a key loop
+    // has none of: a cursor holding a key and no page would start the walk
+    // at no page and write none of the rows left, the statement answering a
+    // count short of its rows. So with nothing offered yet (`offered`
+    // false) `cursor` stays inactive and the walk from the head is the same
+    // statement; after a row was offered the statement is refused
+    // `TxnConflict` and run again.
+    StatusOr<bool> DescentDeclined(std::uint64_t key, bool offered, WalkCursor& cursor) const {
+        if (!ta_.heap()) {
+            cursor.tuple_key = key;
+            cursor.active = true;
+            return false;
+        }
+        if (!offered) return false;
+        return Status::TxnConflict("the descent to tuple key " + std::to_string(key) +
+                                   " declined after rows of the statement were offered; retry "
+                                   "the statement");
     }
 
     // **The walk stopped on a held row, so its count is not an answer**
@@ -13600,6 +13689,21 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         if (done.value()) {
             return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
         }
+    } else if (const std::optional<exec::WriteIndexKey> by_key =
+                   exec::WriteIndexKeyOf(ta, predicates.value());
+               by_key.has_value()) {
+        // **A unique key named whole is the point arm once per row its run
+        // names** (DR-S3a; `WriteWalk::WriteKeys`), under what the walk of
+        // the same WHERE takes: no bound is declared for either, so each row
+        // written takes its row unit.
+        auto keys = UniqueKeyRun(*by_key);
+        if (!keys.ok()) return Refused(keys.status());
+        auto done = walk.WriteKeys(keys.value(), walk_cursor, write_at);
+        if (!done.ok()) return Refused(done.status());
+        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
+        if (done.value()) {
+            return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
+        }
     }
 
     // The collection pass, where the WHERE holds a subquery
@@ -13789,6 +13893,16 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
         if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
             set.has_value()) {
             auto all = walk.WriteKeySet(*set, cursor, claim_at);
+            if (!all.ok()) return ended(Refused(all.status()));
+            if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
+            answered = all.value();
+        } else if (const std::optional<exec::WriteIndexKey> by_key =
+                       exec::WriteIndexKeyOf(ta, predicates.value());
+                   by_key.has_value()) {
+            // A unique key named whole, as UPDATE's (DR-S3a).
+            auto keys = UniqueKeyRun(*by_key);
+            if (!keys.ok()) return ended(Refused(keys.status()));
+            auto all = walk.WriteKeys(keys.value(), cursor, claim_at);
             if (!all.ok()) return ended(Refused(all.status()));
             if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
             answered = all.value();
@@ -16944,6 +17058,18 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
         set.has_value()) {
         auto done = walk.WriteKeySet(*set, walk_cursor, mark_at);
+        if (!done.ok()) return Refused(done.status());
+        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
+        if (done.value()) {
+            return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
+        }
+    } else if (const std::optional<exec::WriteIndexKey> by_key =
+                   exec::WriteIndexKeyOf(ta, predicates.value());
+               by_key.has_value()) {
+        // A unique key named whole, as UPDATE's (DR-S3a).
+        auto keys = UniqueKeyRun(*by_key);
+        if (!keys.ok()) return Refused(keys.status());
+        auto done = walk.WriteKeys(keys.value(), walk_cursor, mark_at);
         if (!done.ok()) return Refused(done.status());
         if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
         if (done.value()) {

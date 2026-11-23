@@ -2455,6 +2455,13 @@ private:
     // What each index step of a recorded run did, into `sys.indexes`' usage
     // counts (DF-S3, `stats/index_stats.hpp`).
     void RecordIndexUse(const exec::StepChain& chain, const exec::ExecStats& stats);
+    // This core's counts of `index_oid`, through `index_use_cache_`; null
+    // where the core's part is full, which the store counts.
+    stats::IndexUse* IndexUseOf(catalog::Oid index_oid);
+    // The tuple keys a write's whole unique key names (DR-S3a;
+    // `exec::IndexRunTupleKeys`), ascending, counted as one probe of the
+    // index (DR-Q23). Called holding no page.
+    StatusOr<std::vector<std::uint64_t>> UniqueKeyRun(const exec::WriteIndexKey& by_key);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);

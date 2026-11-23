@@ -2599,6 +2599,39 @@ std::optional<KeySet> WriteKeySetOf(const Step& where) {
     return TupleKeySetOf(where, /*slot=*/0);
 }
 
+std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
+                                             const Step& where) {
+    if (!where.sub_chains.empty()) return std::nullopt;
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        // A building index's entries are not complete (CI-R1), and a heap's
+        // Keystone index is the tuple key's own arm (`WriteKeyOf`).
+        if (!ix.unique || ix.building || ix.keystone) continue;
+        WriteIndexKey out;
+        out.index = &ix;
+        out.key.assign(ix.key_width, std::byte{0x00});
+        std::size_t at = 0;
+        bool whole = true;
+        for (std::uint16_t col_pos : ix.keys()) {
+            const catalog::SysColumnRow& col = access.schema.columns[col_pos];
+            const parser::AstValue* value = EqualityOnColumn(where, /*slot=*/0, col_pos);
+            auto width = IndexKeyColumnWidth(col);
+            // A value the encoder refuses is not known to match no row
+            // (CU-Q11's reason): this index is passed over and the walk
+            // answers.
+            if (value == nullptr || !width.ok() || at + width.value() > ix.key_width ||
+                !EncodeIndexKeyColumn(col, *value,
+                                      std::span<std::byte>(out.key).subspan(at, width.value()))
+                     .ok()) {
+                whole = false;
+                break;
+            }
+            at += width.value();
+        }
+        if (whole && at == ix.key_width) return out;
+    }
+    return std::nullopt;
+}
+
 StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
                                        std::string_view binding,
                                        const std::vector<parser::ColumnName>& list, bool star,
