@@ -3639,3 +3639,33 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
 - **A write by a unique key is not measured above one core**, nor with two
   sessions racing one key: its units are the walk's, and the cells are the
   equivalence and the sim's.
+- **F2, the hashed home, is not built** (DR-Q11 (a), on a bar CLA set):
+  a wide key on a btree is the indexed form, two descents a point read.
+  Measured with every page resident, the home would save a read 0.9 us to
+  1.8 us and cost an insert 23 % to 27 %; a relation larger than the pool
+  was not measured.
+- **An embedded key's join is not keyed.** A join whose key is every
+  column of an embedded primary key is no lookup: the id is computed from
+  literals at compile, and nothing computes it from an outer row. The step
+  takes the statement-local build or a walk. Answers are right
+  (`btree_primary_key_test.cpp`); the cost is not measured.
+- **`ORDER BY` an embedded key is sorted, not elided.** The rows of such a
+  relation are in key order, and a range by the key reads them so, but the
+  elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
+  with no range is a walk and a top-N.
+- **`ON CONFLICT` on an embedded key is refused `NotImplemented`**: no
+  arbiter computes the id the row's key encodes to.
+- **A btree's indexed key keeps its dead entries until a statement purges
+  them.** A heap's slot release purges its indexes; nothing releases a
+  btree's slots, so `$pkey_<oid>`'s entries of deleted and moved rows wait
+  for `PURGE INDEX $pkey_<oid>`, and its delete-marked rows for `PURGE
+  FROM t WHERE keyidentity ...`.
+- **An embedded relation's `next_id` is its highest key's id plus one**,
+  and `SHOW BUDGET` reads it as ids issued: a named key moves the mark, as
+  on any btree, and here every row names its key.
+- **Not tested**: a KWP load into either btree form; a Waystone opt-in
+  over an embedded lookup; either btree form in the sim (`k0` is a heap);
+  a park and a resume through a key loop after its first descent declined
+  on a heap, the case `WriteWalk::WriteByKeys`' guard is for - the decline
+  itself is `KeySetWriteHoldTest`'s, the park after it needs a failed
+  fetch and a second session together.

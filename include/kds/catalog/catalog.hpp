@@ -1300,12 +1300,15 @@ public:
     Status CheckAnchorRoomForIndex(PageId anchor_page, Oid expected_owner_oid,
                                    std::uint64_t index_oid);
 
+    // `embedded_key`: the positions of an embedded primary key's columns
+    // (`Schema::embedded_key`), empty for every other relation.
     Status InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_id,
                               ClusteredType clustered_type, PageId varheap_page_id,
                               PageId anchor_page_id = kInvalidPageId,
                               std::uint64_t trx_id = kBootstrapXid,
                               CatalogRowRef* where = nullptr,
-                              std::uint16_t spare_slots = 0);
+                              std::uint16_t spare_slots = 0,
+                              std::span<const std::uint16_t> embedded_key = {});
 
     // ---- Secondary indexes (docs/spec/index.md §12) --------------------
 

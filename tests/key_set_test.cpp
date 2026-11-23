@@ -1047,6 +1047,38 @@ TEST_F(KeySetWriteHoldTest, ASingleKeysDescentThatDeclinesIsAnsweredByTheListOrT
     EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n3,1\\n700,1");
 }
 
+// DR-S3a (`WriteWalk::DescentDeclined`): a heap's walk resumes by place, not
+// by key, so a list whose descent declines cannot hand it "the rest from this
+// key". Before any row was offered the walk from the head is the same
+// statement and writes each row once. After one was, the statement is
+// refused - until DR it answered a count short of its rows, the walk having
+// been started at no page.
+TEST_F(KeySetWriteHoldTest, OnAHeapADeclinedDescentIsTheWalkFromTheHeadOrARefusal) {
+    ASSERT_EQ(Run("CREATE TABLE hp (id int64 PRIMARY KEY, v int64) HEAP").rfind("CREATED", 0), 0u);
+    for (int id = 1; id <= 40; ++id) {
+        ASSERT_EQ(Run("INSERT INTO hp VALUES (" + std::to_string(id) + ", 0)").rfind("INSERTED", 0),
+                  0u);
+    }
+    // The first value's descent declines: nothing was offered.
+    const int failed_before = store_.failed();
+    store_.FailNextFetch();
+    EXPECT_EQ(Run("UPDATE hp SET v = v + 1 WHERE id IN (3, 5, 7)"), "UPDATED 3");
+    EXPECT_EQ(store_.failed(), failed_before + 1) << "no descent declined";
+    EXPECT_EQ(Run("SELECT id, v FROM hp WHERE v > 0 ORDER BY id"), "id,v\\n3,1\\n5,1\\n7,1");
+
+    // A later value's descent declines: a row was offered, and the heap's
+    // walk has no place to take the rest from.
+    dispatcher_->SetAfterUpdateRowAppliedForTest([this](std::uint64_t id) {
+        if (id == 11) store_.FailNextFetch();
+    });
+    const std::string refused = Run("UPDATE hp SET v = v + 1 WHERE id IN (11, 13, 15)");
+    dispatcher_->SetAfterUpdateRowAppliedForTest(nullptr);
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("declined after rows of the statement were offered"),
+              std::string::npos)
+        << refused;
+}
+
 // ---- Under transactions ------------------------------------------------------
 //
 // The descent hands a (page, slot) to `AcceptTupleAt`, where visibility is

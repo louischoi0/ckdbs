@@ -54,7 +54,9 @@ std::array<std::byte, SysTableRow::kOnDiskSize> SysTableRow::Encode() const {
     std::memcpy(base + kClusteredTypeOffset, &ct, sizeof(ct));
     std::memcpy(base + kNextIdOffset, &next_id, sizeof(next_id));
     std::memcpy(base + kVarHeapPageIdOffset, &varheap_page_id, sizeof(varheap_page_id));
-    std::memcpy(base + kRetiredKeyOrderOffset, &retired_key_order, sizeof(retired_key_order));
+    std::memcpy(base + kEmbeddedKeyColsOffset, embedded_key_cols.data(),
+                embedded_key_cols.size());
+    std::memcpy(base + kKeyFormOffset, &key_form, sizeof(key_form));
     std::memcpy(base + kAnchorPageIdOffset, &anchor_page_id, sizeof(anchor_page_id));
     std::memcpy(base + kSpareSlotsOffset, &spare_slots, sizeof(spare_slots));
     return buf;
@@ -73,8 +75,19 @@ StatusOr<SysTableRow> SysTableRow::Decode(std::span<const std::byte> bytes) {
     row.clustered_type = static_cast<ClusteredType>(ct);
     std::memcpy(&row.next_id, base + kNextIdOffset, sizeof(row.next_id));
     std::memcpy(&row.varheap_page_id, base + kVarHeapPageIdOffset, sizeof(row.varheap_page_id));
-    std::memcpy(&row.retired_key_order, base + kRetiredKeyOrderOffset,
-                sizeof(row.retired_key_order));
+    std::memcpy(row.embedded_key_cols.data(), base + kEmbeddedKeyColsOffset,
+                row.embedded_key_cols.size());
+    std::memcpy(&row.key_form, base + kKeyFormOffset, sizeof(row.key_form));
+    // A form this build does not know, or key columns the form does not
+    // carry, is a row this build did not write (DR-R12): refused, never
+    // read as the nearest form it does know.
+    const bool has_cols = row.embedded_key_cols[0] != 0;
+    if (row.key_form > kKeyFormEmbedded || has_cols != (row.key_form == kKeyFormEmbedded)) {
+        return Status::Corruption("sys.tables row for oid " + std::to_string(row.oid) +
+                                  " carries key form " + std::to_string(row.key_form) +
+                                  (has_cols ? " with" : " without") +
+                                  " embedded key columns, which this build never writes");
+    }
     std::memcpy(&row.anchor_page_id, base + kAnchorPageIdOffset, sizeof(row.anchor_page_id));
     std::memcpy(&row.spare_slots, base + kSpareSlotsOffset, sizeof(row.spare_slots));
     return row;

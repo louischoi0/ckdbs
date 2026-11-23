@@ -26,6 +26,7 @@
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/transition.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/embedded_key.hpp"
 #include "kds/exec/admin_plans.hpp"
 #include "kds/exec/plan_advice.hpp"
 #include "kds/exec/captured_plans.hpp"
@@ -2455,13 +2456,28 @@ private:
     // What each index step of a recorded run did, into `sys.indexes`' usage
     // counts (DF-S3, `stats/index_stats.hpp`).
     void RecordIndexUse(const exec::StepChain& chain, const exec::ExecStats& stats);
+    // "(a, b): (1, 2)": an embedded primary key's columns and a row's values
+    // for them, as a refusal names a key (`exec::UniqueKeyText`'s shape).
+    // `body` is the row's columns after the Keystone.
+    static std::string EmbeddedKeyText(const catalog::TableAccess& ta,
+                                       const std::vector<parser::AstValue>& body);
+    // **`PURGE`'s window on an embedded key, written in the key's own
+    // comparisons** (DR-Q20): the inclusive ids of the leading columns'
+    // values and an inclusive range on the next; nullopt where no key can
+    // match. Every conjunct is folded or the statement is refused - a
+    // skipped one would widen what is freed (PU1, BH-R2).
+    static StatusOr<std::optional<exec::EmbeddedKeyWindow>> EmbeddedPurgeWindow(
+        const catalog::TableAccess& ta, const std::vector<parser::Condition>& where,
+        std::uint32_t where_byte);
     // This core's counts of `index_oid`, through `index_use_cache_`; null
     // where the core's part is full, which the store counts.
     stats::IndexUse* IndexUseOf(catalog::Oid index_oid);
     // The tuple keys a write's whole unique key names (DR-S3a;
-    // `exec::IndexRunTupleKeys`), ascending, counted as one probe of the
-    // index (DR-Q23). Called holding no page.
-    StatusOr<std::vector<std::uint64_t>> UniqueKeyRun(const exec::WriteIndexKey& by_key);
+    // `exec::IndexRunTupleKeys`), ascending. With `count`, one probe of the
+    // index (DR-Q23): a statement's first collection, not a resume's.
+    // Called holding no page.
+    StatusOr<std::vector<std::uint64_t>> UniqueKeyRun(const exec::WriteIndexKey& by_key,
+                                                      bool count);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);

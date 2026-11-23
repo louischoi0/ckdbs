@@ -34,12 +34,21 @@ struct Schema {
     // schema alone (RowLayout below).
     std::uint16_t spare_slots = 0;
 
+    // **The embedded primary key** (DR-S3e, `exec/embedded_key.hpp`): the
+    // positions of the key's columns, in key order, where the relation's
+    // Keystone id is the code of its key - a btree with a hidden Keystone
+    // and no index for the key. Empty for every other relation. From the
+    // `sys.tables` row, fixed at `CREATE TABLE` (DR-R12).
+    std::vector<std::uint16_t> embedded_key;
+
     // A hidden Keystone (DN-D3; BZ-R1 before it): column 0 is the engine's
     // own `int64`, no statement names it but by `keyidentity`, and the
-    // declared columns start at position 1. A heap with no single `int64`
-    // primary key has one; a heap whose primary key is that column, and
-    // every btree relation, has none. Whether a relation is a heap is its
-    // storage's fact, `TableAccess::clustered_type`, not this one.
+    // declared columns start at position 1. A relation whose declared
+    // primary key is not a single `int64` first column has one - a heap
+    // since DN, a btree since DR-S3d - and so has a heap with no declared
+    // key; a relation whose key is that column, and a btree with no
+    // declared key, has none. Whether a relation is a heap is its storage's
+    // fact, `TableAccess::clustered_type`, not this one.
     bool hidden_keystone() const noexcept {
         return !columns.empty() && columns.front().hidden();
     }
@@ -586,11 +595,11 @@ struct TableAccess {
     }
 
     // **The relation's primary key, as column positions in key order**
-    // (DR-Q24): the first column where it is the Keystone - a btree's tuple
-    // key, a heap's declared `int64` key - else the key columns of the
-    // unique index `CREATE TABLE` built for a declared key
-    // (`PrimaryKeyIndexName`), and empty where the Keystone is hidden and no
-    // key was declared. The catalog stores a primary key nowhere else: it
+    // (DR-Q24): the first column where it is the Keystone - a relation's
+    // `int64` first column - else the embedded key's columns
+    // (`Schema::embedded_key`), else the key columns of the unique index
+    // `CREATE TABLE` built for a declared key (`PrimaryKeyIndexName`), and
+    // empty where the Keystone is hidden and no key was declared. The catalog stores a primary key nowhere else: it
     // is that index, found by the name no statement can write.
     std::vector<std::uint16_t> PrimaryKeyColumns() const;
 };

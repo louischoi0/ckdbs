@@ -158,6 +158,7 @@ add_library(kds
     src/exec/clean_dropped.cpp
     src/exec/varheap_sweep.cpp
     src/exec/index_key.cpp
+    src/exec/embedded_key.cpp
     src/exec/fk_check.cpp
     src/exec/plan_printer.cpp
     src/exec/functions.cpp

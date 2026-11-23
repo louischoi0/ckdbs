@@ -1303,10 +1303,54 @@ StatusOr<storage::PageRef> Catalog::StageAnchorRoot(PageId anchor_page, Oid expe
     return std::move(anchor.value());
 }
 
+namespace {
+
+// The door's own check of an embedded key (DR-S3e): what `CREATE TABLE`
+// decided is admitted only where the row can say it and the relation can be
+// it - a btree whose Keystone is hidden, the key's columns declared ones,
+// each once, at positions a byte holds. Whether the columns' types embed is
+// `exec::KeyEmbeds`', asked by the one caller that sets the key.
+Status CheckEmbeddedKey(const Schema& schema, ClusteredType clustered) {
+    const std::vector<std::uint16_t>& key = schema.embedded_key;
+    if (key.empty()) return Status::OK();
+    if (clustered != ClusteredType::kBtree || !schema.hidden_keystone()) {
+        return Status::InvalidArgument(
+            "catalog: an embedded primary key is a btree's, over a hidden Keystone");
+    }
+    if (key.size() > kMaxEmbeddedKeyColumns) {
+        return Status::InvalidArgument("catalog: an embedded primary key has at most " +
+                                       std::to_string(kMaxEmbeddedKeyColumns) + " columns");
+    }
+    for (std::size_t i = 0; i < key.size(); ++i) {
+        if (key[i] == 0 || key[i] >= schema.columns.size() || key[i] > 0xFF ||
+            std::find(key.begin(), key.begin() + static_cast<std::ptrdiff_t>(i), key[i]) !=
+                key.begin() + static_cast<std::ptrdiff_t>(i)) {
+            return Status::InvalidArgument(
+                "catalog: an embedded primary key names each of its columns once, at a "
+                "declared position below 256");
+        }
+    }
+    return Status::OK();
+}
+
+// The embedded key a `sys.tables` row carries, as `Schema::embedded_key`.
+std::vector<std::uint16_t> EmbeddedKeyOf(const SysTableRow& row) {
+    std::vector<std::uint16_t> key;
+    if (row.key_form != kKeyFormEmbedded) return key;
+    for (const std::uint8_t pos : row.embedded_key_cols) {
+        if (pos == 0) break;
+        key.push_back(pos);
+    }
+    return key;
+}
+
+}  // namespace
+
 Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_id,
                                    ClusteredType clustered_type, PageId varheap_page_id,
                                    PageId anchor_page_id, std::uint64_t trx_id,
-                                   CatalogRowRef* where, std::uint16_t spare_slots) {
+                                   CatalogRowRef* where, std::uint16_t spare_slots,
+                                   std::span<const std::uint16_t> embedded_key) {
     SysTableRow row{};
     row.oid = oid;
     row.namespace_oid = namespace_oid;
@@ -1316,6 +1360,13 @@ Status Catalog::InsertRelationRow(Oid oid, Oid namespace_oid, PageId desc_page_i
     row.varheap_page_id = varheap_page_id;
     row.anchor_page_id = anchor_page_id;
     row.spare_slots = spare_slots;
+    // `CheckEmbeddedKey` admitted the positions: each fits its byte.
+    if (!embedded_key.empty()) {
+        row.key_form = kKeyFormEmbedded;
+        for (std::size_t i = 0; i < embedded_key.size(); ++i) {
+            row.embedded_key_cols[i] = static_cast<std::uint8_t>(embedded_key[i]);
+        }
+    }
     Status s = InsertRow(wal_, ddl_undo_hook_, store_, kCatalogPageTables, row, trx_id, where);
     if (where != nullptr) where->rel_oid = kSysTablesTable;
     if (s.ok()) BumpVersion("sys.tables insert");
@@ -1374,6 +1425,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     // whose first column cannot hold the Keystone id is one no row can
     // ever be written to (heap-and-tuple.md section 4).
     if (Status s = CheckKeystoneColumn(schema); !s.ok()) return s;
+    if (Status s = CheckEmbeddedKey(schema, clustered); !s.ok()) return s;
 
     // No key-mode refusal here any more. Until 2026-08-25 an EXPLICIT
     // relation was required to be btree-clustered and this is where the
@@ -1542,7 +1594,7 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
     note(ref);
     if (Status s = InsertRelationRow(new_oid, namespace_oid, root_id, clustered,
                                       varheap_root, anchor_id, trx_id,
-                                      &ref, schema.spare_slots);
+                                      &ref, schema.spare_slots, schema.embedded_key);
         !s.ok()) {
         return s;
     }
@@ -2630,6 +2682,7 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     auto table_row = GetSysTableRow(rel_id);
     if (!table_row.ok()) return table_row.status();
     schema.value().spare_slots = table_row.value().spare_slots;
+    schema.value().embedded_key = EmbeddedKeyOf(table_row.value());
     return schema;
 }
 
@@ -2709,6 +2762,8 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     // The slot count rides with the columns because the layout is the
     // schema's alone (BW-R2).
     access.schema.spare_slots = table_row.value().spare_slots;
+    // And so does the embedded key, the relation's for life (DR-R12).
+    access.schema.embedded_key = EmbeddedKeyOf(table_row.value());
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;

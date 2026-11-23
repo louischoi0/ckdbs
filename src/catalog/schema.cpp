@@ -60,6 +60,8 @@ std::string PrimaryKeyIndexName(Oid table_oid) { return "$pkey_" + std::to_strin
 std::vector<std::uint16_t> TableAccess::PrimaryKeyColumns() const {
     if (schema.columns.empty()) return {};
     if (!schema.hidden_keystone()) return {0};
+    // An embedded key has no index: it is the Keystone id (DR-S3e).
+    if (!schema.embedded_key.empty()) return schema.embedded_key;
     const std::string name = PrimaryKeyIndexName(oid);
     for (const IndexRef& ix : indexes) {
         if (ix.name == name) return {ix.keys().begin(), ix.keys().end()};

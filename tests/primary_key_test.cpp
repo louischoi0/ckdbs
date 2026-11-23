@@ -470,7 +470,14 @@ TEST(KeyedWriteEquivalenceTest, EveryKeyedWriteLeavesWhatItsWalkLeaves) {
             std::string(c.head) + "a = " + a + " AND b = " + b + c.tail;
         const std::string by_walk = std::string(c.head) + "a = " + a + " AND b >= " + b +
                                     " AND b <= " + b + c.tail;
+        // The walk's instance walks - its key's index serves no write - and
+        // the key's descends by it.
+        const char* probes = "SELECT probes FROM sys.indexes";
+        const std::string walked_before = walked->Execute(probes);
+        const std::string keyed_before = keyed->Execute(probes);
         EXPECT_EQ(keyed->Execute(by_key), walked->Execute(by_walk)) << by_key;
+        EXPECT_EQ(walked->Execute(probes), walked_before) << by_walk;
+        EXPECT_NE(keyed->Execute(probes), keyed_before) << by_key;
         for (const char* read :
              {"SELECT a, b, v, s FROM h", "SELECT v FROM h WHERE a = 2 AND b = 102",
               "SELECT a, b FROM h WHERE a = 5 AND b >= 0 AND b <= 99"}) {

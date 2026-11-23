@@ -59,6 +59,7 @@
 #include "kds/exec/transition.hpp"
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_purge.hpp"
+#include "kds/exec/embedded_key.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
 #include "kds/exec/clean_dropped.hpp"
@@ -5108,6 +5109,19 @@ DispatchOutcome CommandDispatcher::HandleDropColumn(const parser::AlterStmt& stm
                                                       "dropped (invariant 11)" + at);
             return Refused(s);
         }
+        // An embedded primary key's column (DR-S3e): the Keystone id of every
+        // row is that column's code, and no index stands in the drop's way
+        // to say so.
+        {
+            const std::vector<std::uint16_t>& key = access.value()->schema.embedded_key;
+            if (std::find(key.begin(), key.end(), pos) != key.end()) {
+                const Status s = Status::InvalidArgument(
+                    "column '" + stmt.old_column +
+                    "' is part of the primary key, which is this relation's Keystone id, and "
+                    "cannot be dropped" + at);
+                return Refused(s);
+            }
+        }
         // A heap's last declared column (BZ-Q3): without it the relation has
         // no column a statement can write or read, only its hidden key.
         if (access.value()->schema.hidden_keystone() && access.value()->layout.live_columns == 2) {
@@ -6622,12 +6636,16 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // stand-in type registry (Catalog::ResolveTypeByName(), see its
         // comment) - before touching storage, so a bad type name fails clean
         // with nothing created.
-        // ---- The primary key (DN-D3, DN-D5, DN-Q13 (c)) --------------------
+        // ---- The primary key (DN-D3, DN-D5, DN-Q13 (c); DR-S3d) ------------
         //
-        // A heap's alone. One, written as a column's suffix or as a
-        // constraint in the list. A single `int64` is the heap's Keystone and
-        // is declared first; any other is a unique index beside a hidden
-        // Keystone, which is also what a heap with none gets.
+        // One, written as a column's suffix or as a constraint in the list,
+        // on either kind of relation. A single `int64` is the relation's
+        // Keystone and is declared first: on a btree that is the relation as
+        // it always was, the keyword a spelling of it (DR-R9). Any other key
+        // is a key over a hidden Keystone (DR-R2): on a btree whose key
+        // embeds, the Keystone id itself (`exec/embedded_key.hpp`); else a
+        // unique index beside it. A heap with no key has a hidden Keystone
+        // too; a btree with none has its first column, as always.
         std::vector<std::size_t> primary;  // declared column indexes, in key order
         std::uint32_t primary_at = stmt.primary_key_byte_offset;
         for (std::size_t i = 0; i < stmt.columns.size(); ++i) {
@@ -6660,11 +6678,6 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             }
             primary.push_back(*found);
         }
-        if (!primary.empty() && !stmt.heap) {
-            return Refused(Status::NotImplemented(
-                "PRIMARY KEY is a heap's (byte " + std::to_string(primary_at) +
-                "); a btree relation's tuple key is its first column, with no keyword"));
-        }
         // Before the Keystone probe, which builds the column at position 0
         // and would refuse its NULL as a tuple key's - which it may not be.
         for (std::size_t i : primary) {
@@ -6685,19 +6698,19 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             keystone_declared = probe.type_val == catalog::kTypeValInt64;
             if (keystone_declared && primary.front() != 0) {
                 return Refused(Status::InvalidArgument(
-                    "a heap's single int64 primary key is its Keystone, which is declared first "
-                    "(byte " + std::to_string(primary_at) + ")"));
+                    "a single int64 primary key is the relation's Keystone, which is declared "
+                    "first (byte " + std::to_string(primary_at) + ")"));
             }
         }
 
         catalog::Schema schema;
         schema.spare_slots = stmt.spare_slots;
-        // A heap's Keystone is the engine's hidden column 0 unless a single
-        // `int64` primary key declared first is it (DN-D5), so the declared
-        // columns of a hidden-Keystone heap start at position 1.
-        if (stmt.heap && !keystone_declared) {
-            schema.columns.push_back(catalog::HiddenTupleKeyColumn());
-        }
+        // The Keystone is the engine's hidden column 0 unless a single
+        // `int64` primary key declared first is it (DN-D5) or, on a btree,
+        // no key is declared and the first column is it; so the declared
+        // columns of a hidden-Keystone relation start at position 1.
+        const bool hidden_keystone = !keystone_declared && (stmt.heap || !primary.empty());
+        if (hidden_keystone) schema.columns.push_back(catalog::HiddenTupleKeyColumn());
         const std::size_t first_declared = schema.columns.size();
         std::uint32_t pos = static_cast<std::uint32_t>(first_declared);
         for (const auto& col : stmt.columns) {
@@ -6721,6 +6734,20 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 }
             }
             schema.columns.push_back(row);
+        }
+
+        // **A btree's key that embeds is the Keystone id** (DR-S3e, DR-Q7 (a)
+        // as revised; `exec::KeyEmbeds`): decided here, once, from the
+        // declaration alone, and fixed for the relation's life (DR-R12). Any
+        // other key that is not the Keystone is a unique index, made below.
+        std::vector<std::uint16_t> key_positions;
+        if (hidden_keystone) {
+            std::vector<catalog::SysColumnRow> key_columns;
+            for (std::size_t i : primary) {
+                key_positions.push_back(static_cast<std::uint16_t>(first_declared + i));
+                key_columns.push_back(schema.columns[first_declared + i]);
+            }
+            if (!stmt.heap && exec::KeyEmbeds(key_columns)) schema.embedded_key = key_positions;
         }
 
         // ---- REFERENCES, checked before anything is created -----------------
@@ -6812,10 +6839,9 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
 
         // ---- Storage (docs/spec/heap-and-tuple.md §4.1) --------------------------
         //
-        // Every user relation is a btree. `HEAP` decided only whether its
-        // tuple key is the engine's hidden column 0 (BZ-R1, above). There is
-        // no key mode (removed 2026-08-25), so no `CREATE TABLE` shape is
-        // refused for a key-mode reason.
+        // A btree or a heap, by the statement's word. There is no key mode
+        // (removed 2026-08-25): how the Keystone id is chosen is the key
+        // form above, a fact of the declaration.
 
         DdlScope ddl = DdlScopeFor(scope);
         auto oid = catalog_.CreateTable(create_ns.value(), stmt.table_name, schema, ddl.trx_id,
@@ -6842,13 +6868,14 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
             return Refused(oid.status());
         }
 
-        // ---- A heap's indexes, in its transaction (DN-Q2 (a), DN-D3) --------
+        // ---- The relation's own indexes, in its transaction (DN-Q2 (a), DN-D3)
         //
-        // The Keystone index first, then a primary key that is not the
-        // Keystone as a unique index. Both named `$...` - a parameter's
-        // spelling, which no statement can write - so neither is dropped,
-        // rebuilt or shadowed by name.
-        if (stmt.heap) {
+        // A heap's Keystone index first, then - on either kind - a primary
+        // key that is neither the Keystone nor embedded in it as a unique
+        // index. Both named `$...` - a parameter's spelling, which no
+        // statement can write but `PURGE INDEX` (DR-Q21) - so neither is
+        // dropped, rebuilt or shadowed by name.
+        if (stmt.heap || (!key_positions.empty() && schema.embedded_key.empty())) {
             const auto index_of = [&](std::string name, std::vector<std::uint16_t> cols,
                                       std::uint8_t flags) -> Status {
                 catalog::CatalogRowRef written;
@@ -6858,14 +6885,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 if (written.page_id != kInvalidPageId) NoteRowWritten(ddl, written);
                 return made.ok() ? Status::OK() : made.status();
             };
-            Status made = index_of("$keystone_" + std::to_string(oid.value()), {0},
-                                   catalog::kIndexFlagUnique | catalog::kIndexFlagKeystone);
-            if (made.ok() && !primary.empty() && !keystone_declared) {
-                std::vector<std::uint16_t> cols;
-                for (std::size_t i : primary) {
-                    cols.push_back(static_cast<std::uint16_t>(first_declared + i));
-                }
-                made = index_of(catalog::PrimaryKeyIndexName(oid.value()), std::move(cols),
+            Status made = stmt.heap
+                              ? index_of("$keystone_" + std::to_string(oid.value()), {0},
+                                         catalog::kIndexFlagUnique | catalog::kIndexFlagKeystone)
+                              : Status::OK();
+            if (made.ok() && !key_positions.empty() && schema.embedded_key.empty()) {
+                made = index_of(catalog::PrimaryKeyIndexName(oid.value()), key_positions,
                                 catalog::kIndexFlagUnique);
             }
             if (!made.ok()) {
@@ -8284,6 +8309,16 @@ constexpr const catalog::TableAccess::IndexRef* kTupleKeyArbiter = nullptr;
 
 StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConflictArbiter(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
+    // **An embedded primary key arbitrates nothing yet** (DR-S3e): its
+    // conflict is a tuple key's, found at the id the row's key encodes to,
+    // and neither arm here computes that id - the tuple key arm reads a key
+    // the row wrote, and the index arm has no index. Refused by name rather
+    // than answered with the duplicate the clause was written to avoid.
+    if (!ta.schema.embedded_key.empty()) {
+        return Status::NotImplemented(
+            "ON CONFLICT at byte " + std::to_string(written.conflict_byte_offset) +
+            " on a relation whose primary key is its Keystone id is not built");
+    }
     if (!written.conflict_target.has_value()) {
         if (written.on_conflict_do_update && ta.schema.hidden_keystone()) {
             return Status::NotImplemented(
@@ -8678,7 +8713,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // this shape - `NormalizeListedInsertRows` reshaped it, a left-out
     // nullable column as a NULL placeholder (BW-S6).
     const std::size_t ncols = ta.schema.columns.size();
-    const bool explicit_key = ncols > 0 && values.size() == ncols;
+    const bool named_by_row = ncols > 0 && values.size() == ncols;
 
     if (ncols > 0 && values.size() != ncols && values.size() != ncols - 1) {
         // Before the id: the codec would refuse this row at encode, which
@@ -8694,7 +8729,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // the key. The copy is paid only by a row that names its key.
     std::vector<parser::AstValue> body_storage;
     std::uint64_t supplied_id = 0;
-    if (explicit_key) {
+    if (named_by_row) {
         const parser::AstValue& key = values.front();
         if (key.type != parser::ValueType::kInt) {
             return Status::InvalidArgument(
@@ -8718,7 +8753,68 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         supplied_id = *id;
         body_storage.assign(values.begin() + 1, values.end());
     }
-    const std::vector<parser::AstValue>& body = explicit_key ? body_storage : values;
+    const std::vector<parser::AstValue>& body = named_by_row ? body_storage : values;
+
+    // ---- An embedded key names the id (DR-S3e) ----------------------------
+    //
+    // On a relation whose primary key is embedded the Keystone id is the
+    // code of the row's key columns (`exec/embedded_key.hpp`), so every row
+    // names its key, whether or not it wrote `keyidentity`: the id is
+    // computed here, before anything can wait, and the row then takes the
+    // named key's path below - its borrow, its duplicate check, its
+    // placement where the id sorts. A row that does write `keyidentity`
+    // must write the id its key encodes to; any other would place the row
+    // where no read by its key looks (`[quiet-wrong]`), so it is refused.
+    const bool embedded = !ta.schema.embedded_key.empty();
+    // Where a refusal for the key points: the tuple key's token, or the
+    // first key column's.
+    std::uint32_t key_byte = named_by_row ? values.front().byte_offset : 0;
+    if (embedded) {
+        std::vector<parser::AstValue> key_values;
+        for (const std::uint16_t pos : ta.schema.embedded_key) {
+            parser::AstValue value = body[pos - 1];
+            const catalog::SysColumnRow& column = ta.schema.columns[pos];
+            const std::string at = " (byte " + std::to_string(value.byte_offset) + ")";
+            if (value.type == parser::ValueType::kNull) {
+                return Status::InvalidArgument("primary key column '" +
+                                               std::string(catalog::NameView(column.name)) +
+                                               "' is NULL; a primary key is never NULL" + at);
+            }
+            if (Status coerced = exec::CoerceLiteralToColumn(column, value); !coerced.ok()) {
+                return coerced.WithContext("primary key column '" +
+                                           std::string(catalog::NameView(column.name)) + "'" + at);
+            }
+            key_values.push_back(std::move(value));
+        }
+        const std::uint32_t first_key_byte =
+            body[ta.schema.embedded_key.front() - 1].byte_offset;
+        auto id = exec::EmbeddedKeyId(ta.schema, key_values);
+        if (!id.ok()) {
+            return id.status().WithContext("primary key (byte " +
+                                           std::to_string(first_key_byte) + ")");
+        }
+        if (named_by_row && supplied_id != id.value()) {
+            return Status::InvalidArgument(
+                "keyidentity " + std::to_string(supplied_id) + " is not this row's: on '" +
+                RelationNameOf(oid) + "' the Keystone id is its primary key's code, " +
+                std::to_string(id.value()) + " for this row (byte " + std::to_string(key_byte) +
+                ")");
+        }
+        supplied_id = id.value();
+        if (!named_by_row) key_byte = first_key_byte;
+    }
+    const bool explicit_key = named_by_row || embedded;
+    // A key refused as a duplicate, said as what the client wrote: on an
+    // embedded relation that is the primary key, which a live row holds or
+    // a deleted one keeps bound until a `PURGE` (K1).
+    const auto as_key_refusal = [&](Status refused) {
+        if (!embedded || refused.code() != StatusCode::kAlreadyExists) return refused;
+        return Status::AlreadyExists(
+            "primary key " + EmbeddedKeyText(ta, body) +
+            " is already held: by a live row, or by a deleted one until a PURGE frees its key "
+            "(tuple key " + std::to_string(supplied_id) + ") (byte " + std::to_string(key_byte) +
+            ")");
+    };
 
     // ---- The forward check (docs/spec/foreign-keys.md §2) ---------------
     //
@@ -8838,8 +8934,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // **A duplicate carries the tuple key token's byte** (BD-R5), as the exhausted
     // refusal above does.
     const auto duplicate_at_tuple_key = [&](const Status& duplicate) {
-        return Status::AlreadyExists(duplicate.message() + " (byte " +
-                                     std::to_string(values.front().byte_offset) + ")");
+        return as_key_refusal(Status::AlreadyExists(duplicate.message() + " (byte " +
+                                                    std::to_string(key_byte) + ")"));
     };
     // The key's borrow, given back by a statement it protected nothing for
     // (BB-S3's review; AZ-S5's shape for a failed check's `S`): nothing was
@@ -8909,7 +9005,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // lookup that failed, is a wait like any other (a fence over `k`).
         // No mark is consulted (W2 of BZ).
         const auto refuse_if_never_admissible = [&]() -> Status {
-            return NamedKeyVerdict(ta, supplied_id, values.front().byte_offset, scope.txn);
+            return as_key_refusal(NamedKeyVerdict(ta, supplied_id, key_byte, scope.txn));
         };
         const bool held_before =
             scope.txn != nullptr &&
@@ -8936,8 +9032,8 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
             !s.ok()) {
             give_back(key_unit, held_before);
             if (s.code() == StatusCode::kOutOfRange && heap_rel) {
-                return Status::OutOfRange(s.message() + " (byte " +
-                                          std::to_string(values.front().byte_offset) + ")");
+                return Status::OutOfRange(s.message() + " (byte " + std::to_string(key_byte) +
+                                          ")");
             }
             return s;
         }
@@ -11131,6 +11227,101 @@ void CommandDispatcher::RecordIndexUse(const exec::StepChain& chain,
     });
 }
 
+StatusOr<std::optional<exec::EmbeddedKeyWindow>> CommandDispatcher::EmbeddedPurgeWindow(
+    const catalog::TableAccess& ta, const std::vector<parser::Condition>& where,
+    std::uint32_t where_byte) {
+    const std::vector<std::uint16_t>& key = ta.schema.embedded_key;
+    // Read exactly, as PU1 reads a tuple key's window: a conjunct this does
+    // not fold is refused, never skipped - a skipped one would widen what
+    // is freed.
+    const auto refuse = [&](std::uint32_t byte) {
+        return Status::NotImplemented(
+            "PURGE on a relation whose primary key is its Keystone id admits the key's leading "
+            "columns each by one `=` and then one inclusive range (`>=` and `<=`, or BETWEEN) "
+            "on the next, or `keyidentity` comparisons alone (byte " +
+            std::to_string(byte != 0 ? byte : where_byte) + ")");
+    };
+    struct Bound {
+        std::optional<parser::AstValue> eq, low, high;
+        std::uint32_t byte = 0;
+    };
+    std::vector<Bound> bounds(key.size());
+    for (const parser::Condition& cond : where) {
+        const bool compare = cond.kind == parser::PredicateKind::kCompareValue;
+        if ((!compare && cond.kind != parser::PredicateKind::kBetween) ||
+            cond.rhs_kind != parser::RhsKind::kLiteral) {
+            return refuse(cond.col.byte_offset);
+        }
+        auto column = ta.schema.FindColumn(cond.col.name, cond.col.byte_offset);
+        if (!column.ok()) return column.status();
+        if (column.value() == nullptr) return refuse(cond.col.byte_offset);
+        const auto pos = static_cast<std::uint16_t>(column.value() - ta.schema.columns.data());
+        const auto in_key = std::find(key.begin(), key.end(), pos);
+        if (in_key == key.end()) return refuse(cond.col.byte_offset);
+        Bound& b = bounds[static_cast<std::size_t>(in_key - key.begin())];
+        b.byte = cond.col.byte_offset;
+        // Each end at most once, and no end beside an equality.
+        const auto take = [&](std::optional<parser::AstValue>& end, parser::AstValue value) {
+            if (end.has_value()) return false;
+            if (!exec::CoerceLiteralToColumn(*column.value(), value).ok()) return false;
+            end = std::move(value);
+            return true;
+        };
+        bool taken = false;
+        if (!compare) {
+            taken = take(b.low, cond.val) && take(b.high, cond.val_high);
+        } else if (cond.op == parser::CompareOp::kEq) {
+            taken = take(b.eq, cond.val);
+        } else if (cond.op == parser::CompareOp::kGte) {
+            taken = take(b.low, cond.val);
+        } else if (cond.op == parser::CompareOp::kLte) {
+            taken = take(b.high, cond.val);
+        }
+        if (!taken || (b.eq.has_value() && (b.low.has_value() || b.high.has_value()))) {
+            return refuse(cond.col.byte_offset);
+        }
+    }
+    std::vector<parser::AstValue> prefix;
+    std::size_t at = 0;
+    for (; at < key.size() && bounds[at].eq.has_value(); ++at) prefix.push_back(*bounds[at].eq);
+    const parser::AstValue* low = nullptr;
+    const parser::AstValue* high = nullptr;
+    if (at < key.size() && (bounds[at].low.has_value() || bounds[at].high.has_value())) {
+        if (!bounds[at].low.has_value() || !bounds[at].high.has_value()) {
+            return refuse(bounds[at].byte);
+        }
+        low = &*bounds[at].low;
+        high = &*bounds[at].high;
+        ++at;
+    }
+    // Nothing after the range, and something before the end.
+    for (; at < key.size(); ++at) {
+        if (bounds[at].eq.has_value() || bounds[at].low.has_value() ||
+            bounds[at].high.has_value()) {
+            return refuse(bounds[at].byte);
+        }
+    }
+    if (prefix.empty() && low == nullptr) return refuse(where_byte);
+    auto window = exec::EmbeddedKeyWindowOf(ta.schema, prefix, low, high);
+    if (!window.ok()) return window.status().WithContext("PURGE's primary key window");
+    return window;
+}
+
+std::string CommandDispatcher::EmbeddedKeyText(const catalog::TableAccess& ta,
+                                               const std::vector<parser::AstValue>& body) {
+    std::string columns;
+    std::string values;
+    for (const std::uint16_t pos : ta.schema.embedded_key) {
+        if (!columns.empty()) {
+            columns += ", ";
+            values += ", ";
+        }
+        columns += std::string(catalog::NameView(ta.schema.columns[pos].name));
+        values += exec::FormatValue(ta.schema.columns[pos].type_val, body[pos - 1]);
+    }
+    return "(" + columns + "): (" + values + ")";
+}
+
 stats::IndexUse* CommandDispatcher::IndexUseOf(catalog::Oid index_oid) {
     IndexUseSlot& slot = index_use_cache_[index_oid % index_use_cache_.size()];
     if (slot.oid != index_oid) {
@@ -11142,10 +11333,10 @@ stats::IndexUse* CommandDispatcher::IndexUseOf(catalog::Oid index_oid) {
 }
 
 StatusOr<std::vector<std::uint64_t>> CommandDispatcher::UniqueKeyRun(
-    const exec::WriteIndexKey& by_key) {
+    const exec::WriteIndexKey& by_key, bool count) {
     std::uint64_t entries = 0;
     auto keys = exec::IndexRunTupleKeys(page_store_, *by_key.index, by_key.key, &entries);
-    if (!keys.ok()) return keys;
+    if (!keys.ok() || !count) return keys;
     // A use of the index like a read's probe of it (DR-Q23,
     // `stats/index_stats.hpp`): one walk, the entries it read and the tuple
     // keys the write then descends for.
@@ -12799,8 +12990,9 @@ public:
     // so "stopped at value k" and "stopped at key k" are one statement. A
     // held row parks the statement at its key and the resume starts at the
     // first value at or above it; a descent that declines hands the rest to
-    // the walk from that key, which is where the walk would have been. No
-    // row is offered twice either way.
+    // the walk - from that key on a btree, which is where the walk would
+    // have been, and by `DescentDeclined`'s rule on a heap. No row is
+    // offered twice either way.
     //
     // True when every value was offered or is absent. False with `cursor`
     // at the value it stopped on where `parked_on_row` says a held row, and
@@ -12844,9 +13036,10 @@ public:
     // every key was offered or is absent, false with `parked_on_row` and
     // `cursor` at the key a held row stopped it on, and the resume collects
     // the run again and starts at the first key at or above it. A run
-    // collected again may name more rows than the first did; a row placed
+    // collected again may name more rows than the first did: a row placed
     // since is invisible to the statement's view, minted before the park,
-    // and `Qualify` passes it over.
+    // and `Qualify` passes it over; a row moved onto the key since is
+    // judged as the walk judges a row changed under it.
     //
     // **DR-R4 and CU-R1 hold by construction**: the run is a superset on
     // the encoded key, a prefix for a string (IX6), and every row it names
@@ -12871,6 +13064,44 @@ public:
             return false;
         }
         return true;
+    }
+
+    // **The key arms, in their order, in one copy** for UPDATE, DELETE and
+    // the locking read (CU-S3, DR-S3a): a list on the tuple key, else a
+    // unique key named whole. nullopt where the WHERE names neither. Else
+    // what the loop answered: true when every key was offered or is absent,
+    // false for the walk to answer - `parked_on_row` says a held row, with
+    // `cursor` at its key.
+    //
+    // **A resume that carries a place is the walk's** (`[quiet-wrong]`
+    // otherwise, DR-S3a's review). A heap's walk parks at a page and slot
+    // and leaves `tuple_key` 0. That cursor reaches here when a key loop's
+    // first descent declined, the walk took the statement from the head,
+    // wrote rows and parked: resumed through a key loop it would offer every
+    // key again from the lowest, and a row the walk had written would be
+    // written twice. A btree's walk and every key loop park at a key and
+    // set no page, so only that resume is handed on.
+    template <typename WriteAt>
+    StatusOr<std::optional<bool>> WriteByKeys(WalkCursor& cursor, WriteAt&& write_at) {
+        if (cursor.active && cursor.page != kInvalidPageId) return std::optional<bool>{false};
+        if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates_);
+            set.has_value()) {
+            auto done = WriteKeySet(*set, cursor, write_at);
+            if (!done.ok()) return done.status();
+            return std::optional<bool>{done.value()};
+        }
+        if (const std::optional<exec::WriteIndexKey> by_key =
+                exec::WriteIndexKeyOf(ta_, predicates_);
+            by_key.has_value()) {
+            // A resume collects the run again; the statement's use of the
+            // index is counted once, at its first collection (DR-Q23).
+            auto keys = d_.UniqueKeyRun(*by_key, /*count=*/!cursor.active);
+            if (!keys.ok()) return keys.status();
+            auto done = WriteKeys(keys.value(), cursor, write_at);
+            if (!done.ok()) return done.status();
+            return std::optional<bool>{done.value()};
+        }
+        return std::optional<bool>{};
     }
 
     // **A key loop's descent declined at `key`** - a damaged descent or an
@@ -13644,7 +13875,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         }
     };
     if (std::optional<std::uint64_t> tuple_key =
-            arm_target.has_value() ? arm_target : exec::WriteKeyOf(predicates.value());
+            arm_target.has_value() ? arm_target : exec::WriteKeyOf(ta, predicates.value());
         tuple_key.has_value()) {
         StatusOr<PointWrite> wrote = write_at(*tuple_key);
         if (!wrote.ok()) return Refused(wrote.status());
@@ -13676,32 +13907,19 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // "from the head"; a resumed statement is handed the one its park left.
     WalkCursor walk_cursor = resume_from;
 
-    // **A list on the tuple key is the point arm once per value** (CU-S3;
-    // `WriteWalk::WriteKeySet`), under what the walk of the same WHERE
-    // takes: `DeclaredWriteBorrow` reads no bound off a list, so each row
-    // written takes its row unit, unless a range conjunct beside the list
-    // declared a window above.
-    if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
-        set.has_value()) {
-        auto done = walk.WriteKeySet(*set, walk_cursor, write_at);
+    // **A list on the tuple key, or a unique key named whole, is the point
+    // arm once per key** (CU-S3, DR-S3a; `WriteWalk::WriteByKeys`), under
+    // what the walk of the same WHERE takes: `DeclaredWriteBorrow` reads no
+    // bound off a list or off a unique key's columns, so each row written
+    // takes its row unit, unless a range conjunct on the tuple key beside
+    // either declared a window above. Asked after a single key's descent
+    // declined, too (CU-S3b): a list beside the key answers by its own
+    // descents, and the walk only where they decline as well.
+    {
+        auto done = walk.WriteByKeys(walk_cursor, write_at);
         if (!done.ok()) return Refused(done.status());
         if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
-        if (done.value()) {
-            return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
-        }
-    } else if (const std::optional<exec::WriteIndexKey> by_key =
-                   exec::WriteIndexKeyOf(ta, predicates.value());
-               by_key.has_value()) {
-        // **A unique key named whole is the point arm once per row its run
-        // names** (DR-S3a; `WriteWalk::WriteKeys`), under what the walk of
-        // the same WHERE takes: no bound is declared for either, so each row
-        // written takes its row unit.
-        auto keys = UniqueKeyRun(*by_key);
-        if (!keys.ok()) return Refused(keys.status());
-        auto done = walk.WriteKeys(keys.value(), walk_cursor, write_at);
-        if (!done.ok()) return Refused(done.status());
-        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
-        if (done.value()) {
+        if (done.value().value_or(false)) {
             return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
         }
     }
@@ -13883,30 +14101,19 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     // Whether an arm answered for every row, so the walk is not owed.
     bool answered = false;
     WalkCursor cursor;
-    if (std::optional<std::uint64_t> key = exec::WriteKeyOf(predicates.value()); key.has_value()) {
+    if (std::optional<std::uint64_t> key = exec::WriteKeyOf(ta, predicates.value()); key.has_value()) {
         StatusOr<PointWrite> at = claim_at(*key);
         if (!at.ok()) return ended(Refused(at.status()));
         if (at.value() == PointWrite::kParked) return ended(Refused(walk.blocked_verdict));
         answered = at.value() != PointWrite::kScan;
     }
+    // A list on the tuple key or a unique key named whole, as UPDATE's
+    // (CU-S3, DR-S3a).
     if (!answered) {
-        if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
-            set.has_value()) {
-            auto all = walk.WriteKeySet(*set, cursor, claim_at);
-            if (!all.ok()) return ended(Refused(all.status()));
-            if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
-            answered = all.value();
-        } else if (const std::optional<exec::WriteIndexKey> by_key =
-                       exec::WriteIndexKeyOf(ta, predicates.value());
-                   by_key.has_value()) {
-            // A unique key named whole, as UPDATE's (DR-S3a).
-            auto keys = UniqueKeyRun(*by_key);
-            if (!keys.ok()) return ended(Refused(keys.status()));
-            auto all = walk.WriteKeys(keys.value(), cursor, claim_at);
-            if (!all.ok()) return ended(Refused(all.status()));
-            if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
-            answered = all.value();
-        }
+        auto all = walk.WriteByKeys(cursor, claim_at);
+        if (!all.ok()) return ended(Refused(all.status()));
+        if (walk.parked_on_row) return ended(Refused(walk.blocked_verdict));
+        answered = all.value().value_or(false);
     }
     if (!answered) {
         auto any = walk.CollectTargets();
@@ -16383,9 +16590,13 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
     auto access = catalog_.InitTableAccess(oid.value());
     if (!access.ok()) return Refused(access.status());
     const catalog::TableAccess& ta = *access.value();
-    // BZ-R4: a heap's tuple key is hidden, and PURGE's window is written
-    // in tuple key comparisons, so there is no window a statement can name.
-    if (ta.schema.hidden_keystone()) {
+    // BZ-R4: a heap whose Keystone is hidden releases its own slots
+    // (`exec::HeapSlotRelease`), and a row purge has nothing to free there.
+    // **A btree whose Keystone is hidden is purged** (DR-Q19, DR-Q20): it
+    // keeps its delete-marked rows as any btree does and has no other
+    // release. Its window is written in `keyidentity` comparisons, or - an
+    // embedded key - in the key's own, below.
+    if (ta.schema.hidden_keystone() && ta.heap()) {
         return Refused(Status::Unsupported("'" + stmt.table_name +
                                           "' is a heap, whose tuple key is hidden; PURGE's "
                                           "window names tuple keys, so it frees none on a heap" +
@@ -16424,9 +16635,29 @@ DispatchOutcome CommandDispatcher::HandlePurge(std::string_view line, Session& s
 
     // PU1: the one recognizer of the window, refusing what it cannot read
     // rather than skipping it (BH-R2), clamped to the key space.
-    const TupleKeyWindow window = FoldTupleKeyWindow(ta, stmt.where);
-    if (window.unfolded != nullptr) {
-        return Refused(PurgeConjunctRefusal(ta, *window.unfolded, stmt.where_byte_offset));
+    TupleKeyWindow window;
+    // **An embedded key's window is written in the key's own comparisons**
+    // (DR-Q20): the ids ascend as the keys do, so the leading columns'
+    // values and an inclusive range on the next are one window of ids. A
+    // deleted key stays bound until this frees it (K1), and the client
+    // knows the key, not the id.
+    const bool by_key =
+        !ta.schema.embedded_key.empty() &&
+        std::any_of(stmt.where.begin(), stmt.where.end(), [&](const parser::Condition& cond) {
+            return !NamesTupleKey(ta.schema, cond.col.name);
+        });
+    if (by_key) {
+        auto keyed = EmbeddedPurgeWindow(ta, stmt.where, stmt.where_byte_offset);
+        if (!keyed.ok()) return Refused(keyed.status());
+        if (!keyed.value().has_value()) return {"PURGED 0", false, 0};  // names no key
+        window.lo = keyed.value()->lo;
+        window.hi = keyed.value()->hi + 1;  // the fold's window is half open
+        window.bounded = true;
+    } else {
+        window = FoldTupleKeyWindow(ta, stmt.where);
+        if (window.unfolded != nullptr) {
+            return Refused(PurgeConjunctRefusal(ta, *window.unfolded, stmt.where_byte_offset));
+        }
     }
     const std::uint64_t lo = std::max(window.lo, catalog::kFirstRowId);
     const std::uint64_t hi = std::min(window.hi, kIdSpaceEnd);
@@ -17033,7 +17264,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // leaves `mark` answering OK with nothing marked.
         return walk.parked_on_row ? PointWrite::kParked : PointWrite::kOffered;
     };
-    if (std::optional<std::uint64_t> tuple_key = exec::WriteKeyOf(predicates.value());
+    if (std::optional<std::uint64_t> tuple_key = exec::WriteKeyOf(ta, predicates.value());
         tuple_key.has_value()) {
         StatusOr<PointWrite> marked = mark_at(*tuple_key);
         if (!marked.ok()) return Refused(marked.status());
@@ -17054,25 +17285,13 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // AO-S3b, and `UpdateParsed`'s site states the argument.
     WalkCursor walk_cursor = resume_from;
 
-    // A list on the tuple key, as UPDATE's (CU-S3).
-    if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates.value());
-        set.has_value()) {
-        auto done = walk.WriteKeySet(*set, walk_cursor, mark_at);
+    // A list on the tuple key or a unique key named whole, as UPDATE's
+    // (CU-S3, DR-S3a).
+    {
+        auto done = walk.WriteByKeys(walk_cursor, mark_at);
         if (!done.ok()) return Refused(done.status());
         if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
-        if (done.value()) {
-            return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
-        }
-    } else if (const std::optional<exec::WriteIndexKey> by_key =
-                   exec::WriteIndexKeyOf(ta, predicates.value());
-               by_key.has_value()) {
-        // A unique key named whole, as UPDATE's (DR-S3a).
-        auto keys = UniqueKeyRun(*by_key);
-        if (!keys.ok()) return Refused(keys.status());
-        auto done = walk.WriteKeys(keys.value(), walk_cursor, mark_at);
-        if (!done.ok()) return Refused(done.status());
-        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
-        if (done.value()) {
+        if (done.value().value_or(false)) {
             return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
         }
     }

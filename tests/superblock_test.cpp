@@ -347,7 +347,13 @@ TEST(SuperBlockTest, AVersion33VolumeDoesNotMount) {
 // binary refuses the record kind or leaves the loser's departure counted.
 TEST(SuperBlockTest, AVersion34VolumeDoesNotMount) {
     ExpectRefusedNamingBoth(34);
-    EXPECT_EQ(kSuperBlockVersion, 40u);
+    EXPECT_EQ(kSuperBlockVersion, 41u);
+}
+
+// DR-S3d: a version-40 binary reads the key form and the embedded key's
+// columns as reserved bytes, and has no btree with a hidden Keystone.
+TEST(SuperBlockTest, AVersion40VolumeDoesNotMount) {
+    ExpectRefusedNamingBoth(40);
 }
 
 // DP-S1: a version-39 volume has no `sys.views` root (page 19) and no view

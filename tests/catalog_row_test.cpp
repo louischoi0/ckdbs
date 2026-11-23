@@ -253,9 +253,9 @@ TEST(SysPatternRowTest, CatalogConstantsDoNotCollide) {
 //
 // Covered here rather than only through catalog_test.cpp for the reason
 // this file's header gives: a round trip through the same code hides an
-// offset collision. The retired `owner_core` word sits past
-// `varheap_page_id` (`kReservedOffset` since AT-S9), so the fields either
-// side of it are the ones worth pinning.
+// offset collision. The embedded key's columns sit past `varheap_page_id`
+// (`kEmbeddedKeyColsOffset`, where the retired `owner_core` word was), so
+// the fields either side of them are the ones worth pinning.
 
 SysTableRow SampleTableRow() {
     SysTableRow row{};
@@ -265,11 +265,11 @@ SysTableRow SampleTableRow() {
     row.clustered_type = ClusteredType::kBtree;
     row.next_id = 0x2122232425262728ull;
     row.varheap_page_id = 0xB1B2B3B4u;
-    // The retired key-order byte set rather than 0, so a codec that dropped
-    // it fails the round trip instead of passing on a zero that happens to be
-    // the right answer. Nothing reads it since BD-R8 retired BB-R11's check;
-    // it stays a reserved byte of the row.
-    row.retired_key_order = 1;
+    // An embedded key (DR-S3e, superblock 41) rather than the default form,
+    // so a codec that dropped the form or its columns fails the round trip
+    // instead of passing on zeros that happen to be the right answer.
+    row.key_form = kKeyFormEmbedded;
+    row.embedded_key_cols = {3, 1, 0, 0};
     return row;
 }
 
@@ -389,40 +389,58 @@ TEST(SysTableRowTest, RoundTripsEveryField) {
     EXPECT_EQ(out.value().clustered_type, in.clustered_type);
     EXPECT_EQ(out.value().next_id, in.next_id);
     EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
-    EXPECT_EQ(out.value().retired_key_order, in.retired_key_order);
+    EXPECT_EQ(out.value().key_form, in.key_form);
+    EXPECT_EQ(out.value().embedded_key_cols, in.embedded_key_cols);
 }
 
-TEST(SysTableRowTest, TheRetiredKeyOrderByteOccupiesItsOwnByte) {
-    // Same check the retired word gets, for the same reason: a round trip
-    // through one codec cannot catch an offset that overlaps a neighbour,
-    // because both halves make the same mistake.
+TEST(SysTableRowTest, TheKeyFormAndItsColumnsOccupyTheirOwnBytes) {
+    // A round trip through one codec cannot catch an offset that overlaps a
+    // neighbour, because both halves make the same mistake: so the bytes
+    // that differ between two rows are counted here.
     SysTableRow row = SampleTableRow();
     const auto baseline = row.Encode();
 
-    row.retired_key_order = 0;
-    const auto zeroed = row.Encode();
+    row.key_form = kKeyFormIssued;
+    row.embedded_key_cols = {};
+    const auto issued = row.Encode();
 
     for (std::size_t i = 0; i < SysTableRow::kOnDiskSize; ++i) {
-        if (i == SysTableRow::kRetiredKeyOrderOffset) continue;
-        EXPECT_EQ(baseline[i], zeroed[i]) << "the retired key-order byte disturbed byte " << i;
+        const bool theirs = i == SysTableRow::kKeyFormOffset ||
+                            (i >= SysTableRow::kEmbeddedKeyColsOffset &&
+                             i < SysTableRow::kEmbeddedKeyColsOffset + kMaxEmbeddedKeyColumns);
+        if (theirs) continue;
+        EXPECT_EQ(baseline[i], issued[i]) << "the key form disturbed byte " << i;
     }
+    EXPECT_EQ(baseline[SysTableRow::kKeyFormOffset], std::byte{kKeyFormEmbedded});
+    EXPECT_EQ(baseline[SysTableRow::kEmbeddedKeyColsOffset], std::byte{3});
+    EXPECT_EQ(baseline[SysTableRow::kEmbeddedKeyColsOffset + 1], std::byte{1});
+    // A row from before superblock 41 has both written 0: no embedded key.
+    auto old = SysTableRow::Decode(issued);
+    ASSERT_TRUE(old.ok()) << old.status().message();
+    EXPECT_EQ(old.value().key_form, kKeyFormIssued);
+    EXPECT_EQ(old.value().embedded_key_cols, (std::array<std::uint8_t, 4>{}));
 }
 
-TEST(SysTableRowTest, TheRetiredOwnerCoreWordIsWrittenZeroAndNeverRead) {
-    // AT-S9 retired `owner_core` and kept its four bytes, so a pre-AT row
-    // decodes where it lies: the word is written 0 and a non-zero value in
-    // it - what a pre-AT volume holds - changes nothing the decoder returns.
+// DR-R12: a form this build does not know, or key columns without the form
+// that carries them, is a row this build never wrote - refused, not read as
+// the nearest form it knows.
+TEST(SysTableRowTest, AKeyFormThisBuildNeverWritesIsCorruption) {
     const SysTableRow in = SampleTableRow();
-    auto bytes = in.Encode();
-    for (std::size_t i = 0; i < sizeof(std::uint32_t); ++i) {
-        EXPECT_EQ(bytes[SysTableRow::kReservedOffset + i], std::byte{0}) << "byte " << i;
-        bytes[SysTableRow::kReservedOffset + i] = std::byte{0xC1};
+    auto unknown = in.Encode();
+    unknown[SysTableRow::kKeyFormOffset] = std::byte{2};
+    EXPECT_EQ(SysTableRow::Decode(unknown).status().code(), StatusCode::kCorruption);
+
+    auto columns_without_form = in.Encode();
+    columns_without_form[SysTableRow::kKeyFormOffset] = std::byte{kKeyFormIssued};
+    EXPECT_EQ(SysTableRow::Decode(columns_without_form).status().code(),
+              StatusCode::kCorruption);
+
+    auto form_without_columns = in.Encode();
+    for (std::size_t i = 0; i < kMaxEmbeddedKeyColumns; ++i) {
+        form_without_columns[SysTableRow::kEmbeddedKeyColsOffset + i] = std::byte{0};
     }
-    auto out = SysTableRow::Decode(bytes);
-    ASSERT_TRUE(out.ok()) << out.status().message();
-    EXPECT_EQ(out.value().varheap_page_id, in.varheap_page_id);
-    EXPECT_EQ(out.value().retired_key_order, in.retired_key_order);
-    EXPECT_EQ(out.value().Encode(), in.Encode()) << "the old word leaked into the decoded row";
+    EXPECT_EQ(SysTableRow::Decode(form_without_columns).status().code(),
+              StatusCode::kCorruption);
 }
 
 TEST(SysTableRowTest, TheRetiredNameIsWrittenZeroAndNeverRead) {
@@ -441,18 +459,19 @@ TEST(SysTableRowTest, TheRetiredNameIsWrittenZeroAndNeverRead) {
 }
 
 TEST(SysTableRowTest, OnDiskLayoutIsPinned) {
-    // The row grew by four bytes for `owner_core` (retired at AT-S9, its
-    // bytes kept as `kReservedOffset`), one for the key-order byte
-    // (`key_mode` when it was added), and four for `anchor_page_id`
-    // (PW2-1), and two for `spare_slots` (BW-R9), each a format-version
-    // event - the superblock bumps to 10, 14, 15 and 25 are the other halves.
+    // The row grew by four bytes for `owner_core` (retired at AT-S9; the
+    // embedded key's columns since superblock 41), one for the key-order
+    // byte (`key_mode` when it was added; the key form since 41), and four
+    // for `anchor_page_id` (PW2-1), and two for `spare_slots` (BW-R9), each
+    // a format-version event - the superblock bumps to 10, 14, 15, 25 and
+    // 41 are the other halves.
     // Pinned so the next person to add a field cannot do so quietly.
-    EXPECT_EQ(SysTableRow::kReservedOffset,
+    EXPECT_EQ(SysTableRow::kEmbeddedKeyColsOffset,
               SysTableRow::kVarHeapPageIdOffset + sizeof(PageId));
-    EXPECT_EQ(SysTableRow::kRetiredKeyOrderOffset,
-              SysTableRow::kReservedOffset + sizeof(std::uint32_t));
+    EXPECT_EQ(SysTableRow::kKeyFormOffset,
+              SysTableRow::kEmbeddedKeyColsOffset + sizeof(std::uint32_t));
     EXPECT_EQ(SysTableRow::kAnchorPageIdOffset,
-              SysTableRow::kRetiredKeyOrderOffset + sizeof(std::uint8_t));
+              SysTableRow::kKeyFormOffset + sizeof(std::uint8_t));
     EXPECT_EQ(SysTableRow::kSpareSlotsOffset,
               SysTableRow::kAnchorPageIdOffset + sizeof(PageId));
     EXPECT_EQ(SysTableRow::kOnDiskSize,

@@ -998,7 +998,8 @@ I10): `WHERE a = 1 AND b = 2` over a unique index on `(a, b)` - a primary
 key's or any other - declares nothing and takes a row unit per row it
 writes, the rows found by one descent per tuple key the key's run names,
 in ascending tuple key order, and it parks at a held row as the list
-does. And the wait is the ordinary one: it ends at the
+does. A bound on the tuple key beside it declares its window, as beside
+the list. And the wait is the ordinary one: it ends at the
 holder's decide, it is an edge in the wait-for graph, and it is refused
 rather than entered where it would close a cycle.
 

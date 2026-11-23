@@ -166,7 +166,11 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 // exclusive, so such a statement collects its rows in a read walk first
 // (`CommandDispatcher::WriteWalk::CollectTargets`), and that pass is not
 // keyed (`docs/pending/keyed-write-beside-a-subquery.md`).
-std::optional<std::uint64_t> WriteKeyOf(const Step& where);
+//
+// **An embedded primary key pinned whole names one key too** (DR-S3e): on a
+// relation whose key is its Keystone id, `a = 1 AND b = 2` is the id those
+// values encode to (`exec/embedded_key.hpp`), found by the same descent.
+std::optional<std::uint64_t> WriteKeyOf(const catalog::TableAccess& access, const Step& where);
 std::optional<KeySet> WriteKeySetOf(const Step& where);
 
 // **A write that names a unique key whole descends too** (DR-S3a): where
