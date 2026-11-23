@@ -97,7 +97,18 @@ The operator's words of 2026-11-22, recorded in English.
 | **Does not settle** | DM-Q10 (b), DM-Q2 (b), DM-Q7 (b), U2; a tag or a version |
 | **Recorded at** | this file; the DM order's header; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
 
-## 11. CW opened on the standing go-ahead; CW-Q0..Q9 adopted
+## 11. DQ written: a Cabin's miss answered from a map
+
+| | |
+|---|---|
+| **Word** | Three words in one claude.ai conversation, given in Korean: *"Now, a way to add, for joins, a method that works together with the Cabin."*; after CLA's account of the join methods the tree has, *"How about unifying the Cabin and the hash map at the inner build?"*; and after CLA's answer to that, *"Write the work order, then push."* |
+| **Mark** | **DQ is written**, not opened: `workorder-dq-cabin-miss-build.md`, in the main checkout on `main` at `56b44964`, and pushed, documents only. The correlated Cabin probe's miss falls to the statement-local build the step would otherwise have carried; the Cabin and the map stay two structures |
+| **CLA's, not the operator's** | the letter DQ; that DQ is exploratory (DQ-Q0); every candidate, DQ-R and DQ-Q; the stages. **Two things CLA told the operator in that conversation are corrected in the order's section 0**: banking the map's buckets into the Cabin after the build is unsound, since a set is announced before its walk; and `BUILD <relation> OFF` already parses beside a Cabin pin |
+| **Skipped** | the pre-push hook and the suite: neither was run, the session having no build tree, and the commit changes no build input. No `critics-developer` review |
+| **Does not settle** | any DQ-Q item; an opening; a tag or a version; a Bound Cabin read by a SELECT, which the order leaves out |
+| **Recorded at** | this file; `workorder-dq-cabin-miss-build.md`; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
+
+## 12. CW opened on the standing go-ahead; CW-Q0..Q9 adopted
 
 | | |
 |---|---|
@@ -106,11 +117,11 @@ The operator's words of 2026-11-22, recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the CW order's header, §4 and §7; its row in `instructions/v3.2.0/index.md` and in `instructions/milestones.md` |
 
-## 12. CW closed on the standing go-ahead: abandoned at V0, nothing built
+## 13. CW closed on the standing go-ahead: abandoned at V0, nothing built
 
 | | |
 |---|---|
-| **Word** | the same `/go-ahead-achieving-milestone CW` (§11) |
+| **Word** | the same `/go-ahead-achieving-milestone CW` (§12) |
 | **Mark** | **CW is closed, abandoned with nothing built**, at V0. CLA's proposal (CW-Q0 (a), CW-Q1 (a)) is adopted on that standing go-ahead; it is not the operator's own mark. CW-S0 (`bench/v3.5.0/results-cw-s0-premise-v3.5.0-91-g6ddcae43.md`, at `6ddcae43`) measured a primary-key point read's whole page-fetch protocol at **2.8 % of its server CPU at `cores = 2`** and 2.6 % at the clean `cores = 3`. That protocol is 4 fetches, each 2 structure-latch holds and 2 page-latch compare-and-swaps with its lookup and pin. Net of the unarmed path it is 2.1 % (not the words alone: the unarmed hit takes three lookups to the armed hit's one), with no bracket floor subtracted 3.8 %, and a sampled profile bounds every mutex with the fetch functions at 3.6 %; no cell saturated the server (a `point` cell's reactors 23-66 % busy). One shared relation reads -1.3 % stmt/s at worst against a relation per session, inside the runs' spread (-3.2 % at the widest pairing; M4). V0's bars are 5 % each, so CW-S1..S4 do not run. Found and recorded, not built: the write path's fetches are 6.0-7.0 % of an `insert1`, which CW leaves latched by design; `StillOwned`'s two fetches are half a point read's; writeback stamps the checksum into the live frame under a shared latch (`known-gaps.md`, Eviction); the order's clean cell is redrawn for this host's SMT pairs (0,4) (1,5) (2,6) (3,7). The spike stays on the unpushed `worktree-cw-s0-spike` at `cba85f1f`. No suite and no close A/B: the branch changes no build input (`tools/`, `bench/`, `docs/`, `instructions/` only) |
 | **Also adopted** | **CW-Q10 (a)**, raised by CW-S0's review, adopted on that standing go-ahead (CLA's proposal, not the operator's mark): the close stands though no cell saturated the server. The reactors were 23-66 % busy in the `point` cells, and the data do not exclude a reversal at saturation (a pessimistic 5.7 %). A saturated clean `cores = 2` cell, about 2 minutes of runs past the spent budget, would reopen CW at S0 on the operator's word (CW-Q10 (b)) |
 | **Does not settle** | a write-side order for the hot-page fetches, the `StillOwned` fold, or the B1 stamp; CW-Q1 (b) (other bars); CW-Q10 (b); a push, a merge to `main`, a tag or a version |

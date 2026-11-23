@@ -1,13 +1,13 @@
 # Work order CW - a page read that takes no latch: the optimistic page read, measured before it is built
 
 Status: **CLOSED 2026-11-22 on the operator's standing go-ahead, abandoned at
-V0, with nothing built** (`raft-marks-2026-11-22.md` §12; §7's last entry).
+V0, with nothing built** (`raft-marks-2026-11-22.md` §13; §7's last entry).
 CW-S0 measured a point read's whole fetch protocol at 2.8 % of its server CPU
 at `cores = 2` and 2.6 % at the clean `cores = 3`, against V0's 5 %. M4's
 shared relation reads -1.3 % stmt/s at worst, inside the runs' own spread
 (-3.2 % at the widest pairing). CW-Q0 (a) closes the order there:
 CW-S1..S4 do not run, and no engine code lands. Before that: **OPENED 2026-11-22 on the operator's standing go-ahead**
-(`/go-ahead-achieving-milestone CW`, `raft-marks-2026-11-22.md` §11), at
+(`/go-ahead-achieving-milestone CW`, `raft-marks-2026-11-22.md` §12), at
 `56b44964` (`v3.5.0-90-g56b44964`) on branch
 `worktree-cw-optimistic-page-read` in the worktree `sync-stale-records`.
 **CW-Q0..Q9 adopted (a) on that go-ahead** - CLA's proposals, not the
@@ -225,9 +225,9 @@ Binding from CW-S2 on, if the order reaches it.
 
 (a) is CLA's proposal in each. **CW-Q0..Q9 (a) adopted on the operator's
 standing go-ahead of 2026-11-22 (go-ahead-achieving-milestone)**
-(`raft-marks-2026-11-22.md` §11); none is the operator's own mark.
+(`raft-marks-2026-11-22.md` §12); none is the operator's own mark.
 **CW-Q10, raised by CW-S0's review, adopted (a) on the same go-ahead**
-(`raft-marks-2026-11-22.md` §12); it is not the operator's mark either.
+(`raft-marks-2026-11-22.md` §13); it is not the operator's mark either.
 
 | | item | (a) | other |
 |---|---|---|---|
@@ -311,7 +311,7 @@ operator's word given while the order was being written
 Opened at `56b44964` (`v3.5.0-90-g56b44964`) on branch
 `worktree-cw-optimistic-page-read`, worktree `sync-stale-records`, on the
 operator's standing go-ahead (`/go-ahead-achieving-milestone CW`,
-`raft-marks-2026-11-22.md` §11). CW-Q0..Q9 adopted (a) on that go-ahead,
+`raft-marks-2026-11-22.md` §12). CW-Q0..Q9 adopted (a) on that go-ahead,
 CLA's proposals and not the operator's mark. The worktree is the session's
 own: a second worktree cannot be entered from inside one, so the branch is
 made in place, as DM's was.
