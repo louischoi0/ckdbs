@@ -385,18 +385,22 @@ struct IndexProbe {
 // The walked-join annotation (docs/spec/join-inner-build.md §5): the
 // statement-local inner build's compile half.
 //
-// **An annotation on a kScan, never a kind.** Set when every structure arm
-// declined and the step's residual still binds an own column by equality to
-// an earlier step's or an enclosing chain's column - the walked-join shape,
-// the one the ladder had no answer for. The step stays kScan, so trails,
-// access statistics and every kind-switch downstream are untouched by
-// construction. An executor that ignores it wholesale
-// answers identically: the correlated conjunct stays in `Step::residual`,
-// which is the same downgrade-safety every other access hint has.
+// **An annotation on a kScan or a correlated kCabinProbe, never a kind.**
+// Set on a kScan when every structure arm declined and the step's residual
+// still binds an own column by equality to an earlier step's or an
+// enclosing chain's column - the walked-join shape, the one the ladder had
+// no answer for. Set on the correlated Cabin probe as **its miss's
+// fallback** (DQ, spec §5a): the build arm's annotation for the step, read
+// only on a miss that records nothing. The kind is what it
+// was, so trails, access statistics and every kind-switch downstream are
+// untouched by construction. An executor that ignores it wholesale answers
+// identically: the correlated conjunct stays in `Step::residual`, which is
+// the same downgrade-safety every other access hint has.
 //
 // What makes one build serve every outer row: `TupleKeyBound` accepts literals
-// only, so no scan bound varies per outer row - a kScan inner is always the
-// full relation, and one walk's map answers every later key (spec §5).
+// only, so no scan bound varies per outer row - the walk of an annotated
+// step is always the full relation, and one walk's map answers every later
+// key (spec §5).
 struct BuildKey {
     // The own join column's schema position - what the map is keyed on.
     std::uint16_t col_pos = 0;
@@ -776,8 +780,9 @@ struct Step {
     // than the compiler decodes everything and is merely slow.
     std::uint64_t read_columns = kAllColumns;
 
-    // The walked-join annotation. Unlike the per-kind fields above it
-    // marks no kind - the step stays kScan. `BuildKey` owns the contract.
+    // The walked-join annotation, or a correlated Cabin probe's miss
+    // fallback (DQ). Unlike the per-kind fields above it marks no kind.
+    // `BuildKey` owns the contract.
     //
     // **Deliberately last**: cold compiled state sits below the hot
     // execution fields. Inserted mid-struct it moved `residual` onto another

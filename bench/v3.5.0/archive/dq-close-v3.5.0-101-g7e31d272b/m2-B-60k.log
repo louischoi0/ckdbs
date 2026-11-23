@@ -1,0 +1,7 @@
+01:57:49 A n=60000 unique r0 s1 cpu_ms=14.2 walks=1.03 hits=0 misses=2000 rec=0 built=1
+01:57:54 A n=60000 unique r0 s2 cpu_ms=4871.2 REFUSED statement exceeded its row-touch budget of 100000000 tuples;
+01:57:55 Agate n=60000 unique r0 s1 cpu_ms=14.3 walks=1.03 hits=0 misses=2000 rec=0 built=1
+01:57:55 Agate n=60000 unique r0 s2 cpu_ms=11.2 walks=1.03 hits=0 misses=2000 rec=0 built=1
+01:57:55 B n=60000 unique r0 s1 cpu_ms=13.8 walks=1.03 hits=0 misses=0 rec=0 built=1
+01:57:55 B n=60000 unique r0 s2 cpu_ms=10.5 walks=1.03 hits=0 misses=0 rec=0 built=1
+01:57:56 done elapsed_s=7.1

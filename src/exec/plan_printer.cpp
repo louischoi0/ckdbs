@@ -530,12 +530,15 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
 
         // The statement-local inner build (join-inner-build.md §4's
         // honesty clause). Printed for **every annotated step, including
-        // `inner_built=0`**: a step carrying the annotation that did not
-        // publish paid per-row walks for the statement, and that is
+        // `inner_built=0`**: a walked step carrying the annotation that did
+        // not publish paid per-row walks for the statement, and that is
         // precisely what a reader chasing a slow join needs to see - the
         // other counters cannot distinguish it from a step that was never
         // eligible. Keyed off the compiled annotation rather than off a
-        // non-zero counter, for that reason.
+        // non-zero counter, for that reason. On a Cabin step (DQ, spec
+        // §5a) `inner_built=0` with no `build_rows` means no miss reached a
+        // map: its set served every key, each miss recorded, or
+        // `join_build_max_rows = 0` walked every miss plain.
         //
         // `build_rows` is rows **bucketed**, not rows held: it is the
         // published map's size when `inner_built=1`, and how far a

@@ -602,6 +602,64 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   "never probed". Sharpening it needs a per-value record of which unresolved
   transactions could contradict a build, a structure §6a does not have.
   Re-verified at `7dd9b789` by reading. Owner: `docs/spec/cabin.md` §6a.
+  **What it cost a join before DQ** was measured by DQ-S0 at `68e5a69f`
+  (`bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`). With one
+  write held open, a join on a cabined inner column walked the inner
+  relation once per outer row in every statement: 116x to 159x (10,000 inner
+  rows) and 183x to 249x (100,000, the build cap raised) the same join with
+  the Cabin dropped.
+  Since DQ-S2 a top-level join within `join_build_max_rows` answers those
+  misses from the statement's map and walks once a statement
+  (`join-inner-build.md` §5a). Since DQ-S3 a correlated `EXISTS` does
+  too, through the prefix map (verified by DQ-S3's tests over
+  `910d8d63`). A join past the cap still walks once per outer row. The Cabin itself still never fills while the gate
+  refuses.
+
+- **A cabined join whose misses are all recording touches walks once per
+  outer row, and can be refused for its budget where the uncabined join
+  answers** (DQ-Q11). A correlated Cabin probe's recording touch (a key's
+  second, `n = 2`) is a whole walk of the inner relation. A statement whose
+  outer keys are all at that touch pays one walk an outer row: the second
+  run of a join over keys seen once before. DQ-S0 at `68e5a69f` measured it.
+  At the engine's defaults, 60,000 inner rows and 2,000 outer rows make
+  120,000,000 row touches, so `max_rows_touched` refuses the statement. The
+  same join with no Cabin answers in 10.7 to 14.6 ms, and every later run of
+  it is served from the sets. The window is an inner relation within
+  `join_build_max_rows` (65,536) and k x N above the budget: past the cap
+  the build declines too, and the uncabined join is refused as well. That is the "accelerator turning a
+  rows-returning statement into a budget refusal" `cabin.md` §4a says §1
+  forbids, on a top-level join. DQ's E1 leaves this case open by its own
+  rule (DQ-Q2 (a): a recording touch walks and records, so the Cabin
+  converges). DQ-Q2 (b) and (c) remain the operator's:
+  - (b) the recording touch probes the map, and joins stop converging their
+    Cabin;
+  - (c) a bounded number of recording walks a statement.
+  Owner: `docs/spec/cabin.md` §4a.
+
+- **A converged cabined join reads dearer after DQ, and the cause is not
+  isolated** (DQ-Q13). DQ's close at `7e31d272`
+  (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`) measured these,
+  each against the engine DQ opened from:
+  - The first all-served statement of a run whose first statement the miss
+    fallback answered (the third, after the recording statement) reads 10 %
+    to 35 % dearer in six readings (about 0.10 to 0.33 ms on about 1 ms,
+    1,000 hits).
+    - About two thirds follows the fallback's statement: it is gone with
+      `join_build_max_rows = 0`.
+    - The rest moves with code placement: keeping the fallback's helpers
+      out of line removed it and added 1 % to 2 % to whole-relation walks.
+  - After a 1.5 s idle gap every all-served statement reads 7 % to 10 %
+    dearer, so it is not a periodic task's window.
+  - Join statements read +0.2 to +0.5 us (0.5 % to 1.2 %) in M1, a
+    tuple-key join among them, whose inner probe takes no branch DQ
+    changed; its compile and `RunStep` are DQ's changed code.
+
+  It reads as memory or cache state - the map freed at the first
+  statement's end, or where the second statement's sets land - but it is
+  not isolated. What would isolate it: per-thread CPU by thread id, the
+  allocator's state after a freed map, and a stage bisect of the join
+  residue. That waits for the operator's word on a measurement budget.
+  Owner: `docs/spec/join-inner-build.md` §5a.
 
 ## Foreign keys
 

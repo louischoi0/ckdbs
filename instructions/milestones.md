@@ -68,8 +68,8 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| DQ | open | 2026-11-23 | 2026-11-22 | 2026-11-23 | - | e7f733f0 | - | a Cabin's miss answered from a map: the correlated probe's unobserved keys served by the build | v3.2.0/workorder-dq-cabin-miss-build.md |
 | CW | abandoned | 2026-11-22 | 2026-11-17 | 2026-11-22 | 2026-11-22 | da5d5c05 | - | the optimistic page read, measured before it is built | v3.2.0/workorder-cw-optimistic-page-read.md |
-| DQ | written | 2026-11-22 | 2026-11-22 | - | - | n/a | - | a Cabin's miss answered from a map: the correlated probe's unobserved keys served by the build | v3.2.0/workorder-dq-cabin-miss-build.md |
 | DM | abandoned | 2026-11-22 | 2026-11-20 | 2026-11-22 | 2026-11-22 | e3f6bb8b | - | a leaf that knows its own upper bound | v3.2.0/workorder-dm-leaf-upper-bound.md |
 | DP | closed | 2026-11-22 | 2026-11-22 | 2026-11-22 | 2026-11-22 | 8fef04fa | - | VIEW: a stored SELECT absorbed by text before any plan | v3.2.0/workorder-dp-view.md |
 | DO | closed | 2026-11-22 | 2026-11-21 | 2026-11-21 | 2026-11-22 | c22a1a95 | - | the frame table's long holds | v3.2.0/workorder-do-frame-table-long-holds.md |

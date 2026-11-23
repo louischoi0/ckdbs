@@ -306,5 +306,40 @@ TEST_F(InnerBuildContractTest, OneCappedStepDoesNotDeclineItsSibling) {
     EXPECT_EQ(stats.steps[2].rows_examined, 6u) << "one build walk plus bucket entries";
 }
 
+// DQ-R1: a Cabin on the join column puts the probe ahead of the build and
+// carries the build as its miss's fallback (join-inner-build.md §5a). Every
+// cap, with the Cabin's sets filling round by round - first sightings
+// answered by the map, then recordings, then serves - answers the bytes the
+// uncabined statement answers.
+TEST_F(InnerBuildContractTest, ACabinedJoinAnswersTheSameBytesAtEveryCapAndEveryRound) {
+    // The sub-chains first, so round 0 meets their prefix map - frozen
+    // under caps 1 and 2 - before the joins' recordings fill the sets.
+    const char* statements[] = {
+        "SELECT au.name FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE tr.au_id = au.id)",
+        "SELECT au.name FROM au WHERE NOT EXISTS "
+        "(SELECT tr.id FROM tr WHERE tr.au_id = au.id AND tr.qty > 20)",
+        "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id",
+        "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.qty <= 30",
+        "SELECT au.name, tr.qty, ln.amt FROM au JOIN tr ON tr.au_id = au.id "
+        "JOIN ln ON ln.tr_qty = tr.qty",
+    };
+    std::vector<std::vector<std::string>> reference;
+    for (const char* sql : statements) reference.push_back(Run(sql, nullptr, /*cap=*/0));
+
+    auto tr = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "tr");
+    ASSERT_TRUE(tr.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(tr.value(), /*col_pos=*/1).ok());
+    for (std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{5},
+                            kDefaultJoinBuildMaxRows}) {
+        stats::CabinStore cabins;
+        for (int round = 0; round < 4; ++round) {
+            for (std::size_t i = 0; i < std::size(statements); ++i) {
+                EXPECT_EQ(Run(statements[i], nullptr, cap, 0, true, &cabins), reference[i])
+                    << statements[i] << " at cap " << cap << ", round " << round;
+            }
+        }
+    }
+}
+
 }  // namespace
 }  // namespace kds::exec

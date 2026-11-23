@@ -1,0 +1,162 @@
+{
+ "binary": "/home/louis/dqbench/kds_server_A_68e5a69f",
+ "sha256_16": "45eb735a8626c211",
+ "args": {
+  "bin": "/home/louis/dqbench/kds_server_A_68e5a69f",
+  "workdir": "/home/louis/dqbench/work",
+  "out": "/home/louis/dqbench/s0-60k-defaults.json",
+  "sizes": "60000",
+  "dists": "unique",
+  "rounds": 1,
+  "stmts": 2,
+  "outer": 2000,
+  "port": 15991,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "hold_renew_s": 40.0,
+  "heartbeat": "/home/louis/dqbench/s0.heartbeat",
+  "engine_build_cap": true,
+  "max_rows_touched": null
+ },
+ "host_before": {
+  "loadavg": "0.21 1.84 2.47",
+  "cc1plus": "0"
+ },
+ "started_utc": "2026-11-23 00:49:55",
+ "cells": [
+  {
+   "arm": "A",
+   "n": 60000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "0.47 1.81 2.45",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4503404.0,
+     "wall_us": 4503331.2
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4886864.0,
+     "wall_us": 4885506.6
+    }
+   ],
+   "predicted": [
+    {
+     "first": 2000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 2000,
+     "served": 0
+    }
+   ],
+   "distinct_keys": 2000
+  },
+  {
+   "arm": "Agate",
+   "n": 60000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "0.51 1.80 2.44",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4486605.1,
+     "wall_us": 4487023.7
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4583600.8,
+     "wall_us": 4582318.4
+    }
+   ],
+   "predicted": [
+    {
+     "first": 2000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 2000,
+     "served": 0
+    }
+   ],
+   "distinct_keys": 2000
+  },
+  {
+   "arm": "B",
+   "n": 60000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "0.63 1.80 2.44",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 14580.3,
+     "wall_us": 14732.6
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 10714.8,
+     "wall_us": 10823.1
+    }
+   ],
+   "predicted": [
+    {
+     "first": 2000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 2000,
+     "served": 0
+    }
+   ],
+   "distinct_keys": 2000
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "0.63 1.80 2.44",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 20.6
+}

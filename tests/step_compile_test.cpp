@@ -1098,16 +1098,58 @@ TEST_F(StepCompileTest, AFilterScanStillWinsOverTheBuild) {
 
 TEST_F(StepCompileTest, ABankedStructureStillWinsOverTheBuild) {
     // Ladder order is the economics (spec §5): a converged Cabin serve
-    // beats any per-statement rebuild, so the banked arm stays ahead.
+    // beats any per-statement rebuild, so the banked arm stays ahead - and
+    // the build it outranks is carried as its miss's fallback (DQ, spec
+    // §5a), the annotation the step had before the Cabin, field for field.
+    const char* sql = "SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id";
+    const StepChain uncabined = MustCompile(sql);
+    ASSERT_EQ(uncabined.steps.size(), 2u);
+    ASSERT_EQ(uncabined.steps[1].kind, AccessKind::kScan);
+    ASSERT_TRUE(uncabined.steps[1].build.has_value());
+
     auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
     ASSERT_TRUE(trade_oid.ok());
     ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
 
-    const StepChain chain =
-        MustCompile("SELECT trade.sym FROM acct JOIN trade ON trade.acct_id = acct.id");
+    const StepChain chain = MustCompile(sql);
     ASSERT_EQ(chain.steps.size(), 2u);
-    EXPECT_EQ(chain.steps[1].kind, AccessKind::kCabinProbe);
-    EXPECT_FALSE(chain.steps[1].build.has_value());
+    const Step& inner = chain.steps[1];
+    EXPECT_EQ(inner.kind, AccessKind::kCabinProbe);
+    ASSERT_TRUE(inner.cabin.has_value());
+    ASSERT_TRUE(inner.cabin->key_from.has_value());
+    ASSERT_TRUE(inner.build.has_value());
+    EXPECT_EQ(inner.build->col_pos, uncabined.steps[1].build->col_pos);
+    EXPECT_EQ(inner.build->key_from, uncabined.steps[1].build->key_from);
+    EXPECT_EQ(inner.build->residual_pos, uncabined.steps[1].build->residual_pos);
+    // Keyed on the conjunct the probe is keyed on.
+    EXPECT_EQ(inner.build->col_pos, inner.cabin->col_pos);
+    EXPECT_EQ(inner.build->key_from, *inner.cabin->key_from);
+}
+
+TEST_F(StepCompileTest, TheMissFallbackDeclinesWhereTheBuildDeclines) {
+    // DQ-R4: the fallback has the build's one rule. Each shape here is a
+    // correlated Cabin probe whose uncabined twin carries no build.
+    auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
+    ASSERT_TRUE(trade_oid.ok());
+    ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+
+    for (const char* sql : {
+             // The filter scan's rank (spec §8, DQ-Q12): the step's own
+             // literal equality declines the build, and so the fallback.
+             "SELECT COUNT(*) FROM acct JOIN trade ON trade.acct_id = acct.id "
+             "WHERE trade.sym = 'AAPL'",
+             // A second conjunct reading the outer row: a multi-column key.
+             "SELECT COUNT(*) FROM acct JOIN trade ON trade.acct_id = acct.id "
+             "WHERE trade.sym = acct.name",
+             // A boolean conjunct is not split into bucketing and emission.
+             "SELECT COUNT(*) FROM acct JOIN trade ON trade.acct_id = acct.id "
+             "WHERE (trade.sym = 'a' OR trade.id > 3)",
+         }) {
+        const StepChain chain = MustCompile(sql);
+        ASSERT_EQ(chain.steps.size(), 2u) << sql;
+        EXPECT_EQ(chain.steps[1].kind, AccessKind::kCabinProbe) << sql;
+        EXPECT_FALSE(chain.steps[1].build.has_value()) << sql;
+    }
 }
 
 TEST_F(StepCompileTest, ADmlSubChainDeclinesAndIsOtherwiseByteIdentical) {
@@ -1117,43 +1159,54 @@ TEST_F(StepCompileTest, ADmlSubChainDeclinesAndIsOtherwiseByteIdentical) {
     // annotated under SELECT and bare under CompileWhere - which is also
     // the with/without-the-arm comparison JB1's done-condition asks for:
     // every field the identity contract names is byte-identical, and the
-    // annotation is the single delta.
+    // annotation is the single delta. Twice: over the walked inner, and
+    // over a cabined one, whose correlated probe carries the build as its
+    // miss's fallback under SELECT alone (DQ, spec §5a).
     const char* subquery = "EXISTS (SELECT trade.id FROM trade WHERE trade.acct_id = acct.id)";
+    for (const bool cabined : {false, true}) {
+        if (cabined) {
+            auto trade_oid =
+                boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "trade", nullptr);
+            ASSERT_TRUE(trade_oid.ok());
+            ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+        }
 
-    const StepChain with = MustCompile(std::string("SELECT * FROM acct WHERE ") + subquery);
-    ASSERT_EQ(with.steps.size(), 1u);
-    ASSERT_EQ(with.steps[0].sub_chains.size(), 1u);
-    ASSERT_EQ(with.steps[0].sub_chains[0].steps.size(), 1u);
-    const Step& annotated = with.steps[0].sub_chains[0].steps[0];
-    ASSERT_TRUE(annotated.build.has_value());
+        const StepChain with = MustCompile(std::string("SELECT * FROM acct WHERE ") + subquery);
+        ASSERT_EQ(with.steps.size(), 1u);
+        ASSERT_EQ(with.steps[0].sub_chains.size(), 1u);
+        ASSERT_EQ(with.steps[0].sub_chains[0].steps.size(), 1u);
+        const Step& annotated = with.steps[0].sub_chains[0].steps[0];
+        ASSERT_TRUE(annotated.build.has_value());
 
-    auto parsed =
-        parser::Parse(std::string("UPDATE acct SET name = 'x' WHERE ") + subquery);
-    ASSERT_TRUE(parsed.ok()) << parsed.status().message();
-    const auto& update = std::get<parser::UpdateStmt>(parsed.value());
-    auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "acct", nullptr);
-    ASSERT_TRUE(oid.ok());
-    auto access = boot_->catalog.InitTableAccess(oid.value());
-    ASSERT_TRUE(access.ok());
-    auto where_step = CompileWhere(boot_->catalog, *access.value(), "acct", update.where);
-    ASSERT_TRUE(where_step.ok()) << where_step.status().message();
-    ASSERT_EQ(where_step.value().sub_chains.size(), 1u);
-    ASSERT_EQ(where_step.value().sub_chains[0].steps.size(), 1u);
-    const Step& bare = where_step.value().sub_chains[0].steps[0];
-    EXPECT_FALSE(bare.build.has_value());
+        auto parsed =
+            parser::Parse(std::string("UPDATE acct SET name = 'x' WHERE ") + subquery);
+        ASSERT_TRUE(parsed.ok()) << parsed.status().message();
+        const auto& update = std::get<parser::UpdateStmt>(parsed.value());
+        auto oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic, "acct", nullptr);
+        ASSERT_TRUE(oid.ok());
+        auto access = boot_->catalog.InitTableAccess(oid.value());
+        ASSERT_TRUE(access.ok());
+        auto where_step = CompileWhere(boot_->catalog, *access.value(), "acct", update.where);
+        ASSERT_TRUE(where_step.ok()) << where_step.status().message();
+        ASSERT_EQ(where_step.value().sub_chains.size(), 1u);
+        ASSERT_EQ(where_step.value().sub_chains[0].steps.size(), 1u);
+        const Step& bare = where_step.value().sub_chains[0].steps[0];
+        EXPECT_FALSE(bare.build.has_value());
 
-    EXPECT_EQ(annotated.step_id, bare.step_id);
-    EXPECT_EQ(annotated.rel_oid, bare.rel_oid);
-    EXPECT_EQ(annotated.rel_name, bare.rel_name);
-    EXPECT_EQ(annotated.kind, bare.kind);
-    EXPECT_EQ(annotated.filter_columns, bare.filter_columns);
-    EXPECT_EQ(annotated.read_columns, bare.read_columns);
-    EXPECT_EQ(annotated.access_columns, bare.access_columns);
-    ASSERT_EQ(annotated.residual.size(), bare.residual.size());
-    for (std::size_t p = 0; p < annotated.residual.size(); ++p) {
-        EXPECT_EQ(annotated.residual[p].lhs, bare.residual[p].lhs);
-        EXPECT_EQ(annotated.residual[p].op, bare.residual[p].op);
-        EXPECT_EQ(annotated.residual[p].rhs.kind, bare.residual[p].rhs.kind);
+        EXPECT_EQ(annotated.step_id, bare.step_id);
+        EXPECT_EQ(annotated.rel_oid, bare.rel_oid);
+        EXPECT_EQ(annotated.rel_name, bare.rel_name);
+        EXPECT_EQ(annotated.kind, bare.kind);
+        EXPECT_EQ(annotated.filter_columns, bare.filter_columns);
+        EXPECT_EQ(annotated.read_columns, bare.read_columns);
+        EXPECT_EQ(annotated.access_columns, bare.access_columns);
+        ASSERT_EQ(annotated.residual.size(), bare.residual.size());
+        for (std::size_t p = 0; p < annotated.residual.size(); ++p) {
+            EXPECT_EQ(annotated.residual[p].lhs, bare.residual[p].lhs);
+            EXPECT_EQ(annotated.residual[p].op, bare.residual[p].op);
+            EXPECT_EQ(annotated.residual[p].rhs.kind, bare.residual[p].rhs.kind);
+        }
+        EXPECT_EQ(annotated.kind, cabined ? AccessKind::kCabinProbe : AccessKind::kScan);
     }
 }
 
@@ -1161,17 +1214,25 @@ TEST_F(StepCompileTest, AScalarSubChainIsNeverAnnotated) {
     // Spec §6: a hit in a prefix map is conclusive only under `Exists`
     // semantics; a scalar sub-chain's cardinality check has none, so its
     // steps never take the annotation - and neither does anything nested
-    // under one.
-    const StepChain chain = MustCompile(
-        "SELECT * FROM acct WHERE name = "
-        "(SELECT trade.sym FROM trade WHERE trade.acct_id = acct.id)");
-    ASSERT_EQ(chain.steps.size(), 1u);
-    ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
-    EXPECT_EQ(chain.steps[0].sub_chains[0].kind, parser::PredicateKind::kCompareSubquery);
-    const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
-    ASSERT_EQ(inner.size(), 1u);
-    EXPECT_EQ(inner[0].kind, AccessKind::kScan);
-    EXPECT_FALSE(inner[0].build.has_value());
+    // under one, a cabined probe's fallback included (DQ, spec §5a).
+    for (const bool cabined : {false, true}) {
+        if (cabined) {
+            auto trade_oid = boot_->catalog.FindTableOidByName(::kds::catalog::kNamespacePublic,
+                                                               "trade", nullptr);
+            ASSERT_TRUE(trade_oid.ok());
+            ASSERT_TRUE(boot_->catalog.CreateCabin(trade_oid.value(), /*col_pos=*/1).ok());
+        }
+        const StepChain chain = MustCompile(
+            "SELECT * FROM acct WHERE name = "
+            "(SELECT trade.sym FROM trade WHERE trade.acct_id = acct.id)");
+        ASSERT_EQ(chain.steps.size(), 1u);
+        ASSERT_EQ(chain.steps[0].sub_chains.size(), 1u);
+        EXPECT_EQ(chain.steps[0].sub_chains[0].kind, parser::PredicateKind::kCompareSubquery);
+        const std::vector<Step>& inner = chain.steps[0].sub_chains[0].steps;
+        ASSERT_EQ(inner.size(), 1u);
+        EXPECT_EQ(inner[0].kind, cabined ? AccessKind::kCabinProbe : AccessKind::kScan);
+        EXPECT_FALSE(inner[0].build.has_value());
+    }
 }
 
 TEST_F(StepCompileTest, ARelationWiderThanSixtyFourColumnsGetsNoMask) {

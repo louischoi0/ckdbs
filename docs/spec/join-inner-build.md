@@ -31,6 +31,8 @@ letting the **first outer row's inner walk double as the build**. Every
 later outer row probes the map instead of walking. The map is discarded
 when the statement ends. Nothing is declared, persisted, recorded,
 replayed, or shared.
+A join on a **cabined** column takes the same map for the keys its Cabin
+has not observed (§5a).
 
 **A location hint is verified on a btree** (BD-R3 E3,
 `instructions/v3.0.0/workorder-bd-sorted-leaf-named-keys.md`). The
@@ -112,7 +114,8 @@ is the honest rendering of "it got N rows in and threw them away".
 
 The build is the **last arm of the structure ladder**, tried only when
 the tuple key arms, both index arms, and both Cabin arms declined — i.e. for
-exactly the walked-join shape. No statistics, no cardinality estimate
+exactly the walked-join shape. The correlated Cabin probe ranked above it carries the
+same annotation as its miss's fallback (§5a). No statistics, no cardinality estimate
 choose the annotation: the lazy form is what removes the need for one.
 Since CC-S3 the order that puts a relation on the inner side - and so
 decides whether a build pays - is priced from the join planner's estimates
@@ -136,6 +139,75 @@ measuring one.
 Ladder order is also the economics: a converged Cabin serve beats any
 per-statement rebuild, so banked structures stay ahead of the build, and
 the build stays ahead of the walk.
+
+## 5a. A correlated Cabin probe's miss falls to the build (DQ)
+
+A join on a cabined inner column compiles to the correlated Cabin probe
+(`cabin.md` §4a), ahead of the build, and **carries the build's annotation
+as its miss's fallback**. The annotation is the one this section's rule
+gives the step as a walk. It has the same `BuildKeyOf` key, which is the
+conjunct the probe is keyed on, and the same declines: a function or
+boolean conjunct, a second conjunct reading another relation, §8's filter
+scan, a DML `WHERE` sub-chain, a scalar sub-chain. The one difference is
+the walk class. An administrator's plan pinning `ACCESS <relation> CABIN`
+keeps the fallback, and `BUILD <relation> OFF` alone takes it (DQ-Q5,
+DQ-Q9). `BUILD ... ON` beside a Cabin pin is still refused, because `ON`
+is the walk's. The step stays `kCabinProbe`: the annotation marks no
+kind, and nothing keyed on a kind changes.
+
+At execution the probe's three answers are:
+
+- **A hit** is served from the set, as before.
+- **A miss that records nothing** goes to the build's arm instead of walking
+  the inner relation whole. This covers a key's first sighting, a value the
+  value cap refuses, a NULL outer key, a recording the banking gate
+  declines (`cabin.md` §6a), and a store that is switched off. The
+  statement's first such miss walks and buckets, and every later one
+  probes the map. Past `join_build_max_rows` the step walks per miss for
+  the rest of the statement, as §7 says.
+- **A miss due to record** is the recording walk, unchanged
+  (`WalkAndRecord`). It is a whole walk with one key announced, and it
+  neither reads nor fills the map.
+
+**In a sub-chain** (a correlated `EXISTS`, `NOT EXISTS`, `IN`'s per-row
+form) the fallback is §6's prefix form. A miss replays the bucket the
+walks so far filled. A replayed row that qualifies is conclusive, and an
+absence is conclusive only once the map covers the relation. Otherwise the
+miss resumes the walk at the mark and extends the map. So within
+`join_build_max_rows` every inner row is visited at most once by the
+statement's fallback walks. Past it the map freezes, keeps serving its
+prefix, and each later miss walks from the frozen mark (§6). The recording walk's completion license
+(`cabin.md` §4a) runs through the stop in a walk of its own, which neither
+reads nor moves the map or its mark (DQ-S0 (ii), DQ-S3).
+
+So the Cabin observes exactly what it observed before: the same sightings,
+recordings, commits and declines, and the same counters. Nothing is banked
+from the map. A set's only source is still the announced walk (`cabin.md`
+§6), because the map is a statement's unannounced read and holds only the
+rows passing the step's other conjuncts (DQ-R2).
+
+**What it buys** (DQ-S0, `bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`):
+
+- Where the gate declines every recording, the probe used to walk once per
+  outer row in every statement. That was 116x to 249x the uncabined join,
+  and at the engine's defaults a refusal for the row-touch budget where the
+  uncabined join answers. It now walks once a statement.
+- **The cap bounds it.** The fallback is the build, so past
+  `join_build_max_rows` its map declines and every miss walks, as the
+  uncabined join's would.
+- What it leaves: a statement whose misses are all recording touches still
+  walks once per outer row (`known-gaps.md`, Cabin).
+
+A converged join is untouched: every key is a hit and the fallback is
+never reached. `ANALYZE` reports the existing fields together:
+`cabin_hits`, `cabin_misses`, `inner_built`, `build_rows`, `build_probes`.
+The plan statistics fold a Cabin step's decline only where its fallback
+bucketed rows and published no map (DQ-Q10).
+
+The cost model prices the step as the Cabin probe it is (DQ-Q6), so no
+order and no capture moves with it. The Cabin controller's signal does
+move, as any cheaper walk moves it: a step's `pages` falls where the map
+replaced walks.
 
 ## 6. The stopping sub-chain: a prefix map, positive-first
 
@@ -232,7 +304,11 @@ invalidate a map its first outer row built (§4's no-write argument is a
 SELECT argument); **scalar sub-chains** (§6's conclusiveness needs
 `Exists` semantics); and any reuse of a map across statements — that last
 one is what the Cabin *is*, and building a second, unauthoritative cache
-of the same shape would be two structures answering one question.
+of the same shape would be two structures answering one question. The
+map a Cabin probe's miss falls to (§5a) is that same statement-local map,
+and nothing of it is banked into the Cabin: a set is announced before the
+walk that fills it (`cabin.md` §6), and the map holds only the rows passing
+the step's other conjuncts.
 
 ## 9. Validation
 

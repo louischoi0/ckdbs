@@ -11172,7 +11172,13 @@ void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
         mask = static_cast<std::uint16_t>(mask | (1u << written));
         observation.rows[mask] = counts.rows_matched;
         observation.present = static_cast<std::uint16_t>(observation.present | (1u << mask));
-        if (step.build.has_value() && counts.relation_opens > 0 && counts.inner_builds == 0 &&
+        // A Cabin step's annotation is its miss's fallback (DQ-Q10): an
+        // opening its set served built nothing and declined nothing, so its
+        // decline is a map that bucketed rows and was not published.
+        const bool build_tried = step.kind == exec::AccessKind::kCabinProbe
+                                     ? counts.build_rows > 0
+                                     : counts.relation_opens > 0;
+        if (step.build.has_value() && build_tried && counts.inner_builds == 0 &&
             budget_.join_build_max_rows() > 0) {
             observation.declines = static_cast<std::uint8_t>(observation.declines | (1u << written));
         }
