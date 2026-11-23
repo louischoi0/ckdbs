@@ -636,6 +636,31 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   - (c) a bounded number of recording walks a statement.
   Owner: `docs/spec/cabin.md` §4a.
 
+- **A converged cabined join reads dearer after DQ, and the cause is not
+  isolated** (DQ-Q13). DQ's close at `7e31d272`
+  (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`) measured these,
+  each against the engine DQ opened from:
+  - The first all-served statement of a run whose first statement the miss
+    fallback answered (the third, after the recording statement) reads 10 %
+    to 35 % dearer in six readings (about 0.10 to 0.33 ms on about 1 ms,
+    1,000 hits).
+    - About two thirds follows the fallback's statement: it is gone with
+      `join_build_max_rows = 0`.
+    - The rest moves with code placement: keeping the fallback's helpers
+      out of line removed it and added 1 % to 2 % to whole-relation walks.
+  - After a 1.5 s idle gap every all-served statement reads 7 % to 10 %
+    dearer, so it is not a periodic task's window.
+  - Join statements read +0.2 to +0.5 us (0.5 % to 1.2 %) in M1, a
+    tuple-key join among them, whose inner probe takes no branch DQ
+    changed; its compile and `RunStep` are DQ's changed code.
+
+  It reads as memory or cache state - the map freed at the first
+  statement's end, or where the second statement's sets land - but it is
+  not isolated. What would isolate it: per-thread CPU by thread id, the
+  allocator's state after a freed map, and a stage bisect of the join
+  residue. That waits for the operator's word on a measurement budget.
+  Owner: `docs/spec/join-inner-build.md` §5a.
+
 ## Foreign keys
 
 - **A statement that fails for any reason but a foreign-key violation keeps

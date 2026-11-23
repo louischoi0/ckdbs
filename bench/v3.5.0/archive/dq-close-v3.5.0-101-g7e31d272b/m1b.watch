@@ -1,0 +1,5 @@
+02:01:52 driver=alive heartbeat_age=1s
+02:02:52 driver=alive heartbeat_age=2s
+02:03:52 driver=alive heartbeat_age=3s
+02:04:52 driver=alive heartbeat_age=2s
+02:05:52 driver=gone heartbeat_age=8s

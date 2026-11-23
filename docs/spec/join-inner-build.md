@@ -304,7 +304,11 @@ invalidate a map its first outer row built (§4's no-write argument is a
 SELECT argument); **scalar sub-chains** (§6's conclusiveness needs
 `Exists` semantics); and any reuse of a map across statements — that last
 one is what the Cabin *is*, and building a second, unauthoritative cache
-of the same shape would be two structures answering one question.
+of the same shape would be two structures answering one question. The
+map a Cabin probe's miss falls to (§5a) is that same statement-local map,
+and nothing of it is banked into the Cabin: a set is announced before the
+walk that fills it (`cabin.md` §6), and the map holds only the rows passing
+the step's other conjuncts.
 
 ## 9. Validation
 

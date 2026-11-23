@@ -1,0 +1,3167 @@
+{
+ "binary": "/home/louis/dqbench/kds_server_A_68e5a69f",
+ "sha256_16": "45eb735a8626c211",
+ "args": {
+  "bin": "/home/louis/dqbench/kds_server_A_68e5a69f",
+  "workdir": "/home/louis/dqbench/close/w2",
+  "out": "/home/louis/dqbench/close/m2-A-exists10k.json",
+  "sizes": "10000",
+  "dists": "unique,repeat,skewed",
+  "rounds": 3,
+  "stmts": 5,
+  "outer": 1000,
+  "port": 15997,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "hold_renew_s": 40.0,
+  "heartbeat": "/home/louis/dqbench/close/m2.heartbeat",
+  "shape": "exists",
+  "engine_build_cap": false,
+  "max_rows_touched": null
+ },
+ "host_before": {
+  "loadavg": "1.31 1.66 2.01",
+  "cc1plus": "0"
+ },
+ "started_utc": "2026-11-23 02:00:43",
+ "cells": [
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "1.28 1.65 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4996962 matched=1000 sel=0% pages=30593 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4996962,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 499.7,
+     "cpu_us": 227882.6,
+     "wall_us": 227818.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=10000000 matched=1000 sel=0% pages=61000 sub_runs=1000 corr_scans=1000 cabin_misses=1000 cabin_recorded=1000",
+     "opens": 1000,
+     "examined": 10000000,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 1000,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 1000.0,
+     "cpu_us": 463008.4,
+     "wall_us": 463255.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1464.3,
+     "wall_us": 1591.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1199.9,
+     "wall_us": 1303.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1125.7,
+     "wall_us": 1216.2
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "1.28 1.65 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4996962 matched=1000 sel=0% pages=30593 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4996962,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 499.7,
+     "cpu_us": 228230.1,
+     "wall_us": 228159.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4996962 matched=1000 sel=0% pages=30593 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4996962,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 499.7,
+     "cpu_us": 231652.0,
+     "wall_us": 231852.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4996962 matched=1000 sel=0% pages=30593 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4996962,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 499.7,
+     "cpu_us": 225985.4,
+     "wall_us": 226178.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4996962 matched=1000 sel=0% pages=30593 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4996962,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 499.7,
+     "cpu_us": 230548.4,
+     "wall_us": 230708.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4996962 matched=1000 sel=0% pages=30593 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4996962,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 499.7,
+     "cpu_us": 232066.2,
+     "wall_us": 232326.2
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "1.28 1.65 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10988 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9994 build_probes=999",
+     "opens": 1000,
+     "examined": 10988,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9994,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4412.6,
+     "wall_us": 4540.8
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10988 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9994 build_probes=999",
+     "opens": 1000,
+     "examined": 10988,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9994,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3880.0,
+     "wall_us": 3881.7
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10988 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9994 build_probes=999",
+     "opens": 1000,
+     "examined": 10988,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9994,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3919.4,
+     "wall_us": 4060.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10988 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9994 build_probes=999",
+     "opens": 1000,
+     "examined": 10988,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9994,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3732.2,
+     "wall_us": 3893.2
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10988 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9994 build_probes=999",
+     "opens": 1000,
+     "examined": 10988,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9994,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3681.9,
+     "wall_us": 3838.3
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "unique",
+   "round": 1,
+   "host": {
+    "loadavg": "1.28 1.65 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4947093 matched=1000 sel=0% pages=30292 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4947093,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 494.71,
+     "cpu_us": 221771.0,
+     "wall_us": 221903.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=10000000 matched=1000 sel=0% pages=61000 sub_runs=1000 corr_scans=1000 cabin_misses=1000 cabin_recorded=1000",
+     "opens": 1000,
+     "examined": 10000000,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 1000,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 1000.0,
+     "cpu_us": 450815.8,
+     "wall_us": 450991.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1320.2,
+     "wall_us": 1469.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1434.5,
+     "wall_us": 1581.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1122.9,
+     "wall_us": 1293.9
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "unique",
+   "round": 1,
+   "host": {
+    "loadavg": "1.28 1.65 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10983 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10983,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4390.6,
+     "wall_us": 4229.6
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10983 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10983,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3879.7,
+     "wall_us": 4027.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10983 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10983,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3757.9,
+     "wall_us": 3863.6
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10983 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10983,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3794.3,
+     "wall_us": 3926.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10983 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10983,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3658.9,
+     "wall_us": 3800.6
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "unique",
+   "round": 1,
+   "host": {
+    "loadavg": "1.26 1.64 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4947093 matched=1000 sel=0% pages=30292 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4947093,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 494.71,
+     "cpu_us": 225445.1,
+     "wall_us": 225438.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4947093 matched=1000 sel=0% pages=30292 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4947093,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 494.71,
+     "cpu_us": 222549.3,
+     "wall_us": 222803.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4947093 matched=1000 sel=0% pages=30292 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4947093,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 494.71,
+     "cpu_us": 219995.1,
+     "wall_us": 220175.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4947093 matched=1000 sel=0% pages=30292 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4947093,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 494.71,
+     "cpu_us": 220137.6,
+     "wall_us": 220311.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4947093 matched=1000 sel=0% pages=30292 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4947093,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 494.71,
+     "cpu_us": 219366.2,
+     "wall_us": 219515.8
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "unique",
+   "round": 2,
+   "host": {
+    "loadavg": "1.26 1.64 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10989 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=11 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10989,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4910.8,
+     "wall_us": 4997.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10989 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=11 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10989,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3848.2,
+     "wall_us": 3838.0
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10989 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=11 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10989,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3931.9,
+     "wall_us": 4084.3
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10989 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=11 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10989,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3800.5,
+     "wall_us": 3951.4
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10989 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=11 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10989,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3869.5,
+     "wall_us": 3992.8
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "unique",
+   "round": 2,
+   "host": {
+    "loadavg": "1.26 1.64 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5061920 matched=1000 sel=0% pages=30988 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5061920,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 506.19,
+     "cpu_us": 227672.5,
+     "wall_us": 227705.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=10000000 matched=1000 sel=0% pages=61000 sub_runs=1000 corr_scans=1000 cabin_misses=1000 cabin_recorded=1000",
+     "opens": 1000,
+     "examined": 10000000,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 1000,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 1000.0,
+     "cpu_us": 446999.3,
+     "wall_us": 447252.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1364.9,
+     "wall_us": 1494.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1070.6,
+     "wall_us": 1195.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1016.2,
+     "wall_us": 1175.7
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "unique",
+   "round": 2,
+   "host": {
+    "loadavg": "1.26 1.64 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5061920 matched=1000 sel=0% pages=30988 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5061920,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 506.19,
+     "cpu_us": 229765.5,
+     "wall_us": 229791.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5061920 matched=1000 sel=0% pages=30988 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5061920,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 506.19,
+     "cpu_us": 229417.6,
+     "wall_us": 229659.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5061920 matched=1000 sel=0% pages=30988 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5061920,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 506.19,
+     "cpu_us": 231140.7,
+     "wall_us": 231324.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5061920 matched=1000 sel=0% pages=30988 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5061920,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 506.19,
+     "cpu_us": 229986.3,
+     "wall_us": 230146.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5061920 matched=1000 sel=0% pages=30988 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5061920,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 506.19,
+     "cpu_us": 228933.0,
+     "wall_us": 229137.6
+    }
+   ],
+   "predicted": [
+    {
+     "first": 1000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 1000,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 1000
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 0,
+   "host": {
+    "loadavg": "1.24 1.63 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1531082 matched=1000 sel=0% pages=10943 sub_runs=1000 corr_scans=200 cabin_hits=800 cabin_misses=200 cabin_entries=800 hint_hits=800 cabin_recorded=100",
+     "opens": 1000,
+     "examined": 1531082,
+     "matched": 1000,
+     "cabin_hits": 800,
+     "cabin_misses": 200,
+     "cabin_recorded": 100,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 153.11,
+     "cpu_us": 70361.4,
+     "wall_us": 70065.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1291.0,
+     "wall_us": 1430.7
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1050.6,
+     "wall_us": 1150.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1107.7,
+     "wall_us": 1255.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1017.6,
+     "wall_us": 1141.8
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 0,
+   "host": {
+    "loadavg": "1.24 1.63 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5302820 matched=1000 sel=0% pages=32430 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5302820,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 530.28,
+     "cpu_us": 239736.3,
+     "wall_us": 239760.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5302820 matched=1000 sel=0% pages=32430 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5302820,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 530.28,
+     "cpu_us": 238838.3,
+     "wall_us": 239021.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5302820 matched=1000 sel=0% pages=32430 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5302820,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 530.28,
+     "cpu_us": 239449.9,
+     "wall_us": 239625.2
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5302820 matched=1000 sel=0% pages=32430 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5302820,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 530.28,
+     "cpu_us": 238322.7,
+     "wall_us": 238527.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5302820 matched=1000 sel=0% pages=32430 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5302820,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 530.28,
+     "cpu_us": 237215.2,
+     "wall_us": 237399.3
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 0,
+   "host": {
+    "loadavg": "1.24 1.63 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10952 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9958 build_probes=999",
+     "opens": 1000,
+     "examined": 10952,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9958,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4334.8,
+     "wall_us": 4454.0
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10952 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9958 build_probes=999",
+     "opens": 1000,
+     "examined": 10952,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9958,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3839.7,
+     "wall_us": 3840.9
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10952 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9958 build_probes=999",
+     "opens": 1000,
+     "examined": 10952,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9958,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4763.1,
+     "wall_us": 4847.6
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10952 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9958 build_probes=999",
+     "opens": 1000,
+     "examined": 10952,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9958,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3819.1,
+     "wall_us": 3925.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10952 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9958 build_probes=999",
+     "opens": 1000,
+     "examined": 10952,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9958,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3866.4,
+     "wall_us": 3994.6
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 1,
+   "host": {
+    "loadavg": "1.24 1.63 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1489058 matched=1000 sel=0% pages=10693 sub_runs=1000 corr_scans=200 cabin_hits=800 cabin_misses=200 cabin_entries=800 hint_hits=800 cabin_recorded=100",
+     "opens": 1000,
+     "examined": 1489058,
+     "matched": 1000,
+     "cabin_hits": 800,
+     "cabin_misses": 200,
+     "cabin_recorded": 100,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 148.91,
+     "cpu_us": 67946.1,
+     "wall_us": 68002.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1172.0,
+     "wall_us": 1263.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1016.6,
+     "wall_us": 1167.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1001.5,
+     "wall_us": 1109.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1010.6,
+     "wall_us": 1094.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 1,
+   "host": {
+    "loadavg": "1.24 1.63 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10642 matched=1000 sel=9% pages=1058 sub_runs=1000 corr_scans=9 inner_built=0 build_rows=9651 build_probes=999",
+     "opens": 1000,
+     "examined": 10642,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9651,
+     "build_probes": 999,
+     "walks": 1.06,
+     "cpu_us": 4019.4,
+     "wall_us": 4108.2
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10642 matched=1000 sel=9% pages=1058 sub_runs=1000 corr_scans=9 inner_built=0 build_rows=9651 build_probes=999",
+     "opens": 1000,
+     "examined": 10642,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9651,
+     "build_probes": 999,
+     "walks": 1.06,
+     "cpu_us": 3682.6,
+     "wall_us": 3617.2
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10642 matched=1000 sel=9% pages=1058 sub_runs=1000 corr_scans=9 inner_built=0 build_rows=9651 build_probes=999",
+     "opens": 1000,
+     "examined": 10642,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9651,
+     "build_probes": 999,
+     "walks": 1.06,
+     "cpu_us": 3763.0,
+     "wall_us": 3840.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10642 matched=1000 sel=9% pages=1058 sub_runs=1000 corr_scans=9 inner_built=0 build_rows=9651 build_probes=999",
+     "opens": 1000,
+     "examined": 10642,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9651,
+     "build_probes": 999,
+     "walks": 1.06,
+     "cpu_us": 4623.6,
+     "wall_us": 4747.3
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10642 matched=1000 sel=9% pages=1058 sub_runs=1000 corr_scans=9 inner_built=0 build_rows=9651 build_probes=999",
+     "opens": 1000,
+     "examined": 10642,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9651,
+     "build_probes": 999,
+     "walks": 1.06,
+     "cpu_us": 3710.9,
+     "wall_us": 3851.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 1,
+   "host": {
+    "loadavg": "1.22 1.62 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4882580 matched=1000 sel=0% pages=29930 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4882580,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 488.26,
+     "cpu_us": 380688.2,
+     "wall_us": 380774.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4882580 matched=1000 sel=0% pages=29930 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4882580,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 488.26,
+     "cpu_us": 238431.8,
+     "wall_us": 238602.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4882580 matched=1000 sel=0% pages=29930 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4882580,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 488.26,
+     "cpu_us": 220639.5,
+     "wall_us": 220834.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4882580 matched=1000 sel=0% pages=29930 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4882580,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 488.26,
+     "cpu_us": 218455.2,
+     "wall_us": 218620.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4882580 matched=1000 sel=0% pages=29930 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4882580,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 488.26,
+     "cpu_us": 217651.0,
+     "wall_us": 217845.1
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 2,
+   "host": {
+    "loadavg": "1.22 1.62 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10886 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=3 inner_built=0 build_rows=9889 build_probes=999",
+     "opens": 1000,
+     "examined": 10886,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9889,
+     "build_probes": 999,
+     "walks": 1.09,
+     "cpu_us": 4737.0,
+     "wall_us": 4895.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10886 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=3 inner_built=0 build_rows=9889 build_probes=999",
+     "opens": 1000,
+     "examined": 10886,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9889,
+     "build_probes": 999,
+     "walks": 1.09,
+     "cpu_us": 3769.4,
+     "wall_us": 3805.8
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10886 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=3 inner_built=0 build_rows=9889 build_probes=999",
+     "opens": 1000,
+     "examined": 10886,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9889,
+     "build_probes": 999,
+     "walks": 1.09,
+     "cpu_us": 3838.0,
+     "wall_us": 4007.2
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10886 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=3 inner_built=0 build_rows=9889 build_probes=999",
+     "opens": 1000,
+     "examined": 10886,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9889,
+     "build_probes": 999,
+     "walks": 1.09,
+     "cpu_us": 3789.2,
+     "wall_us": 3943.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10886 matched=1000 sel=9% pages=1059 sub_runs=1000 corr_scans=3 inner_built=0 build_rows=9889 build_probes=999",
+     "opens": 1000,
+     "examined": 10886,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9889,
+     "build_probes": 999,
+     "walks": 1.09,
+     "cpu_us": 3709.9,
+     "wall_us": 3844.3
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 2,
+   "host": {
+    "loadavg": "1.22 1.62 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1540159 matched=1000 sel=0% pages=10998 sub_runs=1000 corr_scans=200 cabin_hits=800 cabin_misses=200 cabin_entries=800 hint_hits=800 cabin_recorded=100",
+     "opens": 1000,
+     "examined": 1540159,
+     "matched": 1000,
+     "cabin_hits": 800,
+     "cabin_misses": 200,
+     "cabin_recorded": 100,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 154.02,
+     "cpu_us": 71193.9,
+     "wall_us": 71190.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1199.1,
+     "wall_us": 1334.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1056.8,
+     "wall_us": 1175.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1083.2,
+     "wall_us": 1203.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1109.0,
+     "wall_us": 1215.3
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "repeat",
+   "round": 2,
+   "host": {
+    "loadavg": "1.22 1.62 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5393590 matched=1000 sel=0% pages=32980 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5393590,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 539.36,
+     "cpu_us": 240950.9,
+     "wall_us": 240971.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5393590 matched=1000 sel=0% pages=32980 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5393590,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 539.36,
+     "cpu_us": 240232.4,
+     "wall_us": 240415.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5393590 matched=1000 sel=0% pages=32980 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5393590,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 539.36,
+     "cpu_us": 241419.5,
+     "wall_us": 241597.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5393590 matched=1000 sel=0% pages=32980 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5393590,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 539.36,
+     "cpu_us": 242177.2,
+     "wall_us": 242360.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5393590 matched=1000 sel=0% pages=32980 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5393590,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 539.36,
+     "cpu_us": 239963.6,
+     "wall_us": 240150.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 100,
+     "record": 100,
+     "served": 800
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 100
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 0,
+   "host": {
+    "loadavg": "1.22 1.62 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=2932712 matched=1000 sel=0% pages=18863 sub_runs=1000 corr_scans=540 cabin_hits=460 cabin_misses=540 cabin_entries=460 hint_hits=460 cabin_recorded=20",
+     "opens": 1000,
+     "examined": 2932712,
+     "matched": 1000,
+     "cabin_hits": 460,
+     "cabin_misses": 540,
+     "cabin_recorded": 20,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 293.27,
+     "cpu_us": 133011.8,
+     "wall_us": 133023.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5000500 matched=1000 sel=0% pages=31500 sub_runs=1000 corr_scans=500 cabin_hits=500 cabin_misses=500 cabin_entries=500 hint_hits=500 cabin_recorded=500",
+     "opens": 1000,
+     "examined": 5000500,
+     "matched": 1000,
+     "cabin_hits": 500,
+     "cabin_misses": 500,
+     "cabin_recorded": 500,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 500.05,
+     "cpu_us": 227772.6,
+     "wall_us": 227989.2
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1316.1,
+     "wall_us": 1433.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1132.5,
+     "wall_us": 1217.9
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1063.7,
+     "wall_us": 1129.9
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 0,
+   "host": {
+    "loadavg": "1.20 1.61 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4793132 matched=1000 sel=0% pages=29371 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4793132,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 479.31,
+     "cpu_us": 216450.5,
+     "wall_us": 216486.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4793132 matched=1000 sel=0% pages=29371 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4793132,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 479.31,
+     "cpu_us": 214350.8,
+     "wall_us": 214578.7
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4793132 matched=1000 sel=0% pages=29371 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4793132,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 479.31,
+     "cpu_us": 213520.6,
+     "wall_us": 213683.6
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4793132 matched=1000 sel=0% pages=29371 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4793132,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 479.31,
+     "cpu_us": 214568.6,
+     "wall_us": 214746.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4793132 matched=1000 sel=0% pages=29371 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4793132,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 479.31,
+     "cpu_us": 216316.2,
+     "wall_us": 216478.1
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 0,
+   "host": {
+    "loadavg": "1.20 1.61 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10969 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9975 build_probes=999",
+     "opens": 1000,
+     "examined": 10969,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9975,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4111.6,
+     "wall_us": 4217.3
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10969 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9975 build_probes=999",
+     "opens": 1000,
+     "examined": 10969,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9975,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3940.4,
+     "wall_us": 3860.8
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10969 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9975 build_probes=999",
+     "opens": 1000,
+     "examined": 10969,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9975,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3913.3,
+     "wall_us": 4035.1
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10969 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9975 build_probes=999",
+     "opens": 1000,
+     "examined": 10969,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9975,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3715.8,
+     "wall_us": 3832.8
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10969 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=6 inner_built=0 build_rows=9975 build_probes=999",
+     "opens": 1000,
+     "examined": 10969,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9975,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3752.4,
+     "wall_us": 3889.8
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 1,
+   "host": {
+    "loadavg": "1.20 1.61 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=2783038 matched=1000 sel=0% pages=17957 sub_runs=1000 corr_scans=540 cabin_hits=460 cabin_misses=540 cabin_entries=460 hint_hits=460 cabin_recorded=20",
+     "opens": 1000,
+     "examined": 2783038,
+     "matched": 1000,
+     "cabin_hits": 460,
+     "cabin_misses": 540,
+     "cabin_recorded": 20,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 278.3,
+     "cpu_us": 130436.4,
+     "wall_us": 130464.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5000500 matched=1000 sel=0% pages=31500 sub_runs=1000 corr_scans=500 cabin_hits=500 cabin_misses=500 cabin_entries=500 hint_hits=500 cabin_recorded=500",
+     "opens": 1000,
+     "examined": 5000500,
+     "matched": 1000,
+     "cabin_hits": 500,
+     "cabin_misses": 500,
+     "cabin_recorded": 500,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 500.05,
+     "cpu_us": 225011.4,
+     "wall_us": 225226.7
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1229.1,
+     "wall_us": 1351.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1025.4,
+     "wall_us": 1126.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1011.6,
+     "wall_us": 1109.2
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 1,
+   "host": {
+    "loadavg": "1.20 1.61 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10984 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=7 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10984,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4267.5,
+     "wall_us": 4331.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10984 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=7 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10984,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3681.4,
+     "wall_us": 3783.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10984 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=7 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10984,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3825.5,
+     "wall_us": 3931.7
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10984 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=7 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10984,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3748.4,
+     "wall_us": 3867.4
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10984 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=7 inner_built=0 build_rows=9991 build_probes=999",
+     "opens": 1000,
+     "examined": 10984,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 9991,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3766.4,
+     "wall_us": 3874.4
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 1,
+   "host": {
+    "loadavg": "1.20 1.61 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4873426 matched=1000 sel=0% pages=29857 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4873426,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 487.34,
+     "cpu_us": 220673.3,
+     "wall_us": 220678.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4873426 matched=1000 sel=0% pages=29857 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4873426,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 487.34,
+     "cpu_us": 217427.4,
+     "wall_us": 217640.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4873426 matched=1000 sel=0% pages=29857 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4873426,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 487.34,
+     "cpu_us": 215796.6,
+     "wall_us": 215976.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4873426 matched=1000 sel=0% pages=29857 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4873426,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 487.34,
+     "cpu_us": 219628.0,
+     "wall_us": 219839.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=4873426 matched=1000 sel=0% pages=29857 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 4873426,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 487.34,
+     "cpu_us": 219222.3,
+     "wall_us": 219393.8
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "B",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 2,
+   "host": {
+    "loadavg": "1.20 1.61 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10992 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10992,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4267.0,
+     "wall_us": 4408.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10992 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10992,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3923.6,
+     "wall_us": 3833.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10992 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10992,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 4105.4,
+     "wall_us": 4217.3
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10992 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10992,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3797.8,
+     "wall_us": 3896.5
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=1000 examined=10992 matched=1000 sel=9% pages=1060 sub_runs=1000 corr_scans=8 inner_built=0 build_rows=10000 build_probes=999",
+     "opens": 1000,
+     "examined": 10992,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 10000,
+     "build_probes": 999,
+     "walks": 1.1,
+     "cpu_us": 3763.1,
+     "wall_us": 3864.4
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "A",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 2,
+   "host": {
+    "loadavg": "1.19 1.60 1.97",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=2826155 matched=1000 sel=0% pages=18212 sub_runs=1000 corr_scans=540 cabin_hits=460 cabin_misses=540 cabin_entries=460 hint_hits=460 cabin_recorded=20",
+     "opens": 1000,
+     "examined": 2826155,
+     "matched": 1000,
+     "cabin_hits": 460,
+     "cabin_misses": 540,
+     "cabin_recorded": 20,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 282.62,
+     "cpu_us": 128009.7,
+     "wall_us": 127946.8
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5000500 matched=1000 sel=0% pages=31500 sub_runs=1000 corr_scans=500 cabin_hits=500 cabin_misses=500 cabin_entries=500 hint_hits=500 cabin_recorded=500",
+     "opens": 1000,
+     "examined": 5000500,
+     "matched": 1000,
+     "cabin_hits": 500,
+     "cabin_misses": 500,
+     "cabin_recorded": 500,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 500.05,
+     "cpu_us": 266521.2,
+     "wall_us": 266712.5
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1232.5,
+     "wall_us": 1411.1
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1062.4,
+     "wall_us": 1187.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=1000 matched=1000 sel=100% pages=2000 sub_runs=1000 cabin_hits=1000 cabin_entries=1000 hint_hits=1000",
+     "opens": 1000,
+     "examined": 1000,
+     "matched": 1000,
+     "cabin_hits": 1000,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 0.1,
+     "cpu_us": 1287.0,
+     "wall_us": 1396.3
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  },
+  {
+   "arm": "Agate",
+   "n": 10000,
+   "dist": "skewed",
+   "round": 2,
+   "host": {
+    "loadavg": "1.19 1.60 1.97",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5085815 matched=1000 sel=0% pages=31120 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5085815,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 508.58,
+     "cpu_us": 235258.7,
+     "wall_us": 235261.0
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5085815 matched=1000 sel=0% pages=31120 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5085815,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 508.58,
+     "cpu_us": 240234.9,
+     "wall_us": 240441.4
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5085815 matched=1000 sel=0% pages=31120 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5085815,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 508.58,
+     "cpu_us": 238498.5,
+     "wall_us": 238685.3
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5085815 matched=1000 sel=0% pages=31120 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5085815,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 508.58,
+     "cpu_us": 243954.9,
+     "wall_us": 244107.7
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=1000 examined=5085815 matched=1000 sel=0% pages=31120 sub_runs=1000 corr_scans=1000 cabin_misses=1000",
+     "opens": 1000,
+     "examined": 5085815,
+     "matched": 1000,
+     "cabin_hits": 0,
+     "cabin_misses": 1000,
+     "cabin_recorded": 0,
+     "inner_built": 0,
+     "build_rows": 0,
+     "build_probes": 0,
+     "walks": 508.58,
+     "cpu_us": 243729.4,
+     "wall_us": 243897.8
+    }
+   ],
+   "predicted": [
+    {
+     "first": 520,
+     "record": 20,
+     "served": 460
+    },
+    {
+     "first": 0,
+     "record": 500,
+     "served": 500
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    },
+    {
+     "first": 0,
+     "record": 0,
+     "served": 1000
+    }
+   ],
+   "distinct_keys": 520
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "1.19 1.60 1.97",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 27.3
+}

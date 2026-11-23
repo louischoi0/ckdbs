@@ -88,9 +88,24 @@ def settled_cpu_ns(pid, limit_s=0.05):
     return cpu_ns(pid)
 
 
+def thread_cpu(pid):
+    """CPU ns per server thread, summed by the thread's comm name."""
+    out = {}
+    for t in os.listdir(f"/proc/{pid}/task"):
+        try:
+            with open(f"/proc/{pid}/task/{t}/comm") as f:
+                comm = f.read().strip()
+            with open(f"/proc/{pid}/task/{t}/schedstat") as f:
+                ns = int(f.read().split()[0])
+        except (OSError, ValueError):
+            continue
+        out[comm] = out.get(comm, 0) + ns
+    return out
+
+
 class Server:
     def __init__(self, binary, workdir, tag, port, cpu, inner_rows, budget=None,
-                 raise_cap=True, frames=65536):
+                 raise_cap=True, frames=65536, build_cap=None):
         self.dir = os.path.join(workdir, tag)
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir)
@@ -101,7 +116,8 @@ class Server:
                     f"durability = relaxed\nbuffer_pool_frames = {frames}\n"
                     f"log_file = dq.log\nlog_dir = {self.dir}\nlog_level = warn\n"
                     f"reactor_cpus = {cpu}\njoin_order = written\n"
-                    + (f"join_build_max_rows = {max(65536, 2 * inner_rows)}\n"
+                    + (f"join_build_max_rows = {build_cap}\n" if build_cap is not None else
+                       f"join_build_max_rows = {max(65536, 2 * inner_rows)}\n"
                        if raise_cap else "")
                     + (f"max_rows_touched = {budget}\n" if budget else ""))
         self.err = open(os.path.join(self.dir, "dq.stderr"), "w")
@@ -200,7 +216,7 @@ def cell(a, binary, arm, n, dist, rnd, beat):
     rng = random.Random(1000 * n + 17 * len(dist) + rnd)
     port = a.port + (rnd % 2)
     srv = Server(binary, a.workdir, f"{arm}-{n}-{dist}-{rnd}", port, a.cpu, n,
-                 a.max_rows_touched, raise_cap=not a.engine_build_cap)
+                 a.max_rows_touched, raise_cap=not a.engine_build_cap, build_cap=a.build_cap)
     try:
         c = srv.conn()
         c.execute("CREATE TABLE inn (id int64, k int64, w int64) BTREE")
@@ -233,6 +249,9 @@ def cell(a, binary, arm, n, dist, rnd, beat):
         stmts = []
         for s in range(a.stmts):
             hold()
+            if a.gap_s:
+                time.sleep(a.gap_s)  # outside the timed window
+            th0 = thread_cpu(srv.proc.pid)
             t0 = settled_cpu_ns(srv.proc.pid)
             w0 = time.perf_counter()
             try:
@@ -254,6 +273,8 @@ def cell(a, binary, arm, n, dist, rnd, beat):
                 raise SystemExit(f"no inner step line in ANALYZE output: {text[:600]}")
             got["walks"] = round(got.get("examined", 0) / n, 2)
             got["cpu_us"] = round(cpu_us, 1)
+            th1 = thread_cpu(srv.proc.pid)
+            got["threads_us"] = {k: round((th1[k] - th0.get(k, 0)) / 1000.0, 1) for k in th1}
             got["wall_us"] = round(wall * 1e6, 1)
             stmts.append(got)
             beat(f"{arm} n={n} {dist} r{rnd} s{s + 1} cpu_ms={cpu_us / 1000:.1f} "
@@ -319,6 +340,14 @@ def main():
     ap.add_argument("--hold-renew-s", type=float, default=40.0)
     ap.add_argument("--heartbeat", default=None)
     ap.add_argument("--shape", default="join", choices=sorted(SHAPES))
+    ap.add_argument("--gap-s", type=float, default=0.0,
+                    help="sleep this many seconds before each statement, outside the timed "
+                         "window (DQ close: tests whether periodic background work lands in "
+                         "a different statement's window); per-statement CPU by thread comm "
+                         "is recorded as threads_us")
+    ap.add_argument("--build-cap", type=int, default=None,
+                    help="write join_build_max_rows = N (0 takes the build away); overrides "
+                         "--engine-build-cap and the raised default")
     ap.add_argument("--engine-build-cap", action="store_true",
                     help="leave join_build_max_rows at the engine default (65,536) instead "
                          "of raising it above the inner relation")

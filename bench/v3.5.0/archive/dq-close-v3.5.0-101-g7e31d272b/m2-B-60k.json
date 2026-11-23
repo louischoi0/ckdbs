@@ -1,0 +1,193 @@
+{
+ "binary": "/home/louis/dqbench/kds_server_B_7e31d272",
+ "sha256_16": "9a5ac8d83af20781",
+ "args": {
+  "bin": "/home/louis/dqbench/kds_server_B_7e31d272",
+  "workdir": "/home/louis/dqbench/close/w2",
+  "out": "/home/louis/dqbench/close/m2-B-60k.json",
+  "sizes": "60000",
+  "dists": "unique",
+  "rounds": 1,
+  "stmts": 2,
+  "outer": 2000,
+  "port": 15995,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "hold_renew_s": 40.0,
+  "heartbeat": "/home/louis/dqbench/close/m2.heartbeat",
+  "shape": "join",
+  "engine_build_cap": true,
+  "max_rows_touched": null
+ },
+ "host_before": {
+  "loadavg": "2.04 2.04 2.19",
+  "cc1plus": "0"
+ },
+ "started_utc": "2026-11-23 01:57:48",
+ "cells": [
+  {
+   "arm": "A",
+   "n": 60000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "2.04 2.04 2.19",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 cabin_misses=2000 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 2000,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 14190.2,
+     "wall_us": 14125.3
+    },
+    {
+     "refused": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner rel",
+     "cpu_us": 4871167.2,
+     "wall_us": 4870031.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 2000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 2000,
+     "served": 0
+    }
+   ],
+   "distinct_keys": 2000
+  },
+  {
+   "arm": "Agate",
+   "n": 60000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "2.04 2.04 2.19",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 CabinProbe inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 cabin_misses=2000 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 2000,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 14260.5,
+     "wall_us": 14114.2
+    },
+    {
+     "line": "step 1 CabinProbe inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 cabin_misses=2000 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 2000,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 11187.4,
+     "wall_us": 11318.0
+    }
+   ],
+   "predicted": [
+    {
+     "first": 2000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 2000,
+     "served": 0
+    }
+   ],
+   "distinct_keys": 2000
+  },
+  {
+   "arm": "B",
+   "n": 60000,
+   "dist": "unique",
+   "round": 0,
+   "host": {
+    "loadavg": "2.04 2.04 2.19",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "stmts": [
+    {
+     "line": "step 1 Scan inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 13831.8,
+     "wall_us": 13783.7
+    },
+    {
+     "line": "step 1 Scan inn AS i opens=2000 examined=61999 matched=2000 sel=3% pages=2361 inner_built=1 build_rows=60000 build_probes=1999",
+     "opens": 2000,
+     "examined": 61999,
+     "matched": 2000,
+     "cabin_hits": 0,
+     "cabin_misses": 0,
+     "cabin_recorded": 0,
+     "inner_built": 1,
+     "build_rows": 60000,
+     "build_probes": 1999,
+     "walks": 1.03,
+     "cpu_us": 10536.4,
+     "wall_us": 10684.4
+    }
+   ],
+   "predicted": [
+    {
+     "first": 2000,
+     "record": 0,
+     "served": 0
+    },
+    {
+     "first": 0,
+     "record": 2000,
+     "served": 0
+    }
+   ],
+   "distinct_keys": 2000
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "2.04 2.04 2.19",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 7.1
+}

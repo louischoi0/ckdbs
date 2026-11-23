@@ -1,6 +1,17 @@
 # Work order DQ - a Cabin's miss answered from a map: the correlated Cabin probe's unobserved keys served by the statement-local build, one walk for the statement in place of one walk a miss
 
-Status: **OPENED 2026-11-23 on the operator's standing go-ahead**
+Status: **BUILT 2026-11-23 and STOPPED at DQ-S5 on a measured regression,
+not closed** (DQ-Q13 (a), CLA's proposal as revised at DQ-S5's review,
+not the operator's mark; `raft-marks-2026-11-23.md` §3; §7's DQ-S5). E1 is
+built on top-level chains and sub-chains; E2 is not (DQ-S0). Everything is
+reviewed, suite-green and committed on the work branch. The gate-declined
+cabined join is 108x to 251x cheaper, and at the engine's defaults its
+first statement is answered where it was refused; the recording
+statement's refusal stays (DQ-Q11). Converged cabined-join statements read
+7 % to 35 % dearer in cold cells, and join statements +0.2 to +0.5 us,
+with the causes not isolated inside the spent measurement budget. The
+operator's word either lifts the budget for a diagnosis and a remedy, or
+accepts the residue and closes DQ. Before that: **OPENED 2026-11-23 on the operator's standing go-ahead**
 (`/go-ahead-achieving-milestone DQ`, `raft-marks-2026-11-23.md` §1), at
 `68e5a69f` (`v3.5.0-96-g68e5a69f`) on worktree `dq-cabin-miss-build`, branch
 `worktree-dq-cabin-miss-build`. **DQ-Q0..Q8 adopted (a) on that go-ahead** -
@@ -323,7 +334,9 @@ standing go-ahead of 2026-11-23 (go-ahead-achieving-milestone)**
 | DQ-Q8 | The bar a built stage must meet | **At DQ-S0's gate-refusing cell, server CPU within 1.5x of the same join with the Cabin dropped; on a converged join, no cell slower than today outside the control's range; DQ-R6 met** - the 1.5 is provisional and is replaced by what DQ-S0 measures | the operator's number |
 
 **Raised by DQ-S0 and DQ-S1, adopted (a) on the same standing go-ahead**
-(`raft-marks-2026-11-23.md` §2); none is the operator's own mark.
+(`raft-marks-2026-11-23.md` §2); none is the operator's own mark. **DQ-Q13,
+raised at DQ-S5, adopted (a) on the same go-ahead** (`raft-marks-2026-11-23.md`
+§3), as revised at DQ-S5's review; it is not the operator's mark either.
 
 | | the question | (a) | other |
 |---|---|---|---|
@@ -331,6 +344,7 @@ standing go-ahead of 2026-11-23 (go-ahead-achieving-milestone)**
 | DQ-Q10 | The plan statistics' decline record (`command_dispatcher.cpp`, the fold after a keyed run): a step carrying `Step::build` that opened and published no map is folded as a decline, which the cost model reads for a walked step | **A Cabin step's decline is a fallback that bucketed rows and published no map** (`build_rows > 0`, `inner_builds = 0`): an opening its set served built nothing and declined nothing. A walked step keeps its rule | (b) a Cabin step never records a decline |
 | DQ-Q11 | DQ-S0 measured a refusal: at the engine's defaults (`max_rows_touched` 100,000,000, `join_build_max_rows` 65,536) a 60,000-row cabined join with 2,000 unobserved outer keys is refused where the uncabined one answers in 10.7 to 14.6 ms; the window is an inner relation within the cap and k x N above the budget, since past the cap the build declines and walks too. E1 removes it for every non-recording miss and every declined recording, but not for a statement whose misses are all recording touches (DQ-Q2 (a) keeps each a whole walk) | **Recorded in `known-gaps.md` (Cabin)**, with DQ-Q2 (b) and (c) the remedies the operator may take; DQ keeps DQ-Q2 (a) | (b) take DQ-Q2 (c), a bounded number of recording walks a statement, into DQ |
 | DQ-Q12 | A correlated Cabin step that also carries an unindexed literal equality (`HasUnindexedEqualityFilter`): its uncabined twin is a filter scan with no build (`join-inner-build.md` §8) | **The fallback is declined there**, as the build is, so the miss's worst case is exactly the uncabined step's (§0) and the map keeps one rule (DQ-R4) | (b) annotate it anyway: cheaper than the uncabined step, and a second rule |
+| DQ-Q13 | The close's residue (`bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`). Converged cabined-join statements read 7 % to 35 % dearer on B than on A where the state is cold or in a run whose first statement the fallback answered: about 0.1 to 0.3 ms on a statement of about 1 ms, with the cause not isolated. Join statements read +0.2 to +0.5 us (0.5 % to 1.2 %), unattributed, within about 1 us of the noise. So DQ-Q8's converged clause is not met in those cells, and DQ-R6 is not shown met. The close's measurement budget is spent | **DQ stays open at DQ-S5, stopped** (revised at DQ-S5's review from closing it with the residue. That proposal set aside the bar CLA itself set, DQ-Q8 (a), and under the standing word a regression measured at the close is work, and a spent budget is a stop, not a close). Everything is built, reviewed, suite-green and committed on the work branch, and the residue is in `known-gaps.md`. The operator's word either **lifts the measurement budget** for the diagnosis and a remedy (per-thread CPU by thread id, the allocator's state after a freed map, a stage bisect of the join residue), or **accepts the residue and closes DQ**, which the push word would then land. Basis: the gain is bounded below by 108x on every gate-declined cell, with a refusal at the defaults answered at the first statement; the residue is bounded above at 0.1 to 0.3 ms on a converged statement and +0.5 us on a join; and the one remedy tried (B2) traded statement #3's binary part for 1 % to 2 % on whole-relation walks, so a remedy needs the cause first | (b) close DQ with the residue recorded as a measured cost, not declared met (the proposal as first written); (c) withdraw E1 |
 
 ## 5. Stages
 
@@ -703,3 +717,89 @@ cap; `cabin.md` §4a; the manual; known-gaps.
 
 Suite: 0 failed of 5,159 on this commit's build inputs. Overhead not measured;
 measured at the milestone's close. DQ-S4 (E2) does not run (DQ-S0's verdict).
+
+### DQ-S5 - the close's measurement, and the stop (2026-11-23)
+
+**Stopped, not closed** (DQ-Q13 (a) as revised): the residue below is a
+measured regression against DQ-Q8 (a)'s converged clause and DQ-R6, the
+close's measurement budget is spent, and the operator's word either lifts
+it for a diagnosis and a remedy or accepts the residue.
+
+On worktree `dq-cabin-miss-build` at `7e31d272` (`v3.5.0-101-g7e31d272b`).
+DQ-S4 (E2) did not run (DQ-S0's verdict).
+
+**The measurement** (`ck-tester`, A = `68e5a69f` against B = `7e31d272`,
+`build-release`, `bench/v3.5.0/results-dq-close-v3.5.0-101-g7e31d272b.md`):
+- **DQ-Q8's gate cell is met at every size.** The Agate arm runs at 0.79x
+  to 1.15x of the Cabin dropped, against 1.5x.
+- **DQ-S0's cells, against A.** The gate-declined join is 108x to 133x
+  cheaper at 10,000 inner rows and 186x to 251x at 100,000; the correlated
+  `EXISTS` is 48x to 61x cheaper.
+- **At the engine's defaults** (60,000 inner rows, 2,000 outer keys) the
+  cabined join answers its first statement in 14.2 ms, where A refused
+  both. The second statement is all recording touches and is still
+  refused (DQ-Q11).
+- **A reads the same as in DQ-S0.**
+- **DQ-R6 (M1):**
+  - a point read is level;
+  - the walked join with the build is 1.3 % to 1.6 % cheaper;
+  - the all-served Cabin join and a tuple-key join read +0.2 to +0.5 us
+    (0.5 % to 1.2 %) in two readings of 10 to 15 lifetimes. The tuple-key
+    join's inner probe takes no branch DQ changed; its compile
+    (`BuildAnnotationOf` on the outer walk) and `RunStep` are DQ's changed
+    code. DQ-R6 is not shown met.
+- **The converged join's residue (DQ-Q13):**
+  - the first converged statement of a run whose first statement the
+    fallback answered (#3, after the recording statement) reads 10 % to
+    35 % dearer in six readings;
+  - with a 1.5 s idle gap, every converged statement reads 7 % to 10 %
+    dearer.
+  - What the three diagnostics found:
+    - two thirds follows the fallback's first statement and one third the
+      binary;
+    - the binary third moves with placement;
+    - it is not a periodic task's window.
+  - The cause is not isolated.
+- **One remedy was tried and withdrawn.** B2 kept `BuiltWalk` and
+  `MissWalk` out of line. It removed the binary third of #3 but added 1 %
+  to 2 % to whole-relation walks, and left M1's join residue as it was. It
+  was reverted, so B is the closing code.
+- **Budget:** about an hour of measurement, building excluded, with a quiet
+  hold of 0 s. The 100,000-row A cell was cut to 1 round.
+
+**The simulation corpus** at the closing code (release `ckdbs-sim` built from `7e31d272`, `scripts/sim.sh 20`: every committed seed and 20 of the day's fresh seeds): 754 runs, 0 failures.
+
+**The docs moved:**
+- `join-inner-build.md` §2, §5, §5a and §8, and `cabin.md` §4a;
+- `CLAUDE.md`'s Cabin and inner-build rows;
+- the manual's Cabin section, join paragraph and `BUILD OFF`;
+- `known-gaps.md`: the busy-instance entry restated, the recording
+  statement's refusal (DQ-Q11), and the close's residue (DQ-Q13).
+
+**Sync:** `git fetch origin`. `origin/main` is still `68e5a69f`, the commit
+DQ opened from, so the merge brings nothing.
+
+
+**Review** (`critics-developer`).
+- **The records under-reported the residue.** The reviewer corrected it in
+  place and recomputed it from the archive:
+  - the converged cells are 7 % to 35 % dearer, not 7 % to 23 %;
+  - join statements are +0.2 to +0.5 us, not +0.3 to +0.5;
+  - DQ-R6 is not shown met;
+  - the claim that the tuple-key join runs no changed instruction is false,
+    since its outer walk compiles through `BuildAnnotationOf` and its steps
+    run through the changed `RunStep`;
+  - the results file's header, time window, watchdog account and four
+    statements its own data contradict are corrected. Three runs had no
+    watchdog of their own; none stalled.
+- Applied:
+  - **DQ-Q13 revised from closing with the residue to stopping at DQ-S5.**
+    Closing had set aside the bar CLA set, and a spent budget is a stop;
+  - the two `CLAUDE.md` rows deduplicated;
+  - a driver bug fixed (`dq_close.py` kept a block cut short on a busy host
+    and pooled it; it now refuses). It did not affect these runs.
+- Rejected:
+  - de-duplicating `dq_close.py` against `dq_s0_premise.py`, because the
+    driver is archived with the results it measured;
+  - keying `thread_cpu` by thread id now. That is the diagnosis's first
+    step, and the diagnosis waits for the operator's word.
