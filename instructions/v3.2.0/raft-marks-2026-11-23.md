@@ -181,3 +181,12 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | whether DR-R9's list is acceptable under the operator's own rule; superblock 41 as the operator's own word (DR-R5); the push of the commits after `38d743da`; a tag or a version |
 | **Recorded at** | this file; the DR order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md`; `docs/inflight/known-gaps.md` |
 
+## 19. DR's close landed with `--no-verify`
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given at the push gate of §18's close. An earlier *"go ahead"* in the same session was read by CLA as "continue the work" and not as a push word; nothing was pushed on it |
+| **Mark** | **DR's close is on `main` at `71a148e1`**, a `--no-ff` merge of `ed2a9e7d` onto `38d743da`: `824acfbe` (the review of DR-S3f applied), `e0d86ec6` (an insert's catalog scan; the measured closing commit), `5026660a` (the close's record) and `ed2a9e7d` (the sync merge, no content). Untagged |
+| **What was skipped** | the pre-push hook. The full suite ran 0 failed of 5,224 on `5026660a`'s tree, and neither `ed2a9e7d` nor `71a148e1` changes a file against it. The record that follows the push is documents only and goes out the same way, with no suite run for it |
+| **Does not settle** | whether DR-R9's list is acceptable under the operator's own rule; superblock 41 as the operator's own word (DR-R5); whether this clone's pre-push hook is to be enabled; a tag or a version |
+| **Recorded at** | this file; the DR order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

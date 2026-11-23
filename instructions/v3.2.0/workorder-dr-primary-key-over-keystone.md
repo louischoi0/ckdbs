@@ -7,9 +7,9 @@ for it (`raft-marks-2026-11-23.md` §14, §18). Opened at `e9df68d0`
 `worktree-dr-primary-key`; measured closed at `e0d86ec6`
 (`v3.5.0-124-ge0d86ec62`,
 `bench/v3.5.0/results-dr-close-v3.5.0-124-ge0d86ec62.md`). **Landed open on
-`main` through DR-S3f at `38d743da`** on the operator's word (§17); what
-followed it - DR-S3f's review, the catalog scan and this close - is on the
-branch and waits for the word.
+`main` through DR-S3f at `38d743da`** on the operator's word (§17); **what
+followed it - DR-S3f's review, the catalog scan and this close - landed at
+`71a148e1`** on the operator's "push no verify" (§19), untagged.
 
 **What is built** (§5a, §7): a write that names a unique key whole descends
 by it (P7); a primary key's contract, its value free to move (P3); a
@@ -1439,3 +1439,13 @@ On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`.
   than the pool or more than one core prices its insert differently (not
   measured); whether this clone's pre-push hook is to be enabled.
 
+### The close landed, 2026-11-23
+
+On the operator's "push no verify" (`raft-marks-2026-11-23.md` §19):
+`origin/main` = `71a148e1`, a `--no-ff` merge of `ed2a9e7d` onto
+`38d743da`, pushed with the pre-push hook skipped. It carries `824acfbe`,
+`e0d86ec6`, `5026660a` and the sync merge `ed2a9e7d`. The suite's last run
+is the close's: 0 failed of 5,224 on `5026660a`'s tree, which the two
+merges leave unchanged. Untagged. The push of what followed `38d743da` is
+no longer owed; every other item of the close's "left for the operator"
+stands.
