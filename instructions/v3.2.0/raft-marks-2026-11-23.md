@@ -109,3 +109,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | any DR-Q item; an opening; a tag or a version |
 | **Recorded at** | this file; `workorder-dr-primary-key-over-keystone.md`; its row and this file's row in `instructions/v3.2.0/index.md` |
 
+## 12. DR: a btree carries the key, a range is served, the recommended key is untouched
+
+| | |
+|---|---|
+| **Word** | Four, given in Korean. *"A btree must support a primary key of several types and several columns too. How can the primary key be encoded into the Keystone id so that a btree carries a multi-type composite primary key with no added step?"*; on CLA's account of colliding keys, *"What about identifying the colliding records with a hash list?"*; then *"Without range search it means nothing. Amend the order to a scheme that identifies a row by (primary key values, Keystone id, collision flag) and supports range queries as well, the collision hash list work included."* and *"And when a primary key is created with the type KDS recommends, it must work as it does today, with no added overhead."* The operator wrote "waystoneid" once and corrected it to the Keystone id in the amended word |
+| **Mark** | **The operator's own marks: DR-Q2** (a btree carries a primary key of several types and columns), **DR-R9** (a key of the recommended type works as today, with no added overhead) **and DR-R10** (a range over the primary key is served). The DR draft is amended to them on worktree `dq-cabin-miss-build`, branch `worktree-dr-draft-amend`, over `088d7499`: a new §2a with three forms fixed at `CREATE TABLE` (F0 today's `int64` key, F1 a key of 48 bits or less embedded in the Keystone id, F2 a hashed home with an issued id where the home is taken and one ordered unique index), DR-R11, DR-R12, DR-Q11 to DR-Q15 and DR-S0c |
+| **CLA's, not the operator's** | every detail of §2a: the three forms; the id space split at `2^47`; the collision flag as the issued id's top bit, with nothing stored; the collision list as the flagged entries of `$pkey_<oid>` and not a structure of its own; that an empty home concludes nothing. DR-Q11 to DR-Q15 are unmarked |
+| **Does not settle** | DR-Q1, DR-Q3 to DR-Q15 other than as above; an opening; a push; a tag or a version |
+| **Recorded at** | this file; `workorder-dr-primary-key-over-keystone.md`; its row and this file's row in `instructions/v3.2.0/index.md` |
+
