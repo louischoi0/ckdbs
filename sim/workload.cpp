@@ -47,6 +47,8 @@ const char* OpKindName(Op::Kind kind) {
         case Op::Kind::kCreateIndex: return "create-index";
         case Op::Kind::kPurgeIndex: return "purge-index";
         case Op::Kind::kCreateAssertion: return "create-assertion";
+        case Op::Kind::kInsertKeyed: return "insert-keyed";
+        case Op::Kind::kMoveKey: return "move-key";
     }
     return "unknown";
 }
@@ -59,7 +61,8 @@ std::optional<Op::Kind> ParseOpKind(std::string_view name) {
           Op::Kind::kCreateCabin, Op::Kind::kInsertNamed, Op::Kind::kDropTable,
           Op::Kind::kPurge, Op::Kind::kAlterColumn, Op::Kind::kSelectJoin,
           Op::Kind::kSelectAggregate, Op::Kind::kSelectOrdered, Op::Kind::kSelectSubquery,
-          Op::Kind::kCreateIndex, Op::Kind::kPurgeIndex, Op::Kind::kCreateAssertion}) {
+          Op::Kind::kCreateIndex, Op::Kind::kPurgeIndex, Op::Kind::kCreateAssertion,
+          Op::Kind::kInsertKeyed, Op::Kind::kMoveKey}) {
         if (name == OpKindName(kind)) return kind;
     }
     return std::nullopt;
@@ -79,7 +82,8 @@ Workload::Workload(Rng rng, Profile profile, bool shapes)
       write_list_rng_(rng_.Fork("write_list")),
       write_conjunct_rng_(rng_.Fork("write_conjunct")),
       lock_rng_(rng_.Fork("lock")),
-      storage_rng_(rng_.Fork("storage")) {
+      storage_rng_(rng_.Fork("storage")),
+      keyed_rng_(rng_.Fork("keyed")) {
     for (const char* name : {kFkParent, kFkChild, kAsserted}) {
         constrained_.emplace_back();
         constrained_.back().name = name;
@@ -427,7 +431,7 @@ Op Workload::Next() {
                                   " (id int64, v int64, name varchar) SPARE 1";
         return op;
     }
-    if (shapes_ && constrained_ddl_ < 4 && !in_txn_) return ConstrainedDdl();
+    if (shapes_ && constrained_ddl_ < kConstrainedDdl && !in_txn_) return ConstrainedDdl();
 
     if (in_txn_) {
         if (txn_ops_left_ == 0) {
@@ -477,6 +481,7 @@ Op Workload::Next() {
 
     if (shapes_ && query_rng_.Chance(8)) return Query(/*ddl=*/true);
     if (shapes_ && constraint_rng_.Chance(12)) return ConstrainedOp();
+    if (shapes_ && keyed_rng_.Chance(10)) return KeyedOp();
 
     // 85 data ops, 4 syncs, 3 Cabin declarations and 8 transaction starts
     // per hundred rolls. Three of the data ops were `CREATE PATTERN` until
@@ -629,13 +634,86 @@ Op Workload::ConstrainedDdl() {
             op.sql = std::string("CREATE TABLE ") + kFkChild + " (id int64, v int64 REFERENCES " +
                      kFkParent + ", name varchar) SPARE 1";
             return op;
-        default:
+        case 3:
             op.kind = Op::Kind::kCreateAssertion;
             op.table = kAsserted;
             op.sql = std::string("CREATE ASSERTION ") + kAsserted + "_cap ON " + kAsserted +
                      " GROUP BY (v) CHECK COUNT(*) <= " + std::to_string(kAssertBound);
             return op;
+        default:
+            // The keyed relation (DR-S2): a composite primary key over a
+            // hidden Keystone.
+            op.kind = Op::Kind::kCreateTable;
+            op.table = kKeyed;
+            op.sql = std::string("CREATE TABLE ") + kKeyed +
+                     " (g int32, id int64, v int64, name varchar, PRIMARY KEY (g, id)) HEAP";
+            return op;
     }
+}
+
+Op Workload::KeyedOp() {
+    Rng& r = keyed_rng_;
+    const auto key = [&] { return 1 + r.Below(kKeyedIds); };
+    // Short, and one in eight long enough to spill (`NextName`'s reason).
+    const auto name = [&] {
+        const bool spilled = r.Chance(12);
+        const std::size_t len = spilled ? 200 + r.Below(200) : 1 + r.Below(6);
+        return std::string(len, static_cast<char>('a' + r.Below(26)));
+    };
+    const std::string group = std::to_string(kKeyedGroup);
+    const auto whole_key = [&](std::uint64_t id) {
+        return " WHERE g = " + group + " AND id = " + std::to_string(id);
+    };
+    Op op;
+    op.table = kKeyed;
+    const std::uint64_t roll = r.Below(100);
+    if (roll < 35) {
+        op.kind = Op::Kind::kInsertKeyed;
+        op.key = key();
+        op.v = r.Range(0, 9);
+        op.name = name();
+        op.sql = std::string("INSERT INTO ") + kKeyed + " (g, id, v, name) VALUES (" + group +
+                 ", " + std::to_string(op.key) + ", " + std::to_string(op.v) + ", '" + op.name +
+                 "')";
+    } else if (roll < 50) {
+        op.kind = Op::Kind::kUpdate;
+        op.by_tuple_key = true;
+        op.key = key();
+        op.v = r.Range(0, 9);
+        op.sql = std::string("UPDATE ") + kKeyed + " SET v = " + std::to_string(op.v) +
+                 whole_key(op.key);
+    } else if (roll < 60) {
+        op.kind = Op::Kind::kDelete;
+        op.by_tuple_key = true;
+        op.key = key();
+        op.sql = std::string("DELETE FROM ") + kKeyed + whole_key(op.key);
+    } else if (roll < 75) {
+        op.kind = Op::Kind::kMoveKey;
+        op.key = key();
+        op.lo = key();
+        op.sql = std::string("UPDATE ") + kKeyed + " SET id = " + std::to_string(op.lo) +
+                 whole_key(op.key);
+    } else if (roll < 82) {
+        // By value: the walk, beside the keyed writes.
+        op.kind = Op::Kind::kUpdate;
+        op.set_name = true;
+        op.name = name();
+        op.pred_v = r.Range(0, 9);
+        op.sql = std::string("UPDATE ") + kKeyed + " SET name = '" + op.name + "' WHERE v = " +
+                 std::to_string(op.pred_v);
+    } else if (roll < 92) {
+        op.kind = Op::Kind::kSelectTupleKey;
+        op.key = key();
+        op.sql = std::string("SELECT ") + kReadColumns + " FROM " + kKeyed + whole_key(op.key);
+    } else {
+        op.kind = Op::Kind::kSelectRange;
+        op.lo = key();
+        op.hi = op.lo + 10;
+        op.sql = std::string("SELECT ") + kReadColumns + " FROM " + kKeyed + " WHERE g = " +
+                 group + " AND id BETWEEN " + std::to_string(op.lo) + " AND " +
+                 std::to_string(op.hi);
+    }
+    return op;
 }
 
 Op Workload::AssertedTxnWrite() {

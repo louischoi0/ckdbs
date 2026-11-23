@@ -287,6 +287,11 @@ struct SimVerdict {
     // and admitted as it said.
     std::size_t constraint_refusals = 0;
     std::size_t constraint_admissions = 0;
+    // The keyed relation's writes (DR-S2), each as the oracle said: inserts
+    // placed, inserts and moves refused for a held key, and keys moved.
+    std::size_t keyed_placed = 0;
+    std::size_t keyed_held = 0;
+    std::size_t keys_moved = 0;
     // Power cuts (BS-S4): crashes that cut the log inside its unsynced run;
     // power losses at a page write, the unsynced pages they met and kept,
     // the ones that tore a page, and torn pages the restart refused - at the

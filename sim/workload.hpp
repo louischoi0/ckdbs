@@ -118,13 +118,24 @@ struct Op {
         // The asserted relation's bound (`kAsserted`), declared once, after
         // the tables.
         kCreateAssertion,
+        // **The keyed relation's writes** (DR-S2, `kKeyed`): an INSERT that
+        // names the primary key `(kKeyedGroup, key)`, placed or refused
+        // because a live row holds it - a deleted or moved-off value is free
+        // at once, which is where a primary key differs from a tuple key -
+        // and an UPDATE that moves row `key`'s key to `lo`, refused where a
+        // live row holds `lo`.
+        kInsertKeyed,
+        kMoveKey,
     };
     Kind kind;
     std::string table;
     std::string sql;
     // Semantic fields the oracle needs to build its expectation.
-    std::uint64_t key = 0;       // kSelectTupleKey, kInsertNamed; kUpdate/kDelete when by_tuple_key
-    std::uint64_t lo = 0;        // kSelectRange, kPurge; kSelectOrdered's order (0..2)
+    // kSelectTupleKey, kInsertNamed, kInsertKeyed; kMoveKey's old key;
+    // kUpdate/kDelete when by_tuple_key
+    std::uint64_t key = 0;
+    // kSelectRange, kPurge; kSelectOrdered's order (0..2); kMoveKey's new key
+    std::uint64_t lo = 0;
     std::uint64_t hi = 0;        // kSelectRange, kPurge
     std::int64_t v = 0;          // kInsert(Named), kFilterScan; kUpdate's new v
     std::string name;            // kInsert(Named); kUpdate's new name
@@ -151,6 +162,20 @@ inline constexpr const char* kFkParent = "p0";
 inline constexpr const char* kFkChild = "c0";
 inline constexpr const char* kAsserted = "a0";
 inline constexpr std::size_t kAssertBound = 3;
+
+// **The keyed relation** (DR-S2, DR-R8): a heap whose primary key is not its
+// Keystone - `(g, id)` over a hidden one - with `g` the same in every row,
+// so the oracle's key is `id` and what the engine keys by is a composite
+// unique index. Every statement names the whole key, so its writes are the
+// ones a primary key is found by (DR-S3a) and its reads the index's. Its
+// own stream, in autocommit, with the shapes only; no drop, column cycle or
+// purge names it. The oracle's "tuple key" for it is the `id` column: a
+// row's id may be deleted and inserted again, and may move.
+inline constexpr const char* kKeyed = "k0";
+inline constexpr int kKeyedGroup = 7;
+// Its ids are drawn from `[1, kKeyedIds]`, few enough that an insert often
+// meets a live key and a move a held one.
+inline constexpr std::uint64_t kKeyedIds = 48;
 
 // The columns every read names, in the order the oracle renders them. Not
 // `*`: a column cycle (`Op::Kind::kAlterColumn`) adds and drops `x`.
@@ -232,6 +257,9 @@ private:
     // (`constraint_rng_`).
     Op ConstrainedDdl();
     Op ConstrainedOp();
+    // One statement on the keyed relation (`kKeyed`), in autocommit. Its own
+    // stream (`keyed_rng_`).
+    Op KeyedOp();
     // One write to the asserted relation inside an explicit transaction
     // (CL-Q5 (a)): what leaves an undecided transaction holding a reservation
     // when the iteration crashes, the state a mount must give back. Drawn from
@@ -306,9 +334,14 @@ private:
     // Which tables are heaps (DN-S3): its own stream, so drawing it moves no
     // other stream's draws.
     Rng storage_rng_;
+    // The keyed relation's statements (DR-S2), drawn after every other
+    // stream drew, so no other stream's draws move.
+    Rng keyed_rng_;
     void MaybeLock(Op& op);
     // p0, c0, a0: their own id-guessing counters (`Table::inserted`).
     std::vector<Table> constrained_;
+    // The constrained relations' statements, then the keyed relation's.
+    static constexpr std::size_t kConstrainedDdl = 5;
     std::size_t constrained_ddl_ = 0;
     bool child_cabin_ = false;
     // Relations given their one index (`kCreateIndex`).

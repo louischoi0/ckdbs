@@ -114,6 +114,10 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
         out += " constraint_refusals=" + std::to_string(constraint_refusals) +
                " constraint_admissions=" + std::to_string(constraint_admissions);
     }
+    if (keyed_placed + keyed_held + keys_moved != 0) {
+        out += " keyed=" + std::to_string(keyed_placed) + "/" + std::to_string(keyed_held) + "/" +
+               std::to_string(keys_moved) + "(placed/held/moved)";
+    }
     if (log_cuts != 0) out += " log_cuts=" + std::to_string(log_cuts);
     if (page_cuts != 0) {
         out += " page_cuts=" + std::to_string(page_cuts) + " unsynced_pages=" +
@@ -559,7 +563,12 @@ void AbsorbError(Iteration& it, const Op& op, std::size_t op_index) {
             it.oracle.NoteIndeterminate(op.table);
             break;
         case Op::Kind::kInsertNamed:
+        case Op::Kind::kInsertKeyed:
             it.oracle.NoteUnchecked(op.table, op.key);
+            break;
+        case Op::Kind::kMoveKey:
+            it.oracle.NoteUnchecked(op.table, op.key);
+            it.oracle.NoteUnchecked(op.table, op.lo);
             break;
         case Op::Kind::kPurge:
             it.oracle.NotePurgeUnknown(op.table, op.lo, op.hi);
@@ -695,6 +704,79 @@ bool CheckNamedInsert(Iteration& it, const Op& op, const std::string& reply,
     return true;
 }
 
+// A unique key's refusal (BX-R6), which is a primary key's.
+bool IsKeyHeldRefusal(const std::string& reply) {
+    return IsErr(reply) && reply.find("is already held by") != std::string::npos;
+}
+
+// **The keyed relation's two writes that name a key to hold** (DR-S2): an
+// INSERT of `op.key`, and a move of row `op.key`'s key to `op.lo`. The
+// oracle's key is the `id` column, so "live" is all it asks: a key a deleted
+// or moved-off row once held is free. An INSERT is placed, or refused
+// because a live row holds its key. A move writes one row, or none where no
+// row holds `op.key`, or is refused where another live row holds `op.lo`.
+// Where a key's fate is unknown any well-formed answer is taken and both
+// keys become unknown. A refusal for a held key is never an I/O outcome, so
+// a wrong one fails with faults on too.
+bool CheckKeyedWrite(Iteration& it, const Op& op, const std::string& reply,
+                     std::size_t op_index) {
+    const bool insert = op.kind == Op::Kind::kInsertKeyed;
+    const std::uint64_t target = insert ? op.key : op.lo;
+    const Oracle::Predicate source{true, op.key, 0};
+    const Oracle::Predicate held_by{true, target, 0};
+    const bool checkable = it.oracle.CountCheckable(op.table, source) &&
+                           it.oracle.CountCheckable(op.table, held_by);
+    const Oracle::TableRows* rows = it.oracle.Rows(op.table);
+    const bool source_live = rows != nullptr && rows->count(op.key) != 0;
+    const bool target_live = rows != nullptr && rows->count(target) != 0;
+
+    const bool held = IsKeyHeldRefusal(reply);
+    const bool placed = insert && reply.rfind("INSERTED", 0) == 0;
+    const std::optional<std::size_t> moved =
+        insert ? std::nullopt : ParseCount(reply, "UPDATED ");
+    // What the oracle owes: 0 a refusal, 1 the write, 2 a move of no row.
+    const int owed = insert ? (target_live ? 0 : 1)
+                     : !source_live ? 2
+                     : (target_live && target != op.key) ? 0
+                                                         : 1;
+    const bool wrote = insert ? placed : moved == std::size_t{1};
+    const bool legal = !checkable ? held || placed || moved.has_value()
+                       : owed == 0 ? held
+                       : owed == 1 ? wrote
+                                   : moved == std::size_t{0};
+    if (!legal) {
+        if (IsErr(reply) && it.faults_on() && !held) {
+            AbsorbError(it, op, op_index);
+            ++it.verdict.ops_run;
+            return true;
+        }
+        Fail(it, "op " + std::to_string(op_index) + " [" + op.sql + "]: the oracle expects " +
+                     (owed == 0 ? "a held-key refusal" : owed == 1 ? "the write" : "UPDATED 0") +
+                     ", got " + reply);
+        return false;
+    }
+    ++it.verdict.ops_run;
+    if (!checkable) {
+        it.oracle.NoteUnchecked(op.table, op.key);
+        it.oracle.NoteUnchecked(op.table, target);
+        ++it.verdict.counts_skipped;
+        return true;
+    }
+    ++it.verdict.writes_checked;
+    if (held) {
+        ++it.verdict.keyed_held;
+    } else if (insert) {
+        it.oracle.ApplyInsert(op.table, op.key, OracleRow{op.v, op.name});
+        ++it.verdict.keyed_placed;
+    } else if (owed == 1 && target != op.key) {
+        const OracleRow row = rows->at(op.key);
+        it.oracle.ApplyDelete(op.table, source);
+        it.oracle.ApplyInsert(op.table, target, row);
+        ++it.verdict.keys_moved;
+    }
+    return true;
+}
+
 // The oid a `DROPPED TABLE <name> oid=<n>` reply names, or 0.
 std::uint64_t DroppedOid(const std::string& reply) {
     const std::size_t at = reply.find(" oid=");
@@ -775,6 +857,9 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
 
     if (op.kind == Op::Kind::kInsertNamed) return CheckNamedInsert(it, op, reply, op_index);
     if (op.kind == Op::Kind::kPurge) return CheckPurge(it, op, reply, op_index);
+    if (op.kind == Op::Kind::kInsertKeyed || op.kind == Op::Kind::kMoveKey) {
+        return CheckKeyedWrite(it, op, reply, op_index);
+    }
 
     // A constrained write refused, or admitted, against the oracle's word.
     // A refusal applies nothing; any other answer goes on to the write's own
@@ -940,6 +1025,9 @@ bool ExecuteOp(Iteration& it, const Op& op, std::size_t op_index) {
             break;
         case Op::Kind::kInsertNamed:
             break;  // `CheckNamedInsert`, above
+        case Op::Kind::kInsertKeyed:
+        case Op::Kind::kMoveKey:
+            break;  // `CheckKeyedWrite`, above
         case Op::Kind::kPurge:
             break;  // `CheckPurge`, above
         case Op::Kind::kSync:
@@ -1847,6 +1935,9 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     derived_reads += other.derived_reads;
     constraint_refusals += other.constraint_refusals;
     constraint_admissions += other.constraint_admissions;
+    keyed_placed += other.keyed_placed;
+    keyed_held += other.keyed_held;
+    keys_moved += other.keys_moved;
     indexes_created += other.indexes_created;
     log_cuts += other.log_cuts;
     page_cuts += other.page_cuts;
@@ -1975,6 +2066,16 @@ bool SameOutcome(const Op& op, const std::string& bare, const std::string& full)
             std::sort(b.begin(), b.end());
             return a == b;
         }
+        case Op::Kind::kInsertKeyed:
+        case Op::Kind::kMoveKey:
+            // Written or refused alike. A placement's reply names a page and
+            // a refusal the key's index by its relation's oid, which the
+            // features' own objects move.
+            if (!IsErr(bare) && !IsErr(full)) {
+                return op.kind == Op::Kind::kInsertKeyed || bare == full;
+            }
+            return IsErr(bare) == IsErr(full) &&
+                   IsKeyHeldRefusal(bare) == IsKeyHeldRefusal(full);
         case Op::Kind::kInsertNamed:
             // The refusal's reason, not its text: a duplicate's names the
             // page, which the features' own pages move.

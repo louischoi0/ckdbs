@@ -1104,6 +1104,57 @@ TEST(SimLoop, ACleanRunWithTheShapesReconcilesItsLockingReads) {
     EXPECT_GT(verdict.read_only_transactions, 0u) << verdict.Summary(config);
 }
 
+// DR-S2 (DR-R8): with the shapes the stream writes and reads a heap whose
+// primary key is not its Keystone, every statement naming the whole key;
+// without them never, so the pinned corpus draws what it always drew.
+TEST(SimWorkload, TheShapesWriteARelationByItsPrimaryKey) {
+    for (const bool shapes : {false, true}) {
+        Workload workload(Rng(11).Fork("workload"), Profile::kUniform, shapes);
+        std::map<Op::Kind, int> keyed;
+        bool created = false;
+        for (int i = 0; i < 4000; ++i) {
+            const Op op = workload.Next();
+            if (op.table != kKeyed) continue;
+            if (op.kind == Op::Kind::kCreateTable) {
+                created = true;
+                EXPECT_NE(op.sql.find("PRIMARY KEY (g, id)) HEAP"), std::string::npos) << op.sql;
+                continue;
+            }
+            ++keyed[op.kind];
+            // A write by value walks; every other statement names the key.
+            if (op.kind == Op::Kind::kUpdate && !op.by_tuple_key) continue;
+            EXPECT_NE(op.sql.find("g"), std::string::npos) << op.sql;
+        }
+        EXPECT_EQ(created, shapes);
+        for (const Op::Kind kind :
+             {Op::Kind::kInsertKeyed, Op::Kind::kMoveKey, Op::Kind::kUpdate, Op::Kind::kDelete,
+              Op::Kind::kSelectTupleKey, Op::Kind::kSelectRange}) {
+            EXPECT_EQ(keyed[kind] > 0, shapes) << OpKindName(kind) << " shapes=" << shapes;
+        }
+    }
+}
+
+// And the engine answers them as the oracle says: keys placed, keys refused
+// because a live row holds them, and keys moved, each counted only where
+// the oracle owed exactly that answer - in a clean run, and across a crash
+// and its recovery, which reconciles the relation by its `id`.
+TEST(SimLoop, ARunWithTheShapesReconcilesTheKeyedRelation) {
+    for (const SimMode mode : {SimMode::kClean, SimMode::kCrash}) {
+        SimConfig config;
+        config.seed = 7;
+        config.ops = 3000;
+        config.mode = mode;
+        // A crash ends an iteration at a seed-drawn op, so several are run.
+        config.iterations = mode == SimMode::kClean ? 1 : 12;
+        config.shapes = true;
+        const SimVerdict verdict = RunSimulation(config);
+        EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
+        EXPECT_GT(verdict.keyed_placed, 10u) << verdict.Summary(config);
+        EXPECT_GT(verdict.keyed_held, 0u) << verdict.Summary(config);
+        EXPECT_GT(verdict.keys_moved, 0u) << verdict.Summary(config);
+    }
+}
+
 // The count a mutation reports is compared against the oracle's own count
 // of the rows the predicate matches — the sharpest single assertion the
 // harness makes. This pins that the corpus actually reaches it.
