@@ -610,9 +610,10 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   the Cabin dropped.
   Since DQ-S2 a top-level join within `join_build_max_rows` answers those
   misses from the statement's map and walks once a statement
-  (`join-inner-build.md` §5a). A correlated `EXISTS` over a cabined column
-  still walks once per outer row, and so does a join past the cap. The Cabin
-  itself still never fills while the gate refuses.
+  (`join-inner-build.md` §5a). Since DQ-S3 a correlated `EXISTS` does
+  too, through the prefix map (verified by DQ-S3's tests over
+  `910d8d63`). A join past the cap still walks once per outer row. The Cabin itself still never fills while the gate
+  refuses.
 
 - **A cabined join whose misses are all recording touches walks once per
   outer row, and can be refused for its budget where the uncabined join

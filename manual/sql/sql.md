@@ -815,8 +815,10 @@ DROP CABIN ON trades (DATE(ts));
   bounded by `join_build_max_rows` (65,536 rows by default): past it, every
   row the Cabin has not seen reads the inner table. `join_build_max_rows =
   0`, or a plan's `BUILD <table> OFF`, turns the copy off; no reply changes
-  either way. A correlated `EXISTS` over a cabined column does not use the
-  copy yet.
+  either way. A correlated `EXISTS` over a cabined column uses the copy
+  too: its reads of the inner table stop at the first match, the copy
+  holds what they have reached, and a later row's read starts where the
+  last one stopped.
 - `SHOW CABINS` lists them, with each one's `shape` (`column`, `expression`,
   `predicate`) and `key`. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.

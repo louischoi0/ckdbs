@@ -224,6 +224,9 @@ TEST(CabinMissBuildTest, TheCabinObservesWhatItObservedWithoutTheFallback) {
     // the gate declines, and two that record and serve. Every reply and the
     // Cabin's whole report (observed values, entries, hits, misses) are the
     // same; only the walks the map replaced differ.
+    // The join and, after it, a correlated `EXISTS` (DQ-S3) keyed by the
+    // outer row's tuple key over the same Cabin, so the sub-chain's misses
+    // go through the prefix map in the same sequence.
     const auto sequence = [](exec::Budget budget) {
         Db db(budget);
         db.Ok("CREATE CABIN ON inn(k)");
@@ -231,6 +234,11 @@ TEST(CabinMissBuildTest, TheCabinObservesWhatItObservedWithoutTheFallback) {
         for (int run = 0; run < 4; ++run) {
             if (run == 1) db.HoldAWrite();
             for (const std::string& row : db.Rows(kJoin)) out.push_back(row);
+            for (const std::string& row :
+                 db.Rows("SELECT o.id FROM outr AS o WHERE EXISTS "
+                         "(SELECT i.id FROM inn AS i WHERE i.k = o.id)")) {
+                out.push_back("exists " + row);
+            }
             if (run == 1) db.ReleaseTheWrite();
         }
         for (const std::string& row :
@@ -245,11 +253,21 @@ TEST(CabinMissBuildTest, TheCabinObservesWhatItObservedWithoutTheFallback) {
         }
         return out;
     };
+    {
+        Db db;
+        db.Ok("CREATE CABIN ON inn(k)");
+        const std::string plan = db.Run(
+            "ANALYZE SELECT o.id FROM outr AS o WHERE EXISTS "
+            "(SELECT i.id FROM inn AS i WHERE i.k = o.id)");
+        ASSERT_NE(plan.find("CabinProbe inn AS i cabin=1 on=col1 key=1:0.0 build on=col1"),
+                  std::string::npos)
+            << "the sub-chain is a Cabin probe carrying the fallback: " << plan;
+    }
     const std::vector<std::string> without = sequence(NoBuild());
     const std::vector<std::string> with = sequence(exec::Budget());
     EXPECT_EQ(with, without);
     ASSERT_GE(with.size(), 3u);
-    EXPECT_EQ(with[with.size() - 3].rfind("12,", 0), 0u) << "every key observed";
+    EXPECT_NE(with[with.size() - 3].rfind("0,", 0), 0u) << "sets were observed";
     EXPECT_NE(with[with.size() - 2], "cabins_unbankable_views=0") << "the gate declined";
     EXPECT_NE(with[with.size() - 2], "cabins_unbankable_views=absent");
 }
@@ -290,5 +308,97 @@ TEST(CabinMissBuildTest, ANullOuterKeyAndASwitchedOffStoreFallToTheMap) {
     EXPECT_EQ(db.Rows(nullable), want);
 }
 
+// ---- DQ-S3: a sub-chain's miss falls to the prefix map ---------------------
+//
+// A correlated `EXISTS`-class sub-chain over a cabined column stops each walk
+// at its first qualifying row, so its fallback is the build's prefix form
+// (join-inner-build.md §6): a miss replays the bucket the walks so far filled
+// and resumes at the mark. `w > 130` admits 33 of the 64 inner rows, so some
+// outer keys qualify and some do not, and a `NOT EXISTS` must conclude an
+// absence - which a prefix map may do only once it covers the relation.
+const char* const kSubChains[] = {
+    "SELECT o.id FROM outr AS o WHERE EXISTS "
+    "(SELECT i.id FROM inn AS i WHERE i.k = o.k AND i.w > 130)",
+    "SELECT o.id FROM outr AS o WHERE NOT EXISTS "
+    "(SELECT i.id FROM inn AS i WHERE i.k = o.k AND i.w > 130)",
+};
+
+TEST(CabinMissBuildTest, AGateDeclinedSubChainIsAnsweredFromThePrefixMap) {
+    for (const char* sql : kSubChains) {
+        Db reference(NoBuild(), /*cabins=*/false);
+        const std::vector<std::string> want = reference.Rows(sql);
+
+        Db db;
+        db.Ok("CREATE CABIN ON inn(k)");
+        db.HoldAWrite();
+        for (int run = 0; run < 2; ++run) {
+            const std::string plan = db.Run(std::string("ANALYZE ") + sql);
+            // Every key misses, and every miss is the prefix form's: the
+            // walks visit each inner row once (46, 7, 7 and 4 rows, the
+            // last reaching the end), and fifteen replays read seven
+            // bucketed rows - 71 examined, where the per-row walk examined
+            // 896. The map ends holding every row the `w > 130` admits.
+            EXPECT_EQ(Counter(plan, "cabin_misses"), kOuter) << sql << plan;
+            EXPECT_EQ(Counter(plan, "cabin_recorded"), -1) << sql << plan;
+            EXPECT_EQ(Counter(plan, "examined"), 71) << sql << plan;
+            EXPECT_EQ(Counter(plan, "build_rows"), 33) << sql << plan;
+            EXPECT_EQ(Counter(plan, "inner_built"), 1) << sql << plan;
+            EXPECT_EQ(Counter(plan, "build_probes"), kOuter - 1) << sql << plan;
+            EXPECT_EQ(db.Rows(sql), want) << sql << ", run " << run;
+        }
+        db.ReleaseTheWrite();
+    }
+}
+
+TEST(CabinMissBuildTest, ASubChainAnswersTheSameWithTheCabinTheMapAndNeither) {
+    // DQ-R1 for the sub-chain, the gate open: rounds that sight, record and
+    // serve, against the walk with neither and against the Cabin alone.
+    for (const char* sql : kSubChains) {
+        Db reference(NoBuild(), /*cabins=*/false);
+        const std::vector<std::string> want = reference.Rows(sql);
+        Db with;
+        Db cabin_alone(NoBuild());
+        with.Ok("CREATE CABIN ON inn(k)");
+        cabin_alone.Ok("CREATE CABIN ON inn(k)");
+        for (int run = 0; run < 4; ++run) {
+            EXPECT_EQ(with.Rows(sql), want) << sql << ", run " << run;
+            EXPECT_EQ(cabin_alone.Rows(sql), want) << sql << ", run " << run;
+        }
+    }
+}
+
+
+TEST(CabinMissBuildTest, ASubChainInterleavesHitsRecordingsAndThePrefixMapForOneAnswer) {
+    // DQ-S0 (ii)'s claim, in the order it bears weight: one `EXISTS`
+    // statement whose outer rows take every arm - a set, a recording walk
+    // through the stop, the prefix map - with recordings between the
+    // fallbacks. Key 2 is banked by a literal probe; keys 5 and 8 are
+    // sighted by a statement over outer rows 2 and 3. Then, row by row:
+    // 1 a hit; 2 and 3 recording walks; 4 to 12 first sightings, the
+    // fallback walking from the head and resuming at its mark; 13 to 15
+    // hits; 16 a recording. The map buckets every admitted row once and
+    // reaches the end: the recordings neither moved its mark nor filled it.
+    const char* sql = kSubChains[0];
+    Db reference(NoBuild(), /*cabins=*/false);
+    const std::vector<std::string> want = reference.Rows(sql);
+
+    Db db;
+    db.Ok("CREATE CABIN ON inn(k)");
+    EXPECT_EQ(db.Rows("SELECT * FROM inn WHERE k = 2").size(), 1u);
+    db.Rows(std::string(sql) + " AND o.id >= 2 AND o.id <= 3");
+    const std::string plan = db.Run(std::string("ANALYZE ") + sql);
+    EXPECT_EQ(Counter(plan, "cabin_hits"), 4) << plan;
+    EXPECT_EQ(Counter(plan, "cabin_misses"), 12) << plan;
+    EXPECT_EQ(Counter(plan, "cabin_recorded"), 3) << plan;
+    EXPECT_EQ(Counter(plan, "inner_built"), 1) << plan;
+    EXPECT_EQ(Counter(plan, "build_rows"), 33) << plan;
+    EXPECT_EQ(Counter(plan, "build_probes"), 8) << plan;
+
+    Db again;
+    again.Ok("CREATE CABIN ON inn(k)");
+    EXPECT_EQ(again.Rows("SELECT * FROM inn WHERE k = 2").size(), 1u);
+    again.Rows(std::string(sql) + " AND o.id >= 2 AND o.id <= 3");
+    EXPECT_EQ(again.Rows(sql), want);
+}
 }  // namespace
 }  // namespace kds::server

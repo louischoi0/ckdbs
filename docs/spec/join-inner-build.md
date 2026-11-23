@@ -169,8 +169,16 @@ At execution the probe's three answers are:
   (`WalkAndRecord`). It is a whole walk with one key announced, and it
   neither reads nor fills the map.
 
-**In a sub-chain** (a correlated `EXISTS`) the annotation is carried and
-not read: a miss there walks, as before.
+**In a sub-chain** (a correlated `EXISTS`, `NOT EXISTS`, `IN`'s per-row
+form) the fallback is §6's prefix form. A miss replays the bucket the
+walks so far filled. A replayed row that qualifies is conclusive, and an
+absence is conclusive only once the map covers the relation. Otherwise the
+miss resumes the walk at the mark and extends the map. So within
+`join_build_max_rows` every inner row is visited at most once by the
+statement's fallback walks. Past it the map freezes, keeps serving its
+prefix, and each later miss walks from the frozen mark (§6). The recording walk's completion license
+(`cabin.md` §4a) runs through the stop in a walk of its own, which neither
+reads nor moves the map or its mark (DQ-S0 (ii), DQ-S3).
 
 So the Cabin observes exactly what it observed before: the same sightings,
 recordings, commits and declines, and the same counters. Nothing is banked

@@ -312,12 +312,16 @@ TEST_F(InnerBuildContractTest, OneCappedStepDoesNotDeclineItsSibling) {
 // answered by the map, then recordings, then serves - answers the bytes the
 // uncabined statement answers.
 TEST_F(InnerBuildContractTest, ACabinedJoinAnswersTheSameBytesAtEveryCapAndEveryRound) {
+    // The sub-chains first, so round 0 meets their prefix map - frozen
+    // under caps 1 and 2 - before the joins' recordings fill the sets.
     const char* statements[] = {
+        "SELECT au.name FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE tr.au_id = au.id)",
+        "SELECT au.name FROM au WHERE NOT EXISTS "
+        "(SELECT tr.id FROM tr WHERE tr.au_id = au.id AND tr.qty > 20)",
         "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id",
         "SELECT au.name, tr.qty FROM au JOIN tr ON tr.au_id = au.id WHERE tr.qty <= 30",
         "SELECT au.name, tr.qty, ln.amt FROM au JOIN tr ON tr.au_id = au.id "
         "JOIN ln ON ln.tr_qty = tr.qty",
-        "SELECT au.name FROM au WHERE EXISTS (SELECT tr.id FROM tr WHERE tr.au_id = au.id)",
     };
     std::vector<std::vector<std::string>> reference;
     for (const char* sql : statements) reference.push_back(Run(sql, nullptr, /*cap=*/0));

@@ -643,17 +643,8 @@ private:
         if (step.kind == AccessKind::kIndexProbe || step.kind == AccessKind::kIndexRange) {
             co_return co_await RunIndexStep(steps, index, step, access);
         }
-        // The build annotation's arm, in its two forms. The test is the
-        // *walk's* class and not the predicate that spelled it
-        // (`record_through_stops_` is set for every sub-chain runner): a
-        // walk a sink can cut needs the prefix rule, and one that always
-        // runs to the end does not.
-        if (step.build.has_value()) {
-            if (record_through_stops_) {
-                co_return co_await WalkPrefixAndProbe(steps, index, step, access);
-            }
-            co_return co_await WalkAndBuild(steps, index, step, access);
-        }
+        // The build annotation's arm (`BuiltWalk`).
+        if (step.build.has_value()) co_return co_await BuiltWalk(steps, index, step, access);
         // An elided `ORDER BY <tuple key> DESC` rests on this walk (CV O2).
         if (step.emit_order == EmitOrder::kTupleKeyBackward) {
             co_return co_await RunReverseWalkStep(steps, index, step, access);
@@ -925,26 +916,46 @@ private:
         co_return co_await ServeAllOrWalk(steps, index, step, access, std::move(values));
     }
 
+    // **The build annotation's arm, in its two forms** - a walked join's
+    // step (`RunStep`) and a Cabin probe's miss (`MissWalk`). The test is
+    // the *walk's* class and not the predicate that spelled it
+    // (`record_through_stops_` is set for every sub-chain runner): a walk a
+    // sink can cut needs the prefix rule (spec §6), and one that always runs
+    // to the end does not.
+    //
+    //
+    // Both forms are entered here alone, so their two guards are asked here
+    // once: `BuildIsArmable`, the structural one, and the off-switch, the
+    // A/B lever (JB5) - `join_build_max_rows == 0` maps nothing, marks
+    // nothing, and the walk is the walk the statement always ran.
+    //
+    // **Not a coroutine**, nor is `MissWalk`: each hands back the one
+    // coroutine that answers, so neither adds a frame.
+    sched::Coro BuiltWalk(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                          const catalog::TableAccess& access) {
+        if (!BuildIsArmable(step, access) || budget_.join_build_max_rows() == 0) {
+            return RunWalkStep(steps, index, step, access);
+        }
+        if (record_through_stops_) return WalkPrefixAndProbe(steps, index, step, access);
+        return WalkAndBuild(steps, index, step, access);
+    }
+
     // **A correlated Cabin probe's miss that records nothing** (DQ E1,
     // join-inner-build.md §5a): a first sighting, a capped value, a
     // recording the banking gate declines, an unkeyable value, no store.
-    // Where the step carries the build's annotation - its miss's fallback,
-    // the one the step would carry were the Cabin not there - the build's
-    // arm answers it: the statement's first such miss walks and buckets,
-    // every later one probes the map, and past the cap the step walks per
-    // miss (spec §7). Otherwise the walk, as before. The recording walk
-    // never comes here, so the Cabin observes what it observed without the
-    // fallback (DQ-R3) and nothing is banked from the map (DQ-R2).
-    //
-    // **Not a coroutine**: it hands back the one coroutine that answers, so
-    // a miss pays a branch and no frame. A sub-chain's miss walks: its map
-    // is the prefix form (spec §6), not this one (DQ-S3).
+    // Where the step carries the annotation, `BuiltWalk` answers it - on a
+    // top-level chain the map, built by the first such miss; in a sub-chain
+    // §6's prefix form, frozen past the cap. Otherwise the walk, as before.
+    // The recording walk never comes here -
+    // its completion license runs through the stop in a walk of its own,
+    // which neither reads nor moves the map or its mark (DQ-S0 (ii)) - so
+    // the Cabin observes what it observed without the fallback (DQ-R3) and
+    // nothing is banked from the map (DQ-R2). A miss of a step with no
+    // annotation pays a branch and no frame (DQ-R6).
     sched::Coro MissWalk(const std::vector<Step>& steps, std::size_t index, const Step& step,
                          const catalog::TableAccess& access) {
-        if (step.build.has_value() && !record_through_stops_) {
-            return WalkAndBuild(steps, index, step, access);
-        }
-        return RunWalkStep(steps, index, step, access);
+        if (!step.build.has_value()) return RunWalkStep(steps, index, step, access);
+        return BuiltWalk(steps, index, step, access);
     }
 
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
@@ -1193,8 +1204,8 @@ private:
     }
 
     // Whether an annotated step may build at all - a property of the step
-    // and its relation, not of the run, so both build forms ask it once
-    // and in the same words.
+    // and its relation, not of the run, so `BuiltWalk` asks it once for
+    // both build forms.
     //
     // WalkAndRecord's guard, for its reason: the bucketing reads the join
     // column out of this row's frame slots, so the partial decode must
@@ -1230,16 +1241,11 @@ private:
     // a built step probes the map (ProbeBuild, JB4) instead of walking.
     sched::Coro WalkAndBuild(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
-        if (!BuildIsArmable(step, access)) {
-            co_return co_await RunWalkStep(steps, index, step, access);
-        }
-
         InnerBuildState& state = statement_->builds[step.step_id];
-        // The off-switch and the cap's standing verdict (workplan JB5):
-        // `join_build_max_rows == 0` disables the build outright - no map
-        // can hold a row - and a declined step already took the Cabin's
-        // fall-back refusal. Both walk plain, never error.
-        if (budget_.join_build_max_rows() == 0 || state.phase == BuildPhase::kDeclined) {
+        // The cap's standing verdict (workplan JB5): a declined step already
+        // took the Cabin's fall-back refusal, and walks plain, never error.
+        // The off-switch and `BuildIsArmable` are `BuiltWalk`'s.
+        if (state.phase == BuildPhase::kDeclined) {
             co_return co_await RunWalkStep(steps, index, step, access);
         }
         if (state.phase == BuildPhase::kBuilt) {
@@ -1308,13 +1314,7 @@ private:
     // so in fewer moving parts.
     sched::Coro WalkPrefixAndProbe(const std::vector<Step>& steps, std::size_t index,
                                    const Step& step, const catalog::TableAccess& access) {
-        if (!BuildIsArmable(step, access) || budget_.join_build_max_rows() == 0) {
-            // The off-switch is the A/B lever (JB5) and it gates here, at
-            // the arm: nothing maps, nothing marks, and the walk is the
-            // walk this statement always ran.
-            co_return co_await RunWalkStep(steps, index, step, access);
-        }
-
+        // The off-switch and `BuildIsArmable` are `BuiltWalk`'s.
         InnerBuildState& state = statement_->builds[step.step_id];
 
         // 1. The prefix, replayed for this key.

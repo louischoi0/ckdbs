@@ -22,7 +22,8 @@ and runs the same `--stmts` statements in sequence on it:
 
     ANALYZE SELECT o.id, i.w FROM outr AS o JOIN inn AS i ON i.k = o.k
 
-The outer relation holds 1,000 rows (`--outer`); every inner key k is
+or, with `--shape exists`, the correlated EXISTS over the same relations
+(`SHAPES`). The outer relation holds 1,000 rows (`--outer`); every inner key k is
 distinct (one inner row a key), drawn as a permutation of 1..N. The outer
 keys:
 
@@ -52,7 +53,13 @@ from dk_close import cpu_ns, host_state  # noqa: E402
 from dp_close import rotated  # noqa: E402
 
 ARMS = ["A", "Agate", "B"]
-STMT = "SELECT o.id, i.w FROM outr AS o JOIN inn AS i ON i.k = o.k"
+# The join DQ-S0 measured, and (`--shape exists`, DQ-S3) the correlated
+# EXISTS over the same relations, whose inner step is a sub-chain's.
+SHAPES = {
+    "join": "SELECT o.id, i.w FROM outr AS o JOIN inn AS i ON i.k = o.k",
+    "exists": "SELECT o.id FROM outr AS o WHERE EXISTS "
+              "(SELECT i.id FROM inn AS i WHERE i.k = o.k)",
+}
 COUNTERS = ["opens", "examined", "matched", "cabin_hits", "cabin_misses", "cabin_recorded",
             "inner_built", "build_rows", "build_probes"]
 
@@ -184,8 +191,8 @@ def inner_counters(text):
     return {"line": None}
 
 
-def plan_text(c):
-    rows = c.execute("ANALYZE " + STMT)[1]
+def plan_text(c, shape):
+    rows = c.execute("ANALYZE " + SHAPES[shape])[1]
     return "\n".join(" ".join((f or b"").decode() for f in r) for r in rows)
 
 
@@ -229,7 +236,7 @@ def cell(a, binary, arm, n, dist, rnd, beat):
             t0 = settled_cpu_ns(srv.proc.pid)
             w0 = time.perf_counter()
             try:
-                text = plan_text(c)
+                text = plan_text(c, a.shape)
             except kwp.KwpError as e:
                 # A refusal is a result of the cell, not an end of the run:
                 # the statement's CPU up to the refusal is still the cost.
@@ -311,6 +318,7 @@ def main():
     ap.add_argument("--driver-cpus", default="0,4")
     ap.add_argument("--hold-renew-s", type=float, default=40.0)
     ap.add_argument("--heartbeat", default=None)
+    ap.add_argument("--shape", default="join", choices=sorted(SHAPES))
     ap.add_argument("--engine-build-cap", action="store_true",
                     help="leave join_build_max_rows at the engine default (65,536) instead "
                          "of raising it above the inner relation")

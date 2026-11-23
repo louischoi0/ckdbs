@@ -641,3 +641,65 @@ once at the first run, at a load average of 5.7. It is the known flake
 (`known-gaps.md`, Testing), and it passed 8 of 8 repeats alone. The
 reviewed tree's suite: 0 failed of 5,156. Overhead not
 measured; measured at the milestone's close.
+
+### DQ-S3 - sub-chains (2026-11-23)
+
+On worktree `dq-cabin-miss-build`, over `910d8d63`.
+
+**The executor:**
+- **A sub-chain's miss that records nothing goes to §6's prefix map**
+  (`WalkPrefixAndProbe`). DQ-S0 (ii) said this composes, and DQ-Q4 (a)
+  gated the stage on it.
+- **One dispatch.** `BuiltWalk` (`step_vm.cpp`, not a coroutine) is the
+  build annotation's arm for both a walked join's step (`RunStep`) and a
+  Cabin probe's miss (`MissWalk`).
+- **One guard.** `BuildIsArmable` and the off-switch are asked there once,
+  for both forms, where each form used to ask them for itself.
+- **The recording walk is unchanged.** Its completion license runs through
+  the stop in a walk of its own, which neither reads nor moves the map or
+  its mark.
+
+**Docs:** §5a's sub-chain paragraph, including the frozen form past the
+cap; `cabin.md` §4a; the manual; known-gaps.
+
+**Tests** (`tests/cabin_miss_build_test.cpp`):
+- **A gate-declined `EXISTS` and `NOT EXISTS`, pinned exactly.**
+  - 16 misses, 71 rows examined, 33 rows bucketed, the map complete, and
+    15 replays.
+  - The per-row walk examined 896. That figure is the mutation check: with
+    the sub-chain fallback forced off, the test fails at it.
+- **One `EXISTS` statement whose outer rows take every arm in turn:** a
+  hit, two recording walks, nine first sightings through the prefix map,
+  three hits, and a recording.
+  - The map still buckets 33 rows and completes, so the recordings neither
+    moved its mark nor filled it. That is DQ-S0 (ii)'s claim, run.
+- **DQ-R3 with a sub-chain:** the same Cabin report with and without the
+  fallback, now over the join and over a correlated `EXISTS`.
+- **DQ-R1 for sub-chains:** the gate open, against the walk with neither
+  structure and against the Cabin alone.
+- **The inner-build contract suite** puts its `EXISTS` and a `NOT EXISTS`
+  first, so round 0 meets the prefix map, frozen under caps 1 and 2.
+
+**Review** (`critics-developer`): no correctness bug.
+- Applied:
+  - the interleaved statement, with its counters;
+  - the exact pins in place of a bound with 9 rows of slack;
+  - the contract suite's order;
+  - the shared guard hoisted;
+  - the duplicate counter helper removed;
+  - `MissWalk`'s comment cut;
+  - two spec sentences corrected: "every inner row once" holds within the
+    cap only, and "a hit" there means a replayed row that qualifies;
+  - known-gaps given its commit.
+- Rejected:
+  - merging `MissWalk` into `BuiltWalk`, since `RunStep` would then call a
+    function named for a miss;
+  - folding the five-field `BuildRecording` setups into a helper, which is
+    older than DQ;
+  - tests for a NULL key, `IN`'s per-row form, a Cabin step at index 1 or
+    later, a nested sub-chain and a hoisted chain. The prefix map's own
+    cases are the inner-build suites', and the fallback reaches them by the
+    one dispatch they already pin.
+
+Suite: 0 failed of 5,159 on this commit's build inputs. Overhead not measured;
+measured at the milestone's close. DQ-S4 (E2) does not run (DQ-S0's verdict).

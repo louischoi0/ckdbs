@@ -218,10 +218,11 @@ Ladder order encodes the economics — a converged Cabin serve beats any
 per-statement rebuild — so the Cabin keeps priority and the build takes
 only what nothing banked can serve. **That includes the probe's own
 misses** (DQ, `join-inner-build.md` §5a): the step carries the build's
-annotation, and on a top-level join a miss that records nothing — a first
-sighting, a capped value, a recording the banking gate declines — is
-answered from the statement's map instead of a walk of the inner relation
-(a correlated `EXISTS`'s miss still walks). The recording
+annotation, and a miss that records nothing — a first sighting, a capped
+value, a recording the banking gate declines — is answered from the
+statement's map instead of a walk of the inner relation. In a correlated
+`EXISTS`, `NOT EXISTS` or `IN` sub-chain that map is the build's prefix
+form. The recording
 walk below is unchanged and is the only walk a set is banked from; the map
 is never banked.
 
