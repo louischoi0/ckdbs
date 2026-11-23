@@ -605,19 +605,22 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   **What it costs a join** was measured by DQ-S0 at `68e5a69f`
   (`bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`): with one
   write held open, a join on a cabined inner column walks the inner relation
-  once per outer row in every statement, 120x to 190x the same join with the
-  Cabin dropped.
+  once per outer row in every statement. That is 116x to 159x (10,000 inner
+  rows) and 183x to 249x (100,000, the build cap raised) the same join with
+  the Cabin dropped.
 
 - **A cabined join whose misses are all recording touches walks once per
   outer row, and can be refused for its budget where the uncabined join
   answers** (DQ-Q11). A correlated Cabin probe's recording touch (a key's
   second, `n = 2`) is a whole walk of the inner relation. A statement whose
   outer keys are all at that touch pays one walk an outer row: the second
-  run of a join over 1,000 keys seen once before. DQ-S0 at `68e5a69f`
-  measured it. At 100,000 inner rows and 1,000 outer rows that is
-  100,000,000 row touches, so the default `max_rows_touched` refuses the
-  statement. The same join with no Cabin answers in 25 ms, and every later
-  run of it is served from the sets. That is the "accelerator turning a
+  run of a join over keys seen once before. DQ-S0 at `68e5a69f` measured it.
+  At the engine's defaults, 60,000 inner rows and 2,000 outer rows make
+  120,000,000 row touches, so `max_rows_touched` refuses the statement. The
+  same join with no Cabin answers in 10.7 to 14.6 ms, and every later run of
+  it is served from the sets. The window is an inner relation within
+  `join_build_max_rows` (65,536) and k x N above the budget: past the cap
+  the build declines too, and the uncabined join is refused as well. That is the "accelerator turning a
   rows-returning statement into a budget refusal" `cabin.md` §4a says §1
   forbids, on a top-level join. DQ's E1 leaves this case open by its own
   rule (DQ-Q2 (a): a recording touch walks and records, so the Cabin

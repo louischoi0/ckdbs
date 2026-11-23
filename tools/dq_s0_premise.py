@@ -32,7 +32,8 @@ keys:
              shuffled
 
 Per statement: server CPU (`/proc/<pid>/task/*/schedstat`, every thread,
-compile and run together), client wall, and the inner step's ANALYZE
+compile and run together, read once no thread is runnable:
+`settled_cpu_ns`), client wall, and the inner step's ANALYZE
 counters (`opens`, `examined`, `cabin_hits`, `cabin_misses`,
 `cabin_recorded`, `inner_built`, `build_rows`, `build_probes`). Walks of the
 inner relation are `examined / N`.
@@ -47,7 +48,8 @@ import argparse, hashlib, json, os, random, re, shutil, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kwp  # noqa: E402
-from dk_close import cpu_ns, host_state, lat_summary  # noqa: E402
+from dk_close import cpu_ns, host_state  # noqa: E402
+from dp_close import rotated  # noqa: E402
 
 ARMS = ["A", "Agate", "B"]
 STMT = "SELECT o.id, i.w FROM outr AS o JOIN inn AS i ON i.k = o.k"
@@ -55,8 +57,33 @@ COUNTERS = ["opens", "examined", "matched", "cabin_hits", "cabin_misses", "cabin
             "inner_built", "build_rows", "build_probes"]
 
 
+def settled_cpu_ns(pid, limit_s=0.05):
+    """`cpu_ns` once no server thread is runnable. A thread's schedstat
+    runtime is folded in when it leaves the CPU or at a tick (4 ms at this
+    host's HZ=250), so a read taken while the server still runs - the reply
+    sent, its tail not yet off the CPU - misses up to a tick: DQ-S0 read
+    0.00 ms for 1 ms statements. Bounded: a thread that never sleeps is read
+    as it stands after `limit_s`."""
+    deadline = time.perf_counter() + limit_s
+    while time.perf_counter() < deadline:
+        running = False
+        for t in os.listdir(f"/proc/{pid}/task"):
+            try:
+                with open(f"/proc/{pid}/task/{t}/stat") as f:
+                    running = f.read().rpartition(")")[2].split()[0] == "R"
+            except (OSError, IndexError):
+                continue
+            if running:
+                break
+        if not running:
+            break
+        time.sleep(0.0002)
+    return cpu_ns(pid)
+
+
 class Server:
-    def __init__(self, binary, workdir, tag, port, cpu, inner_rows, budget=None, frames=65536):
+    def __init__(self, binary, workdir, tag, port, cpu, inner_rows, budget=None,
+                 raise_cap=True, frames=65536):
         self.dir = os.path.join(workdir, tag)
         shutil.rmtree(self.dir, ignore_errors=True)
         os.makedirs(self.dir)
@@ -67,7 +94,8 @@ class Server:
                     f"durability = relaxed\nbuffer_pool_frames = {frames}\n"
                     f"log_file = dq.log\nlog_dir = {self.dir}\nlog_level = warn\n"
                     f"reactor_cpus = {cpu}\njoin_order = written\n"
-                    f"join_build_max_rows = {max(65536, 2 * inner_rows)}\n"
+                    + (f"join_build_max_rows = {max(65536, 2 * inner_rows)}\n"
+                       if raise_cap else "")
                     + (f"max_rows_touched = {budget}\n" if budget else ""))
         self.err = open(os.path.join(self.dir, "dq.stderr"), "w")
         self.proc = subprocess.Popen([binary, "--config", conf], stdout=self.err,
@@ -117,7 +145,7 @@ def outer_keys(dist, n_outer, n_inner, rng):
     return out
 
 
-def load(c, table, rows, width):
+def load(c, table, rows):
     for i in range(0, len(rows), 500):
         vals = ",".join("(" + ",".join(str(x) for x in r) + ")" for r in rows[i:i + 500])
         c.execute(f"INSERT INTO {table} VALUES {vals}")
@@ -165,16 +193,16 @@ def cell(a, binary, arm, n, dist, rnd, beat):
     rng = random.Random(1000 * n + 17 * len(dist) + rnd)
     port = a.port + (rnd % 2)
     srv = Server(binary, a.workdir, f"{arm}-{n}-{dist}-{rnd}", port, a.cpu, n,
-                 a.max_rows_touched)
+                 a.max_rows_touched, raise_cap=not a.engine_build_cap)
     try:
         c = srv.conn()
         c.execute("CREATE TABLE inn (id int64, k int64, w int64) BTREE")
         perm = list(range(1, n + 1))
         rng.shuffle(perm)
-        load(c, "inn", [(i + 1, perm[i], i) for i in range(n)], 3)
+        load(c, "inn", [(i + 1, perm[i], i) for i in range(n)])
         c.execute("CREATE TABLE outr (id int64, k int64) BTREE")
         keys = outer_keys(dist, a.outer, n, rng)
-        load(c, "outr", [(i + 1, keys[i]) for i in range(len(keys))], 2)
+        load(c, "outr", [(i + 1, keys[i]) for i in range(len(keys))])
         if arm in ("A", "Agate"):
             c.execute("CREATE CABIN ON inn(k)")
         holder = None
@@ -198,7 +226,7 @@ def cell(a, binary, arm, n, dist, rnd, beat):
         stmts = []
         for s in range(a.stmts):
             hold()
-            t0 = cpu_ns(srv.proc.pid)
+            t0 = settled_cpu_ns(srv.proc.pid)
             w0 = time.perf_counter()
             try:
                 text = plan_text(c)
@@ -206,14 +234,14 @@ def cell(a, binary, arm, n, dist, rnd, beat):
                 # A refusal is a result of the cell, not an end of the run:
                 # the statement's CPU up to the refusal is still the cost.
                 wall = time.perf_counter() - w0
-                cpu_us = (cpu_ns(srv.proc.pid) - t0) / 1000.0
+                cpu_us = (settled_cpu_ns(srv.proc.pid) - t0) / 1000.0
                 stmts.append({"refused": str(e)[:160], "cpu_us": round(cpu_us, 1),
                               "wall_us": round(wall * 1e6, 1)})
                 beat(f"{arm} n={n} {dist} r{rnd} s{s + 1} cpu_ms={cpu_us / 1000:.1f} "
                      f"REFUSED {str(e)[:60]}")
                 continue
             wall = time.perf_counter() - w0
-            cpu_us = (cpu_ns(srv.proc.pid) - t0) / 1000.0
+            cpu_us = (settled_cpu_ns(srv.proc.pid) - t0) / 1000.0
             got = inner_counters(text)
             if got.get("line") is None:
                 raise SystemExit(f"no inner step line in ANALYZE output: {text[:600]}")
@@ -264,14 +292,8 @@ def quiet_gate(beat, limit_s=1800):
     return round(time.time() - t0, 1)
 
 
-def rotated(arms, r):
-    o = arms[r % len(arms):] + arms[:r % len(arms)]
-    return o[::-1] if r % 2 else o
 
 
-def med(xs):
-    xs = sorted(xs)
-    return xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2
 
 
 def main():
@@ -289,6 +311,9 @@ def main():
     ap.add_argument("--driver-cpus", default="0,4")
     ap.add_argument("--hold-renew-s", type=float, default=40.0)
     ap.add_argument("--heartbeat", default=None)
+    ap.add_argument("--engine-build-cap", action="store_true",
+                    help="leave join_build_max_rows at the engine default (65,536) instead "
+                         "of raising it above the inner relation")
     ap.add_argument("--max-rows-touched", type=int, default=None,
                     help="the server's max_rows_touched; the engine default when absent")
     a = ap.parse_args()
@@ -321,26 +346,6 @@ def main():
                         json.dump(out, f, indent=1)
     out["host_after"] = host_state()
     out["elapsed_s"] = round(time.time() - t_start, 1)
-    # The summary: per (n, dist, arm, statement), the median over rounds.
-    summary = {}
-    for c in out["cells"]:
-        for s, st in enumerate(c["stmts"]):
-            key = f"{c['n']}/{c['dist']}/{c['arm']}/s{s + 1}"
-            summary.setdefault(key, []).append(st)
-    def summarize(v):
-        ok = [x for x in v if "refused" not in x]
-        got = {"cpu_ms_median": round(med([x["cpu_us"] for x in v]) / 1000, 2),
-               "cpu_ms_min": round(min(x["cpu_us"] for x in v) / 1000, 2),
-               "cpu_ms_max": round(max(x["cpu_us"] for x in v) / 1000, 2),
-               "refused": len(v) - len(ok)}
-        if ok:
-            for name, field in (("walks", "walks"), ("hits", "cabin_hits"),
-                                ("misses", "cabin_misses"), ("recorded", "cabin_recorded"),
-                                ("inner_built", "inner_built")):
-                got[name] = med([x[field] for x in ok])
-        return got
-
-    out["summary"] = {k: summarize(v) for k, v in summary.items()}
     with open(a.out, "w") as f:
         json.dump(out, f, indent=1)
     beat(f"done elapsed_s={out['elapsed_s']}")

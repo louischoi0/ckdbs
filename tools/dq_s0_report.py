@@ -6,11 +6,8 @@ Cabin and build counters - and the statement at which A first meets B.
     dq_s0_report.py RESULTS.json [RESULTS.json ...]
 """
 import json, sys
+from statistics import median as med
 
-
-def med(xs):
-    xs = sorted(xs)
-    return xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2
 
 
 def main():
@@ -48,7 +45,10 @@ def main():
             a = {s: med([x["cpu_us"] for x in by[(n, dist, arm, s)]]) for s in stmts}
             meet = next((s for s in stmts if a[s] <= b[s]), None)
             meet_text = f"#{meet}" if meet else f"none of {len(stmts)} statements"
-            print(f"| {n:,} rows | {dist} | {arm} | {meet_text} | {a[1] / b[1]:.0f}x |")
+            # A B reading of 0 us (a sub-tick read, DQ-S0's resolution note)
+            # has no ratio; dividing by it would end the report.
+            ratio = f"{a[1] / b[1]:.0f}x" if b[1] > 0 else "- (B read 0 us)"
+            print(f"| {n:,} rows | {dist} | {arm} | {meet_text} | {ratio} |")
 
 
 if __name__ == "__main__":

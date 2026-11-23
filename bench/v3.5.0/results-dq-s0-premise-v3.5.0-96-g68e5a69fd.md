@@ -1,31 +1,43 @@
 # DQ-S0 - the premise: a join on a cabined inner column before its keys converge
 
-Measured 2026-11-23 between 00:20 and 00:28 UTC, on worktree `dq-cabin-miss-build`
-at `68e5a69fd` (`v3.5.0-96-g68e5a69fd`), the commit DQ opened from. Order:
-`instructions/v3.2.0/workorder-dq-cabin-miss-build.md` §5, DQ-S0 (iii).
-Driver `tools/dq_s0_premise.py`, tables by `tools/dq_s0_report.py`, raw output in
-`bench/v3.5.0/archive/dq-s0-premise-v3.5.0-96-g68e5a69fd/`.
+Measured 2026-11-23 between 00:20 and 00:28 UTC and at 00:50 UTC, on worktree
+`dq-cabin-miss-build` at `68e5a69fd` (`v3.5.0-96-g68e5a69fd`), the commit DQ
+opened from. Order: `instructions/v3.2.0/workorder-dq-cabin-miss-build.md`
+§5, DQ-S0 (iii). Driver `tools/dq_s0_premise.py`, tables by
+`tools/dq_s0_report.py`, raw output in
+`bench/v3.5.0/archive/dq-s0-premise-v3.5.0-96-g68e5a69fd/`. Corrected after
+DQ-S0's `critics-developer` review: the order's §7 lists what changed.
 
 ## The answer first
 
-**A declared Cabin makes this join 120x (10,000 inner rows) to 190x
-(100,000 inner rows) dearer than the same join without it, for as long as
-its keys are unobserved. Where the banking gate declines, that lasts for
-every statement. At the default row-touch budget, the cabined join is
-refused outright: at 100,000 inner rows the build answers it in 25 ms.**
-Once the keys converge, the Cabin is 4.6x (10,000 rows) to 25x
-(100,000 rows) cheaper than the build, so the Cabin is worth having. The
-problem is only its miss path. The verdict is **E1** (the miss falls to
-the build), **without E2**, with DQ-S3 (sub-chains) in scope.
+**A declared Cabin makes this join 116x to 159x (10,000 inner rows) and
+183x to 249x (100,000 inner rows) dearer than the same join with the
+Cabin dropped, statement by statement, for as long as its keys are
+unobserved. Where the banking gate declines, that lasts for every
+statement. At the engine's own defaults the cabined join is refused
+outright while the uncabined one answers.** The defaults are
+`max_rows_touched` 100,000,000 and `join_build_max_rows` 65,536. At
+60,000 inner rows and 2,000 outer rows the cabined join was refused at
+both statements and the build answered in 10.7 to 14.6 ms.
 
-| what | 10,000 inner rows | 100,000 inner rows |
-|---|---|---|
-| B, the build (no Cabin), server CPU a statement, median | 3.3 to 3.7 ms | 18.2 to 24.6 ms |
-| Agate, the gate declining, every statement | 442 to 451 ms (1,000 walks) | 4,480 to 4,620 ms (1,000 walks) |
-| Agate over B | 120x | 183x to 190x |
-| A, unique keys, statements #1 and #2 | 446 ms, 491 ms | 4,505 ms, 4,942 ms |
-| A once converged (1,000 hits) | 0.65 to 0.99 ms | under 2 ms (see the resolution note) |
-| at the default `max_rows_touched` (100,000,000) | no refusal | **Agate refused 9 of 9 statements; A refused statements #1 and #2 of `unique`; B refused 0 of 9** |
+Once the keys converge, the Cabin is 3.9x (10,000 rows) to 16.9x (100,000
+rows) cheaper than the build in wall time, so the Cabin is worth having.
+The problem is only its miss path. The verdict is **E1** (the miss falls
+to the build), **without E2**, with DQ-S3 (sub-chains) in scope.
+
+**The cap bounds what E1 can buy.** The fallback is the build, with the
+build's `join_build_max_rows` (DQ-R4). With an inner relation past the
+cap the map declines and every miss walks, with or without E1. At the
+default 65,536 that is every inner relation above 65,536 rows.
+
+| what | 10,000 inner rows | 100,000 inner rows (cap raised) | 60,000 inner rows, 2,000 outer, engine defaults |
+|---|---|---|---|
+| B, the build (no Cabin), server CPU a statement, median | 2.79 to 3.86 ms | 18.19 to 24.58 ms | 10.71 ms, 14.58 ms |
+| Agate, the gate declining, every statement | 442 to 451 ms (1,000 walks) | 4,480 to 4,620 ms (1,000 walks) | refused, 2 of 2 |
+| Agate over B, statement by statement | 116x to 159x | 183x to 249x | - |
+| A, unique keys, statements #1 and #2 | 446 ms, 491 ms | 4,505 ms, 4,942 ms | refused, 2 of 2 |
+| A once converged (1,000 hits), wall p50 | 0.89 ms | 1.16 ms | - |
+| refusals at the default `max_rows_touched` | none | A: `unique` #1 and #2; Agate: 9 of 9; B: 0 of 9 (census, cap raised) | A 2 of 2, Agate 2 of 2, B 0 of 2 |
 
 ## What was run
 
@@ -38,8 +50,12 @@ the build), **without E2**, with DQ-S3 (sub-chains) in scope.
   it.
 - `join_order = written`: the outer relation drives. Under `fixed` the
   planner could choose either side.
-- `join_build_max_rows = 2 x inner rows`. The default 65,536 would decline a
-  100,000-row build and walk per outer row.
+- **The build cap.** The 10,000-row and 100,000-row cells set
+  `join_build_max_rows = 2 x inner rows` (at 10,000 rows that is the
+  default 65,536). At 100,000 rows the default would decline the build and
+  walk per outer row, so B would be refused at the default budget too.
+  The 60,000-row cell ran at the engine's own cap
+  (`--engine-build-cap`), the only cell at every default.
 - The server's threads pinned to CPU 2, the driver to CPUs 0 and 4 (SMT
   pairs (0,4) (1,5) (2,6) (3,7)).
 - One fresh server per cell, so each cell starts with an empty Cabin
@@ -48,34 +64,56 @@ the build), **without E2**, with DQ-S3 (sub-chains) in scope.
   i.k = o.k`.
   - The inner relation `inn (id, k, w)` holds N rows, its `k` a permutation
     of 1..N, so there is one row per key.
-  - The outer relation `outr (id, k)` holds 1,000 rows. Its keys are:
-    - `unique`: 1,000 distinct keys;
+  - The outer relation `outr (id, k)` holds 1,000 rows (2,000 in the
+    60,000-row cell). Its keys are:
+    - `unique`: distinct keys;
     - `repeat`: 100 keys, 10 times each, shuffled;
     - `skewed`: 20 hot keys 25 times each, plus 500 distinct cold keys,
       shuffled.
 - Arms:
   - **A**: `CREATE CABIN ON inn(k)`.
   - **Agate**: as A, plus a second session holding `BEGIN; INSERT` open for
-    the whole cell (renewed every 40 s, under the 60 s ceiling), so the
-    banking gate declines every recording.
+    the whole cell (renewed every 40 s, under the 60 s ceiling; no cell
+    needed a renewal), so the banking gate declines every recording.
   - **B**: no Cabin, so the build answers.
-- Each cell ran 5 statements in sequence (3 in the default-budget census).
-  The arm order was rotated and reversed per round, 3 rounds.
+- Each cell ran 5 statements in sequence (3 in the census, 2 in the
+  60,000-row cell). The arm order was rotated and reversed per round, 3
+  rounds (1 in the census and the 60,000-row cell).
 - Per statement: server CPU (`/proc/<pid>/task/*/schedstat`, every thread),
   client wall time, and the inner step's `ANALYZE` counters.
-- The plan lines confirm the arms: A and Agate are `step 1 CabinProbe inn AS
-  i cabin=1 on=col1 key=0:0.1`; B is `step 1 Scan inn AS i build on=col1
-  key=0:0.1`.
+- Walks of the inner relation are `examined / N` and `cabin_misses`. The
+  order names `correlated_scans`, but that counter counts a sub-chain's
+  walks only, and this join is top-level.
+- The inner step's stats line confirms each arm's kind:
+  - `step 1 CabinProbe inn AS i` in A and Agate;
+  - `step 1 Scan inn AS i ... inner_built=1` in B.
+
+  The plan lines (`cabin=1 on=col1 key=0:0.1`, `build on=col1 key=0:0.1`)
+  were read in a smoke run and are not archived.
 - **The budget.** The 10,000-row cells and one census round of the
   100,000-row cells ran at the default `max_rows_touched` (100,000,000).
   The 100,000-row cost cells ran with `max_rows_touched = 1000000000`,
   since the default refuses what they measure.
-- **Host and time.** Load average 0.73 to 1.89 at every cell, and no
-  `cc1plus` at any cell. The quiet gate held 0 s.
-  - Time spent: building 5 minutes, running 8 minutes (10,000 rows 2.6 min,
-    the census 1.1 min, the 100,000-row cost cells 4.6 min), inside the
-    20-minute stage budget.
-  - Nothing was cut.
+- **The driver changed inside the stage**, and every change is recorded:
+  - The first run (`s0-10k.json`, `s0-10k.log`) ended in an unhandled
+    refusal at the first 100,000-row statement. Its 27 10,000-row cells
+    (00:20:07 to 00:20:45) are kept.
+  - The driver then learned to record a refusal and to raise
+    `max_rows_touched`, for the census and the cost cells.
+  - After the review it learned `--engine-build-cap`, used by the
+    60,000-row cell.
+  - It also learned a settled CPU read (`settled_cpu_ns`). That read waits
+    until no server thread is runnable, because `schedstat` folds a running
+    thread's time in only at a 4 ms tick or when the thread leaves the CPU.
+    The archived cells predate it, so their readings under about 4 ms can
+    be low: 5 read 0.0 ms. No conclusion here rests on a cell under 4 ms;
+    the converged figures are wall time.
+  - None of these changes alters what an earlier cell measured.
+- **Host and time.** The 1-minute load was 0.47 to 1.89 at every cell, and
+  no `cc1plus` ran at any cell. The quiet gate held 0 s.
+  - Time spent: building 5 minutes, running 9 minutes (10,000 rows
+    0.6 min, the census 1.1 min, the 100,000-row cost cells 4.6 min, the
+    60,000-row cell 0.3 min), inside the 20-minute stage budget.
 
 **No earlier number exists for this shape.** No results file under
 `bench/` sets a correlated Cabin probe beside the build (the order's
@@ -84,9 +122,9 @@ engine.
 
 ## The table
 
-Medians over 3 rounds. The full per-statement table is
-`archive/.../table.md`, and the default-budget census is
-`archive/.../table-100k-default-budget.md`.
+Medians over 3 rounds. The full per-statement tables are
+`archive/.../table.md` (10,000 and 100,000 rows), `table-100k-default-budget.md`
+(the census) and `table-60k-engine-defaults.md`.
 
 | inner rows | outer keys | arm | statement | server CPU | misses | hits | sets recorded | map built |
 |---|---|---|---|---|---|---|---|---|
@@ -107,9 +145,11 @@ Medians over 3 rounds. The full per-statement table is
 | 100,000 rows | repeat | A | #1 | 970.61 ms | 200 misses | 800 hits | 100 sets | 0 maps |
 | 100,000 rows | skewed | A | #1 | 2,444.43 ms | 540 misses | 460 hits | 20 sets | 0 maps |
 | 100,000 rows | skewed | A | #2 | 2,470.53 ms | 500 misses | 500 hits | 500 sets | 0 maps |
+| 60,000 rows, 2,000 outer | unique | A | #1, #2 | refused at 4,503 ms, 4,887 ms | - | - | - | - |
+| 60,000 rows, 2,000 outer | unique | Agate | #1, #2 | refused at 4,487 ms, 4,584 ms | - | - | - | - |
+| 60,000 rows, 2,000 outer | unique | B | #1, #2 | 14.58 ms, 10.71 ms | - | - | - | 1 map |
 
-Client wall time per statement, every round and statement of the class
-(10,000 rows / 100,000 rows):
+Client wall time per statement, every round and statement of the class:
 
 | class | p0 | p25 | p50 | p95 | p99 |
 |---|---|---|---|---|---|
@@ -119,12 +159,6 @@ Client wall time per statement, every round and statement of the class
 | A converged (all hits), 100,000 rows | 0.68 ms | 0.96 ms | 1.18 ms | 2.36 ms | 2.39 ms |
 | B, 100,000 rows | 17.63 ms | 18.96 ms | 19.55 ms | 24.62 ms | 25.46 ms |
 | Agate, 100,000 rows | 4,447.71 ms | 4,484.55 ms | 4,511.93 ms | 4,633.83 ms | 4,683.64 ms |
-
-**Resolution note.** `schedstat` advances at scheduler events, so a
-statement under about 2 ms can read 0.00 ms of server CPU (seven readings
-did). The converged rows are read from wall time, which is the client's
-whole round trip, and the conclusions here never rest on a sub-2-ms CPU
-cell.
 
 **No wait breakdown.** One session ran each statement on an idle,
 all-resident `cores = 1` server, so the statement is all CPU. `ANALYZE`'s
@@ -143,63 +177,70 @@ DB time line was not collected, and no `sys.wait_stats` was read.
      A statements.
 2. **The recording statement costs as much as the sighting statement.**
    `unique` #2 records 1,000 sets with 1,000 walks, 10 % dearer than #1
-   (491 ms against 446 ms at 10,000 rows): the recording block's key compare
-   and entry appends. E1 leaves this statement as it is (DQ-Q2 (a)), and
-   at 100,000 rows and the default budget it is refused. See the next
-   point.
-3. **The default row-touch budget turns the cabined join into a
-   refusal.**
-   - At 100,000 inner rows, 1,000 walks are 100,000,000 row touches,
-     exactly `max_rows_touched`.
-   - In the census, A was refused at `unique` #1 and #2, and Agate at every
-     statement of every distribution. B was refused at none.
-   - B touches 100,000 rows plus 1,000 probes, and answers in 25 ms.
+   (491 ms against 446 ms at 10,000 rows): the recording block's key
+   compare and entry appends. E1 leaves this statement as it is
+   (DQ-Q2 (a)).
+3. **At the engine's defaults the cabined join is a refusal.**
+   - At 60,000 inner rows the build fits the default cap. With 2,000
+     outer rows, the per-row walk is 120,000,000 row touches, over the
+     default `max_rows_touched`. A and Agate were refused at both
+     statements, and B answered in 10.7 to 14.6 ms.
    - `cabin.md` §4a calls an accelerator that turns a rows-returning
      statement into a budget refusal "what §1 forbids". The tree does that
      today, on a top-level join, and dropping the Cabin brings the rows
      back.
-   - E1 removes it for every non-recording miss and every declined
-     recording, which is every Agate statement and `unique` #1. It does
-     not remove it for a statement whose misses are all recording touches,
-     like `unique` #2 (DQ-Q11, `known-gaps.md`).
+   - The window at defaults: N up to 65,536 (the cap) and k x N above
+     100,000,000.
+   - E1 removes the refusal for every non-recording miss and every declined
+     recording: every Agate statement, and `unique` #1. It does not remove
+     it for a statement whose misses are all recording touches, like
+     `unique` #2 (DQ-Q11, `known-gaps.md`).
+   - Past the cap, E1 removes nothing.
+   - The 100,000-row census shows the same refusals, with the cap raised
+     so that B could build.
 4. **A banking gate that refuses never converges.** Agate reads 1,000
-   misses and 0 sets in all 15 statements at both sizes. One open write
-   transaction anywhere on the instance is enough. That is the
+   misses and 0 sets in all 90 statements at both sizes. One open
+   write transaction anywhere on the instance is enough. That is the
    known-gaps entry ("A Cabin builds rarely on a busy instance") turned
-   into a number: 120x to 190x the uncabined cost, for good.
-5. **Converged, the Cabin beats the build.** 1,000 hits cost 0.7 to 1.0 ms
-   of wall time at either size. The build costs 3.5 ms at 10,000 rows and
-   19.6 ms at 100,000 rows, because it re-walks the relation every
-   statement. The ladder's order (banked structure first, build last) is
-   right on a converged join. DQ keeps it.
+   into a number: 116x to 249x the uncabined cost, for good.
+5. **Converged, the Cabin beats the build.**
+   - 1,000 hits cost 0.89 ms (10,000 rows) and 1.16 ms (100,000 rows) of
+     wall time at the median.
+   - B costs 3.46 ms and 19.55 ms, since every statement builds its own
+     map.
+   - So the ladder's order (banked structure first, build last) is right
+     on a converged join, and DQ keeps it.
+   - B's statement #1 is 5 to 6 ms dearer than #2 to #5 at 100,000 rows in
+     every distribution and round. The cause is unverified (the load's
+     background work finishing, the planner's first sample, first-use
+     allocation). A per-thread CPU read would tell them apart, and the
+     direction is conservative for B.
 
 ## The verdict, and what it does to the order's items
 
 - **E1, not E0.** The miss walks are the whole cost of every unconverged
-  cell, and they meet or pass the budget at 100,000 rows. The build's
-  first walk costs 3.5 ms (10,000 rows) or 24.6 ms (100,000 rows) against
-  the 446 ms or 4.5 s it would replace.
-- **E2 is not built (DQ-Q3 (a)'s condition is not met).**
-  - E2 saves a walk only in a statement whose first miss is a recording
+  cell, and at the defaults they pass the budget where the build does not.
+  A B statement costs 2.8 to 3.9 ms (10,000 rows) or 18.2 to 24.6 ms
+  (100,000 rows) against the 446 ms or 4.5 s it would replace.
+- **E2 is not built.** DQ-Q3 (a)'s condition was read as whether E2
+  saves a walk, not as written, and the order's §7 records that.
+  - As written ("the first miss is often a recording one"), the condition
+    is met in `unique` #2 and `skewed` #2, where every miss is a recording
+    touch.
+  - But E2 saves a walk only in a statement whose first miss is a recording
     touch and which later has a miss the map would serve. That is at most
-    one walk a statement, by construction.
-  - In every measured cell it saves 0 walks. The statements whose first
-    miss records (`unique` #2, `skewed` #2) have no non-recording miss
-    after it: 1,000 and 500 misses, all recorded. Under DQ-Q2 (a) each
+    one walk a statement, by construction, because under DQ-Q2 (a) each
     later recording touch walks anyway.
-  - In every other statement the first miss is a first touch, which
-    E1's build walk already serves.
+  - In the measured cells it saves 0, since each statement re-runs the same
+    outer relation. The rejection rests on the bound, not on the cells.
   - DQ-S4 does not run.
-- **DQ-Q8's bar: 1.5x, kept on a measured basis.**
-  - Under E1, the gate-refusing cell is predicted at B's cost plus the
-    bookkeeping of 1,000 misses: a set lookup, the sighting, and the
-    gate's decline.
-  - The converged A cells bound one probe of the set at 0.7 to 1.0 us
-    (1,000 hits in 0.7 to 1.0 ms of wall time).
-  - So Agate under E1 is predicted at about 4.5 ms against B's 3.5 ms at
-    10,000 rows (1.3x), and about 20.5 ms against 19.6 ms at 100,000 rows
-    (1.05x).
-  - The bar stays 1.5x at the gate-refusing cell. It is no longer
-    provisional: S0 measured its basis, and DQ-S5 measures it.
+- **DQ-Q8's bar stays 1.5x, provisional until DQ-S5 measures it.** Under
+  E1, the gate-refusing cell is predicted at B's cost plus the bookkeeping
+  of 1,000 misses: a set lookup, the sighting, and the gate's decline.
+  - No cell measured that bookkeeping. The converged cells bound a set's
+    serve at about 0.9 to 1.2 us a probe, and that bounds a miss's
+    bookkeeping only if a miss costs no more than a serve.
+  - On that assumption the cell is about 1.3x of B at 10,000 rows and
+    1.05x at 100,000 rows. The 100,000-row figure needs the raised cap.
 - **DQ-Q4 (a) holds: sub-chains are DQ-S3.** DQ-S0 (ii) found that E1
   composes with both stop rules. The reading is in the order's §7.

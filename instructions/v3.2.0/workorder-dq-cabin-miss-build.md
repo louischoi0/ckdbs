@@ -181,7 +181,12 @@ write-heavy instance a declared Cabin turns a join the build would answer
 in one walk into `k` walks, permanently. Purpose 2 of the engine
 (`CLAUDE.md`) is acceleration that can be dropped without changing a
 result; it says nothing of cost, so this is not a contract break. It is the
-opposite of what an operator declaring a Cabin expects.
+opposite of what an operator declaring a Cabin expects. **Corrected by
+DQ-S0** (§7): the cost is not a contract break, but the refusal it can
+reach is one. At the engine's defaults, a join the build answers is
+refused for its row-touch budget once a Cabin is declared, and `cabin.md`
+§4a says §1 forbids an accelerator that turns a rows-returning statement
+into a budget refusal.
 
 ### 1.4 Why the two structures stay two `[design]`
 
@@ -225,7 +230,12 @@ measured.
   statement's first such miss walks and buckets, every later one probes the
   map. A miss due to record is `WalkAndRecord`, unchanged (DQ-Q2). The Cabin
   observes exactly what it observes today; only the non-recording walks
-  change. A step that fails `BuildKeyOf`'s rule, and a declined or outgrown
+  change. **Made precise at DQ-S0's review**: the recording walk is
+  unchanged, and a recording `WalkAndRecord` declines before its walk
+  falls to the build too. That covers its four exits: the key column not
+  decoded, an unbankable view, a refused announce, and the instance's
+  second answer. Agate's misses from its second statement on are all
+  declined there. A step that fails `BuildKeyOf`'s rule, and a declined or outgrown
   map, walk per miss as today.
 - **E2 - the recording walk also buckets.** `WalkAndRecord`'s walk is a
   whole walk of the inner relation with one key announced. Where the map is
@@ -319,7 +329,7 @@ standing go-ahead of 2026-11-23 (go-ahead-achieving-milestone)**
 |---|---|---|---|
 | DQ-Q9 | A step an administrator's plan pins `ACCESS <relation> CABIN [(<column>)]`: the walk class is not admitted (`walk` is false, `step_compiler.cpp:3407`) | **It keeps the fallback**: the fallback is not a ladder rank but the Cabin step's own miss path, and a controller-made Cabin is read only through such a pin (PO11), so denying it there would leave exactly the pinned join with the per-miss walk. `BUILD OFF` alone takes it (DQ-Q5) | (b) a keyed pin keeps today's per-miss walk |
 | DQ-Q10 | The plan statistics' decline record (`command_dispatcher.cpp`, the fold after a keyed run): a step carrying `Step::build` that opened and published no map is folded as a decline, which the cost model reads for a walked step | **A Cabin step's decline is a fallback that bucketed rows and published no map** (`build_rows > 0`, `inner_builds = 0`): an opening its set served built nothing and declined nothing. A walked step keeps its rule | (b) a Cabin step never records a decline |
-| DQ-Q11 | DQ-S0 measured a refusal: at the default `max_rows_touched` a 100,000-row cabined join with 1,000 unobserved outer keys is refused where the uncabined one answers in 25 ms. E1 removes it for every non-recording miss and every declined recording, but not for a statement whose misses are all recording touches (DQ-Q2 (a) keeps each a whole walk) | **Recorded in `known-gaps.md` (Cabin)**, with DQ-Q2 (b) and (c) the remedies the operator may take; DQ keeps DQ-Q2 (a) | (b) take DQ-Q2 (c), a bounded number of recording walks a statement, into DQ |
+| DQ-Q11 | DQ-S0 measured a refusal: at the engine's defaults (`max_rows_touched` 100,000,000, `join_build_max_rows` 65,536) a 60,000-row cabined join with 2,000 unobserved outer keys is refused where the uncabined one answers in 10.7 to 14.6 ms; the window is an inner relation within the cap and k x N above the budget, since past the cap the build declines and walks too. E1 removes it for every non-recording miss and every declined recording, but not for a statement whose misses are all recording touches (DQ-Q2 (a) keeps each a whole walk) | **Recorded in `known-gaps.md` (Cabin)**, with DQ-Q2 (b) and (c) the remedies the operator may take; DQ keeps DQ-Q2 (a) | (b) take DQ-Q2 (c), a bounded number of recording walks a statement, into DQ |
 | DQ-Q12 | A correlated Cabin step that also carries an unindexed literal equality (`HasUnindexedEqualityFilter`): its uncabined twin is a filter scan with no build (`join-inner-build.md` §8) | **The fallback is declined there**, as the build is, so the miss's worst case is exactly the uncabined step's (§0) and the map keeps one rule (DQ-R4) | (b) annotate it anyway: cheaper than the uncabined step, and a second rule |
 
 ## 5. Stages
@@ -392,7 +402,9 @@ No engine change. Results:
 
 **(i) §1.2 re-read at `68e5a69f`: every claim holds, line for line.** No
 build input changed between `56b44964` and `68e5a69f`. The census found
-five more readers of `Step::build`, each relevant to DQ:
+these places relevant to DQ. The first and last are not readers of
+`Step::build` (one reads the plan pin, the other the `inner_build` flag);
+the review corrected the list:
 
 - `step_compiler.cpp:3407`: a keyed pin makes `walk` false and so takes
   the build's rank. This is DQ-Q9.
@@ -406,8 +418,15 @@ five more readers of `Step::build`, each relevant to DQ:
   annotation and `inner_built=` for every step that carries one, so DQ-S1's
   display needs no new code (DQ-R8).
 - `step_compiler.cpp:2296-2297` and `:2521`: `inner_build` is false under
-  `CompileWhere` and for a scalar sub-chain, so DQ-R4's SELECT-only rule
-  holds by construction.
+  `CompileWhere` and for a scalar sub-chain. DQ-R4's SELECT-only rule holds
+  by construction, provided the fallback is gated on the same flag, which
+  DQ-S1 does.
+- Readers that ignore an annotated Cabin step because each tests the kind
+  first: `step_compiler.cpp:1480`, `:3595` and `:3771`. This supports
+  DQ-Q1 (a) and DQ-R5.
+- `BuildIsArmable` (`step_vm.cpp:1189`) is the run-time guard E1 passes
+  through. It holds for a Cabin step, because the correlated conjunct stays
+  in `Step::residual`.
 
 One comment is stale: `WalkAndRecord`'s "the miss path and the heap
 hint-failure path both end here" names two callers, and it has one
@@ -421,34 +440,79 @@ with the prefix map.**
     license) runs through the stop, touches no map, and leaves the prefix
     map's state and mark as they were.
   - A fallback walk is `WalkPrefixAndProbe`'s: it replays the bucket,
-    resumes at the mark, and extends the map. It carries no recording,
-    since the fallback is reached only where no recording is live (DQ-R2).
+    resumes at the mark, and extends the map. No recording of this step
+    is live in it: every decline leaves `WalkAndRecord` before
+    `recording_` is set. An outer step's recording can be live, and the
+    step-id checks make it harmless.
   - A hit serves the set and touches neither.
   - So each walk keeps its own rule whole, and interleaving them changes
     neither.
 - E2 would put both rules in one walk. The completion license visits the
   rows after the stop for the recording alone and returns before the
   bucketing (`step_vm.cpp`, the recording block's `if (stopped_) return`).
-  So the map would cover a prefix ending at the stop while the walk ends at
-  the relation's end, and `WalkPrefix`'s mark has no position for that.
+  The walk still advances the prefix mark and, uncut, sets `complete`.
+  - So a map bucketed only to the stop would read `kBuilt`, and a later
+    key past the stop would answer an empty bucket as a conclusive
+    absence. That is a wrong `EXISTS`.
+  - Freezing the mark at the stop and withholding `complete`, as the cap's
+    frozen map does, would compose. That is moot while E2 is not built.
 - E2 is also not built (iii). DQ-Q4 (a) therefore stands, and **DQ-S3 runs**.
 
 **(iii) The premise holds, and is worse than §1.3 stated.**
 
-- Where the banking gate declines, the cabined join costs 120x (10,000
-  inner rows) to 190x (100,000 inner rows) what the uncabined one costs, in
-  every statement: 445 ms against 3.5 ms, and 4.5 s against 19 to 25 ms.
-- At the default `max_rows_touched` the 100,000-row cabined join is
-  refused, and the uncabined one answers (DQ-Q11).
-- Converged, the Cabin is 4.6x to 25x cheaper than the build.
-- **The verdict:** E1, without E2. E2 saves 0 walks in every measured cell
-  and at most one walk a statement by construction, so DQ-S4 does not run.
-- DQ-Q8's 1.5x is kept on a measured basis: Agate under E1 is predicted at
-  1.3x (10,000 rows) and 1.05x (100,000 rows) of B.
+- Where the banking gate declines, the cabined join costs 116x to 159x
+  (10,000 inner rows) and 183x to 249x (100,000 inner rows) what the
+  uncabined one costs, statement by statement, in every statement.
+- At the engine's defaults a 60,000-row cabined join with 2,000 outer keys
+  is refused at both statements, and the uncabined one answers in 10.7 to
+  14.6 ms (DQ-Q11). The 100,000-row census shows the same, with the build
+  cap raised so that B could build.
+- **The cap bounds E1.** Past `join_build_max_rows` (65,536 by default) the
+  map declines and every miss walks, with or without E1.
+- Converged, the Cabin is 3.9x to 16.9x cheaper than the build in wall
+  time.
+- **The verdict:** E1, without E2.
+  - **DQ-Q3 (a)'s condition was read as whether E2 saves a walk, not as
+    written.** As written ("the first miss is often a recording one"), it
+    is met in `unique` #2 and `skewed` #2, where every miss is a recording
+    touch.
+  - But E2 saves at most one walk a statement, by construction: under
+    DQ-Q2 (a) each later recording touch walks anyway. In these cells it
+    saves none.
+  - The rejection rests on that bound. DQ-S4 does not run.
+- DQ-Q8's 1.5x stays provisional until DQ-S5 measures it. Agate under E1
+  is predicted at 1.3x (10,000 rows) and 1.05x (100,000 rows, with the cap
+  raised) of B, on the assumption that a miss's bookkeeping costs no more
+  than a set's serve. No cell measured that bookkeeping.
 
 **Raised:** DQ-Q9 and DQ-Q11 here, DQ-Q10 by (i), and DQ-Q12 at DQ-S1's
 compile rule. All four are adopted (a) on the standing go-ahead
 (`raft-marks-2026-11-23.md` §2).
 
-Time: building 5 minutes, running 8, quiet hold 0 s. No suite: no build
+Time: building 5 minutes, running 9, quiet hold 0 s. No suite: no build
 input changed (`tools/`, `bench/`, `instructions/` only).
+
+**Review** (`critics-developer`, at `f70d9f4f`).
+- Applied:
+  - two driver bugs, fixed by the reviewer: a CPU read that could miss up
+    to a 4 ms tick (`settled_cpu_ns`), and a division by a 0 reading in the
+    report;
+  - F1, the refusal claim, which held at 100,000 rows only with the build
+    cap the driver raised. It was measured again at the defaults (60,000
+    rows, 2,000 outer keys, at 00:50 UTC) and is restated with the cap
+    beside it everywhere;
+  - F2, §2's E1 made precise;
+  - F3 to F5, the ratios and figures, recomputed from the JSON;
+  - F6, DQ-Q8 kept provisional;
+  - F7, the driver's changes inside the stage, recorded in the results
+    file;
+  - F8, the plan lines' provenance;
+  - F9, the reading of DQ-Q3 (a)'s condition;
+  - F10, §1.3;
+  - the census and (ii) wording;
+  - the driver's simplifications: the unused summary, the copied `med`
+    and `rotated`, and dead parameters.
+- Rejected:
+  - folding the driver's `Server` into `dk_close.Server`, which would
+    change a driver DK's archived measurement was taken with;
+  - one shared `quiet_gate`, left for when a third driver needs it.
