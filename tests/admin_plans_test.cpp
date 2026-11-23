@@ -23,6 +23,7 @@
 #include "kds/sched/coro.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/expeditor.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/stats/plan_stats.hpp"
 #include "kds/stats/statement_stats.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -683,6 +684,9 @@ protected:
     std::optional<txn::UndoLog> undo_;
     std::optional<txn::TransactionManager> mgr_;
     stats::PlanStats stats_{1};
+    // A Cabin store for the tests that re-make the dispatcher with one;
+    // declared before it so it outlives it.
+    stats::CabinStore cabins_;
     std::optional<CommandDispatcher> dispatcher_;
     catalog::Oid models_ = 0;
     catalog::Oid results_ = 0;
@@ -1500,6 +1504,86 @@ TEST_F(AdminPlanTest, ABuildPinChoosesTheJoinMethodAndTheRowsAreTheSame) {
     EXPECT_NE(contradiction.response.find("is the walk's"), std::string::npos)
         << contradiction.response;
     EXPECT_TRUE(PlanRows().empty());
+}
+
+// DQ-Q5, DQ-Q9: a correlated Cabin probe's miss fallback is the build's
+// annotation, so `BUILD OFF` takes it and a Cabin pin keeps it.
+TEST_F(AdminPlanTest, ACabinPinKeepsTheMissFallbackAndBuildOffTakesIt) {
+    const std::string sql = Where("5");
+    const std::vector<std::string> rows = Rows(sql);
+    Ok("CREATE CABIN ON results(model_id)");
+    // Models first, so results is the inner step: a correlated Cabin probe
+    // carrying the build it outranks, under the ladder and under a Cabin
+    // pin; `OFF` takes the fallback with or without the pin. The rows are
+    // the same under every pin.
+    const struct {
+        const char* pins;
+        bool fallback;
+    } cases[] = {
+        {"", true},
+        {" ACCESS results CABIN (model_id)", true},
+        {" BUILD results OFF", false},
+        {" ACCESS results CABIN BUILD results OFF", false},
+    };
+    for (const auto& c : cases) {
+        Ok("CREATE PLAN p FOR " + sql + kModelsFirst + c.pins);
+        const std::string plan = Plan(sql);
+        const std::string line = StepLine(plan, 0);
+        ASSERT_EQ(line.rfind("step 0 CabinProbe results", 0), 0u) << c.pins << plan;
+        EXPECT_EQ(line.find(" build on=col1") != std::string::npos, c.fallback) << c.pins << plan;
+        EXPECT_EQ(line.find(" arm=plan") != std::string::npos, *c.pins != '\0') << c.pins << plan;
+        EXPECT_EQ(Rows(sql), rows) << c.pins;
+        Ok("DROP PLAN p");
+    }
+
+    // ON is the walk's: beside a Cabin pin it is refused, and alone it holds
+    // the step to the walk, the Cabin standing aside.
+    const DispatchOutcome contradiction =
+        Do("CREATE PLAN p FOR " + sql + kModelsFirst + " ACCESS results CABIN BUILD results ON");
+    EXPECT_EQ(contradiction.status.code(), StatusCode::kInvalidArgument) << contradiction.response;
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst + " BUILD results ON");
+    const std::string plan = Plan(sql);
+    EXPECT_EQ(StepLine(plan, 0).rfind("step 0 Scan results", 0), 0u) << plan;
+    EXPECT_NE(StepLine(plan, 0).find(" build on=col1"), std::string::npos) << plan;
+    EXPECT_EQ(Rows(sql), rows);
+}
+
+// DQ-Q10: a Cabin step carries the build as its miss's fallback, and an
+// opening that built no map because no miss reached the fallback is no
+// decline - which the plan statistics would read, for the walked step the
+// relation becomes once the Cabin is dropped, as a build not worth pricing.
+TEST_F(AdminPlanTest, ACabinStepThatBuiltNoMapFoldsNoDecline) {
+    // A Cabin store, so the join converges: each model id is sighted, then
+    // recorded, then served, and a served run's step opens and builds
+    // nothing.
+    dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                        /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
+                        exec::Budget(), /*recorder=*/nullptr, /*replay=*/false,
+                        /*access_statistics=*/true, &cabins_, &*mgr_);
+    dispatcher_->set_plan_stats(&stats_);
+    dispatcher_->set_join_order(exec::JoinOrder::kFixed);
+    Ok("CREATE CABIN ON results(model_id)");
+    const std::string sql = Where("5");
+    Ok("CREATE PLAN p FOR " + sql + kModelsFirst);
+    for (int i = 0; i < 3; ++i) Rows(sql);
+    const std::string plan = Plan(sql);
+    ASSERT_EQ(StepLine(plan, 0).rfind("step 0 CabinProbe results", 0), 0u) << plan;
+    ASSERT_NE(StepLine(plan, 0).find(" build on=col1"), std::string::npos) << plan;
+    ASSERT_NE(plan.find("cabin_hits=8"), std::string::npos) << plan;
+    ASSERT_EQ(plan.find("cabin_misses="), std::string::npos) << plan;
+    Rows(sql);
+    ASSERT_TRUE(stats_.StewardStep(boot_->catalog, store_, 1'000'000'000).ok());
+
+    parser::Parser parser(sql);
+    ASSERT_TRUE(parser.Parse().ok());
+    ASSERT_TRUE(parser.fingerprint().has_value());
+    stats::PlanKey key;
+    key.fetch_id = parser.fingerprint()->fetch_id;
+    key.n = 2;
+    key.oids = {results_, models_, 0, 0};
+    const auto* posterior = stats_.Current()->Find(key);
+    ASSERT_NE(posterior, nullptr) << "the runs folded an observation";
+    EXPECT_EQ(posterior->declines, 0u);
 }
 
 // CX-S3b: a statement over one relation has no order and an arm to pin.

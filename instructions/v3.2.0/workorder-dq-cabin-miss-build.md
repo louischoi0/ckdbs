@@ -516,3 +516,58 @@ input changed (`tools/`, `bench/`, `instructions/` only).
   - folding the driver's `Server` into `dk_close.Server`, which would
     change a driver DK's archived measurement was taken with;
   - one shared `quiet_gate`, left for when a third driver needs it.
+
+### DQ-S1 - the annotation (2026-11-23)
+
+On worktree `dq-cabin-miss-build`, over `60279878`.
+
+**What the compiler does now:**
+- **The rule is one function.** `BuildAnnotationOf` (`step_compiler.cpp`)
+  is asked by the walked join's arm and by the correlated Cabin probe's
+  arm, so DQ-R4's one rule holds by construction. The probe's arm sets
+  `Step::build` beside `Step::cabin`, and the step stays `kCabinProbe`
+  (DQ-Q1 (a)).
+- **The walk class aside, the rule is the build's** (DQ-Q5, DQ-Q9, DQ-Q12):
+  - `ACCESS <relation> CABIN` keeps the annotation;
+  - `BUILD OFF` takes it;
+  - `BUILD ON` beside a Cabin pin is refused, as before;
+  - a literal equality that would make the walk a filter scan declines it,
+    as do a function or boolean conjunct, a second correlated conjunct, a
+    DML `WHERE` sub-chain and a scalar sub-chain.
+- **The plan statistics' fold changed** (DQ-Q10): a Cabin step's decline is
+  `build_rows > 0` with no map published. This was mutation-checked: the
+  old rule fails `AdminPlanTest.ACabinStepThatBuiltNoMapFoldsNoDecline`.
+- **Display:** the plan and `ANALYZE` print ` build on=colN key=...` and
+  `inner_built=` on a Cabin step (DQ-R8), with no printer change.
+- **Not read by the executor yet:** `RunStep` dispatches `kCabinProbe`
+  before it reads `build`.
+- **DQ-R1, every cap:** the inner-build contract suite gains a cabined join
+  at every cap and every round of the Cabin's convergence, byte for byte
+  against the uncabined walk.
+
+**Review** (`critics-developer`): no correctness bug.
+- Applied:
+  - the rule folded into one function;
+  - the Cabin cases of the scalar and DML sub-chain tests folded into the
+    existing tests, run over both catalogs;
+  - the plan-pin test made table-driven;
+  - five comments corrected: the Cabin arm's ("a key the set has not
+    observed costs what the uncabined join costs" was false for a
+    recording touch), `BuildKey`'s, the printer's `inner_built=0`,
+    `ArmPin`'s `OFF`, and `CorrelatedCabinProbeOf`'s.
+- Rejected:
+  - a `NOT SCAN` pin test, because `NOT SCAN` is not a pin the grammar
+    admits (`admin_plans_test.cpp`, the refused `access=0:!SCAN`);
+  - folding the five `CompileWhere` blocks into one helper, which is older
+    than DQ;
+  - annotating only top-level chains until DQ-S3. The sub-chain's
+    annotation is carried and not read until then (spec §5a), and DQ-S3
+    follows in this milestone.
+- Two gaps the reviewer named are left for DQ-S2, where they become
+  testable:
+  - DQ-Q10's positive half (an outgrown fallback folds a decline);
+  - the fold's walked branch, which has no dispatcher-level test anywhere.
+    That gap is older than DQ.
+
+Suite: 0 failed of 5,150 on this commit's build inputs. Overhead not measured; measured at the
+milestone's close.

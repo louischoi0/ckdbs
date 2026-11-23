@@ -13,6 +13,7 @@
 #include "kds/exec/step_vm.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/server/superblock.hpp"
+#include "kds/stats/cabin_store.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/heap/heap_chain.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
@@ -120,10 +121,12 @@ protected:
 
     // Runs `sql`, rendering each row "a|b|c" in emission order. `cap` is
     // the statement's `join_build_max_rows`; `stop_after` non-zero stops
-    // the sink after that many rows (the LIMIT interaction).
+    // the sink after that many rows (the LIMIT interaction); `cabins` is the
+    // store a cabined column's probe observes into and serves from (DQ).
     std::vector<std::string> Run(const std::string& sql, ExecStats* out_stats = nullptr,
                                  std::size_t cap = kDefaultJoinBuildMaxRows,
-                                 std::size_t stop_after = 0, bool scan_kernel = true) {
+                                 std::size_t stop_after = 0, bool scan_kernel = true,
+                                 stats::CabinStore* cabins = nullptr) {
         auto parsed = parser::Parse(sql);
         EXPECT_TRUE(parsed.ok()) << parsed.status().message();
         if (!parsed.ok()) return {};
@@ -150,7 +153,7 @@ protected:
                            ? storage::VisitControl::kStop
                            : storage::VisitControl::kContinue;
             },
-            &stats, budget);
+            &stats, budget, /*trail=*/nullptr, /*replay=*/nullptr, cabins);
         EXPECT_TRUE(ran.ok()) << sql << " (cap=" << cap << "): " << ran.message();
         return rows;
     }

@@ -1884,7 +1884,8 @@ std::optional<CabinProbe> CoverCabinProbeOf(const catalog::TableAccess& access, 
 // exists for. Since JB1 the same shape without a Cabin takes the build
 // annotation one arm later (a per-statement map, not a banked structure);
 // ladder order is the economics, join-inner-build.md §5: a converged
-// serve beats any per-statement rebuild.
+// serve beats any per-statement rebuild. Since DQ the probe carries that
+// annotation too, as its miss's fallback (§5a).
 std::optional<CabinProbe> CorrelatedCabinProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
                                                  const Step& step, std::uint16_t slot,
@@ -1983,6 +1984,26 @@ std::optional<BuildKey> BuildKeyOf(const Scope& scope, const catalog::TableAcces
         out = key;
     }
     return out;
+}
+
+// The build annotation a step takes, or nullopt - **the one rule**, asked
+// by the walked join's arm and by the correlated Cabin probe as its miss's
+// fallback (DQ, spec §5a), so the two cannot drift. The block admits builds
+// (`inner_build`: a SELECT's chain, no `CompileWhere`, no scalar
+// sub-chain); the plan's pin does not say `BUILD OFF` (CX-S5); the step
+// carries no function or boolean conjunct (AP-S4, BU-S1) - the map holds the
+// rows passing the *non-correlated* conjuncts, and neither kind is split
+// into the two, so one reading an outer row's column would bucket the first
+// outer row's answer; no literal equality makes it a filter scan, declined
+// by decision (spec §8, DQ-Q12); and `BuildKeyOf` finds its key.
+std::optional<BuildKey> BuildAnnotationOf(bool inner_build, const ArmPin& pin, const Scope& scope,
+                                          const catalog::TableAccess& access, const Step& step,
+                                          std::uint16_t slot) {
+    if (!inner_build || pin.build == ArmPin::Build::kOff || !step.fn_residual.empty() ||
+        !step.bool_residual.empty() || HasUnindexedEqualityFilter(access, step, slot)) {
+        return std::nullopt;
+    }
+    return BuildKeyOf(scope, access, step, slot);
 }
 
 // The columns a step's access is keyed or filtered on, ascending and
@@ -3543,6 +3564,15 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // serve beats any per-statement rebuild (spec §5).
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cp);
+                // **The miss's fallback** (DQ E1, join-inner-build.md §5a):
+                // the build arm's own annotation, so a miss that records
+                // nothing is answered from the statement's map. The walk
+                // class aside: a keyed pin's `ACCESS ... CABIN` keeps it and
+                // only `BUILD OFF` takes it (DQ-Q5, DQ-Q9). `BuildKeyOf`
+                // accepts only a step whose one conjunct reading another
+                // relation is a correlated equality, so its key is the
+                // conjunct this probe is keyed on.
+                step.build = BuildAnnotationOf(inner_build, pin, scope, rel, step, slot);
             } else if (auto cv = cabin ? CoverCabinProbeOf(rel, step, slot, gate) : std::nullopt;
                        cv.has_value()) {
                 // An expression Cabin's cover of a two-sided range (AQ-R8),
@@ -3575,20 +3605,13 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // bounds what a walk visits, and v1 declines to also build
                 // for it.
                 step.kind = AccessKind::kFilterScan;
-            } else if (walk && inner_build && pin.build != ArmPin::Build::kOff &&
-                       step.fn_residual.empty() && step.bool_residual.empty()) {
-                // A step carrying a function conjunct takes no build
-                // (AP-S4): the map holds the rows passing the
-                // *non-correlated* conjuncts, and a function conjunct is
-                // not split into the two - one reading an outer row's
-                // column would bucket the first outer row's answer.
-                //
+            } else if (walk) {
                 // The last ladder arm (workplan JB1): every arm above
                 // declined, so a correlated equality still on the step is
                 // the walked join. An annotation, never a kind - `kind`
                 // stays kScan, and `BuildKey` (step_chain.hpp) owns the
                 // contract.
-                step.build = BuildKeyOf(scope, rel, step, slot);
+                step.build = BuildAnnotationOf(inner_build, pin, scope, rel, step, slot);
             }
             // A strict tuple key range, last (ruling (a), at
             // TupleKeyRangeOf): only a step still a bare walk takes it.

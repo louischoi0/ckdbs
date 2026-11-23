@@ -107,7 +107,9 @@ inline constexpr std::size_t kMaxPlanVariants = 16;
 // (`join-inner-build.md`) - every keyed class stands aside, so the walk's
 // ranks are what the ladder has left, and the pin is met only where the
 // step ends with the build annotation; `OFF` takes the build's rank away,
-// so the step walks per outer row, or takes what ranks below it. Neither
+// so the step walks per outer row, or takes what ranks below it - and from
+// a correlated Cabin probe, its miss's fallback (DQ-Q5), so each miss walks
+// as it did before DQ. Neither
 // forces a build: the build's own rule (`BuildKeyOf`) and the filter scan's
 // rank above it are unchanged, and `join_build_max_rows`' run-time decline
 // is a resource limit, not a plan change (CX-Q8 (a)).
