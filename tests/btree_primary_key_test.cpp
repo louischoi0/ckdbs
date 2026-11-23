@@ -1,10 +1,15 @@
 #include <algorithm>
+#include <map>
 #include <memory>
+#include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "kds/catalog/rows.hpp"
+#include "kds/server/session.hpp"
 #include "sim/instance.hpp"
 #include "view_text.hpp"
 
@@ -122,6 +127,16 @@ protected:
         BtreePrimaryKeyTest::SetUp();
         Ok("CREATE TABLE w (k varchar(40), n int64, v int64, PRIMARY KEY (k, n))", "CREATED");
     }
+
+    // The home a read by the whole key `(k, n)` names in its plan.
+    std::string HomeOf(const std::string& k, int n) {
+        const std::string plan =
+            Plan("SELECT v FROM w WHERE k = '" + k + "' AND n = " + std::to_string(n));
+        const std::string::size_type at = plan.find(" home=");
+        if (at == std::string::npos) return "";
+        const std::string::size_type from = at + 6;
+        return plan.substr(from, plan.find_first_not_of("0123456789", from) - from);
+    }
 };
 
 TEST_F(WideKeyTest, TheRelationIsABtreeWithAHiddenKeystoneAndTheKeysIndex) {
@@ -136,7 +151,8 @@ TEST_F(WideKeyTest, TheRelationIsABtreeWithAHiddenKeystoneAndTheKeysIndex) {
     EXPECT_EQ(described.Column("primary_key"), (std::vector<std::string>{"1", "2", "0"}));
 
     Ok("INSERT INTO w VALUES ('ann', 1, 10), ('ann', 2, 20), ('bob', 1, 30)", "INSERTED");
-    EXPECT_EQ(Rows("SELECT * FROM w").rows,
+    // Rows sit at their keys' homes, so a walk's order is no key's.
+    EXPECT_EQ(Rows("SELECT * FROM w ORDER BY k, n").rows,
               (Table{{"ann", "1", "10"}, {"ann", "2", "20"}, {"bob", "1", "30"}}));
     Refused("INSERT INTO w VALUES ('ann', 2, 99)", "is already held");
     // A positional row is the declared columns: the key is issued.
@@ -162,6 +178,186 @@ TEST_F(WideKeyTest, TheKeyIsReadWrittenAndMovedAsOnAHeap) {
     EXPECT_EQ(Rows("SELECT k, n, v FROM w ORDER BY k, n").rows,
               (Table{{"ann", "1", "10"}, {"ann", "2", "22"}, {"ann", "5", "21"},
                      {"bob", "1", "31"}}));
+}
+
+// ---- The hashed home (DR-S3f, `exec/hashed_key.hpp`) ------------------------
+
+// A row is placed at the id its key hashes to, and a read that pins the whole
+// key descends there before it asks the index.
+TEST_F(WideKeyTest, ARowSitsAtItsKeysHomeAndAReadByTheWholeKeyDescendsThere) {
+    Ok("INSERT INTO w VALUES ('ann', 1, 10), ('ann', 2, 20), ('bob', 1, 30)", "INSERTED");
+    const std::string select = "SELECT v FROM w WHERE k = 'ann' AND n = 2";
+    const std::string plan = Plan(select);
+    EXPECT_NE(plan.find("IndexProbe w"), std::string::npos) << plan;
+    EXPECT_NE(plan.find(" home="), std::string::npos) << plan;
+    EXPECT_EQ(plan.find("index_scanned="), std::string::npos) << plan;  // the home answered
+    EXPECT_EQ(Rows(select).rows, (Table{{"20"}}));
+
+    const std::string home = HomeOf("ann", 2);
+    ASSERT_FALSE(home.empty());
+    EXPECT_LT(std::stoull(home), catalog::kHashedKeyIssuedBase);
+    EXPECT_EQ(Rows("SELECT keyidentity FROM w WHERE k = 'ann' AND n = 2").rows,
+              (Table{{home}}));
+    // The issue mark starts above every home, and no row has drawn from it.
+    EXPECT_EQ(Rows("SELECT name, next_id FROM sys.tables").Find("name", "w", "next_id"),
+              std::to_string(catalog::kHashedKeyIssuedBase));
+
+    // A key that moved keeps its row's id: the row is off its new key's home,
+    // the index finds it, and its old home answers nothing for the old key.
+    Ok("UPDATE w SET n = 5 WHERE k = 'ann' AND n = 2", "UPDATED 1");
+    const std::string moved = "SELECT keyidentity, v FROM w WHERE k = 'ann' AND n = 5";
+    EXPECT_EQ(Rows(moved).rows, (Table{{home, "20"}}));
+    EXPECT_NE(Plan(moved).find("index_scanned="), std::string::npos) << Plan(moved);
+    EXPECT_TRUE(Rows(select).rows.empty());
+    // A partial key, a range and a list are the index's alone.
+    EXPECT_EQ(Plan("SELECT v FROM w WHERE k = 'ann'").find(" home="), std::string::npos);
+    EXPECT_EQ(Plan("SELECT v FROM w WHERE k = 'ann' AND n >= 1 AND n <= 5").find(" home="),
+              std::string::npos);
+    EXPECT_EQ(Rows("SELECT n FROM w WHERE k = 'ann' ORDER BY n").rows, (Table{{"1"}, {"5"}}));
+}
+
+// A home that is bound - by a deleted row of the same key until a PURGE, by
+// a row another statement put there - costs the row its place and nothing
+// else: it is issued an id above every home, and the index finds it.
+TEST_F(WideKeyTest, ABoundHomeGivesTheRowAnIssuedIdAndTheIndexStillFindsIt) {
+    Ok("INSERT INTO w VALUES ('bob', 1, 30)", "INSERTED");
+    const std::string home = HomeOf("bob", 1);
+    Ok("DELETE FROM w WHERE k = 'bob' AND n = 1", "DELETED 1");
+    Ok("INSERT INTO w VALUES ('bob', 1, 31)", "INSERTED");
+    const Table again = Rows("SELECT keyidentity, v FROM w WHERE k = 'bob' AND n = 1").rows;
+    ASSERT_EQ(again.size(), 1u);
+    EXPECT_GE(std::stoull(again[0][0]), catalog::kHashedKeyIssuedBase);
+    EXPECT_EQ(again[0][1], "31");
+    // The deleted row is purged; the live one stays where it was issued.
+    const std::string purged = Run("PURGE FROM w WHERE keyidentity >= 1");
+    EXPECT_EQ(purged.rfind("PURGED 1", 0), 0u) << purged;
+    EXPECT_EQ(Rows("SELECT keyidentity, v FROM w WHERE k = 'bob' AND n = 1").rows, again);
+
+    // Another key's row at this key's home: a row that names its own id.
+    const std::string taken = HomeOf("zed", 9);
+    ASSERT_FALSE(taken.empty());
+    Ok("INSERT INTO w (keyidentity, k, n, v) VALUES (" + taken + ", 'sq', 1, 7)", "INSERTED");
+    Ok("INSERT INTO w VALUES ('zed', 9, 90)", "INSERTED");
+    EXPECT_EQ(Rows("SELECT v FROM w WHERE k = 'zed' AND n = 9").rows, (Table{{"90"}}));
+    EXPECT_EQ(Rows("SELECT v FROM w WHERE k = 'sq' AND n = 1").rows, (Table{{"7"}}));
+    EXPECT_EQ(Rows("SELECT keyidentity FROM w WHERE k = 'sq' AND n = 1").rows, (Table{{taken}}));
+    Refused("INSERT INTO w VALUES ('zed', 9, 91)", "is already held");
+}
+
+// DR-R11: the home answers nothing the index would not. Every key is read
+// two ways after every few writes - by its whole key, which tries the home,
+// and by a range that pins the same one key, which is the index's alone -
+// against a model, through inserts, deletes, moves and keys inserted again.
+TEST_F(WideKeyTest, AReadThroughTheHomeAnswersWhatTheIndexAloneAnswers) {
+    std::mt19937 rng(20261123);
+    std::map<std::pair<std::string, int>, int> model;
+    const std::vector<std::string> names = {"a", "b", "c", "d", "e"};
+    const auto pick = [&]() {
+        return std::make_pair(names[rng() % names.size()], static_cast<int>(rng() % 12));
+    };
+    const auto where = [](const std::pair<std::string, int>& key) {
+        return "k = '" + key.first + "' AND n = " + std::to_string(key.second);
+    };
+    int serial = 0;
+    for (int op = 0; op < 600; ++op) {
+        const auto key = pick();
+        const auto held = model.find(key);
+        switch (rng() % 4) {
+            case 0:
+            case 1:
+                if (held == model.end()) {
+                    Ok("INSERT INTO w VALUES ('" + key.first + "', " +
+                           std::to_string(key.second) + ", " + std::to_string(++serial) + ")",
+                       "INSERTED");
+                    model[key] = serial;
+                } else {
+                    Refused("INSERT INTO w VALUES ('" + key.first + "', " +
+                                std::to_string(key.second) + ", 0)",
+                            "is already held");
+                }
+                break;
+            case 2:
+                Ok("DELETE FROM w WHERE " + where(key),
+                   held == model.end() ? "DELETED 0" : "DELETED 1");
+                model.erase(key);
+                break;
+            default: {
+                const auto to = pick();
+                if (held == model.end() || model.count(to) != 0) break;
+                Ok("UPDATE w SET k = '" + to.first + "', n = " + std::to_string(to.second) +
+                       " WHERE " + where(key),
+                   "UPDATED 1");
+                model[to] = held->second;
+                model.erase(key);
+                break;
+            }
+        }
+        if (op % 20 != 19) continue;
+        for (const std::string& name : names) {
+            for (int n = 0; n < 12; ++n) {
+                const auto it = model.find({name, n});
+                const Table want =
+                    it == model.end() ? Table{} : Table{{std::to_string(it->second)}};
+                const std::string at = "k = '" + name + "' AND n ";
+                ASSERT_EQ(Rows("SELECT v FROM w WHERE " + at + "= " + std::to_string(n)).rows,
+                          want)
+                    << name << ' ' << n << " at op " << op;
+                ASSERT_EQ(Rows("SELECT v FROM w WHERE " + at + ">= " + std::to_string(n) +
+                               " AND n <= " + std::to_string(n))
+                              .rows,
+                          want)
+                    << name << ' ' << n << " at op " << op;
+            }
+        }
+    }
+    // Some rows are at homes and some were issued ids: both ranges are in use.
+    const Table ids = Rows("SELECT keyidentity FROM w").rows;
+    const auto issued = std::count_if(ids.begin(), ids.end(), [](const auto& row) {
+        return std::stoull(row[0]) >= catalog::kHashedKeyIssuedBase;
+    });
+    EXPECT_GT(issued, 0);
+    EXPECT_LT(static_cast<std::size_t>(issued), ids.size());
+}
+
+// The home's premise is that no view shows two rows of one key, which holds
+// for a view that is a commit point. A read-write transaction's is not: under
+// REPEATABLE READ it can show the row a later commit deleted beside the
+// transaction's own row of the same key. So inside one the read is the
+// index's, and it answers whatever a read that never had a home answers.
+TEST_F(WideKeyTest, AReadInsideAReadWriteTransactionIsTheIndexsAlone) {
+    Ok("INSERT INTO w VALUES ('ann', 2, 20)", "INSERTED");
+    Session reader;
+    const auto in_txn = [&](const std::string& sql) {
+        return db_->dispatcher().Dispatch(sql, &reader).response;
+    };
+    const std::string by_key = "SELECT v FROM w WHERE k = 'ann' AND n = 2";
+    const std::string by_range = "SELECT v FROM w WHERE k = 'ann' AND n >= 2 AND n <= 2";
+    ASSERT_EQ(in_txn("BEGIN ISOLATION LEVEL REPEATABLE READ").rfind("BEGIN", 0), 0u);
+    EXPECT_EQ(testing_view::ReadViewText(in_txn(by_key)).rows, (Table{{"20"}}));
+
+    // Committed after the reader's view was taken.
+    Ok("DELETE FROM w WHERE k = 'ann' AND n = 2", "DELETED 1");
+    EXPECT_TRUE(Rows(by_key).rows.empty());
+    // Whatever the engine answers this insert, the two reads agree after it.
+    const std::string inserted = in_txn("INSERT INTO w VALUES ('ann', 2, 99)");
+    EXPECT_EQ(testing_view::ReadViewText(in_txn(by_key)).rows,
+              testing_view::ReadViewText(in_txn(by_range)).rows)
+        << inserted;
+    // The plan names the home; the transaction's read went past it.
+    const std::string plan = in_txn("ANALYZE " + by_key);
+    EXPECT_NE(plan.find(" home="), std::string::npos) << plan;
+    if (!testing_view::ReadViewText(in_txn(by_key)).rows.empty()) {
+        EXPECT_NE(plan.find("index_scanned="), std::string::npos) << plan;
+    }
+    in_txn("ROLLBACK");
+
+    // A READ ONLY transaction's view is a commit point: the home answers.
+    Ok("INSERT INTO w VALUES ('cy', 1, 5)", "INSERTED");
+    ASSERT_EQ(in_txn("BEGIN READ ONLY").rfind("BEGIN", 0), 0u);
+    const std::string read_only = in_txn("ANALYZE SELECT v FROM w WHERE k = 'cy' AND n = 1");
+    EXPECT_NE(read_only.find(" home="), std::string::npos) << read_only;
+    EXPECT_EQ(read_only.find("index_scanned="), std::string::npos) << read_only;
+    in_txn("COMMIT");
 }
 
 // DR-Q19, DR-Q21: such a btree keeps its delete-marked rows and its key's

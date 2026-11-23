@@ -1507,6 +1507,37 @@ private:
         const catalog::TableAccess::IndexRef* ix = LiveIndexOf(step, access);
         if (ix == nullptr) co_return co_await RunWalkStep(steps, index, step, access);
         const IndexProbe& probe = *step.index;
+        // **A hashed primary key's home, before the index** (DR-S3f,
+        // `IndexProbe::home`; DR-R11 `[quiet-wrong]`). The descent's row
+        // goes through `AcceptTupleAt` as any located row does - its
+        // visibility, the whole residual - and `rows_matched` moves exactly
+        // when it passed both. The residual pins every column of a unique
+        // key, so a row that passed is the only row any snapshot shows with
+        // that key, and the probe below could offer no other. A missing
+        // row, an invisible one, one carrying another key or one the
+        // residual refused concludes nothing here: the probe runs.
+        // The counter is this step's own and is read back after the call,
+        // because the next step runs inside it.
+        //
+        // **Only for a reader whose view is a commit point**: one with no
+        // transaction id of its own - an autocommit `SELECT`, a `READ ONLY`
+        // transaction - and not the view that sees every writer. "No two
+        // visible rows share a unique key" is the unique check's promise
+        // about committed states. A read-write transaction's view is such a
+        // state plus its own writes, and under `REPEATABLE READ` it can
+        // show the row a later commit deleted beside the transaction's own
+        // row of the same key; the probe returns both, and a home that
+        // stopped at one would answer differently. So there the probe runs.
+        if (probe.home.has_value() && snapshot_.view.own_trx_id == txn::kNoTrxId &&
+            !snapshot_.view.sees_everything) {
+            const std::uint64_t matched_before = stats_.For(step.step_id).rows_matched;
+            if (Status s = AcceptByKey(steps, index, step, access, *probe.home); !s.ok()) {
+                co_return s;
+            }
+            if (stopped_ || stats_.For(step.step_id).rows_matched != matched_before) {
+                co_return Status::OK();
+            }
+        }
         const index::IndexLayout layout = LayoutOf(*ix);
         // A bound is a whole entry, which is the sort key (index_page.hpp).
         const std::size_t entry_width = ix->entry_width;

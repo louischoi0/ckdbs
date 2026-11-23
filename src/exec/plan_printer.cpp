@@ -164,6 +164,9 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     if (step.index.has_value() && step.index->key_from.has_value()) {
         os << " key=" << FormatColumnRef(*step.index->key_from);
     }
+    if (step.index.has_value() && step.index->home.has_value()) {
+        os << " home=" << *step.index->home;
+    }
     if (step.range.has_value()) {
         os << " range=[" << step.range->low << ", " << step.range->high << ']';
     }

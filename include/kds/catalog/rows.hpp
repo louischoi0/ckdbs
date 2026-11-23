@@ -86,8 +86,16 @@ static_assert(offsetof(SysObjectRow, name) == SysObjectRow::kNameOffset);
 // have: its positions are one byte each in the four bytes the row has for
 // them. Four is also a unique index's cap (`kMaxIndexKeyColumns`), so no
 // primary key has more.
+//
+// `kKeyFormHashed` (DR-S3f): the key is the unique index `$pkey_<oid>` over a
+// hidden Keystone, and a row's id is its key's home where that is free
+// (`exec/hashed_key.hpp`), else an issued id at or above
+// `kHashedKeyIssuedBase` - where such a relation's `next_id` starts, so no
+// issued id is ever a home.
 inline constexpr std::uint8_t kKeyFormIssued = 0;
 inline constexpr std::uint8_t kKeyFormEmbedded = 1;
+inline constexpr std::uint8_t kKeyFormHashed = 2;
+inline constexpr std::uint64_t kHashedKeyIssuedBase = std::uint64_t{1} << 47;
 inline constexpr std::size_t kMaxEmbeddedKeyColumns = 4;
 
 struct SysTableRow {
@@ -105,7 +113,8 @@ struct SysTableRow {
     // `CREATE TABLE`): `kKeyFormIssued` - a row names its id or the engine
     // issues one, every relation's until superblock 41 - or
     // `kKeyFormEmbedded` - the id is the code of the row's primary key
-    // columns (`exec/embedded_key.hpp`). The byte was the retired key-order
+    // columns (`exec/embedded_key.hpp`) - or `kKeyFormHashed` - the id is
+    // the key's home where free, else issued (`exec/hashed_key.hpp`). The byte was the retired key-order
     // byte, written 0 since BD-R8's superblock 20, so every row from before
     // reads as `kKeyFormIssued`. `CheckKeyForm` refuses any other value.
     std::uint8_t key_form = kKeyFormIssued;

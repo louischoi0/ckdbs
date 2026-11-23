@@ -3644,11 +3644,32 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
 - **A write by a unique key is not measured above one core**, nor with two
   sessions racing one key: its units are the walk's, and the cells are the
   equivalence and the sim's.
-- **F2, the hashed home, is not built** (DR-Q11 (a), on a bar CLA set):
-  a wide key on a btree is the indexed form, two descents a point read.
-  Measured with every page resident, the home would save a read 0.9 us to
-  1.8 us and cost an insert 23 % to 27 %; a relation larger than the pool
-  was not measured.
+- **A hashed key's home serves one shape** (DR-S3f): a `SELECT` whose
+  `WHERE` pins every key column by an equality with a literal. A write by
+  the whole key, a `SELECT ... FOR UPDATE`, a join on the whole key and a
+  value list read the index and then the row, as before homes. **So does
+  every `SELECT` inside a read-write transaction**: the home is tried only
+  under a view that is a commit point. `READ COMMITTED`'s statement view
+  would be safe by the argument in `heap-and-tuple.md` §3.1c and is not
+  admitted, because a view does not carry its level; the remedy named and
+  not built is that field.
+- **A row off its home stays off it.** A row whose key moved, a row whose
+  key was inserted again while its deleted row was unpurged, and a row
+  whose home another key took are read by two descents for their lives:
+  nothing moves a row to a home that has since come free (K1: an id is
+  not rebound). A workload that deletes and re-inserts its keys without
+  `PURGE` drifts to the indexed cost.
+- **A hashed relation's `SHOW BUDGET` reads half its ids as issued**: its
+  issue mark starts at `2^47`, above every home, and the budget is read
+  off the mark. The ids left to issue are `2^47` less what was issued.
+- **A hashed relation's walk is in hash order**, and its inserts land
+  across the whole tree: a full scan's emission order is no key's (no
+  contract ever said otherwise), and a relation larger than the pool pays
+  a leaf read an insert where the indexed form appended. Not measured
+  above the pool, above one core, or with two sessions racing one home.
+- **A row may name another key's home**: `INSERT ... (keyidentity, ...)`
+  on a hashed relation places the row at the id it wrote. It costs the
+  home's own key its place and no answer.
 - **An embedded key's join is not keyed.** A join whose key is every
   column of an embedded primary key is no lookup: the id is computed from
   literals at compile, and nothing computes it from an outer row. The step
@@ -3685,7 +3706,7 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
   statement, and an embedded key's lookup is derived from its columns'.
   No trail is recorded for such a shape.
 - **Not tested**: a KWP load into either btree form; the embedded form in
-  the sim (`k0` is an indexed key, on a heap or a btree);
+  the sim (`k0` is an indexed key on a heap or a hashed one on a btree);
   a park and a resume through a key loop after its first descent declined
   on a heap, the case `WriteWalk::WriteByKeys`' guard is for - the decline
   itself is `KeySetWriteHoldTest`'s, the park after it needs a failed

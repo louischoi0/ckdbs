@@ -78,6 +78,13 @@ struct Schema {
     // `spare_slots`, in the struct's padding** (`EmbeddedKeyColumns`).
     EmbeddedKeyColumns embedded_key;
 
+    // How the relation's Keystone id is chosen (`SysTableRow::key_form`):
+    // `kKeyFormEmbedded` exactly where `embedded_key` is not empty,
+    // `kKeyFormHashed` for a btree whose indexed key places a row at its
+    // home (`exec/hashed_key.hpp`), `kKeyFormIssued` for every other
+    // relation. One byte, the last of the struct's padding.
+    std::uint8_t key_form = kKeyFormIssued;
+
     // A hidden Keystone (DN-D3; BZ-R1 before it): column 0 is the engine's
     // own `int64`, no statement names it but by `keyidentity`, and the
     // declared columns start at position 1. A relation whose declared
@@ -408,7 +415,8 @@ struct ForeignKeyRef {
 };
 
 // A `Schema` is its columns, its slot count and - in what was padding - its
-// embedded key: the size it had before DR (`EmbeddedKeyColumns`).
+// embedded key and its key form: the size it had before DR
+// (`EmbeddedKeyColumns`).
 static_assert(sizeof(Schema) == sizeof(std::vector<SysColumnRow>) + 8,
               "Schema grew: every TableAccess field after it moves");
 

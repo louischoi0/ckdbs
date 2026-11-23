@@ -63,6 +63,7 @@ add_executable(kds_tests
     btree_race_test.cpp
     index_key_test.cpp
     embedded_key_test.cpp
+    hashed_key_test.cpp
     index_tree_test.cpp
     index_race_test.cpp
     index_ddl_test.cpp

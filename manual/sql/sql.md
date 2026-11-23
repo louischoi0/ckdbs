@@ -179,7 +179,7 @@ CREATE TABLE [<namespace>.]<name>
   |---|---|---|
   | one `int64`, the first column | **the tuple key itself** - the relation exactly as without the keyword | **the tuple key itself**, visible and named by an `INSERT` or issued |
   | `int8`, `int16`, `int32`, `date` and `bool` columns of 48 bits or less together (`int32`; `(int32, int16)`; `(date, int8)`) | **embedded**: the key is the row's identity, with no index. Rows are stored in key order | a unique index beside a hidden tuple key |
-  | anything else - wider, or a string, an `int64` beside another column, a decimal | a unique index beside a hidden tuple key | a unique index beside a hidden tuple key |
+  | anything else - wider, or a string, an `int64` beside another column, a decimal | a unique index beside a hidden tuple key, **each row placed by a hash of its key** | a unique index beside a hidden tuple key |
 
   - **Recommended: one `int64` first column.** It is the only form with no
     second structure and none of the limits below.
@@ -189,10 +189,21 @@ CREATE TABLE [<namespace>.]<name>
     off it. A string column of the key is ordered by its first 32 bytes
     and compared in full, so keys that share those bytes cost each read
     and each insert a lookup per such key: make keys differ inside them.
-    **For such a key prefer `HEAP`**: a deleted row's space and its key's
-    dead index entries are reclaimed in the background there, while a
-    `BTREE` keeps both until `PURGE FROM t WHERE keyidentity >= 1` and
-    `PURGE INDEX $pkey_<oid>` (the name `sys.indexes` shows).
+    **On a `BTREE` a row is placed by a hash of its key**, so `WHERE`
+    every key column `=` a value finds it in one descent, where a `HEAP`
+    reads its index and then the row. The price is the insert: rows land
+    across the whole relation instead of at its end. A row keeps its place
+    when its key changes, and a key inserted again before its deleted row
+    is purged takes another place; such rows are found through the index,
+    one descent more. `ANALYZE` shows `home=` on a read that may try the
+    place first: an autocommit `SELECT`, or one in a `READ ONLY`
+    transaction. Inside a read-write transaction the read goes through
+    the index.
+    **Where rows are deleted or keys change often, prefer `HEAP`**: a
+    deleted row's space and its key's dead index entries are reclaimed in
+    the background there, while a `BTREE` keeps both until `PURGE FROM t
+    WHERE keyidentity >= 1` and `PURGE INDEX $pkey_<oid>` (the name
+    `sys.indexes` shows).
   - **An embedded key** never changes (`UPDATE` of a key column is
     `UNSUPPORTED`, and the column cannot be dropped), and a deleted key
     cannot be inserted again until a `PURGE` frees it (`PURGE FROM t WHERE

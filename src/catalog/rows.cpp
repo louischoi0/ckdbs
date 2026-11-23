@@ -52,7 +52,7 @@ Status SysTableRow::CheckKeyForm() const {
     for (std::size_t i = 1; i < embedded_key_cols.size(); ++i) {
         gap = gap || (embedded_key_cols[i] != 0 && embedded_key_cols[i - 1] == 0);
     }
-    if (key_form <= kKeyFormEmbedded && has_cols == (key_form == kKeyFormEmbedded) && !gap) {
+    if (key_form <= kKeyFormHashed && has_cols == (key_form == kKeyFormEmbedded) && !gap) {
         return Status::OK();
     }
     return Status::Corruption("sys.tables row for oid " + std::to_string(oid) +

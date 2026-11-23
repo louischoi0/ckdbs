@@ -695,9 +695,10 @@ DR-Q0 and DR-Q2 stay the operator's marks.
 | DR-Q8 | **(a)**: CH stays written and unopened | P3 answers CH's demand for a key that is not the Keystone and for no other; CH's standing is the operator's |
 | DR-Q9 | **(a)**: the standing budget | Every run inside 20 minutes; the cuts are in the results file |
 | DR-Q10 | **(a)**: the manual recommends one `int64` first column | For another key: `HEAP` for a wide key, a btree for a narrow one that is ranged or ordered by (the close) |
-| DR-Q11 | **(a)**, and by the bar DR-S1 set the form is **P1** | (a)'s first condition is met: F2's point read is 0.9 us and 1.8 us ahead of P1's (3 % and 6 % of the statement). Its second is a bar DR-S1 sets, and DR-R6 wants a number: **F2's insert within 10 % of P1's server CPU a row at 1,000,000 rows**, provisional, CLA's. The ground: a form is not taken for a single-digit gain on one statement shape at a double-digit cost on another, with a persisted hash and two `[quiet-wrong]` rules (DR-R11, DR-R12) beside it. Measured: +27 % (+23 % at 100,000). **F2 is not built.** The bar was set after the cells were read, and at a break-even bar of two keyed reads an insert F2 would pass at 1,000,000 rows (1.4) and sit on the line at 100,000 (2.0): the verdict turns on the bar, and (b) stays the operator's. F2 is P1 with a home, so it can be ordered over P1 later; a relation made as P1 stays P1 (DR-R12) |
-| DR-Q12, DR-Q13 `[quiet-wrong]` | **not reached** | They decide F2's details, and F2 is not built. Neither is adopted |
-| DR-Q14 | **(a) as revised**: P1 yes, F1 no | F2's place is P1's. F1's refusal is `Unsupported` |
+| DR-Q11 | **(a), on the operator's bar: the form is F2** | **The bar is the operator's since `raft-marks-2026-11-23.md` §16**: an insert 50 % or more dearer is accepted for a btree's key of several types and columns where no other path is affected. (a)'s first condition is met (F2's point read is 0.9 us and 1.8 us ahead of P1's) and under that bar so is its second (F2's insert is 23 % to 27 % dearer). **Before that word the bar was 10 %, set by DR-S1 and CLA's, and by it the form was P1**: DR-S3d built P1, DR-S3f replaced it on a btree with F2. That the word means F2 is CLA's reading, recorded as such in §16 |
+| DR-Q12 `[quiet-wrong]` | **(a)**: an issued id in `[2^47, 2^48)`, nothing stored for the flag, no second structure | Adopted with DR-S3f on the standing go-ahead. Premise re-read on worktree `dq-cabin-miss-build` at `d38b68fc`: a home is `1 + h mod (2^47 - 1)`, so at most `2^47 - 1`; the relation's issue mark is written `2^47` at `CREATE TABLE` and every writer of it moves it up only (`AllocateRowId`, `AdmitExplicitRowId`); so no issued id is a home. It holds. A row that writes its own `keyidentity` may sit at another key's home, which costs that key's row its place and no answer (DR-R11) |
+| DR-Q13 `[quiet-wrong]` | **(a) as revised**: an absent key is two descents, and **the home is tried only under a view that is a commit point** | Adopted with DR-S3f on the standing go-ahead. Premise re-read at `d38b68fc`: DR-R11 lets a row at the home answer where it is visible and carries the key, which rests on no view showing two rows of one unique key. That is the unique check's promise about committed states. **It does not hold for a read-write transaction's view**: under `REPEATABLE READ` the view can show a row a later commit deleted beside the transaction's own row of that key, and the index returns both. Revised: a statement with a transaction id of its own reads the index and never the home. `READ COMMITTED`'s statement view would be safe and is not admitted, because a view does not carry its level (`known-gaps.md`) |
+| DR-Q14 | **(a)**: F2 yes, F1 no | As written. Through DR-S3e the form was P1 and the answer the same. F1's refusal is `Unsupported` |
 | DR-Q15 | **written out as DR-Q22 and adopted there, on the standing word alone** | (a) was to put the format events to the operator at DR-S1, and DR-R5 asks for the operator's word on a format event as its own item. The standing go-ahead is the only word DR-Q22 has: it is an adoption, never the operator's mark, it is listed first at the push gate, and nothing of it reaches `main` before the operator's word there. DR-S1's review asked that DR-S3d wait for that word; CLA did not stop, the standing word being to follow CLA's proposal where a decision is needed |
 
 The items DR-S0 raised, (a) CLA's proposal and adopted:
@@ -713,6 +714,7 @@ The items DR-S0 raised, (a) CLA's proposal and adopted:
 | DR-Q22 | The format events (DR-R5, DR-Q15). | **One, superblock 41**: `sys.tables`' retired key-order byte becomes the key form (0 none, 1 embedded), its reserved word at offset 97 the embedded key's column positions (up to four, one byte each), and a btree may carry a hidden Keystone. F1's code is a persisted format pinned by byte vectors. No index flag, no entry layout and no `sys.indexes` row change. **No `hash47`**: F2 is not built | (b) no superblock move, an older binary misreading an embedded relation; (c) F1 not built, and no event |
 | DR-Q23 | A write's use of an index in `sys.indexes`' counts. | **counted**: a run P7 collects is one probe, its entries scanned and its tuple keys resolved. `index_stats.hpp`'s "a write's walk is not counted" is amended to it | (b) not counted |
 | DR-Q24 | What shows a primary key. | **`sys.columns` and `DESCRIBE` gain `primary_key`**, the column's 1-based place in the key or 0 | (b) nothing: the key is read off `sys.indexes` |
+| DR-Q25 | How DR-R9's "no instruction added" is read at the close. DR-R9 is the operator's rule and its last sentence names the bar: "no instruction added, shown by the chains and the review, and a delta inside the control's range". The review's inventory (§7, the close) lists what a relation whose key is one `int64` first column executes that it did not at `e9df68d0`: a test where a form exists to be asked for (an insert's row, a walk's step, an index probe's step, a write that is not by the tuple key), and P7's loop over the relation's unique indexes, which is the feature. | **the chains are identical, the review's list is stated, and the delta is inside the control: the bar is read as met where every remaining instruction is a test another form needs, and the list is put to the operator as it stands**. Adopted on the standing go-ahead; DR-R9 itself stays the operator's, and whether the list is acceptable under it is the operator's to say | (b) the letter: no test at all, which no engine that has a second key form can meet on an insert; (c) the forms dispatched through per-relation function tables, their own order |
 
 ## 5a. DR-S1 - the verdict `[design]`, adopted on the standing go-ahead
 
@@ -729,15 +731,17 @@ Against P0, from §1.8 and the results file.
 | P2d, `PURGE` by primary key on a heap | **not built** | DR-Q6 (a) |
 | F0, the keyword on a btree's `int64` first column | **go** | A spelling of what the relation is (DR-R9) |
 | F1, the embedded key | **go**, integer, date and bool columns | One descent, no index, the range and the order by the tuple key |
-| F2, the hashed home | **not built** | DR-Q11 (a): its point read is ahead by 3 % to 6 % of a statement and its insert is 23 % to 27 % dearer, past the 10 % bar (§4a). Not foreclosed: it is P1 with a home |
-| P1, a hidden Keystone and the index on a btree | **go**, as the wide key's form | DR-Q11 (a)'s other branch |
+| F2, the hashed home | **go, since the operator's bar** (`raft-marks-2026-11-23.md` §16; DR-S3f) | DR-S1 as first written did not build it: its point read is ahead by 3 % to 6 % of a statement and its insert is 23 % to 27 % dearer, past the 10 % bar CLA had set. The operator accepts an insert 50 % or more dearer where no other path is affected, and by that bar both of DR-Q11 (a)'s conditions are met |
+| P1, a hidden Keystone and the index on a btree | **built at DR-S3d, replaced on a btree by F2 at DR-S3f** | It was DR-Q11 (a)'s other branch under the 10 % bar. A heap's form is unchanged: the index alone, no homes |
 | P5, a place hint | **not built** | On its own word only |
 | P6, the limits | **documented** | DR-Q3 (a) |
 | P8, a page by key | **its own order** | DR-Q17 (a) |
 
 **DR-S3's stages, in order**: S3a P7; S3b P3's contract and cells with
 DR-Q23 and DR-Q24; S3c P2a; S3d superblock 41, F0's keyword and P1 with
-DR-Q19 and DR-Q21; S3e F1 with DR-Q20. DR-S2 runs before S3a (DR-R8).
+DR-Q19 and DR-Q21; S3e F1 with DR-Q20; **S3f F2 with DR-Q12 and DR-Q13,
+added after DR-S4's first close run on the operator's bar**. DR-S2 runs
+before S3a (DR-R8).
 
 **The amendments owed, by file**: `docs/spec/heap-and-tuple.md` §3.1b and
 §4.1c; `docs/spec/index.md` §8, §10.2 and §2; `docs/spec/foreign-keys.md`
@@ -1156,3 +1160,108 @@ findings applied on worktree `dq-cabin-miss-build`, branch
   290 runs with 0 failures on the release build; the manual and
   `CLAUDE.md`'s rows are amended (DR-S4's documents).
 - **Suite**: 0 failed of 5,212.
+
+### DR-S4, the close's first run, its remedies and their review, 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`.
+
+- **The first close run, at `866860b8`** (`v3.5.0-119-g866860b85`,
+  `ck-tester`): 6 of 14 phases of the opening commit against the closing
+  one lay outside the same-binary control, on relations that have no
+  primary key but their `int64` first column - the heap's load, walked
+  update, range, insert and delete dearer by 3 % to 7 %, and the btree's
+  load by 0.13 us a row. DR-R9's measured half was not met. Its results
+  file was superseded by the next run's and never committed.
+- **Three remedies, `bff54d52`**: `Schema::embedded_key` out of a vector
+  and into five bytes of the struct's padding (it had grown every `Schema`
+  by 24 bytes and moved every field a `TableAccess` keeps after it); the
+  embedded key's derivation out of `InsertOneRow`'s body; `Decode`'s
+  refusal built out of line. A fourth, the key-form check moved out of
+  `Decode`, was built and measured as a fifth diagnostic and first
+  withdrawn, the load not having moved by more than the builds differ.
+- **The second run, at `bff54d52`** (`v3.5.0-120-gbff54d524`,
+  `bench/v3.5.0/results-dr-close-v3.5.0-120-gbff54d524.md`): **14 of 14
+  phases inside the control.** The file carries the five diagnostic
+  builds beside it and what they show: a phase no remedy touched swings by
+  0.32 us to 0.76 us between builds of one source, as much as the deltas
+  the bar is read by. **The load's delta is positive in all six builds**
+  (the btree's +0.08 us to +0.23 us a row, the heap's +0.11 us to
+  +0.34 us), inside the final run's control by 0.01 us a row on the
+  btree: CLA reads a cost of about 0.1 us a row on a multi-row load as
+  real and its source as not found. No instruction was counted (`perf` is
+  absent on the host).
+- **The review of `bff54d52`** (`critics-developer`, report only): no
+  wrong result. **Applied, `d38b68fc`**: a key column past position 255
+  does not embed, which `KeyEmbeds` now says (it had become a silent
+  change of form), with its cell and the spec's row; the key-form check
+  is `SysTableRow::CheckKeyForm`, asked where a relation is loaded and
+  never in `Decode`, and it refuses a position after a 0; the row's two
+  new members sit in padding it had; the ladder's embedded arm is asked
+  only of a step no Keystone arm took; an insert reads the byte a key's
+  refusal names only where one is said; comments that said a cost was
+  measured say what the structure is. **Rejected**: entering
+  `WriteByKeys` only where a key function answers (a few instructions a
+  statement on a path that walks a relation, against the park contract
+  of three call sites); holding the catalog row's array in `Schema` (a
+  second form of four bytes saved for a scan of them at every use).
+- **DR-R9's review half** (DR-Q25): what a relation whose key is one
+  `int64` first column, with no unique index, executes at `d38b68fc`
+  that it did not at `e9df68d0`. **Its chains are identical by
+  construction** - no embedded key can be on a relation whose Keystone is
+  not hidden, and the catalog refuses one at the door and at the load -
+  and `btree_primary_key_test.cpp`'s first cell compares the keyword's
+  plans with the bare relation's on one build; no cell compares a chain
+  with the opening commit's. **What remains, each a test another form
+  needs**: one test of the key form a row inserted; one test a walked
+  step compiled and none on a keyed read; one test an `UPDATE`'s
+  assignment compiled; on a write that is not by the tuple key, the tail
+  of `WriteKeyOf`, `WriteByKeys`' cursor test and P7's loop over the
+  relation's indexes (none on such a btree, the Keystone index on such a
+  heap), which is DR-Q16's feature; a four-byte copy a `sys.tables` row
+  decoded; `DESCRIBE`'s `primary_key` column, which is DR-Q24's.
+- **Suite**: 0 failed of 5,212 at `bff54d52`; at `d38b68fc` 5,211 of
+  5,212, the one failure the new cell's own `INSERT` text, corrected and
+  passing.
+
+### DR-S3f, the hashed home, 2026-11-23
+
+On worktree `dq-cabin-miss-build`, branch `worktree-dr-primary-key`, over
+`d38b68fc`. Built on the operator's bar (`raft-marks-2026-11-23.md` §16),
+after DR-S4's first close; DR-Q12 (a) and DR-Q13 (a) as revised adopted on
+the standing go-ahead (§4a).
+
+- **The form.** A btree's primary key that is neither its `int64` first
+  column nor embeddable is hashed: `sys.tables.key_form` 2, joining
+  superblock 41 (DR-Q22), the relation's issue mark starting at `2^47`.
+  The key stays the unique index `$pkey_<oid>` over a hidden Keystone;
+  what is new is the id a row is first given. P1 is no longer created on
+  a btree. A heap is unchanged.
+- **The mapping** (`exec/hashed_key.hpp`, DR-R12): per key column a tag,
+  a length and the value in full - a string's text, any other type's
+  index key encoding - hashed by FNV-1a with MurmurHash3's finish and
+  folded to `[1, 2^47)`. Pinned by vectors computed outside the engine
+  (`tests/hashed_key_test.cpp`).
+- **The insert**: a row that wrote no `keyidentity` asks its home's row
+  unit without waiting, finds by one descent whether the id is bound, and
+  takes the home where it is free; otherwise it is issued an id, as
+  every row was. The key's uniqueness is the index's check, as before.
+- **The read**: a literal `IndexProbe` whose residual pins every key
+  column carries `home`; the executor descends there first and is done
+  where the row passes the step's residual, read off the step's own
+  `rows_matched`. **Only under a view that is a commit point** (DR-Q13 as
+  revised): a statement with a transaction id of its own reads the index.
+- **What no other form pays** (DR-R9 as the operator's condition): the
+  insert's one test of the key form is the test it already made for the
+  embedded form; an index probe's step tests the form once at compile and
+  `home` once at run; nothing on a keyed read, a walk or a write.
+- **Cells**: the home and the issued id by value; a moved key; a bound
+  home (a deleted row of the key, another key's row); **a differential
+  cell**, every key read by its whole key and by a range pinning the same
+  key, against a model through 600 inserts, deletes, moves and
+  re-inserts; a `REPEATABLE READ` transaction that inserts a key whose
+  row a later commit deleted, read both ways.
+- **Suite**: 0 failed of 5,221.
+- **Owed at this commit**: the `critics-developer` review (running when
+  the operator asked for the push, §17) and the close's re-measurement.
+  Overhead not measured; measured at the milestone's close.
+

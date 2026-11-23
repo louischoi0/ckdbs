@@ -29,8 +29,12 @@ btree per form the milestone gave it, the rows arriving shuffled:
 
     F0        (id int64, v, w)                       named keys
     F1        (a int32, b int16, v, w, PRIMARY KEY (a, b))     embedded
-    P1int     (a int32, b int32, v, w, PRIMARY KEY (a, b))     indexed
-    P1str     (s varchar(64), v, w, PRIMARY KEY (s))           indexed
+    Wint      (a int32, b int32, v, w, PRIMARY KEY (a, b))     a wide key
+    Wstr      (s varchar(64), v, w, PRIMARY KEY (s))           a wide key
+
+    A wide key is whatever form the binary gives it: the indexed form, rows
+    in issue order (P1), through `bff54d524`, and the hashed home (F2) from
+    DR-S3f on. Run against both binaries, the two cells are that pair.
 
     load, a point read, a range of 100 rows by the key, an update and a
     delete by the whole key.
@@ -165,11 +169,11 @@ def btree_forms(n):
                "cols": "a, b, v, w", "row": lambda i: f"({i // 1000},{i % 1000},{i},0)",
                "pred": lambda i: f"a = {i // 1000} AND b = {i % 1000}",
                "range": lambda x: f"a = {x // 1000} AND b >= {x % 900} AND b <= {x % 900 + 99}"},
-        "P1int": {"ddl": "CREATE TABLE t (a int32, b int32, v int64, w int64, PRIMARY KEY (a, b))",
+        "Wint": {"ddl": "CREATE TABLE t (a int32, b int32, v int64, w int64, PRIMARY KEY (a, b))",
                   "cols": "a, b, v, w", "row": lambda i: f"({i // 1000},{i % 1000},{i},0)",
                   "pred": lambda i: f"a = {i // 1000} AND b = {i % 1000}",
                   "range": lambda x: f"a = {x // 1000} AND b >= {x % 900} AND b <= {x % 900 + 99}"},
-        "P1str": {"ddl": "CREATE TABLE t (s varchar(64), v int64, w int64, PRIMARY KEY (s))",
+        "Wstr": {"ddl": "CREATE TABLE t (s varchar(64), v int64, w int64, PRIMARY KEY (s))",
                   "cols": "s, v, w", "row": lambda i: f"('{vkey(i)}',{i},0)",
                   "pred": lambda i: f"s = '{vkey(i)}'",
                   "range": lambda x: f"s >= '{vkey(x)}' AND s <= '{vkey(x + 99)}'"},
@@ -250,7 +254,7 @@ def main():
     else:
         bins = {}
         plan = [(f, heap_form_cell) for f in ("ref_heap", "int32", "int32x2", "varchar64", "mixed4")]
-        plan += [(f, btree_form_cell) for f in ("F0", "F1", "P1int", "P1str")]
+        plan += [(f, btree_form_cell) for f in ("F0", "F1", "Wint", "Wstr")]
     out = {"part": a.part, "args": vars(a), "host_before": host_state(),
            "sha256_16": {k: digest(v) for k, v in {**bins, "B": a.bin_b}.items()},
            "started_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), "cells": []}

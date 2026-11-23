@@ -2461,6 +2461,10 @@ private:
     // `body` is the row's columns after the Keystone.
     static std::string EmbeddedKeyText(const catalog::TableAccess& ta,
                                        const std::vector<parser::AstValue>& body);
+    // The home of a hashed relation's row (DR-S3f; `exec::HashedKeyHome`
+    // over `body`'s primary key values), or 0 where the key has none.
+    static std::uint64_t HashedRowHome(const catalog::TableAccess& ta,
+                                       const std::vector<parser::AstValue>& body);
     // **An embedded relation's row names its id by its key** (DR-S3e): `id`
     // becomes the code of `body`'s key columns (`exec::EmbeddedKeyId`) and
     // `key_byte` the first key column's byte, where the row wrote no

@@ -148,3 +148,25 @@ The operator's words of 2026-11-23, recorded in English.
 | **`[quiet-wrong]` re-read** | DR-Q1 (a) rests on a moved key changing no identity and no stored reference: read at `e9df68d0` (the order's §1.8 item 2), it holds. DR-Q16 (a) rests on a unique key's run naming every row a walk of the same WHERE could write: the run is the superset a read through the index resolves and the unique check walks (`src/exec/index_maintain.cpp`, `CheckUniqueKey`), every row is tested against the whole WHERE where it is found, and a WHERE with no tuple key bound declares no window for either path (`DeclaredWriteBorrow`), so it holds. **DR-Q12 and DR-Q13 are not adopted**: they decide details of F2, which is not built |
 | **Does not settle** | DR-Q11 (b), F2 whatever the cells say, and the 10 % bar itself, which is CLA's; DR-Q22 as the operator's own word on a format event; P2c's and P8's orders; CH's standing (DR-Q8); a relation larger than the pool, which no cell measured; a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; the DR order's header, §1.8, §2, §4a, §5a and §7; its row in `instructions/v3.2.0/index.md` |
+
+## 16. DR: an insert 50 % or more dearer is accepted for a btree's multi-type, multi-column key, where no other path is affected
+
+| | |
+|---|---|
+| **Word** | *"Even if supporting multiple types and multiple columns on a btree makes an insert 50 % or more slower, it must be accepted and implemented, as long as other paths are not affected."* Given in the session of §14, while DR-S4's close was being reviewed |
+| **Mark** | **DR-Q11's insert bar is the operator's**: an insert 50 % or more dearer is accepted for the btree's key of several types and columns, on the condition that no other path is affected. It replaces the 10 % bar DR-S1 set, which was CLA's (§15, "does not settle") |
+| **CLA's reading, not the operator's words** | The one form withheld on an insert's cost was F2, the hashed home: DR-S0c measured its point read 0.9 us to 1.8 us ahead of P1's and its insert 23 % to 27 % dearer. Under the operator's bar both of DR-Q11 (a)'s conditions are met, so **F2 is the form a wide key takes on a btree** and is built as DR-S3f; P1, the indexed form with rows in issue order, is no longer created on a btree. "No other path is affected" is read as DR-R9 extended to every form but the hashed one: F0, F1 and every heap gain no structure and no step from F2. CLA stated this reading in its reply when the word arrived |
+| **Adopted with it, on the standing go-ahead of §14** | DR-Q12 `[quiet-wrong]` (a): a colliding row takes an issued id in `[2^47, 2^48)`, nothing stored for the flag, no second structure. DR-Q13 `[quiet-wrong]` (a): an absent key is two descents, the home and then the index. Each CLA's proposal and not the operator's per-item mark; their premises as re-read are in the DR order's §4a |
+| **Does not settle** | whether F2 stays if a relation larger than the pool, or more than one core, prices its insert past what the operator meant; the format detail (`key_form` 2 and `Hash47` join superblock 41, DR-Q22, which is itself adopted on the standing word alone); a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; the DR order's header, §4a, §5a and §7; `docs/spec/heap-and-tuple.md` §3.1c; the order's row in `instructions/v3.2.0/index.md` |
+
+## 17. DR: push the work so far, the gate run, and go on
+
+| | |
+|---|---|
+| **Word** | *"First, push the work so far, with the verify."* and then *"And after that, continue the work."* Given in the session of §14 while DR-S3f's review was running |
+| **Mark** | **DR lands open on `main`**: every commit of `worktree-dr-primary-key` through DR-S3f, merged with `--no-ff` and pushed with the pre-push hook run, not skipped. The milestone stays open and the session goes on to its close |
+| **What goes out, as it stands** | DR-S2 to DR-S3e; DR-S4's first close with its remedies and their review; **DR-S3f, the hashed home, with its `critics-developer` review not yet returned** and the close's re-measurement on it not yet taken. Superblock 41 goes out with it, which DR-R5 put to the operator's own word and which is adopted on the standing go-ahead alone (§15) |
+| **Does not settle** | DR's close; a tag or a version |
+| **Recorded at** | this file; the DR order's §7; its row in `instructions/v3.2.0/index.md` |
+

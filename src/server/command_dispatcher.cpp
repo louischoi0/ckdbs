@@ -60,6 +60,7 @@
 #include "kds/exec/index_ddl.hpp"
 #include "kds/exec/index_purge.hpp"
 #include "kds/exec/embedded_key.hpp"
+#include "kds/exec/hashed_key.hpp"
 #include "kds/exec/index_maintain.hpp"
 #include "kds/exec/pagination.hpp"
 #include "kds/exec/clean_dropped.hpp"
@@ -6762,6 +6763,12 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 for (const std::uint16_t pos : key_positions) {
                     (void)schema.embedded_key.push_back(pos);
                 }
+                schema.key_form = catalog::kKeyFormEmbedded;
+            } else if (!stmt.heap) {
+                // **Any other key on a btree is hashed** (DR-S3f, DR-Q11 on
+                // the operator's bar): the unique index made below, and a
+                // row placed at its key's home where that is free.
+                schema.key_form = catalog::kKeyFormHashed;
             }
         }
 
@@ -8780,13 +8787,25 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     // relation** (DR-R9): the derivation and its refusals are out of this
     // function's body, and the byte a key's refusal points at is read only
     // where one is said.
-    const bool embedded = !ta.schema.embedded_key.empty();
+    //
+    // **A hashed key names a home** (DR-S3f, `exec/hashed_key.hpp`): where
+    // the row wrote no `keyidentity`, the id its key hashes to, tried below
+    // before an id is issued. Computed here, from the values as written;
+    // 0 where the key has none, which no home is.
+    const std::uint8_t key_form = ta.schema.key_form;
+    const bool embedded = key_form == catalog::kKeyFormEmbedded;
     std::uint32_t embedded_key_byte = 0;
-    if (embedded) {
-        if (named_by_row) embedded_key_byte = values.front().byte_offset;
-        if (Status s = EmbeddedRowId(oid, ta, body, named_by_row, supplied_id, embedded_key_byte);
-            !s.ok()) {
-            return s;
+    std::uint64_t home = 0;
+    if (key_form != catalog::kKeyFormIssued) {
+        if (embedded) {
+            if (named_by_row) embedded_key_byte = values.front().byte_offset;
+            if (Status s =
+                    EmbeddedRowId(oid, ta, body, named_by_row, supplied_id, embedded_key_byte);
+                !s.ok()) {
+                return s;
+            }
+        } else if (!named_by_row) {
+            home = HashedRowHome(ta, body);
         }
     }
     // Where a refusal for the key points: the tuple key's token, or on an
@@ -9026,6 +9045,51 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         attempt.emplace(place());
         if (!attempt->ok()) give_back(key_unit, held_before);
     } else {
+        // ---- A hashed key's home, before an id is issued (DR-S3f) --------
+        //
+        // The row is placed at its key's home where that is free **now**:
+        // its unit asked and never waited for, the id found unbound by a
+        // descent before anything is encoded, so a home another writer
+        // holds, a live or deleted row keeps, or another key hashed to
+        // costs this row nothing but its place - it is issued an id below,
+        // as every row of the indexed form was before homes. The home
+        // decides nothing else: the key's uniqueness is the index's check,
+        // after the placement, as for any row (DR-R11).
+        bool at_home = false;
+        if (home != 0) {
+            const txn::LockKey unit = txn::LockKey::Tuple(ta.oid, home);
+            const bool held_before =
+                scope.txn != nullptr &&
+                scope.txn->borrows().HoldsCovering(unit, txn::LockMode::kExclusive);
+            const std::optional<Status> busy =
+                BorrowOrWait(scope, unit, RepeatableReadWait::kCapable,
+                             txn::LockMode::kExclusive, [] {
+                                 return Status::AlreadyExists("the home is another writer's");
+                             });
+            if (busy.has_value() && busy->code() != StatusCode::kAlreadyExists) return *busy;
+            if (!busy.has_value()) {
+                Status bound = [&]() -> Status {
+                    auto present = exec::LocateRow(page_store_, ta, home);
+                    return present.ok() ? Status::AlreadyExists("the home is bound")
+                                        : present.status();
+                }();
+                if (bound.code() == StatusCode::kNotFound) {
+                    row_id = home;
+                    if (Status s = encode(); !s.ok()) {
+                        give_back(unit, held_before);
+                        return s;
+                    }
+                    if (after_row_id_fixed_for_test_) after_row_id_fixed_for_test_(row_id);
+                    attempt.emplace(place());
+                    at_home = attempt->ok() ||
+                              attempt->status().code() != StatusCode::kAlreadyExists;
+                    if (!attempt->ok()) give_back(unit, held_before);
+                } else {
+                    give_back(unit, held_before);
+                    if (bound.code() != StatusCode::kAlreadyExists) return bound;
+                }
+            }
+        }
         // A refused borrow burns the id (K3), which is then free (BD-R4):
         // nothing is on the trail, so the wait survives and `DispatchAsync`
         // re-runs the statement for a fresh id.
@@ -9038,7 +9102,7 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
         // refused for. The id is burned, its borrow given back, and another
         // drawn; a spill the abandoned round wrote is left as any failed
         // placement leaves one.
-        for (int round = 0;; ++round) {
+        for (int round = 0; !at_home; ++round) {
             auto issued = catalog_.AllocateRowId(oid);
             if (!issued.ok()) return issued.status();
             row_id = issued.value();
@@ -11291,6 +11355,17 @@ StatusOr<std::optional<exec::EmbeddedKeyWindow>> CommandDispatcher::EmbeddedPurg
     auto window = exec::EmbeddedKeyWindowOf(ta.schema, prefix, low, high);
     if (!window.ok()) return window.status().WithContext("PURGE's primary key window");
     return window;
+}
+
+std::uint64_t CommandDispatcher::HashedRowHome(const catalog::TableAccess& ta,
+                                               const std::vector<parser::AstValue>& body) {
+    const std::vector<std::uint16_t> key = ta.PrimaryKeyColumns();
+    std::vector<parser::AstValue> values;
+    for (const std::uint16_t pos : key) {
+        if (pos == 0 || pos > body.size()) return 0;
+        values.push_back(body[pos - 1]);
+    }
+    return exec::HashedKeyHome(ta.schema, key, values).value_or(0);
 }
 
 Status CommandDispatcher::EmbeddedRowId(catalog::Oid oid, const catalog::TableAccess& ta,
