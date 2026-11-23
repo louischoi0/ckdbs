@@ -92,6 +92,9 @@ TEST(EmbeddedKeyTest, WhichKeysEmbed) {
     EXPECT_FALSE(embeds({kTypeValInt32, kTypeValInt32}));      // 64 bits
     EXPECT_FALSE(embeds({kTypeValInt32, kTypeValInt16, kTypeValInt8}));  // 56 bits
     EXPECT_FALSE(embeds({kTypeValInt64}));
+    // Four columns at most, whatever their bits: what the catalog row names.
+    EXPECT_TRUE(embeds({kTypeValInt8, kTypeValInt8, kTypeValInt8, kTypeValBool}));
+    EXPECT_FALSE(embeds({kTypeValInt8, kTypeValInt8, kTypeValInt8, kTypeValInt8, kTypeValInt8}));
     EXPECT_FALSE(embeds({kTypeValVarchar}));
     EXPECT_FALSE(embeds({kTypeValChar}));  // DR-Q7 (a) as revised
     EXPECT_FALSE(embeds({}));

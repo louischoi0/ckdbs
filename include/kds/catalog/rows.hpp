@@ -84,7 +84,8 @@ static_assert(offsetof(SysObjectRow, name) == SysObjectRow::kNameOffset);
 
 // `SysTableRow::key_form`'s values, and how many columns an embedded key may
 // have: its positions are one byte each in the four bytes the row has for
-// them, and a key of more than four columns cannot fit 48 bits anyway.
+// them. Four is also a unique index's cap (`kMaxIndexKeyColumns`), so no
+// primary key has more.
 inline constexpr std::uint8_t kKeyFormIssued = 0;
 inline constexpr std::uint8_t kKeyFormEmbedded = 1;
 inline constexpr std::size_t kMaxEmbeddedKeyColumns = 4;

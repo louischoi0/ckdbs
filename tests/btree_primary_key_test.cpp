@@ -389,6 +389,30 @@ TEST_F(EmbeddedKeyRelationTest, ADateKeyAndAJoinByTheKey) {
               (Table{{"1", "12"}, {"2", "29"}}));
 }
 
+// A primary key has at most four columns, in every form and on either kind:
+// what a unique index keys and what an embedded key's catalog row names.
+// Refused at the key's byte, before anything is created.
+TEST_F(BtreePrimaryKeyTest, AFifthKeyColumnIsRefusedAtTheKeysByte) {
+    const std::string cols = "(a int8, b int8, c int8, d int8, e int8, v int64, ";
+    for (const char* storage : {"", " HEAP"}) {
+        const std::string sql = "CREATE TABLE five " + cols + "PRIMARY KEY (a, b, c, d, e))" +
+                                storage;
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << reply;
+        EXPECT_NE(reply.find("at most 4 columns and this names 5 (byte " +
+                             std::to_string(sql.find("PRIMARY")) + ")"),
+                  std::string::npos)
+            << reply;
+    }
+    // Four one-byte columns embed.
+    Ok("CREATE TABLE four (a int8, b int8, c int8, d int8, v int64, PRIMARY KEY (a, b, c, d))",
+       "CREATED");
+    EXPECT_TRUE(Indexes("$").empty());
+    Ok("INSERT INTO four VALUES (1, -2, 3, -4, 9)", "INSERTED");
+    EXPECT_EQ(Rows("SELECT v FROM four WHERE a = 1 AND b = -2 AND c = 3 AND d = -4").rows,
+              (Table{{"9"}}));
+}
+
 // A key that does not embed - too wide, or of a type that never does - takes
 // the index, and a heap never embeds: its rows are in no key order.
 TEST_F(BtreePrimaryKeyTest, OnlyAKeyThatEmbedsOnABtreeHasNoIndex) {

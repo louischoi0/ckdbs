@@ -34,21 +34,18 @@
 // pins it by vectors; changing it, or the index key encoding it reads, is a
 // format event (DR-R5).
 //
-// What may embed (DR-Q7 (a) as revised): `int8`, `int16`, `int32`, `date`
-// and `bool`. A `char(N)` does not: its comparison against its code was not
-// read, so such a key takes a unique index (P1).
+// What may embed (DR-Q7 (a) as revised; `catalog::KeyEmbeds`): up to four
+// columns of `int8`, `int16`, `int32`, `date` and `bool`. A `char(N)` does
+// not: its comparison against its code was not read, so such a key takes a
+// unique index (P1).
 
 namespace kds::exec {
 
-inline constexpr std::uint32_t kEmbeddedKeyMaxBits = 48;
-
-// The bits `type_val`'s code takes, or nullopt for a type that never embeds.
-std::optional<std::uint32_t> EmbeddedKeyColumnBits(std::uint32_t type_val);
-
-// Whether a primary key over `key_cols`, in key order, embeds: every column
-// of an embeddable type, and at most `kEmbeddedKeyMaxBits` together. Decided
-// once, at `CREATE TABLE`, from the declaration alone (DR-R12).
-bool KeyEmbeds(std::span<const catalog::SysColumnRow> key_cols);
+// Which keys embed is the catalog's question (`catalog/schema.hpp`): it is
+// asked at `CREATE TABLE` and again of every row the catalog loads.
+using catalog::EmbeddedKeyColumnBits;
+using catalog::kEmbeddedKeyMaxBits;
+using catalog::KeyEmbeds;
 
 // The Keystone id of the key whose column values are `key_values`, one per
 // column of `schema.embedded_key` in key order, each in its column's

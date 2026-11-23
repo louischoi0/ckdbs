@@ -1108,6 +1108,21 @@ TEST(SimLoop, ACleanRunWithTheShapesReconcilesItsLockingReads) {
 // primary key is not its Keystone, every statement naming the whole key;
 // without them never, so the pinned corpus draws what it always drew.
 TEST(SimWorkload, TheShapesWriteARelationByItsPrimaryKey) {
+    // The relation is a heap or a btree by the seed: both are drawn.
+    std::set<std::string> storages;
+    for (std::uint64_t seed = 1; seed <= 16; ++seed) {
+        Workload workload(Rng(seed).Fork("workload"), Profile::kUniform, /*shapes=*/true);
+        for (int i = 0; i < 40; ++i) {
+            const Op op = workload.Next();
+            if (op.table != kKeyed || op.kind != Op::Kind::kCreateTable) continue;
+            const std::string key = "PRIMARY KEY (g, id)) ";
+            const auto at = op.sql.find(key);
+            ASSERT_NE(at, std::string::npos) << op.sql;
+            storages.insert(op.sql.substr(at + key.size()));
+        }
+    }
+    EXPECT_EQ(storages, (std::set<std::string>{"BTREE", "HEAP"}));
+
     for (const bool shapes : {false, true}) {
         Workload workload(Rng(11).Fork("workload"), Profile::kUniform, shapes);
         std::map<Op::Kind, int> keyed;
@@ -1117,7 +1132,6 @@ TEST(SimWorkload, TheShapesWriteARelationByItsPrimaryKey) {
             if (op.table != kKeyed) continue;
             if (op.kind == Op::Kind::kCreateTable) {
                 created = true;
-                EXPECT_NE(op.sql.find("PRIMARY KEY (g, id)) HEAP"), std::string::npos) << op.sql;
                 continue;
             }
             ++keyed[op.kind];
@@ -1139,19 +1153,23 @@ TEST(SimWorkload, TheShapesWriteARelationByItsPrimaryKey) {
 // the oracle owed exactly that answer - in a clean run, and across a crash
 // and its recovery, which reconciles the relation by its `id`.
 TEST(SimLoop, ARunWithTheShapesReconcilesTheKeyedRelation) {
+    // Two seeds and, in the crash mode, six iterations of each: the
+    // relation is a heap in some and a btree in others.
+    for (const std::uint64_t seed : {std::uint64_t{7}, std::uint64_t{8}}) {
     for (const SimMode mode : {SimMode::kClean, SimMode::kCrash}) {
         SimConfig config;
-        config.seed = 7;
+        config.seed = seed;
         config.ops = 3000;
         config.mode = mode;
         // A crash ends an iteration at a seed-drawn op, so several are run.
-        config.iterations = mode == SimMode::kClean ? 1 : 12;
+        config.iterations = mode == SimMode::kClean ? 1 : 6;
         config.shapes = true;
         const SimVerdict verdict = RunSimulation(config);
         EXPECT_TRUE(verdict.ok) << verdict.Summary(config);
         EXPECT_GT(verdict.keyed_placed, 10u) << verdict.Summary(config);
         EXPECT_GT(verdict.keyed_held, 0u) << verdict.Summary(config);
         EXPECT_GT(verdict.keys_moved, 0u) << verdict.Summary(config);
+    }
     }
 }
 

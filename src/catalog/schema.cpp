@@ -55,6 +55,32 @@ StatusOr<const SysColumnRow*> Schema::FindColumn(std::string_view name,
     return &columns[matches.front()];
 }
 
+std::optional<std::uint32_t> EmbeddedKeyColumnBits(std::uint32_t type_val) {
+    switch (type_val) {
+        case kTypeValInt8:
+        case kTypeValBool:
+            return 8;
+        case kTypeValInt16:
+            return 16;
+        case kTypeValInt32:
+        case kTypeValDate:
+            return 32;
+        default:
+            return std::nullopt;
+    }
+}
+
+bool KeyEmbeds(std::span<const SysColumnRow> key_cols) {
+    if (key_cols.empty() || key_cols.size() > kMaxEmbeddedKeyColumns) return false;
+    std::uint32_t total = 0;
+    for (const SysColumnRow& col : key_cols) {
+        const std::optional<std::uint32_t> bits = EmbeddedKeyColumnBits(col.type_val);
+        if (!bits.has_value()) return false;
+        total += *bits;
+    }
+    return total <= kEmbeddedKeyMaxBits;
+}
+
 std::string PrimaryKeyIndexName(Oid table_oid) { return "$pkey_" + std::to_string(table_oid); }
 
 std::vector<std::uint16_t> TableAccess::PrimaryKeyColumns() const {

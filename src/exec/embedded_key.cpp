@@ -44,50 +44,22 @@ StatusOr<ColumnCode> CodeOf(const catalog::SysColumnRow& col, const parser::AstV
 
 }  // namespace
 
-std::optional<std::uint32_t> EmbeddedKeyColumnBits(std::uint32_t type_val) {
-    switch (type_val) {
-        case catalog::kTypeValInt8:
-        case catalog::kTypeValBool:
-            return 8;
-        case catalog::kTypeValInt16:
-            return 16;
-        case catalog::kTypeValInt32:
-        case catalog::kTypeValDate:
-            return 32;
-        default:
-            return std::nullopt;
-    }
-}
-
-bool KeyEmbeds(std::span<const catalog::SysColumnRow> key_cols) {
-    if (key_cols.empty()) return false;
-    std::uint32_t total = 0;
-    for (const catalog::SysColumnRow& col : key_cols) {
-        const std::optional<std::uint32_t> bits = EmbeddedKeyColumnBits(col.type_val);
-        if (!bits.has_value()) return false;
-        total += *bits;
-    }
-    return total <= kEmbeddedKeyMaxBits;
-}
-
 StatusOr<std::uint64_t> EmbeddedKeyId(const catalog::Schema& schema,
                                       std::span<const parser::AstValue> key_values) {
     if (key_values.size() != schema.embedded_key.size() || key_values.empty()) {
         return Status::InvalidArgument("an embedded key takes one value per key column");
     }
-    std::uint64_t code = 0;
-    for (std::size_t i = 0; i < key_values.size(); ++i) {
-        auto column = CodeOf(schema.columns[schema.embedded_key[i]], key_values[i]);
-        if (!column.ok()) return column.status();
-        code = (code << column.value().bits) | column.value().code;
-    }
-    // id = code + 1, and the largest id is 2^48 - 1 (`kMaxKeystoneId`).
-    if (code >= kMaxKeystoneId) {
+    // The whole key's window is one id, so an insert is placed exactly
+    // where a read by the key looks - by construction, not by two codes
+    // kept alike. An empty window is the one key past the id space.
+    auto window = EmbeddedKeyWindowOf(schema, key_values, nullptr, nullptr);
+    if (!window.ok()) return window.status();
+    if (!window.value().has_value()) {
         return Status::OutOfRange(
             "the largest value of every primary key column together is the one key this "
             "relation cannot hold: its key fills the Keystone id's 48 bits, and id 0 is no id");
     }
-    return code + 1;
+    return window.value()->lo;
 }
 
 StatusOr<std::optional<EmbeddedKeyWindow>> EmbeddedKeyWindowOf(

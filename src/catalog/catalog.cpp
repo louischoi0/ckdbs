@@ -1305,11 +1305,13 @@ StatusOr<storage::PageRef> Catalog::StageAnchorRoot(PageId anchor_page, Oid expe
 
 namespace {
 
-// The door's own check of an embedded key (DR-S3e): what `CREATE TABLE`
-// decided is admitted only where the row can say it and the relation can be
-// it - a btree whose Keystone is hidden, the key's columns declared ones,
-// each once, at positions a byte holds. Whether the columns' types embed is
-// `exec::KeyEmbeds`', asked by the one caller that sets the key.
+// The check of an embedded key (DR-S3e), at the door and at every load: it
+// is admitted only where the row can say it and the relation can be it - a
+// btree whose Keystone is hidden, the key's columns declared ones, each
+// once, at positions a byte holds, and together a key that embeds
+// (`KeyEmbeds`). `CREATE TABLE` decided all of it; a `sys.tables` row that
+// says otherwise is not one this build wrote, and the load refuses it
+// `Corruption` rather than index a column that is not there.
 Status CheckEmbeddedKey(const Schema& schema, ClusteredType clustered) {
     const std::vector<std::uint16_t>& key = schema.embedded_key;
     if (key.empty()) return Status::OK();
@@ -1330,7 +1332,23 @@ Status CheckEmbeddedKey(const Schema& schema, ClusteredType clustered) {
                 "declared position below 256");
         }
     }
+    std::vector<SysColumnRow> columns;
+    for (const std::uint16_t pos : key) columns.push_back(schema.columns[pos]);
+    if (!KeyEmbeds(columns)) {
+        return Status::InvalidArgument(
+            "catalog: an embedded primary key is integer, date and bool columns of 48 bits "
+            "or less together");
+    }
     return Status::OK();
+}
+
+// `CheckEmbeddedKey` of a relation as the catalog loaded it.
+Status CheckLoadedEmbeddedKey(Oid rel_id, const Schema& schema, ClusteredType clustered) {
+    const Status s = CheckEmbeddedKey(schema, clustered);
+    if (s.ok()) return s;
+    return Status::Corruption("sys.tables row for oid " + std::to_string(rel_id) +
+                              " carries an embedded key the relation cannot have: " +
+                              s.message());
 }
 
 // The embedded key a `sys.tables` row carries, as `Schema::embedded_key`.
@@ -2683,6 +2701,11 @@ StatusOr<Schema> Catalog::BuildSchemaFromColumns(Oid rel_id) {
     if (!table_row.ok()) return table_row.status();
     schema.value().spare_slots = table_row.value().spare_slots;
     schema.value().embedded_key = EmbeddedKeyOf(table_row.value());
+    if (Status s = CheckLoadedEmbeddedKey(rel_id, schema.value(),
+                                          table_row.value().clustered_type);
+        !s.ok()) {
+        return s;
+    }
     return schema;
 }
 
@@ -2764,6 +2787,10 @@ StatusOr<const TableAccess*> Catalog::InitTableAccess(Oid oid) {
     access.schema.spare_slots = table_row.value().spare_slots;
     // And so does the embedded key, the relation's for life (DR-R12).
     access.schema.embedded_key = EmbeddedKeyOf(table_row.value());
+    if (Status s = CheckLoadedEmbeddedKey(oid, access.schema, table_row.value().clustered_type);
+        !s.ok()) {
+        return s;
+    }
     access.desc_page_id = table_row.value().desc_page_id;
     access.clustered_type = table_row.value().clustered_type;
     access.varheap_page_id = table_row.value().varheap_page_id;

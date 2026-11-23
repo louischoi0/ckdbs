@@ -1760,16 +1760,19 @@ Verified on `cn4-transition-refresh` (BV's close). Owned by
   for `CREATE`, an `UPDATE` along an edge, and `DROP`. A seeded workload
   interleaving state moves with transactions, rollbacks and faults is not
   generated.
-- **The sim harness generates one hidden-Keystone heap, with the shapes
-  only, in autocommit.** Since DR-S2 (worktree `dq-cabin-miss-build`,
+- **The sim harness generates one hidden-Keystone relation, with the
+  shapes only, in autocommit.** Since DR-S2 (worktree `dq-cabin-miss-build`,
   branch `worktree-dr-primary-key`) the shapes' stream creates `k0`, a heap
-  with the primary key `(g, id)` over a hidden Keystone, and inserts,
+  or - one seed in two - a btree, with the primary key `(g, id)` as a
+  unique index over a hidden Keystone, and inserts,
   updates, deletes and reads it by its whole key and moves its keys
   (`sim/workload.cpp` `KeyedOp`), the oracle reconciling it by `id`
   (`sim/loop.cpp` `CheckKeyedWrite`). **Not generated**: a keyed write
   inside an explicit transaction, a hidden-Keystone heap among the main
   tables (whose ops issue and name tuple keys, drop, purge and cycle
-  columns), a key of another type, and a foreign key naming `k0`. A
+  columns), a key of another type, **an embedded key** (its rule differs:
+  a deleted key stays bound and no key moves), and a foreign key naming
+  `k0`. A
   hidden-Keystone heap's surface - the hidden column skipped by `*`,
   `RETURNING *`, `DESCRIBE`, positional `INSERT` - stays covered at unit
   level (`tests/heap_hidden_key_test.cpp`).
@@ -3653,8 +3656,20 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
   relation are in key order, and a range by the key reads them so, but the
   elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
   with no range is a walk and a top-N.
-- **`ON CONFLICT` on an embedded key is refused `NotImplemented`**: no
-  arbiter computes the id the row's key encodes to.
+- **`ON CONFLICT` on a relation whose key is embedded is refused
+  `NotImplemented`**, whatever its target - a column of another unique
+  index included, which the insert path could serve: no arbiter computes
+  the id the row's key encodes to, and the refusal is not narrowed to the
+  targets that need it.
+- **An embedded key's literal prefix on a joined relation is a range per
+  outer row.** `... JOIN e ON e.b = o.x WHERE e.a = 1` takes the tuple key
+  range of `a = 1` on `e`'s step, ahead of a correlated index probe and
+  the statement-local build, and walks that range once per outer row. It
+  is the rank an inclusive tuple key range has always had; answers are
+  right, the cost is not measured.
+- **`PURGE` on an embedded key names a live key by its id**: the refusal
+  of a one-key window over a live row says `tuple key N is live`, not the
+  key the statement wrote.
 - **A btree's indexed key keeps its dead entries until a statement purges
   them.** A heap's slot release purges its indexes; nothing releases a
   btree's slots, so `$pkey_<oid>`'s entries of deleted and moved rows wait
@@ -3663,8 +3678,12 @@ costs. The contract is `docs/spec/heap-and-tuple.md` §3.1b; the order is
 - **An embedded relation's `next_id` is its highest key's id plus one**,
   and `SHOW BUDGET` reads it as ids issued: a named key moves the mark, as
   on any btree, and here every row names its key.
-- **Not tested**: a KWP load into either btree form; a Waystone opt-in
-  over an embedded lookup; either btree form in the sim (`k0` is a heap);
+- **`WAYSTONE ON` over a read by an embedded key is refused
+  `Unsupported`**: the opt-in asks for a tuple key equality in the
+  statement, and an embedded key's lookup is derived from its columns'.
+  No trail is recorded for such a shape.
+- **Not tested**: a KWP load into either btree form; the embedded form in
+  the sim (`k0` is an indexed key, on a heap or a btree);
   a park and a resume through a key loop after its first descent declined
   on a heap, the case `WriteWalk::WriteByKeys`' guard is for - the decline
   itself is `KeySetWriteHoldTest`'s, the park after it needs a failed

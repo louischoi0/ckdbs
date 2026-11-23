@@ -183,7 +183,7 @@ TEST_F(HeapHiddenKeyTest, OnConflictTakesNoTargetOnAHeap) {
     EXPECT_EQ(bare.rfind("INSERTED", 0), 0u) << bare;
     const std::string named = Run("INSERT INTO h VALUES (1, 2) ON CONFLICT (a) DO NOTHING");
     EXPECT_EQ(named.rfind("ERR", 0), 0u) << named;
-    EXPECT_NE(named.find("heap's tuple key is hidden"), std::string::npos) << named;
+    EXPECT_NE(named.find("tuple key is hidden"), std::string::npos) << named;
 }
 
 // ON CONFLICT DO UPDATE on a heap (CG-Q1 (b)): the one column of a unique

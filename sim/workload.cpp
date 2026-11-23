@@ -642,11 +642,15 @@ Op Workload::ConstrainedDdl() {
             return op;
         default:
             // The keyed relation (DR-S2): a composite primary key over a
-            // hidden Keystone.
+            // hidden Keystone - a unique index beside it, on a heap or, one
+            // time in two, on a btree (DR-S3d), where the key does not
+            // embed and the relation keeps its delete-marked rows. The
+            // oracle's rule is one for both: the key is a value.
             op.kind = Op::Kind::kCreateTable;
             op.table = kKeyed;
             op.sql = std::string("CREATE TABLE ") + kKeyed +
-                     " (g int32, id int64, v int64, name varchar, PRIMARY KEY (g, id)) HEAP";
+                     " (g int32, id int64, v int64, name varchar, PRIMARY KEY (g, id))" +
+                     (keyed_rng_.Chance(50) ? " HEAP" : " BTREE");
             return op;
     }
 }

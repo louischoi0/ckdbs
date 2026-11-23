@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <string>
@@ -77,6 +78,22 @@ struct Schema {
 // statement spells it and no declared column can collide with it.
 inline constexpr std::string_view kHiddenTupleKeyName = "$tuple_key";
 SysColumnRow HiddenTupleKeyColumn();
+
+// ---- Which primary keys embed (DR-S3e, DR-Q7 (a) as revised) ----------------
+//
+// The bits a column of `type_val` takes in an embedded key's code
+// (`exec/embedded_key.hpp`): `int8` and `bool` 8, `int16` 16, `int32` and
+// `date` 32, and nullopt for a type that never embeds. A `char(N)` does not:
+// its comparison against its code was not read, so such a key is indexed.
+inline constexpr std::uint32_t kEmbeddedKeyMaxBits = 48;
+std::optional<std::uint32_t> EmbeddedKeyColumnBits(std::uint32_t type_val);
+
+// Whether a primary key over `key_cols`, in key order, embeds: at most
+// `kMaxEmbeddedKeyColumns` columns - what the `sys.tables` row can name -
+// every one of an embeddable type, and at most `kEmbeddedKeyMaxBits`
+// together. Decided once, at `CREATE TABLE`, from the declaration alone
+// (DR-R12), and asked again of every row the catalog loads.
+bool KeyEmbeds(std::span<const SysColumnRow> key_cols);
 
 // The name of the unique index `CREATE TABLE` builds for a declared primary
 // key that is not the Keystone (DN-Q22): a parameter's spelling, which no

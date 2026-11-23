@@ -1107,3 +1107,52 @@ commit over `adc0ff3b`: the two stages share the format event and
 - **Review**: `critics-developer` on a snapshot; its findings are the next
   entry.
 - **Overhead**: not measured; measured at the milestone's close.
+
+### The review of DR-S3d and S3e, 2026-11-23
+
+`critics-developer`, on a snapshot of `41ab8693`'s diff, report only; its
+findings applied on worktree `dq-cabin-miss-build`, branch
+`worktree-dr-primary-key`, in the commit after it.
+
+- **What it traced and found sound**: no `[quiet-wrong]` path - no wrong
+  answer and no wrongly placed row. The code is order-preserving for every
+  embeddable type and one key is one id; no shift overflows; every window
+  a read takes is a superset of its answer, built from conjuncts the
+  residual keeps; a value that does not encode leaves the step to the
+  walk; every path that places a row reaches `InsertOneRow`, the load
+  stream and `INSERT ... SELECT` among them; every `ON CONFLICT` form is
+  refused before a row is placed; `PURGE`'s window is never wider than its
+  conjuncts; nothing else pins superblock 40.
+- **Applied**:
+  - A key of five or six one-byte columns passed `KeyEmbeds` and was then
+    refused by the catalog's door with no byte. **A primary key has at
+    most four columns**, refused at the key's byte in `CREATE TABLE`, on
+    either kind; `KeyEmbeds` says the same. The comment that said five
+    columns could not fit 48 bits was false and is corrected.
+  - **A loaded embedded key is checked** (`CheckLoadedEmbeddedKey`): a
+    `sys.tables` row whose key positions the relation cannot have is
+    `Corruption` at the load, where it would have indexed past the schema.
+    For that, which keys embed moved to the catalog (`catalog::KeyEmbeds`),
+    the one place the door, the load and `CREATE TABLE` ask it.
+  - `EmbeddedKeyId` is the whole key's window, so an insert's id and a
+    read's window agree by construction and one code remains.
+  - Two refusals that told an indexed btree "a heap's tuple key is
+    hidden" say the relation's.
+  - Documents: `ON CONFLICT` is refused on the relation whatever its
+    target, said so; the four-column cap; the Keystone form's row;
+    `crosscore.md` CC8's stale version number; `CLAUDE.md`'s locking read.
+- **Rejected**:
+  - Ranking the embedded range below the correlated arms on a joined
+    step. It has the rank an inclusive tuple key range has always had, by
+    the ruling `index.md` IX9 records; `known-gaps.md` states the cost.
+  - Skipping `AdmitExplicitRowId` for an embedded row. Invariant 11's mark
+    is a high-water mark above every id placed, on every relation; an
+    embedded relation that left it behind would be the one exception, for
+    a catalog write a row.
+  - Naming a live key by its columns in `PURGE`'s one-key refusal:
+    cosmetic, and `known-gaps.md` says what it prints.
+- **Beside the review**: the sim's keyed relation is a btree one seed in
+  two (DR-S3d's indexed form under seeded crashes); the sim corpus ran
+  290 runs with 0 failures on the release build; the manual and
+  `CLAUDE.md`'s rows are amended (DR-S4's documents).
+- **Suite**: 0 failed of 5,212.

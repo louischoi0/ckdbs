@@ -6688,6 +6688,17 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                     "); a primary key is never NULL"));
             }
         }
+        // Four columns at most, on either kind: what a unique index keys
+        // (`kMaxIndexKeyColumns`) and what an embedded key's row names
+        // (`kMaxEmbeddedKeyColumns`). Here, at the key's byte, not at the
+        // index's or the catalog's door, which carry none.
+        static_assert(catalog::kMaxEmbeddedKeyColumns == catalog::kMaxIndexKeyColumns);
+        if (primary.size() > catalog::kMaxIndexKeyColumns) {
+            return Refused(Status::InvalidArgument(
+                "a primary key has at most " + std::to_string(catalog::kMaxIndexKeyColumns) +
+                " columns and this names " + std::to_string(primary.size()) + " (byte " +
+                std::to_string(primary_at) + ")"));
+        }
         bool keystone_declared = false;
         if (primary.size() == 1) {
             catalog::SysColumnRow probe{};
@@ -6747,7 +6758,7 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
                 key_positions.push_back(static_cast<std::uint16_t>(first_declared + i));
                 key_columns.push_back(schema.columns[first_declared + i]);
             }
-            if (!stmt.heap && exec::KeyEmbeds(key_columns)) schema.embedded_key = key_positions;
+            if (!stmt.heap && catalog::KeyEmbeds(key_columns)) schema.embedded_key = key_positions;
         }
 
         // ---- REFERENCES, checked before anything is created -----------------
@@ -8323,7 +8334,7 @@ StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConfli
         if (written.on_conflict_do_update && ta.schema.hidden_keystone()) {
             return Status::NotImplemented(
                 "ON CONFLICT DO UPDATE at byte " + std::to_string(written.conflict_byte_offset) +
-                " on a heap names its arbiter: a heap's tuple key is hidden (BZ-R4), so write "
+                " names its arbiter here: the relation's tuple key is hidden (BZ-R4), so write "
                 "ON CONFLICT (<the column of a unique index>)");
         }
         return kTupleKeyArbiter;
@@ -8343,8 +8354,8 @@ StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConfli
     return Status::NotImplemented(
         "ON CONFLICT (" + target.name + ") at byte " + std::to_string(target.byte_offset) +
         (ta.schema.hidden_keystone()
-             ? ": the arbiter is the one column of a unique index, and a heap's tuple key is "
-               "hidden (BZ-R4)"
+             ? ": the arbiter is the one column of a unique index, and this relation's tuple "
+               "key is hidden (BZ-R4)"
              : ": the arbiter is the tuple key or the one column of a unique index"));
 }
 
