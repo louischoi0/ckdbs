@@ -800,6 +800,23 @@ DROP CABIN ON trades (DATE(ts));
   dropped until the Cabin is.
 - The expression and predicate forms wait for open writes to the relation,
   as `DROP INDEX` does.
+- **A join on a cabined column.** `ON i.k = o.k` with a Cabin on `i(k)`
+  answers each outer row whose key the Cabin has seen from its set. Every
+  other outer row is answered from an in-memory copy of the inner table,
+  read once for the statement on the first such row - the same copy a join
+  on a column with no Cabin uses (`ANALYZE`'s `inner_built`,
+  `build_rows`, `build_probes` beside `cabin_hits` and `cabin_misses`).
+  The exception is the row that makes the Cabin see a key, its second
+  sight of it: that row still reads the whole inner table, unless another
+  session's write is in flight, in which case the Cabin records nothing and
+  the copy answers that row too. So a join over keys that never repeat
+  costs one read of the inner table, and the statement in which many keys
+  are seen for the second time costs one read per such row. The copy is
+  bounded by `join_build_max_rows` (65,536 rows by default): past it, every
+  row the Cabin has not seen reads the inner table. `join_build_max_rows =
+  0`, or a plan's `BUILD <table> OFF`, turns the copy off; no reply changes
+  either way. A correlated `EXISTS` over a cabined column does not use the
+  copy yet.
 - `SHOW CABINS` lists them, with each one's `shape` (`column`, `expression`,
   `predicate`) and `key`. Entry sets are memory-resident and do not survive
   a restart; only the catalog row persists.
@@ -1375,7 +1392,9 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
     `ACCESS` (or right after `ORDER`), `BUILD <table> ON` reads the inner
     table once and keeps its rows in memory for the rest of the statement,
     instead of looking it up again for every row of the outer table;
-    `BUILD <table> OFF` never does that for it:
+    `BUILD <table> OFF` never does that for it - and on a table whose join
+    column carries a Cabin, it also stops the in-memory copy from answering
+    the values the Cabin has not seen yet:
 
     ```
     VARIANT wide ELSE ORDER (u, l) BUILD l ON
@@ -2459,7 +2478,8 @@ they were before the split.
   Since 2026-08-20 one join *does* hash, and the distinction is worth
   stating precisely because the sentence above used to deny it outright.
   When a join's inner side has no index, no Cabin, and no filter of its
-  own that already narrows it, the executor builds an in-memory map of
+  own that already narrows it - or has a Cabin, for the values the Cabin
+  has not seen yet - the executor builds an in-memory map of
   the inner rows the statement's own filters admit — **once per
   statement**, on the first outer row's read — and every later outer row
   looks its key up instead of reading again. That is a hash build in

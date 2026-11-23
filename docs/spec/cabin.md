@@ -216,7 +216,14 @@ compete for the claim: a Cabin is declared, authoritative and survives
 the statement; the build is undeclared, unauthoritative and dies with it.
 Ladder order encodes the economics — a converged Cabin serve beats any
 per-statement rebuild — so the Cabin keeps priority and the build takes
-only what nothing banked can serve.
+only what nothing banked can serve. **That includes the probe's own
+misses** (DQ, `join-inner-build.md` §5a): the step carries the build's
+annotation, and on a top-level join a miss that records nothing — a first
+sighting, a capped value, a recording the banking gate declines — is
+answered from the statement's map instead of a walk of the inner relation
+(a correlated `EXISTS`'s miss still walks). The recording
+walk below is unchanged and is the only walk a set is banked from; the map
+is never banked.
 
 Selection is `f(shape, catalog)`, last of the **banked**-structure arms:
 after both index forms (an index is complete for every key value) and

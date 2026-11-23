@@ -925,6 +925,28 @@ private:
         co_return co_await ServeAllOrWalk(steps, index, step, access, std::move(values));
     }
 
+    // **A correlated Cabin probe's miss that records nothing** (DQ E1,
+    // join-inner-build.md §5a): a first sighting, a capped value, a
+    // recording the banking gate declines, an unkeyable value, no store.
+    // Where the step carries the build's annotation - its miss's fallback,
+    // the one the step would carry were the Cabin not there - the build's
+    // arm answers it: the statement's first such miss walks and buckets,
+    // every later one probes the map, and past the cap the step walks per
+    // miss (spec §7). Otherwise the walk, as before. The recording walk
+    // never comes here, so the Cabin observes what it observed without the
+    // fallback (DQ-R3) and nothing is banked from the map (DQ-R2).
+    //
+    // **Not a coroutine**: it hands back the one coroutine that answers, so
+    // a miss pays a branch and no frame. A sub-chain's miss walks: its map
+    // is the prefix form (spec §6), not this one (DQ-S3).
+    sched::Coro MissWalk(const std::vector<Step>& steps, std::size_t index, const Step& step,
+                         const catalog::TableAccess& access) {
+        if (step.build.has_value() && !record_through_stops_) {
+            return WalkAndBuild(steps, index, step, access);
+        }
+        return RunWalkStep(steps, index, step, access);
+    }
+
     sched::Coro RunCabinStep(const std::vector<Step>& steps, std::size_t index, const Step& step,
                         const catalog::TableAccess& access) {
         if (step.cabin.has_value() && step.cabin->cover.has_value()) {
@@ -950,7 +972,7 @@ private:
             }
             key = stats::MakeCabinKey(step.cabin->cabin_id, ProbeValue(step));
         }
-        if (!key.has_value()) co_return co_await RunWalkStep(steps, index, step, access);
+        if (!key.has_value()) co_return co_await MissWalk(steps, index, step, access);
 
         if (const stats::CabinSet set = cabins_->Find(*key); set.valid()) {
             cabins_->NoteHit(step.cabin->cabin_id);
@@ -987,14 +1009,16 @@ private:
                 cabins_->NoteCapRefusal();
                 return false;
             }();
-        if (!record) co_return co_await RunWalkStep(steps, index, step, access);
+        if (!record) co_return co_await MissWalk(steps, index, step, access);
         co_return co_await WalkAndRecord(steps, index, step, access, *key);
     }
 
     // Walks `step` with a recording for `key` live, and commits the set iff
-    // the walk completed. **The only place a Recording is created** - the
-    // miss path and the heap hint-failure path both end here, which is what
-    // keeps every rule below one rule with one home.
+    // the walk completed. **The only place a Recording is created** - called
+    // from `RunCabinStep`'s miss path alone, which is what keeps every rule
+    // below one rule with one home. Every decline before the Recording
+    // exists answers the row by `MissWalk`, and the recording walk itself
+    // never reads or fills the build's map (DQ-R2).
     sched::Coro WalkAndRecord(const std::vector<Step>& steps, std::size_t index, const Step& step,
                          const catalog::TableAccess& access, const stats::CabinKey& key) {
         // The recording reads the key column out of this row's frame slots,
@@ -1017,7 +1041,7 @@ private:
                                ? std::all_of(step.cabin->f->inputs.begin(),
                                              step.cabin->f->inputs.end(), decoded)
                                : decoded(step.cabin->col_pos);
-        if (!keyed) co_return co_await RunWalkStep(steps, index, step, access);
+        if (!keyed) co_return co_await MissWalk(steps, index, step, access);
 
         // **A set may only be banked from a view nothing can later
         // contradict** (cabin.md §6a, which carries the argument and the
@@ -1031,7 +1055,7 @@ private:
         if (snapshot_.view.in_flight_at_mint ||
             snapshot_.view.own_trx_id != txn::kNoTrxId) {
             cabins_->NoteUnbankableView();
-            co_return co_await RunWalkStep(steps, index, step, access);
+            co_return co_await MissWalk(steps, index, step, access);
         }
 
         // **The build is announced before anything else is asked**, and
@@ -1044,7 +1068,7 @@ private:
         // that ran before this line released that latch before it, so its
         // transaction's publication is visible to the loads that follow.
         if (!cabins_->BeginRecording(key)) {
-            co_return co_await RunWalkStep(steps, index, step, access);
+            co_return co_await MissWalk(steps, index, step, access);
         }
         // What the announce cannot cover, and the mint's bit cannot
         // either, is the window **between** them: another core may begin a
@@ -1093,7 +1117,7 @@ private:
              visibility->CommitCeiling() != snapshot_.view.snapshot_lsn)) {
             cabins_->CancelRecording(key);
             cabins_->NoteUnbankableView();
-            co_return co_await RunWalkStep(steps, index, step, access);
+            co_return co_await MissWalk(steps, index, step, access);
         }
 
         Recording recording;
@@ -1179,8 +1203,9 @@ private:
     // residual - and declining to build is always legal: the walk still
     // answers, per row, as it always did. The range and bounds checks are
     // for a Step built by something other than the compiler (the ladder
-    // never pairs `build` with a kind or a range): a pruned walk ends
-    // early with `stopped_` false, so building under one would publish a
+    // pairs `build` with a kScan or a correlated kCabinProbe and never with
+    // a range): a pruned walk ends early with `stopped_` false, so building
+    // under one would publish a
     // partial map as the whole relation - declined here so "a published
     // map is a full relation" is structural, not an else-if two files
     // away. A range would also give the prefix mark a second meaning, the

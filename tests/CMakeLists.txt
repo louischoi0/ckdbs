@@ -169,6 +169,7 @@ add_executable(kds_tests
     dml_forms_test.cpp
     waystone_contract_test.cpp
     cabin_contract_test.cpp
+    cabin_miss_build_test.cpp
     foreign_key_test.cpp
     cabin_store_test.cpp
     scheduler_test.cpp

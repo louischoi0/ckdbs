@@ -602,12 +602,17 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   "never probed". Sharpening it needs a per-value record of which unresolved
   transactions could contradict a build, a structure §6a does not have.
   Re-verified at `7dd9b789` by reading. Owner: `docs/spec/cabin.md` §6a.
-  **What it costs a join** was measured by DQ-S0 at `68e5a69f`
-  (`bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`): with one
-  write held open, a join on a cabined inner column walks the inner relation
-  once per outer row in every statement. That is 116x to 159x (10,000 inner
+  **What it cost a join before DQ** was measured by DQ-S0 at `68e5a69f`
+  (`bench/v3.5.0/results-dq-s0-premise-v3.5.0-96-g68e5a69fd.md`). With one
+  write held open, a join on a cabined inner column walked the inner
+  relation once per outer row in every statement: 116x to 159x (10,000 inner
   rows) and 183x to 249x (100,000, the build cap raised) the same join with
   the Cabin dropped.
+  Since DQ-S2 a top-level join within `join_build_max_rows` answers those
+  misses from the statement's map and walks once a statement
+  (`join-inner-build.md` §5a). A correlated `EXISTS` over a cabined column
+  still walks once per outer row, and so does a join past the cap. The Cabin
+  itself still never fills while the gate refuses.
 
 - **A cabined join whose misses are all recording touches walks once per
   outer row, and can be refused for its budget where the uncabined join

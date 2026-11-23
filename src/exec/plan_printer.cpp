@@ -536,8 +536,9 @@ std::string FormatStepStats(const StepChain& chain, const ExecStats& stats) {
         // other counters cannot distinguish it from a step that was never
         // eligible. Keyed off the compiled annotation rather than off a
         // non-zero counter, for that reason. On a Cabin step (DQ, spec
-        // §5a) `inner_built=0` with no `build_rows` means no miss reached
-        // the fallback - its set served every key, or each miss recorded.
+        // §5a) `inner_built=0` with no `build_rows` means no miss reached a
+        // map: its set served every key, each miss recorded, or
+        // `join_build_max_rows = 0` walked every miss plain.
         //
         // `build_rows` is rows **bucketed**, not rows held: it is the
         // published map's size when `inner_built=1`, and how far a

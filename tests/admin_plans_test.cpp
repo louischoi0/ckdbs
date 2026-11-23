@@ -1586,6 +1586,53 @@ TEST_F(AdminPlanTest, ACabinStepThatBuiltNoMapFoldsNoDecline) {
     EXPECT_EQ(posterior->declines, 0u);
 }
 
+// DQ-Q10's other half, beside the walked step's own rule: a fallback whose
+// map outgrows `join_build_max_rows` - 8 here, against 58 and 59 rows - bucketed
+// and published nothing, and is folded as a decline, as the walked build
+// that outgrows the same cap is.
+TEST_F(AdminPlanTest, AnOutgrownBuildFoldsADeclineWalkedOrAsACabinsFallback) {
+    exec::Budget capped;
+    capped.set_join_build_max_rows(8);
+    dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr,
+                        /*clock=*/nullptr, /*wal=*/nullptr, wal::DurabilityClass::kRelaxed,
+                        capped, /*recorder=*/nullptr, /*replay=*/false,
+                        /*access_statistics=*/true, &cabins_, &*mgr_);
+    dispatcher_->set_plan_stats(&stats_);
+    dispatcher_->set_join_order(exec::JoinOrder::kFixed);
+    const auto declines_of = [&](const std::string& sql) -> int {
+        parser::Parser parser(sql);
+        EXPECT_TRUE(parser.Parse().ok());
+        if (!parser.fingerprint().has_value()) return -1;
+        stats::PlanKey key;
+        key.fetch_id = parser.fingerprint()->fetch_id;
+        key.n = 2;
+        key.oids = {results_, models_, 0, 0};
+        const auto* posterior = stats_.Current()->Find(key);
+        return posterior == nullptr ? -1 : posterior->declines;
+    };
+    // Two shapes, so each folds under a key of its own.
+    const std::string walked =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE results.pnl >= 5";
+    const std::string cabined = Where("5");
+
+    Ok("CREATE PLAN w FOR " + walked + kModelsFirst);
+    std::string plan = Plan(walked);
+    ASSERT_EQ(StepLine(plan, 0).rfind("step 0 Scan results", 0), 0u) << plan;
+    ASSERT_NE(plan.find("inner_built=0 build_rows=8"), std::string::npos) << plan;
+
+    Ok("CREATE CABIN ON results(model_id)");
+    Ok("CREATE PLAN c FOR " + cabined + kModelsFirst);
+    plan = Plan(cabined);
+    ASSERT_EQ(StepLine(plan, 0).rfind("step 0 CabinProbe results", 0), 0u) << plan;
+    ASSERT_NE(plan.find("cabin_misses=8"), std::string::npos) << plan;
+    ASSERT_NE(plan.find("inner_built=0 build_rows=8"), std::string::npos) << plan;
+
+    ASSERT_TRUE(stats_.StewardStep(boot_->catalog, store_, 1'000'000'000).ok());
+    EXPECT_EQ(declines_of(walked), 0b01) << "results, written position 0";
+    EXPECT_EQ(declines_of(cabined), 0b01) << "results, written position 0";
+}
+
 // CX-S3b: a statement over one relation has no order and an arm to pin.
 TEST_F(AdminPlanTest, AOneRelationStatementTakesAPlanForItsArm) {
     Ok("CREATE INDEX results_model ON results (model_id)");

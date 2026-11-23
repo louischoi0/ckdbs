@@ -571,3 +571,73 @@ On worktree `dq-cabin-miss-build`, over `60279878`.
 
 Suite: 0 failed of 5,150 on this commit's build inputs. Overhead not measured; measured at the
 milestone's close.
+
+### DQ-S2 - E1 on top-level chains (2026-11-23)
+
+On worktree `dq-cabin-miss-build`, over `46cd483c`.
+
+**The executor reads the annotation.** `MissWalk` (`step_vm.cpp`) is not a
+coroutine. It hands back `WalkAndBuild` where the step carries the
+annotation on a top-level chain, and `RunWalkStep` otherwise.
+- **Every miss path that records nothing calls it.** That is six paths:
+  `RunCabinStep` with no key (no store, a NULL or unbindable value), a
+  sighting not due to record, and `WalkAndRecord`'s four exits before a
+  Recording exists: the key column not decoded, an unbankable view, a
+  refused announce, and the instance's second answer.
+- **The recording walk is unchanged.** Every Cabin-store call runs before
+  the branch, as it did, so DQ-R2 and DQ-R3 hold by construction.
+- **A miss without the annotation** pays a branch and no coroutine frame
+  (DQ-R6).
+
+**Docs:**
+- the inner-build spec's new §5a;
+- `cabin.md` §4a;
+- the manual's Cabin section, its join paragraph and its `BUILD OFF`;
+- the known-gaps entries, stated for the tree as it now is.
+
+**Tests:**
+- `tests/cabin_miss_build_test.cpp`:
+  - a gate-declined join answered from the map in every statement, with
+    the counters pinned;
+  - the budget refusal it removes;
+  - DQ-R1's mixed statement (sets, a recording walk and probes, one
+    answer);
+  - DQ-R3, the same Cabin report with and without the fallback: sets,
+    entries, hits, misses, the gate's declines and the cap's refusals;
+  - a NULL outer key and a switched-off store.
+- `AdminPlanTest.AnOutgrownBuildFoldsADeclineWalkedOrAsACabinsFallback`:
+  DQ-Q10's other half, with the walked branch beside it, which had no
+  dispatcher-level test before.
+- Mutation check: with `MissWalk` forced to walk, the four behaviour tests
+  fail and the two invariance tests pass.
+- **Where DQ-R1 is pinned:**
+  - the mixed statement and the gate cells in the new file, as sorted rows;
+  - `cabin_contract_test.cpp`'s correlated self-joins, which now go through
+    the fallback and are compared byte for byte against the uncabined
+    reference;
+  - the inner-build contract suite's cabined join at every cap and every
+    round, byte for byte (S1).
+  - So DQ-R1's text holds, with the mixed statement in a file of its own.
+
+**Review** (`critics-developer`): no correctness bug.
+- Applied:
+  - the known-gaps entry and `cabin.md` §4a stated for S2 (a correlated
+    `EXISTS` still walks);
+  - two test lines that pinned nothing, removed;
+  - DQ-R3's comparison extended to the gate's declines and the cap's
+    refusals;
+  - the NULL-key and no-store paths given a test;
+  - three comments corrected;
+  - the manual given the cap, and the in-flight exception;
+  - §5a told that the Cabin controller's `pages` signal falls where the map
+    replaces walks.
+- Deferred to DQ-S3: folding `MissWalk` and `RunStep`'s build dispatch
+  into one function, once both have the sub-chain arm.
+- Rejected: one shared `Rows()` helper for the four test files that copy
+  it, which is older than DQ.
+
+Suite: `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` failed
+once at the first run, at a load average of 5.7. It is the known flake
+(`known-gaps.md`, Testing), and it passed 8 of 8 repeats alone. The
+reviewed tree's suite: 0 failed of 5,156. Overhead not
+measured; measured at the milestone's close.
