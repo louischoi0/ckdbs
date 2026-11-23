@@ -79,3 +79,13 @@ The operator's words of 2026-11-23, recorded in English.
 | **Does not settle** | an order to build the scan queue (BG-R1..R5 stay as written); installing the BS nightly; a push, a tag or a version |
 | **Recorded at** | this file; each order's header; their rows in `instructions/v3.0.0/index.md` and in `instructions/milestones.md`; `CLAUDE.md`'s test hardening row; `docs/inflight/known-gaps.md` (Eviction) |
 
+
+## 9. BS's and BG's close records landed: push no verify
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, given after CLA's report of §8 |
+| **Mark** | **§8's records land on `main`**: the branch `worktree-close-bs-bg-narrow` (worktree `dq-cabin-miss-build`; `314adfed` and this record), a fast-forward of `origin/main` `5a7dfb92`, pushed with `--no-verify`. Documents only; no suite was run, and none is owed, since no build input changed |
+| **Skipped on that word** | the pre-push hook |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; its row in `instructions/v3.2.0/index.md` |
