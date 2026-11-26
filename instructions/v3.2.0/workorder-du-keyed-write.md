@@ -1,14 +1,20 @@
 # Work order DU - a write that finds its rows by a key: a bound on the tuple key, an index, and what a subquery leaves
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
+Status: **OPEN since 2026-11-26.** Written on worktree
 `known-gaps-milestone-orders` (branch
 `worktree-known-gaps-milestone-orders`) from `8274c951`
 (`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; DU-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
-with a `path:line` was read at `8274c951`; a claim taken from
-`known-gaps.md` carries that entry's own verification commit and is not
-re-verified here.
+(`raft-marks-2026-11-26.md` §3). **Opened the same day** on worktree
+`du-keyed-write` (branch `worktree-du-keyed-write`) from `60dc593af`
+(`v3.4.17-150-g60dc593af`), on the operator's word of 2026-11-26
+(`raft-marks-2026-11-26.md` §4): DU-Q0..Q6 are adopted as CLA proposed,
+(a) in each, **on the operator's standing go-ahead of 2026-11-26
+(go-ahead-achieving-milestone)** - none is the operator's own per-item
+mark - DU-Q2 (a) with its reading fixed against DU-R4 and DU-Q3 (a) with
+its premise corrected (§4, §7). A `[source-read]` claim with a `path:line`
+in §0-§2 was read at `8274c951`, and one in §7 at the commit its entry
+names; a claim taken from `known-gaps.md` carries that entry's own
+verification commit and is not re-verified here.
 
 Tags: `[operator]`, `[source-read]`, `[measured]`, `[design]`,
 `[quiet-wrong]`, as in DT's order.
@@ -104,15 +110,15 @@ at `:14041` and `:14231`); the read side's correlated index probe is
 
 ## 4. Items for the operator (DU-Q), CLA's proposals
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| DU-Q0 | Is DU opened, and with what scope? | (a) §2's bounded walk and index-driven write; (b) the bounded walk only; (c) both and a Cabin-driven write | (a): a Cabin set is authoritative only for values observed, and a write that observes nothing gains little |
-| DU-Q1 | Does DU-S0 gate? | (a) a premise with a bar: an `UPDATE` by a non-unique index key at 1 M rows measured against its walk; under a 5x saving DU stops at the bounded walk. (b) built regardless | (a) |
-| DU-Q2 | The collection's size | (a) bounded by `max_locks_per_txn`, as a walked write's row units are; past it the statement is refused as today. (b) falls back to the walk | (a) |
-| DU-Q3 | Where the walk declares the whole key space | (a) the index-driven write declares the same and saves reads only; (b) an index-key range lock is designed - a new unit kind | (a); (b) is a lock-model change for its own order |
-| DU-Q4 | Plans | (a) the ladder's rank, and an administrator's one-relation plan may pin a write's arm as it does a read's; (b) rank only | (a) |
-| DU-Q5 | A write whose `WHERE` holds a subquery | (a) stays outside DU until the pending entry is ruled on; (b) the operator rules now and DU carries it | (a) |
-| DU-Q6 | `PURGE` by list or range | (a) outside DU; (b) inside | (a) |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| DU-Q0 | Is DU opened, and with what scope? | (a) §2's bounded walk and index-driven write; (b) the bounded walk only; (c) both and a Cabin-driven write | (a): a Cabin set is authoritative only for values observed, and a write that observes nothing gains little | (a), adopted on the standing go-ahead of 2026-11-26 |
+| DU-Q1 | Does DU-S0 gate? | (a) a premise with a bar: an `UPDATE` by a non-unique index key at 1 M rows measured against its walk; under a 5x saving DU stops at the bounded walk. (b) built regardless | (a) | (a), adopted on the standing go-ahead of 2026-11-26. **The bar is passed**: 12.9x and 308x (§7, DU-S0) |
+| DU-Q2 | The collection's size | (a) bounded by `max_locks_per_txn`, as a walked write's row units are; past it the statement is refused as today. (b) falls back to the walk | (a) | (a), adopted on the standing go-ahead of 2026-11-26, **its reading fixed at DU-S0 against DU-R4**: a first collection of more than `max_locks_per_txn` distinct tuple keys is not written from, and the statement is answered as today - by its walk, which the row units refuse where today's walk is refused. A collection is a superset of the rows written (IX1), so refusing on its size would refuse a statement the walk answers |
+| DU-Q3 | Where the walk declares the whole key space | (a) the index-driven write declares the same and saves reads only; (b) an index-key range lock is designed - a new unit kind | (a); (b) is a lock-model change for its own order | (a), adopted on the standing go-ahead of 2026-11-26, **its premise corrected at DU-S0**: only a write with no `WHERE` declares the whole key space, and it has no index arm; a write whose `WHERE` bounds no tuple key declares nothing and takes a row unit per row written, and the index-driven write takes the same (§7). No unit is designed |
+| DU-Q4 | Plans | (a) the ladder's rank, and an administrator's one-relation plan may pin a write's arm as it does a read's; (b) rank only | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
+| DU-Q5 | A write whose `WHERE` holds a subquery | (a) stays outside DU until the pending entry is ruled on; (b) the operator rules now and DU carries it | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
+| DU-Q6 | `PURGE` by list or range | (a) outside DU; (b) inside | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 
 ## 5. Stages
 
@@ -141,3 +147,136 @@ No stage is opened and no code is written. **Not reviewed**: the
 `critics-developer` review was started and stopped before it reported,
 so no line reference or reading in this order has a second reader behind
 it.
+
+### DU-S0 - the census and the premise (2026-11-26)
+
+On `du-keyed-write` at `60dc593af` (`v3.4.17-150-g60dc593af`), read from
+`src/server/command_dispatcher.cpp` and `src/exec/step_compiler.cpp`
+unless a line names another file. No behaviour changed.
+
+**The units a walked write takes, by `WHERE` shape** `[source-read]`. An
+`UPDATE` and a locking read ask `U`, a `DELETE` `X` (`:13599`, `:14198`,
+`:17235`); the shape decides the unit, not the mode.
+
+| `WHERE` | declared before the walk (`DeclaredWriteBorrow`, `:15200`) | per row (`WriteWalk::Claim`, `:13019`) |
+|---|---|---|
+| none | the range `[0, kIdSpaceEnd)` | nothing: the declaration covers the row |
+| a tuple key window of more than one key (`FoldTupleKeyWindow`: `=`, `<`, `<=`, `>`, `>=`, `BETWEEN` on the tuple key by name, one-sided included) | the range `[lo, hi)` | nothing |
+| a window of one key; a list on the tuple key; a unique key named whole; any conjunct that bounds no tuple key | nothing | the row's tuple unit, asked once the row has qualified, in the order the rows are met |
+| an empty window (`lo >= hi`) | nothing | nothing qualifies |
+
+Above either column the relation's `IX`, taken with the statement's first
+unit (`BorrowChain`). Beside them and unchanged by how a row is found: a
+unique key's `kIndexKey` unit where the `SET` moves one, a foreign key
+parent's `IS` and `S`, an assertion's reservation. **A window is folded
+from the raw conjuncts by column name** and reads no embedded primary key
+(`a = 1` on a key embedded as the Keystone id declares nothing).
+
+**The isolation level changes no unit.** It changes two verdicts and one
+wait: which version selects a row (`SnapshotVersionDecides`, `:13320`;
+`txn.md` §5, F4), what a refused declaration's wait is worth
+(`RepeatableReadWait::kFutile`), and whether a statement re-run after a
+wait mints a view. All three are asked of a row or a unit after it is
+found, by code the point arm and the walk share (`Qualify`, `Claim`,
+`BorrowOrWait`).
+
+**DU-R2, argued once for both levels.** Let `V` be the statement's view
+(`READ COMMITTED` and autocommit: minted at the statement's start;
+`REPEATABLE READ`: at `BEGIN`; a resumed statement keeps it), and let the
+collection read the index's entries after `V` was minted, holding no page.
+
+- *A row the walk would write is collected.* The walk writes a row only on
+  its page's version, whose writer is this transaction or one `V` sees
+  (`txn.md` §5's table; a version reached through undo is never written).
+  That version was on its page before `V` was minted or before this
+  statement began, and its index entry was appended under the same leaf
+  hold (`MaintainIndexes`, IX2). It is the row's head from then until the
+  write, and a head's entries are owed (IX2a), so no purge removes one.
+  The entry lies inside the probe's bounds because the version passes the
+  `WHERE` and the bounds are the read ladder's own superset of it (IX1).
+- *A row the walk would wait on or refuse through F4 is collected.* The
+  snapshot's version passes the `WHERE` and its superseder is not resolved
+  for every reader while this transaction's view is live (`live_` bounds
+  the horizon, `manager.cpp:672`), so its entry is owed too.
+- *Every collected row is judged where it is written*, by `Qualify` and
+  `Claim` on the slot the descent finds: the walk's verdict for a walk
+  that reached the row at that moment.
+- *A row the collection missed* therefore has no version passing the
+  `WHERE` that `V` sees or that this transaction wrote: at most a head by
+  a writer `V` cannot see, whose entry was appended after the collection
+  passed it. A walk that met that head would wait on its writer or be
+  refused; the collection does not meet it. **This is the one difference,
+  and it is a refusal or a wait forgone, never a row written or missed**:
+  under either level the statement's state says the row does not match.
+  DR-S3a's unique-key run and every index read share it.
+
+**A statement that moves its own key** is covered by the order of the
+work and by the resume: the first collection ends before the first write,
+the keys are written ascending, and a resume collects again and starts at
+the key it stopped on (`WriteWalk::WriteKeys`, `:13160`) - every row this
+statement wrote sorts below that key, and an entry it appended names a row
+it wrote.
+
+**DU-R3.** The index-driven write reaches `Claim` through the same row
+function as the walk and the declaration is taken before either, so the
+units are the walk's, unit for unit. **One order differs, on a heap**: the
+walk meets rows in page order and a key loop in key order, as CU-S3's list
+and DR-S3a's run already do there.
+
+**DU-Q3's premise, corrected.** A walked write whose `WHERE` bounds no
+tuple key declares nothing; only a write with no `WHERE` declares the
+whole key space, and it names no index. So no index-driven write widens or
+narrows a declaration, and it saves the leaf holds as well as the reads:
+the walk takes every leaf exclusive, the point arm the leaves its rows are
+in.
+
+**The read ladder's entry points a write can reuse** `[source-read]`,
+`[measured]` on a Debug build of `60dc593af` by `ANALYZE`:
+
+| read arm | function | a `SELECT` takes it for | a write today |
+|---|---|---|---|
+| tuple key range, btree | `TupleKeyRangeOf` (`step_compiler.cpp:1059`) | both bounds present, strict or not: `id BETWEEN 3 AND 6` is `Range [3, 6]`. `id > 3` alone is `Scan` | walks every leaf |
+| embedded key window | `EmbeddedKeyWindowOnStep` (`:1232`) | a prefix or a range of an embedded key | the whole key pinned descends (DR-S3e); a prefix walks |
+| a heap's Keystone range | `IndexChoiceOver` over the Keystone index | `>=` and `<=` both: `id BETWEEN 3 AND 6` is `IndexRange`. `id >= 3 AND id < 6` is `Scan` | walks every page |
+| index equality prefix, a list, a range after it | `IndexProbeOf` (`:1424`), `IndexChoiceOver` (`:1294`) | `owner = 1`, `owner IN (1, 2)` (`key_set=2`), `owner BETWEEN 1 AND 2`; `owner > 1` is `Scan` | a unique index pinned whole descends (`WriteIndexKeyOf`, `:2651`); every other shape walks |
+| the entries between two bounds | `index::IndexSeekLeaf`, `index::IndexVisitFrom` (`RunIndexStep`, `step_vm.cpp:1493`) | phase 1 of an index step | `IndexRunTupleKeys` reads one key's run |
+| a row by its tuple key | `LocateByTupleKey` (`:9958`) | a lookup | the point arm, a list, a unique key's run (`WriteKeys`) |
+
+Two rank facts the build follows. With a two-sided tuple key range and an
+indexed equality both present, the read ladder takes the range (`id
+BETWEEN 3 AND 6 AND owner = 1` is `Range`); with a one-sided bound it
+takes the index (`id >= 3 AND owner = 1` is `IndexProbe`). A write's lock
+window is wider than the read's range - it folds a one-sided bound - so
+**the bounded walk takes the window's bounds, one-sided included, and the
+index arm ranks above a one-sided bound and below a two-sided one**.
+
+**What a write has no word for.** `ANALYZE UPDATE ...` is refused `expected
+a SELECT statement`: `ANALYZE` is a dispatcher prefix over `HandleSelect`
+(`:1991`). A test tells a write's descent from its walk by the leaves it
+pins exclusive (`tests/key_set_test.cpp`, `KeySetWriteHoldTest`).
+`indexes = off` is a read-path switch (`index.md` §12.3) the write's
+existing unique-key arm does not ask.
+
+**Another session's branch changes the same code.** `worktree-dt-write-path-yield`
+at `d172085e8` (DT-S0..S3, not on `main`) edits `WalkBtreeLeaves`,
+`WalkHeapPages`, `VisitRelation`, `WriteWalk` and the three statements'
+walk sites. DU is built from `60dc593af` without it; whichever lands
+second merges the two.
+
+**The premise** `[measured]`
+(`bench/v3.5.0/results-du-s0-premise-v3.4.17-150-g60dc593af.md`): at
+1,000,000 rows, `cores = 1`, an `UPDATE` by an indexed non-unique key
+costs 33.1-35.2 ms of server CPU walked, and 107 µs (10 rows a key) or
+2,738 µs (1,000 rows a key) as an index read followed by a write by the
+tuple keys it returned - 308x and 12.9x, against a control arm that moved
+0.3 % and 4.3 %. **DU-Q1 (a)'s 5x bar is passed and DU-S2 is built.** The
+host was not quiet (another session's build and suite ran through every
+cell); the unit is on-CPU time and the verdict is a ratio 2.6 times its
+bar at the least. **The same cells bound the gain**: the walk costs 33 ns
+a row visited and the keyed form up to 2.7 µs a row written, so past about
+1 row in 80 of the relation the walk is the cheaper arm, which the arm
+taken by rank alone does not see; DU-Q2's bound caps the cost and DU-Q4's
+pin is the operator's lever. DU-S4 measures the built arm on both sides of
+that crossing.
+
+Overhead not measured; measured at the milestone's close.
