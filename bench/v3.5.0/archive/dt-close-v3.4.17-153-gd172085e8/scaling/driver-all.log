@@ -1,0 +1,4 @@
+18:47:30 scaling A N=5000 load 0.47 0.85 1.57 2/1084 351504 competing: 0
+18:48:01 scaling B N=5000 load 0.86 0.91 1.57 1/1074 352110 competing: 0
+18:48:39 scaling A N=15000 load 1.62 1.11 1.61 1/1064 352709 competing: 0
+18:49:32 scaling B N=15000 load 1.63 1.19 1.61 1/1067 353537 competing: 0

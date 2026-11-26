@@ -1,0 +1,8 @@
+probe {'p0_us': 3.8, 'p25_us': 88.4, 'p50_us': 94.0, 'p95_us': 126.7, 'p99_us': 226.4, 'p99.9_us': 306.0, 'max_us': 316.0, 'n': 2000} cold_rate=2000.0/s
+dt-ivw-A-r0 load 0.53 cached=1.00 hot p50=13870326.0 p95=22370546.3 p99=23157933.2 max=23334562.5 n=689 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-ivr-A-r0 load 0.68 cached=1.00 hot p50=304.2 p95=442.7 p99=511.2 max=2325.1 n=20005 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-i-A-r0 load 1.20 cached=1.00 hot p50=530.5 p95=654.2 p99=725.5 max=3528.1 n=20005 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-ivu-A-r0 load 0.88 cached=1.00 hot p50=14285366.3 p95=23288501.5 p99=23946291.2 max=23947321.9 n=146 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-aw-A-r0 load 0.95 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-au-A-r0 load 0.94 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 192.9 s

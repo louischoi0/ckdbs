@@ -1,6 +1,12 @@
 # Work order DT - a write that gives its core back: the write path's page miss off the reactor, and a write walk that yields
 
-Status: **OPENED 2026-11-26** on worktree `dt-write-path-yield` (branch
+Status: **CLOSED NARROW 2026-11-26** at `6e43ec8c0`
+(`v3.4.17-154-g6e43ec8c0`), the walk's yield and its cancel built, the
+write's page miss not (§7, "DT-S4: the close"): closed on CLA's reading of
+the close measurement, adopted on the standing go-ahead and not the
+operator's mark, and landed on `main` under the push the operator
+authorized ahead of the close (`raft-marks-2026-11-26.md` §4). Opened
+2026-11-26 on worktree `dt-write-path-yield` (branch
 `worktree-dt-write-path-yield`) from `60dc593af`, under the operator's
 standing go-ahead of 2026-11-26 (`raft-marks-2026-11-26.md` §4): every
 DT-Q item is **adopted on that go-ahead, never marked by the operator item
@@ -598,3 +604,123 @@ statement's start carried to the pause, and what the log gets today is
 the tree before the cells above were added; the one failure is
 `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` again (DT-S2).
 Overhead not measured; measured at the milestone's close.
+
+### DT-S4: the close (2026-11-26)
+
+Two measurements, a remedy between them, and CLA's reading of the second.
+
+**The first close measured a regression, and DT did not close on it**
+`[measured]` (`bench/v3.5.0/results-dt-close-v3.4.17-153-gd172085e8.md`,
+A `60dc593af` against B `d172085e8`, `cores = 1`, `relaxed`). The effect
+was there: beside a walked `UPDATE` matching nothing the co-located reads'
+p99 fell from 245.2 ms and 265.1 ms to 10.26 ms and 1.62 ms. DT-R4 held:
+B less the control was -70 ns to +40 ns on the point statements. **But
+under the default checkpoint cadence B stalled for seconds** (the reads'
+max 1.39 s and 7.66 s), and the window's log went from 169 MB to 3,020 MB,
+its page images from 20,672 to 368,312. With `checkpoint_interval_ms = 0`
+B was clean (p99 332.4 µs).
+
+**The cause, by reading** `[source-read]`. A write walk fetched every leaf
+it passed `PageAccess::kWrite`, and a write fetch marks the frame dirty
+and logs the image it owes (`wal.md` §10) whether or not a row is written.
+Before DT that cost one image a leaf a checkpoint interval, because the
+walk held its core and the cadence checkpoint could not run inside it. A
+walk that yields hands every leaf it passed to the checkpoint between two
+slices; each copy owes an image at the walk's next pass, and the log's
+sync gate and the checkpoint's writeback take the core by turns.
+
+**The remedy** (`6e43ec8c0`): **a write walk looks at a leaf before it
+takes it for writing.** Under a shared hold it asks, slot by slot, the
+function the write judges a row with (`WriteWalk::Qualify`, passed as
+`LeafProbe`; `LookAtLeaf`) until one row would be written, and only then
+takes the leaf exclusive, judging every row again under that hold; a leaf
+with no such row is passed over, neither dirtied nor imaged. The look
+decides which leaves are written through and never which rows. The rows a
+resumed walk is past are skipped by one rule for the look and the visit.
+By design this ended what eight cells pinned - that a write walk holds
+every leaf exclusive, which `KeySetWriteHoldTest` (seven cells) used to
+tell a walk from a descent and
+`LockingReadRigTest.NoPageIsDirtiedAndNoRecordIsAppended` stated; the
+watching store now records a leaf pinned in any mode, and the rig cell
+states the new fact: a walk that writes no row dirties no leaf.
+
+**The remedy's review** (`critics-developer`): no wrong answer found.
+**Applied**: the key-set cells, which after the first adaptation no longer
+told a descent from a walk; the look's and the visit's two skip rules made
+one (`finished`); `LookAtLeaf` moved out of the header; the rig cell's
+write asserted as `UPDATED 2`. **Not caught by any cell**, stated: the
+look asking a resumed walk's finished rows, and a wanted leaf's sibling
+taken from the look instead of from the write hold.
+
+**The second close** `[measured]`
+(`bench/v3.5.0/results-dt-close-v3.4.17-154-g6e43ec8c0.md`, three arms: A
+`60dc593af`, B `d172085e8`, C `6e43ec8c0`; `cores = 1`, `relaxed`, the
+default cadence, two runs a cell, 900,000 rows in 128,960 pages, four
+sessions asking 1,000 point reads a second):
+
+| | A | B | C |
+|---|---|---|---|
+| reads beside a walk writing nothing: p99 | 253.5, 263.4 ms | 9.0, 9.7 ms | **320.7, 365.0 µs** |
+| the same: max | 268, 265 ms | 3.44, 4.12 s | **1.53, 2.85 ms** |
+| the same: reads answered a second | 34.5, 26.3 | 488.6, 838.2 | **1,000.2, 1,000.2** |
+| the same: log, page images | 171, 130 MB; 20,800, 15,872 | 2,081, 4,943 MB; 253,756, 602,676 | **0; 0** |
+| reads beside a walk writing 50,000 rows: p99 | 0.66, 3.39 s | 344, 687 ms | **51.1, 50.9 ms** |
+| that walk alone: walks finished, walks over 1 s | 30, 43; 11, 9 | 4, 21; 2, 3 | **83, 82; 0, 0** |
+| that walk alone: page images | 1,152, 1,792 | 142,115, 126,336 | 57,094, 57,094 |
+| keyless walked `UPDATE`, 100 rows of 100,000, btree: server CPU against A | | +430.5 µs (+13.1 %) | **+212.5 µs (+6.4 %)**, 15 of 15 rounds |
+| the same on a heap | | +21.1 µs (+0.6 %) | **-77.3 µs (-2.4 %)** |
+
+- **The stall is gone**: no walk of C's is over 1 s in its nine walker
+  cells (A: 25 in eight, B: 28), no hold reaches 100 ms, and the walk's
+  own best time is A's within 0 ms to 3 ms where B's was 10 ms above it.
+- **DT-R4 holds on C**: the eight point statements are -10 ns to -240 ns
+  against A, the control (a second copy of A) within 50 ns. A point
+  `SELECT`, which no line of DT reaches, moved by the same -3 %: the two
+  binaries differ by that much and the file does not assign it.
+- **What C costs, measured**: the +6.4 % above on a btree; and a walk that
+  writes now has its pages copied by the checkpoint between slices, each
+  copy imaged again at the next write - 9 % to 21 % more log a walk in a
+  loop writing the same 7,150 leaves about 70 times in 20 s.
+- **What is left and not located**: the reads' p99 beside the writing walk
+  is about 50 ms (13 to 67 times under A's), a plateau no wait event
+  accounts for.
+- **Not measured**: a walk whose written rows are spread over every leaf
+  (the look's worst case; the relation admits no such predicate without a
+  reload), `cores > 1`, `strict`, an `analytic` session's slice, a write
+  driven by a list, a cancel's latency, a pool smaller than the relation.
+- **The host was not quiet**: another session built and ran its suite in
+  bursts; the cells it overlapped were discarded and run again, 13.7
+  minutes were spent holding for it, and the cells of the first pass were
+  checked at their ends and not sampled between.
+
+**CLA's reading, adopted on the standing go-ahead and not the operator's
+mark**: the regression the first close measured is gone, and what C costs
+is the price of the mechanism - a statement that gives its core back pays
+for the giving, and a checkpoint that can now run does its work - stated
+in `known-gaps.md` ("What a write's pause costs and what it can refuse")
+with its numbers, not a regression that stops the close. **The other
+reading is open to the operator**: 6.4 % on a walked `UPDATE`, or 9 % to
+21 % of log on a repeated writing walk, as a regression; DT's code is
+three commits (`ad74b4c44`, `d172085e8`, `6e43ec8c0`), and
+`WriteSliceFor` returning an empty slice turns every pause off and
+leaves the look.
+
+**DT closes narrow**: §2.3 and §2.4 built; §2.1 and §2.2 stopped by
+DT-Q1's bar as CLA read it at DT-S0, on one host; DT-Q6's three walks left
+outside. The page miss of a write is owned by no order.
+
+**Documents**: `sched.md` §3 (the write's pause, the look), `txn.md` §5
+(the relation `IX` across a pause), `protocol.md` §10 (the cancel),
+`CLAUDE.md`'s two rows, `manual/sql/sql.md`, `known-gaps.md`. `page.md`
+§12 is unchanged: nothing of a write's page miss was built.
+
+**Suite** at `6e43ec8c0`'s build inputs (`scripts/test.sh`, the range the
+push hook runs, serial, 634.5 s): **5,242 of 5,242 passed, 0 failed**, two
+of them reporting skipped (`CatalogPageCeilingTest`, two cells) and two
+more disabled and not run (`StrictMarkerSnapshotRigTest`, two cells). The
+run before it on the same tree (`ctest -j 12`) was 5,240 of 5,242, both
+failures the two cells that fail at `60dc593af` too
+(`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`,
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`;
+`known-gaps.md`, Testing). The close's commit after it brings documents,
+`bench/` and `tools/dt_close.py` only, no build input.

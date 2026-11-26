@@ -1,0 +1,9039 @@
+{
+ "part": "ab",
+ "args": {
+  "part": "ab",
+  "bin_a": "/home/ukjin/bench-runs/dt/close/bin/kds_server.A",
+  "bin_b": "/home/ukjin/bench-runs/dt/close/bin/kds_server.B",
+  "workdir": "/home/ukjin/bench-runs/dt/close/w4",
+  "out": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/bench/v3.5.0/archive/dt-close-v3.4.17-153-gd172085e8/dr4-ab.json",
+  "rows": 100000,
+  "reads": 20000,
+  "writes": 4000,
+  "walks": 40,
+  "ranges": 1000,
+  "rounds": 15,
+  "frames": 131072,
+  "port": 32781,
+  "cpu": 2,
+  "driver_cpus": "0,4",
+  "heartbeat": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/bench/v3.5.0/archive/dt-close-v3.4.17-153-gd172085e8/dr4.beat"
+ },
+ "host_before": {
+  "loadavg": "1.61 1.44 2.03",
+  "cc1plus": "0"
+ },
+ "sha256_16": {
+  "A": "d9e683d9b312c7e2",
+  "A2": "d9e683d9b312c7e2",
+  "B": "145700aedddebda5"
+ },
+ "started_utc": "2026-11-26 18:41:15",
+ "cells": [
+  {
+   "arm": "A",
+   "round": 0,
+   "host": {
+    "loadavg": "1.72 1.46 2.04",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.1,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.231,
+     "wall_us_row": 1.441,
+     "rows_s": 693879
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.25,
+     "cpu_us_lo": 6.09,
+     "cpu_us_hi": 6.3,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.4,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.85,
+     "cpu_us_lo": 6.76,
+     "cpu_us_hi": 7.63,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.5,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3296.64,
+     "cpu_us_lo": 3275.05,
+     "cpu_us_hi": 3331.81,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3399.9,
+      "p25": 3454.8,
+      "p50": 3468.8,
+      "p95": 3612.8,
+      "p99": 3641.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.78,
+     "cpu_us_lo": 15.5,
+     "cpu_us_hi": 16.87,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.6,
+      "p50": 29.0,
+      "p95": 30.8,
+      "p99": 32.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.48,
+     "cpu_us_lo": 6.37,
+     "cpu_us_hi": 6.97,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.1,
+      "p99": 19.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.07,
+     "cpu_us_lo": 5.98,
+     "cpu_us_hi": 6.44,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.5,
+      "p99": 14.8
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.998,
+     "wall_us_row": 4.036,
+     "rows_s": 247778
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.68,
+     "cpu_us_lo": 6.63,
+     "cpu_us_hi": 7.86,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 15.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.24,
+     "cpu_us_lo": 7.16,
+     "cpu_us_hi": 8.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.8,
+      "p99": 17.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3271.18,
+     "cpu_us_lo": 3243.62,
+     "cpu_us_hi": 3303.68,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3308.8,
+      "p25": 3394.9,
+      "p50": 3406.1,
+      "p95": 3461.1,
+      "p99": 3563.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.12,
+     "cpu_us_lo": 24.89,
+     "cpu_us_hi": 28.29,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.3,
+      "p50": 37.7,
+      "p95": 39.5,
+      "p99": 44.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.22,
+     "cpu_us_lo": 7.98,
+     "cpu_us_hi": 8.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.4,
+      "p50": 14.7,
+      "p95": 15.9,
+      "p99": 22.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.46,
+     "cpu_us_lo": 6.31,
+     "cpu_us_hi": 6.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.8,
+      "p50": 13.1,
+      "p95": 14.1,
+      "p99": 16.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 0,
+   "host": {
+    "loadavg": "1.82 1.49 2.04",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.213,
+     "wall_us_row": 1.419,
+     "rows_s": 704947
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.22,
+     "cpu_us_lo": 6.18,
+     "cpu_us_hi": 6.31,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.0,
+      "p99": 14.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.8,
+     "cpu_us_hi": 7.5,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.3,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3293.4,
+     "cpu_us_lo": 3264.31,
+     "cpu_us_hi": 3327.63,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3315.8,
+      "p25": 3408.0,
+      "p50": 3427.1,
+      "p95": 3538.8,
+      "p99": 3585.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.69,
+     "cpu_us_lo": 15.46,
+     "cpu_us_hi": 16.85,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.1,
+      "p50": 28.7,
+      "p95": 30.4,
+      "p99": 80.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.42,
+     "cpu_us_lo": 6.36,
+     "cpu_us_hi": 6.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.04,
+     "cpu_us_lo": 5.97,
+     "cpu_us_hi": 6.33,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.5,
+      "p50": 12.6,
+      "p95": 13.4,
+      "p99": 14.4
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.98,
+     "wall_us_row": 3.545,
+     "rows_s": 282127
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.82,
+     "cpu_us_lo": 6.73,
+     "cpu_us_hi": 8.1,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.6,
+      "p99": 15.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.78,
+     "cpu_us_lo": 7.48,
+     "cpu_us_hi": 8.47,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.4,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.9,
+      "p99": 32.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3298.34,
+     "cpu_us_lo": 3265.13,
+     "cpu_us_hi": 3384.87,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3375.2,
+      "p25": 3443.0,
+      "p50": 3479.5,
+      "p95": 3575.0,
+      "p99": 3584.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.69,
+     "cpu_us_lo": 25.42,
+     "cpu_us_hi": 29.55,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 37.2,
+      "p25": 38.2,
+      "p50": 38.6,
+      "p95": 40.3,
+      "p99": 174.0
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.37,
+     "cpu_us_lo": 8.22,
+     "cpu_us_hi": 9.06,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.3,
+      "p25": 14.8,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 22.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.56,
+     "cpu_us_lo": 6.49,
+     "cpu_us_hi": 7.18,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.4
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 0,
+   "host": {
+    "loadavg": "1.82 1.49 2.04",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.1,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.248,
+     "wall_us_row": 1.454,
+     "rows_s": 687904
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.3,
+     "cpu_us_lo": 6.27,
+     "cpu_us_hi": 6.36,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.04,
+     "cpu_us_lo": 6.95,
+     "cpu_us_hi": 7.85,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3717.01,
+     "cpu_us_lo": 3687.33,
+     "cpu_us_hi": 3738.84,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3781.3,
+      "p25": 3888.6,
+      "p50": 3900.4,
+      "p95": 4002.9,
+      "p99": 4007.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.81,
+     "cpu_us_lo": 15.53,
+     "cpu_us_hi": 17.61,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.5,
+      "p50": 29.1,
+      "p95": 30.6,
+      "p99": 34.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.56,
+     "cpu_us_lo": 6.52,
+     "cpu_us_hi": 6.91,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 14.0,
+      "p99": 16.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.17,
+     "cpu_us_lo": 6.1,
+     "cpu_us_hi": 6.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.7,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.979,
+     "wall_us_row": 3.617,
+     "rows_s": 276508
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.74,
+     "cpu_us_hi": 8.04,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.0,
+      "p50": 14.3,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.39,
+     "cpu_us_lo": 7.34,
+     "cpu_us_hi": 8.23,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.9,
+      "p99": 16.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3298.06,
+     "cpu_us_lo": 3281.76,
+     "cpu_us_hi": 3314.27,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3393.3,
+      "p25": 3423.7,
+      "p50": 3439.0,
+      "p95": 3477.3,
+      "p99": 3503.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.01,
+     "cpu_us_lo": 24.85,
+     "cpu_us_hi": 29.51,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.2,
+      "p50": 37.6,
+      "p95": 39.0,
+      "p99": 59.7
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.28,
+     "cpu_us_lo": 8.1,
+     "cpu_us_hi": 8.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.5,
+     "cpu_us_lo": 6.42,
+     "cpu_us_hi": 7.01,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 15.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 1,
+   "host": {
+    "loadavg": "1.84 1.50 2.04",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.212,
+     "wall_us_row": 1.432,
+     "rows_s": 698503
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.25,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.32,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.4,
+      "p50": 13.6,
+      "p95": 14.1,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.77,
+     "cpu_us_lo": 6.7,
+     "cpu_us_hi": 7.56,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 15.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3295.53,
+     "cpu_us_lo": 3273.39,
+     "cpu_us_hi": 3330.23,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3322.6,
+      "p25": 3410.6,
+      "p50": 3434.3,
+      "p95": 3531.8,
+      "p99": 3534.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.74,
+     "cpu_us_lo": 15.15,
+     "cpu_us_hi": 16.63,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.4,
+      "p25": 27.2,
+      "p50": 28.6,
+      "p95": 30.2,
+      "p99": 32.2
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.43,
+     "cpu_us_lo": 6.31,
+     "cpu_us_hi": 6.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.8,
+      "p50": 13.1,
+      "p95": 14.0,
+      "p99": 22.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.08,
+     "cpu_us_lo": 6.0,
+     "cpu_us_hi": 6.38,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.5,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.963,
+     "wall_us_row": 3.354,
+     "rows_s": 298148
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.74,
+     "cpu_us_hi": 7.86,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.23,
+     "cpu_us_lo": 7.16,
+     "cpu_us_hi": 8.34,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3279.78,
+     "cpu_us_lo": 3260.64,
+     "cpu_us_hi": 3311.67,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3290.0,
+      "p25": 3404.1,
+      "p50": 3417.0,
+      "p95": 3515.4,
+      "p99": 3531.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.99,
+     "cpu_us_lo": 24.88,
+     "cpu_us_hi": 28.18,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.2,
+      "p50": 37.5,
+      "p95": 39.3,
+      "p99": 41.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.12,
+     "cpu_us_lo": 7.98,
+     "cpu_us_hi": 8.53,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.3,
+      "p50": 14.5,
+      "p95": 15.5,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.37,
+     "cpu_us_lo": 6.33,
+     "cpu_us_hi": 6.54,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 14.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 1,
+   "host": {
+    "loadavg": "1.69 1.47 2.03",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.249,
+     "wall_us_row": 1.466,
+     "rows_s": 681963
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.37,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.9,
+     "cpu_us_lo": 6.77,
+     "cpu_us_hi": 7.62,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.3,
+      "p50": 13.5,
+      "p95": 14.2,
+      "p99": 15.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3721.74,
+     "cpu_us_lo": 3696.91,
+     "cpu_us_hi": 3776.69,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3829.6,
+      "p25": 3860.6,
+      "p50": 3872.3,
+      "p95": 4030.9,
+      "p99": 4033.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.65,
+     "cpu_us_lo": 15.12,
+     "cpu_us_hi": 17.29,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.2,
+      "p25": 27.0,
+      "p50": 28.5,
+      "p95": 30.2,
+      "p99": 89.6
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.5,
+     "cpu_us_lo": 6.41,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 16.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.07,
+     "cpu_us_lo": 5.99,
+     "cpu_us_hi": 6.18,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.4,
+      "p50": 12.6,
+      "p95": 13.3,
+      "p99": 14.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.981,
+     "wall_us_row": 3.306,
+     "rows_s": 302451
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.79,
+     "cpu_us_lo": 6.69,
+     "cpu_us_hi": 7.98,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.7,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.48,
+     "cpu_us_lo": 7.33,
+     "cpu_us_hi": 8.23,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.9,
+      "p50": 14.2,
+      "p95": 15.1,
+      "p99": 17.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3334.0,
+     "cpu_us_lo": 3295.97,
+     "cpu_us_hi": 3424.31,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3398.4,
+      "p25": 3485.7,
+      "p50": 3527.2,
+      "p95": 3691.4,
+      "p99": 3749.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.97,
+     "cpu_us_lo": 25.72,
+     "cpu_us_hi": 30.57,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 37.5,
+      "p25": 38.5,
+      "p50": 39.0,
+      "p95": 40.7,
+      "p99": 45.0
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.4,
+     "cpu_us_lo": 8.29,
+     "cpu_us_hi": 8.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.4,
+      "p25": 14.9,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 21.9
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.63,
+     "cpu_us_lo": 6.55,
+     "cpu_us_hi": 7.06,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.5,
+      "p95": 14.3,
+      "p99": 17.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 1,
+   "host": {
+    "loadavg": "1.63 1.46 2.02",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.215,
+     "wall_us_row": 1.43,
+     "rows_s": 699525
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.36,
+     "cpu_us_lo": 6.32,
+     "cpu_us_hi": 6.47,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.02,
+     "cpu_us_lo": 6.95,
+     "cpu_us_hi": 7.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3299.12,
+     "cpu_us_lo": 3283.04,
+     "cpu_us_hi": 3335.73,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3358.8,
+      "p25": 3460.6,
+      "p50": 3480.1,
+      "p95": 3604.5,
+      "p99": 3635.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.85,
+     "cpu_us_lo": 15.12,
+     "cpu_us_hi": 17.01,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.7,
+      "p50": 29.2,
+      "p95": 30.8,
+      "p99": 48.6
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.56,
+     "cpu_us_lo": 6.49,
+     "cpu_us_hi": 6.86,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.21,
+     "cpu_us_lo": 6.13,
+     "cpu_us_hi": 6.42,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.9,
+      "p50": 13.0,
+      "p95": 13.7,
+      "p99": 15.3
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.942,
+     "wall_us_row": 3.316,
+     "rows_s": 301597
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.84,
+     "cpu_us_lo": 6.72,
+     "cpu_us_hi": 7.85,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.9,
+      "p50": 14.1,
+      "p95": 14.8,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.38,
+     "cpu_us_lo": 7.31,
+     "cpu_us_hi": 8.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.8,
+      "p99": 16.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3273.63,
+     "cpu_us_lo": 3255.62,
+     "cpu_us_hi": 3318.4,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3373.1,
+      "p25": 3400.3,
+      "p50": 3414.3,
+      "p95": 3459.0,
+      "p99": 3498.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.12,
+     "cpu_us_lo": 24.96,
+     "cpu_us_hi": 29.21,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.4,
+      "p25": 37.3,
+      "p50": 37.6,
+      "p95": 39.3,
+      "p99": 41.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.22,
+     "cpu_us_lo": 8.13,
+     "cpu_us_hi": 8.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.9,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.7,
+      "p99": 21.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.46,
+     "cpu_us_lo": 6.4,
+     "cpu_us_hi": 6.63,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 14.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 2,
+   "host": {
+    "loadavg": "1.63 1.46 2.02",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.249,
+     "wall_us_row": 1.47,
+     "rows_s": 680053
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.37,
+     "cpu_us_lo": 6.18,
+     "cpu_us_hi": 6.54,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.5,
+      "p50": 13.8,
+      "p95": 14.5,
+      "p99": 15.3
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.96,
+     "cpu_us_lo": 6.83,
+     "cpu_us_hi": 7.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.5,
+      "p95": 14.3,
+      "p99": 15.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3727.0,
+     "cpu_us_lo": 3702.91,
+     "cpu_us_hi": 3778.85,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3791.7,
+      "p25": 3858.2,
+      "p50": 3879.8,
+      "p95": 4069.3,
+      "p99": 4106.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.77,
+     "cpu_us_lo": 15.37,
+     "cpu_us_hi": 17.72,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.5,
+      "p50": 29.0,
+      "p95": 31.7,
+      "p99": 214.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.58,
+     "cpu_us_lo": 6.51,
+     "cpu_us_hi": 6.84,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.16,
+     "cpu_us_lo": 6.12,
+     "cpu_us_hi": 6.44,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.9,
+      "p50": 13.0,
+      "p95": 13.6,
+      "p99": 15.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.975,
+     "wall_us_row": 3.37,
+     "rows_s": 296753
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.75,
+     "cpu_us_lo": 6.69,
+     "cpu_us_hi": 7.9,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.5,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.33,
+     "cpu_us_lo": 7.25,
+     "cpu_us_hi": 8.13,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3299.02,
+     "cpu_us_lo": 3272.56,
+     "cpu_us_hi": 3354.61,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3367.8,
+      "p25": 3423.5,
+      "p50": 3431.8,
+      "p95": 3536.1,
+      "p99": 3543.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.76,
+     "cpu_us_lo": 24.59,
+     "cpu_us_hi": 28.62,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.0,
+      "p25": 36.9,
+      "p50": 37.2,
+      "p95": 39.1,
+      "p99": 51.1
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.4,
+     "cpu_us_lo": 8.15,
+     "cpu_us_hi": 8.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.9,
+      "p25": 14.7,
+      "p50": 15.0,
+      "p95": 16.0,
+      "p99": 23.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.6,
+     "cpu_us_lo": 6.52,
+     "cpu_us_hi": 6.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 2,
+   "host": {
+    "loadavg": "1.50 1.44 2.01",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.221,
+     "wall_us_row": 1.438,
+     "rows_s": 695470
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.15,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.26,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 13.9,
+      "p99": 14.5
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.73,
+     "cpu_us_lo": 6.66,
+     "cpu_us_hi": 7.46,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.1,
+      "p99": 15.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3291.89,
+     "cpu_us_lo": 3276.93,
+     "cpu_us_hi": 3313.88,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3398.0,
+      "p25": 3413.9,
+      "p50": 3430.1,
+      "p95": 3462.5,
+      "p99": 3465.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.61,
+     "cpu_us_lo": 15.4,
+     "cpu_us_hi": 17.71,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.2,
+      "p25": 27.0,
+      "p50": 28.5,
+      "p95": 30.1,
+      "p99": 155.8
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.29,
+     "cpu_us_lo": 6.23,
+     "cpu_us_hi": 6.5,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.6,
+      "p50": 12.7,
+      "p95": 13.6,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.9,
+     "cpu_us_lo": 5.84,
+     "cpu_us_hi": 6.02,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.2,
+      "p50": 12.4,
+      "p95": 13.2,
+      "p99": 14.3
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.979,
+     "wall_us_row": 3.358,
+     "rows_s": 297832
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.71,
+     "cpu_us_hi": 7.99,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.9,
+      "p50": 14.2,
+      "p95": 15.1,
+      "p99": 16.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.23,
+     "cpu_us_lo": 7.16,
+     "cpu_us_hi": 8.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.5,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3290.94,
+     "cpu_us_lo": 3256.23,
+     "cpu_us_hi": 3331.33,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3381.1,
+      "p25": 3417.3,
+      "p50": 3430.3,
+      "p95": 3572.9,
+      "p99": 3587.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.86,
+     "cpu_us_lo": 24.74,
+     "cpu_us_hi": 29.36,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.1,
+      "p25": 37.1,
+      "p50": 37.4,
+      "p95": 39.2,
+      "p99": 166.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.15,
+     "cpu_us_lo": 7.93,
+     "cpu_us_hi": 8.44,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.5,
+      "p50": 14.7,
+      "p95": 15.9,
+      "p99": 23.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.51,
+     "cpu_us_lo": 6.45,
+     "cpu_us_hi": 6.92,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 13.1,
+      "p50": 13.4,
+      "p95": 14.1,
+      "p99": 16.4
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 2,
+   "host": {
+    "loadavg": "1.38 1.42 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.213,
+     "wall_us_row": 1.43,
+     "rows_s": 699157
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.26,
+     "cpu_us_lo": 6.19,
+     "cpu_us_hi": 6.47,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.6,
+      "p95": 14.3,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.8,
+     "cpu_us_hi": 7.79,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3285.59,
+     "cpu_us_lo": 3259.33,
+     "cpu_us_hi": 3322.85,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3302.5,
+      "p25": 3407.1,
+      "p50": 3425.7,
+      "p95": 3468.6,
+      "p99": 3659.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.74,
+     "cpu_us_lo": 15.55,
+     "cpu_us_hi": 16.81,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.4,
+      "p25": 27.1,
+      "p50": 28.7,
+      "p95": 30.4,
+      "p99": 166.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.42,
+     "cpu_us_lo": 6.34,
+     "cpu_us_hi": 6.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 16.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.03,
+     "cpu_us_lo": 5.95,
+     "cpu_us_hi": 6.2,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.4,
+      "p50": 12.6,
+      "p95": 13.3,
+      "p99": 14.3
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.949,
+     "wall_us_row": 3.269,
+     "rows_s": 305887
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.82,
+     "cpu_us_lo": 6.79,
+     "cpu_us_hi": 7.99,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.8,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.35,
+     "cpu_us_lo": 7.27,
+     "cpu_us_hi": 8.07,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3282.39,
+     "cpu_us_lo": 3254.24,
+     "cpu_us_hi": 3307.26,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3312.5,
+      "p25": 3407.6,
+      "p50": 3420.6,
+      "p95": 3576.0,
+      "p99": 3600.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.81,
+     "cpu_us_lo": 24.68,
+     "cpu_us_hi": 28.59,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.0,
+      "p25": 36.9,
+      "p50": 37.3,
+      "p95": 38.8,
+      "p99": 42.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.25,
+     "cpu_us_lo": 8.11,
+     "cpu_us_hi": 8.65,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.42,
+     "cpu_us_lo": 6.35,
+     "cpu_us_hi": 6.61,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 14.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 3,
+   "host": {
+    "loadavg": "1.38 1.42 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.25,
+     "wall_us_row": 1.465,
+     "rows_s": 682769
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.14,
+     "cpu_us_lo": 6.07,
+     "cpu_us_hi": 6.21,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 13.9,
+      "p99": 14.5
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.92,
+     "cpu_us_lo": 6.77,
+     "cpu_us_hi": 7.65,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3726.07,
+     "cpu_us_lo": 3702.6,
+     "cpu_us_hi": 3787.68,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3807.0,
+      "p25": 3858.2,
+      "p50": 3873.7,
+      "p95": 3992.6,
+      "p99": 4045.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.51,
+     "cpu_us_lo": 15.24,
+     "cpu_us_hi": 16.76,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.2,
+      "p25": 26.9,
+      "p50": 28.4,
+      "p95": 30.1,
+      "p99": 158.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.49,
+     "cpu_us_lo": 6.37,
+     "cpu_us_hi": 6.89,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.9,
+      "p99": 22.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.35,
+     "cpu_us_lo": 6.07,
+     "cpu_us_hi": 7.39,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.9,
+      "p50": 13.2,
+      "p95": 14.3,
+      "p99": 16.7
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.986,
+     "wall_us_row": 3.323,
+     "rows_s": 300923
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.81,
+     "cpu_us_hi": 8.0,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.7,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.46,
+     "cpu_us_lo": 7.32,
+     "cpu_us_hi": 8.18,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 14.0,
+      "p95": 15.0,
+      "p99": 16.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3310.33,
+     "cpu_us_lo": 3284.49,
+     "cpu_us_hi": 3338.91,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3379.2,
+      "p25": 3472.2,
+      "p50": 3483.3,
+      "p95": 3529.0,
+      "p99": 3538.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.84,
+     "cpu_us_lo": 24.7,
+     "cpu_us_hi": 27.93,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.5,
+      "p25": 37.4,
+      "p50": 37.7,
+      "p95": 39.7,
+      "p99": 53.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.39,
+     "cpu_us_lo": 8.26,
+     "cpu_us_hi": 8.82,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.2,
+      "p25": 14.8,
+      "p50": 15.0,
+      "p95": 16.0,
+      "p99": 22.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.58,
+     "cpu_us_lo": 6.49,
+     "cpu_us_hi": 6.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.5
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 3,
+   "host": {
+    "loadavg": "1.35 1.41 2.00",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.221,
+     "wall_us_row": 1.415,
+     "rows_s": 706862
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.37,
+     "cpu_us_lo": 6.22,
+     "cpu_us_hi": 6.43,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 15.0
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.04,
+     "cpu_us_lo": 6.92,
+     "cpu_us_hi": 7.77,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3298.31,
+     "cpu_us_lo": 3273.16,
+     "cpu_us_hi": 3346.73,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3340.8,
+      "p25": 3464.8,
+      "p50": 3476.4,
+      "p95": 3593.9,
+      "p99": 3606.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.81,
+     "cpu_us_lo": 15.62,
+     "cpu_us_hi": 17.27,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.7,
+      "p50": 29.2,
+      "p95": 31.1,
+      "p99": 169.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.58,
+     "cpu_us_lo": 6.5,
+     "cpu_us_hi": 6.79,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.9
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.15,
+     "cpu_us_lo": 5.99,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 16.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.966,
+     "wall_us_row": 3.348,
+     "rows_s": 298673
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.93,
+     "cpu_us_lo": 6.73,
+     "cpu_us_hi": 8.15,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.1,
+      "p50": 14.4,
+      "p95": 15.0,
+      "p99": 15.6
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.4,
+     "cpu_us_lo": 7.27,
+     "cpu_us_hi": 8.17,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3261.18,
+     "cpu_us_lo": 3246.8,
+     "cpu_us_hi": 3299.9,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3332.5,
+      "p25": 3389.9,
+      "p50": 3396.6,
+      "p95": 3492.1,
+      "p99": 3522.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.65,
+     "cpu_us_lo": 25.14,
+     "cpu_us_hi": 28.54,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.6,
+      "p25": 37.9,
+      "p50": 38.5,
+      "p95": 41.0,
+      "p99": 108.3
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.52,
+     "cpu_us_lo": 8.25,
+     "cpu_us_hi": 9.05,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.1,
+      "p25": 14.9,
+      "p50": 15.2,
+      "p95": 16.5,
+      "p99": 24.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.81,
+     "cpu_us_lo": 6.6,
+     "cpu_us_hi": 7.6,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 13.3,
+      "p50": 13.6,
+      "p95": 14.9,
+      "p99": 17.4
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 3,
+   "host": {
+    "loadavg": "1.24 1.39 1.99",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.225,
+     "wall_us_row": 1.447,
+     "rows_s": 691140
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.24,
+     "cpu_us_lo": 6.21,
+     "cpu_us_hi": 6.29,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.2,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.87,
+     "cpu_us_lo": 6.77,
+     "cpu_us_hi": 7.59,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.4,
+      "p99": 15.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3288.51,
+     "cpu_us_lo": 3267.81,
+     "cpu_us_hi": 3336.54,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3408.4,
+      "p25": 3459.3,
+      "p50": 3474.5,
+      "p95": 3605.5,
+      "p99": 3623.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.62,
+     "cpu_us_lo": 15.36,
+     "cpu_us_hi": 16.9,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.4,
+      "p50": 28.9,
+      "p95": 30.6,
+      "p99": 80.0
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.36,
+     "cpu_us_lo": 6.32,
+     "cpu_us_hi": 6.56,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.1,
+      "p95": 13.9,
+      "p99": 16.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.03,
+     "cpu_us_lo": 5.98,
+     "cpu_us_hi": 6.32,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.5,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.946,
+     "wall_us_row": 3.328,
+     "rows_s": 300489
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.78,
+     "cpu_us_lo": 6.66,
+     "cpu_us_hi": 7.96,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.4,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 14.8,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.35,
+     "cpu_us_lo": 7.26,
+     "cpu_us_hi": 8.2,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.3,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 15.0,
+      "p99": 16.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3272.16,
+     "cpu_us_lo": 3250.63,
+     "cpu_us_hi": 3307.05,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3364.7,
+      "p25": 3434.3,
+      "p50": 3450.8,
+      "p95": 3517.9,
+      "p99": 3639.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.03,
+     "cpu_us_lo": 24.94,
+     "cpu_us_hi": 28.59,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.6,
+      "p50": 38.0,
+      "p95": 40.0,
+      "p99": 42.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.17,
+     "cpu_us_lo": 7.98,
+     "cpu_us_hi": 8.47,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.0,
+      "p25": 14.6,
+      "p50": 14.8,
+      "p95": 15.8,
+      "p99": 21.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.45,
+     "cpu_us_lo": 6.41,
+     "cpu_us_hi": 6.62,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 4,
+   "host": {
+    "loadavg": "1.22 1.38 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.215,
+     "wall_us_row": 1.429,
+     "rows_s": 699594
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.38,
+     "cpu_us_lo": 6.33,
+     "cpu_us_hi": 6.42,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.02,
+     "cpu_us_lo": 6.96,
+     "cpu_us_hi": 7.91,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3308.59,
+     "cpu_us_lo": 3280.98,
+     "cpu_us_hi": 3342.9,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3373.1,
+      "p25": 3472.6,
+      "p50": 3488.1,
+      "p95": 3628.8,
+      "p99": 3690.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.92,
+     "cpu_us_lo": 15.76,
+     "cpu_us_hi": 17.82,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 27.0,
+      "p25": 27.7,
+      "p50": 29.2,
+      "p95": 30.8,
+      "p99": 148.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.52,
+     "cpu_us_lo": 6.47,
+     "cpu_us_hi": 6.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.15,
+     "cpu_us_lo": 6.12,
+     "cpu_us_hi": 6.41,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.9,
+      "p50": 13.0,
+      "p95": 13.6,
+      "p99": 15.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.977,
+     "wall_us_row": 3.372,
+     "rows_s": 296592
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.87,
+     "cpu_us_lo": 6.65,
+     "cpu_us_hi": 8.07,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.0,
+      "p50": 14.3,
+      "p95": 14.9,
+      "p99": 15.6
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.57,
+     "cpu_us_lo": 7.46,
+     "cpu_us_hi": 8.39,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.5,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.2,
+      "p99": 16.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3278.78,
+     "cpu_us_lo": 3253.04,
+     "cpu_us_hi": 3342.78,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3372.1,
+      "p25": 3445.1,
+      "p50": 3469.7,
+      "p95": 3590.1,
+      "p99": 3610.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.24,
+     "cpu_us_lo": 25.11,
+     "cpu_us_hi": 31.09,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.8,
+      "p50": 38.2,
+      "p95": 40.2,
+      "p99": 176.3
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.37,
+     "cpu_us_lo": 8.27,
+     "cpu_us_hi": 8.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.1,
+      "p25": 14.8,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 21.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.61,
+     "cpu_us_lo": 6.51,
+     "cpu_us_hi": 7.11,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 4,
+   "host": {
+    "loadavg": "1.22 1.38 1.98",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.256,
+     "wall_us_row": 1.459,
+     "rows_s": 685448
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.19,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.29,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.1,
+      "p99": 14.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.18,
+     "cpu_us_lo": 6.93,
+     "cpu_us_hi": 7.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.9,
+      "p99": 16.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 4405.09,
+     "cpu_us_lo": 4375.42,
+     "cpu_us_hi": 4489.87,
+     "lat_us": {
+      "ops": 40,
+      "p0": 4502.5,
+      "p25": 4561.0,
+      "p50": 4603.5,
+      "p95": 4744.4,
+      "p99": 4779.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 16.07,
+     "cpu_us_lo": 15.82,
+     "cpu_us_hi": 18.46,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.9,
+      "p25": 27.9,
+      "p50": 29.4,
+      "p95": 31.4,
+      "p99": 35.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.55,
+     "cpu_us_lo": 6.37,
+     "cpu_us_hi": 7.08,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.9,
+      "p50": 13.1,
+      "p95": 14.1,
+      "p99": 23.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.14,
+     "cpu_us_lo": 6.03,
+     "cpu_us_hi": 6.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.5,
+      "p50": 12.7,
+      "p95": 13.6,
+      "p99": 14.7
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.975,
+     "wall_us_row": 3.335,
+     "rows_s": 299873
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.82,
+     "cpu_us_lo": 6.75,
+     "cpu_us_hi": 7.97,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.4,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.39,
+     "cpu_us_lo": 7.31,
+     "cpu_us_hi": 8.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 15.0,
+      "p99": 16.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3297.24,
+     "cpu_us_lo": 3273.93,
+     "cpu_us_hi": 3322.04,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3350.3,
+      "p25": 3423.9,
+      "p50": 3434.3,
+      "p95": 3477.5,
+      "p99": 3540.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.73,
+     "cpu_us_lo": 24.64,
+     "cpu_us_hi": 29.63,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 35.7,
+      "p25": 36.9,
+      "p50": 37.3,
+      "p95": 39.2,
+      "p99": 43.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.25,
+     "cpu_us_lo": 8.13,
+     "cpu_us_hi": 8.67,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.9,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.7,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.44,
+     "cpu_us_lo": 6.38,
+     "cpu_us_hi": 6.54,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 4,
+   "host": {
+    "loadavg": "1.12 1.36 1.97",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.216,
+     "wall_us_row": 1.435,
+     "rows_s": 696892
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.13,
+     "cpu_us_lo": 6.07,
+     "cpu_us_hi": 6.26,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 13.9,
+      "p99": 14.5
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.81,
+     "cpu_us_lo": 6.68,
+     "cpu_us_hi": 7.45,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.3,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3288.9,
+     "cpu_us_lo": 3268.31,
+     "cpu_us_hi": 3347.31,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3342.8,
+      "p25": 3414.4,
+      "p50": 3420.8,
+      "p95": 3570.8,
+      "p99": 3623.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.64,
+     "cpu_us_lo": 15.5,
+     "cpu_us_hi": 16.83,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.0,
+      "p50": 28.6,
+      "p95": 30.1,
+      "p99": 32.0
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.4,
+     "cpu_us_lo": 6.35,
+     "cpu_us_hi": 6.72,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 13.0,
+      "p50": 13.1,
+      "p95": 13.9,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.01,
+     "cpu_us_lo": 5.96,
+     "cpu_us_hi": 6.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 14.9
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.972,
+     "wall_us_row": 3.361,
+     "rows_s": 297488
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.65,
+     "cpu_us_lo": 6.62,
+     "cpu_us_hi": 7.88,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 15.0
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.35,
+     "cpu_us_lo": 7.15,
+     "cpu_us_hi": 8.1,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.9,
+      "p25": 13.9,
+      "p50": 14.2,
+      "p95": 15.1,
+      "p99": 17.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3279.78,
+     "cpu_us_lo": 3255.2,
+     "cpu_us_hi": 3299.14,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3313.6,
+      "p25": 3436.8,
+      "p50": 3457.2,
+      "p95": 3519.5,
+      "p99": 3521.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.18,
+     "cpu_us_lo": 25.1,
+     "cpu_us_hi": 28.43,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.9,
+      "p25": 37.8,
+      "p50": 38.2,
+      "p95": 40.2,
+      "p99": 42.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.17,
+     "cpu_us_lo": 8.02,
+     "cpu_us_hi": 8.55,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.0,
+      "p25": 14.6,
+      "p50": 14.8,
+      "p95": 15.8,
+      "p99": 22.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.47,
+     "cpu_us_lo": 6.36,
+     "cpu_us_hi": 6.83,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 13.0,
+      "p50": 13.3,
+      "p95": 14.0,
+      "p99": 16.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 5,
+   "host": {
+    "loadavg": "1.03 1.33 1.96",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.266,
+     "wall_us_row": 1.49,
+     "rows_s": 671045
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.21,
+     "cpu_us_lo": 6.19,
+     "cpu_us_hi": 6.3,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.0,
+      "p99": 14.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.79,
+     "cpu_us_hi": 7.54,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.3,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3293.3,
+     "cpu_us_lo": 3268.97,
+     "cpu_us_hi": 3353.23,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3377.6,
+      "p25": 3405.2,
+      "p50": 3425.0,
+      "p95": 3513.5,
+      "p99": 3553.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.68,
+     "cpu_us_lo": 15.48,
+     "cpu_us_hi": 16.56,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.4,
+      "p25": 27.1,
+      "p50": 28.7,
+      "p95": 30.3,
+      "p99": 48.4
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.45,
+     "cpu_us_lo": 6.41,
+     "cpu_us_hi": 6.7,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.8,
+      "p99": 16.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.03,
+     "cpu_us_lo": 5.99,
+     "cpu_us_hi": 6.51,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.5,
+      "p50": 12.6,
+      "p95": 13.4,
+      "p99": 14.9
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.961,
+     "wall_us_row": 3.275,
+     "rows_s": 305317
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.92,
+     "cpu_us_lo": 6.68,
+     "cpu_us_hi": 8.16,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 15.0,
+      "p99": 15.6
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.54,
+     "cpu_us_lo": 7.45,
+     "cpu_us_hi": 8.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.4,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.3,
+      "p99": 16.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3288.59,
+     "cpu_us_lo": 3251.51,
+     "cpu_us_hi": 3329.46,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3352.0,
+      "p25": 3450.5,
+      "p50": 3478.7,
+      "p95": 3653.8,
+      "p99": 3657.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.17,
+     "cpu_us_lo": 24.93,
+     "cpu_us_hi": 28.73,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.7,
+      "p50": 38.1,
+      "p95": 39.9,
+      "p99": 57.3
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.33,
+     "cpu_us_lo": 8.2,
+     "cpu_us_hi": 8.7,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.2,
+      "p25": 14.8,
+      "p50": 15.0,
+      "p95": 16.0,
+      "p99": 21.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.6,
+     "cpu_us_lo": 6.48,
+     "cpu_us_hi": 6.96,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 5,
+   "host": {
+    "loadavg": "1.03 1.33 1.96",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.218,
+     "wall_us_row": 1.436,
+     "rows_s": 696368
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.19,
+     "cpu_us_lo": 6.08,
+     "cpu_us_hi": 6.26,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.6,
+      "p25": 13.3,
+      "p50": 13.5,
+      "p95": 14.2,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.87,
+     "cpu_us_lo": 6.76,
+     "cpu_us_hi": 7.71,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.9,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.5,
+      "p99": 15.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3288.38,
+     "cpu_us_lo": 3275.22,
+     "cpu_us_hi": 3311.91,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3302.5,
+      "p25": 3455.6,
+      "p50": 3479.6,
+      "p95": 3566.9,
+      "p99": 3582.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.64,
+     "cpu_us_lo": 15.33,
+     "cpu_us_hi": 17.67,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.6,
+      "p25": 27.4,
+      "p50": 28.9,
+      "p95": 30.5,
+      "p99": 66.3
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.44,
+     "cpu_us_lo": 6.33,
+     "cpu_us_hi": 6.66,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.0,
+      "p50": 13.1,
+      "p95": 13.9,
+      "p99": 16.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.99,
+     "cpu_us_lo": 5.89,
+     "cpu_us_hi": 6.77,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.4,
+      "p50": 12.6,
+      "p95": 13.5,
+      "p99": 15.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.971,
+     "wall_us_row": 3.295,
+     "rows_s": 303475
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.66,
+     "cpu_us_lo": 6.59,
+     "cpu_us_hi": 8.02,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 15.1
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.31,
+     "cpu_us_lo": 7.1,
+     "cpu_us_hi": 7.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.9,
+      "p99": 16.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3277.94,
+     "cpu_us_lo": 3255.95,
+     "cpu_us_hi": 3315.34,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3371.2,
+      "p25": 3436.5,
+      "p50": 3459.2,
+      "p95": 3561.5,
+      "p99": 3616.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.12,
+     "cpu_us_lo": 25.02,
+     "cpu_us_hi": 29.06,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.7,
+      "p25": 37.7,
+      "p50": 38.0,
+      "p95": 39.9,
+      "p99": 68.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.19,
+     "cpu_us_lo": 8.07,
+     "cpu_us_hi": 8.59,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.9,
+      "p25": 14.7,
+      "p50": 14.9,
+      "p95": 15.9,
+      "p99": 21.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.47,
+     "cpu_us_lo": 6.4,
+     "cpu_us_hi": 6.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 13.0,
+      "p50": 13.3,
+      "p95": 14.0,
+      "p99": 15.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 5,
+   "host": {
+    "loadavg": "1.11 1.34 1.96",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.293,
+     "wall_us_row": 1.525,
+     "rows_s": 655900
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.26,
+     "cpu_us_lo": 6.23,
+     "cpu_us_hi": 6.34,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.2,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.3,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.05,
+     "cpu_us_lo": 6.95,
+     "cpu_us_hi": 7.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3737.93,
+     "cpu_us_lo": 3722.72,
+     "cpu_us_hi": 3797.53,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3835.3,
+      "p25": 3915.3,
+      "p50": 3937.2,
+      "p95": 4054.8,
+      "p99": 4066.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.76,
+     "cpu_us_lo": 15.46,
+     "cpu_us_hi": 17.44,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.5,
+      "p50": 29.1,
+      "p95": 30.6,
+      "p99": 33.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.63,
+     "cpu_us_lo": 6.52,
+     "cpu_us_hi": 6.85,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.2,
+      "p99": 16.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.19,
+     "cpu_us_lo": 6.11,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 12.9,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 15.9
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.978,
+     "wall_us_row": 3.362,
+     "rows_s": 297431
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.83,
+     "cpu_us_lo": 6.75,
+     "cpu_us_hi": 7.9,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.9,
+      "p50": 14.2,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.5,
+     "cpu_us_lo": 7.43,
+     "cpu_us_hi": 8.35,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.4,
+      "p25": 14.1,
+      "p50": 14.4,
+      "p95": 15.2,
+      "p99": 16.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3308.59,
+     "cpu_us_lo": 3285.2,
+     "cpu_us_hi": 3362.0,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3354.0,
+      "p25": 3475.5,
+      "p50": 3492.9,
+      "p95": 3574.7,
+      "p99": 3691.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.05,
+     "cpu_us_lo": 24.86,
+     "cpu_us_hi": 28.58,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.7,
+      "p50": 38.1,
+      "p95": 39.8,
+      "p99": 41.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.46,
+     "cpu_us_lo": 8.31,
+     "cpu_us_hi": 8.85,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.3,
+      "p25": 14.9,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 21.9
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.57,
+     "cpu_us_lo": 6.53,
+     "cpu_us_hi": 6.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.6
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 6,
+   "host": {
+    "loadavg": "1.10 1.34 1.95",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.211,
+     "wall_us_row": 1.419,
+     "rows_s": 704912
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.19,
+     "cpu_us_lo": 6.16,
+     "cpu_us_hi": 6.25,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.1,
+      "p99": 14.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.72,
+     "cpu_us_lo": 6.65,
+     "cpu_us_hi": 7.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.2,
+      "p99": 15.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3294.3,
+     "cpu_us_lo": 3262.64,
+     "cpu_us_hi": 3348.73,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3315.2,
+      "p25": 3416.2,
+      "p50": 3434.6,
+      "p95": 3600.3,
+      "p99": 3652.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.54,
+     "cpu_us_lo": 15.21,
+     "cpu_us_hi": 16.42,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 25.9,
+      "p25": 26.9,
+      "p50": 28.4,
+      "p95": 30.0,
+      "p99": 83.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.29,
+     "cpu_us_lo": 6.2,
+     "cpu_us_hi": 6.52,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.5,
+      "p50": 12.7,
+      "p95": 13.5,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.87,
+     "cpu_us_lo": 5.82,
+     "cpu_us_hi": 6.07,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.7,
+      "p25": 12.2,
+      "p50": 12.4,
+      "p95": 13.1,
+      "p99": 14.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.963,
+     "wall_us_row": 3.283,
+     "rows_s": 304571
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.76,
+     "cpu_us_lo": 6.63,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.9,
+      "p50": 14.1,
+      "p95": 14.8,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.4,
+     "cpu_us_lo": 7.29,
+     "cpu_us_hi": 8.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.3,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 15.2,
+      "p99": 16.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3287.57,
+     "cpu_us_lo": 3250.21,
+     "cpu_us_hi": 3333.29,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3378.5,
+      "p25": 3468.4,
+      "p50": 3485.0,
+      "p95": 3615.4,
+      "p99": 3673.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.15,
+     "cpu_us_lo": 25.0,
+     "cpu_us_hi": 29.39,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.7,
+      "p25": 37.6,
+      "p50": 38.0,
+      "p95": 39.7,
+      "p99": 54.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.19,
+     "cpu_us_lo": 8.06,
+     "cpu_us_hi": 8.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.0,
+      "p25": 14.6,
+      "p50": 14.8,
+      "p95": 15.8,
+      "p99": 21.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.46,
+     "cpu_us_lo": 6.36,
+     "cpu_us_hi": 6.99,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.0,
+      "p99": 15.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 6,
+   "host": {
+    "loadavg": "1.10 1.34 1.95",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.226,
+     "wall_us_row": 1.428,
+     "rows_s": 700036
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.21,
+     "cpu_us_lo": 6.15,
+     "cpu_us_hi": 6.33,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.1,
+      "p99": 14.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.99,
+     "cpu_us_lo": 6.93,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3301.0,
+     "cpu_us_lo": 3265.39,
+     "cpu_us_hi": 3332.93,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3390.8,
+      "p25": 3454.6,
+      "p50": 3473.7,
+      "p95": 3593.3,
+      "p99": 3605.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.87,
+     "cpu_us_lo": 15.57,
+     "cpu_us_hi": 19.0,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.6,
+      "p50": 29.2,
+      "p95": 30.8,
+      "p99": 77.2
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.5,
+     "cpu_us_lo": 6.44,
+     "cpu_us_hi": 6.89,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 14.1,
+      "p99": 16.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.12,
+     "cpu_us_lo": 6.05,
+     "cpu_us_hi": 6.45,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.968,
+     "wall_us_row": 3.371,
+     "rows_s": 296631
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.81,
+     "cpu_us_lo": 6.78,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.8,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.34,
+     "cpu_us_lo": 7.29,
+     "cpu_us_hi": 8.61,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.8,
+      "p99": 16.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3279.51,
+     "cpu_us_lo": 3262.52,
+     "cpu_us_hi": 3316.97,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3378.3,
+      "p25": 3406.0,
+      "p50": 3418.3,
+      "p95": 3575.6,
+      "p99": 3597.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.53,
+     "cpu_us_lo": 25.37,
+     "cpu_us_hi": 29.48,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.7,
+      "p50": 38.1,
+      "p95": 39.7,
+      "p99": 42.9
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.2,
+     "cpu_us_lo": 8.07,
+     "cpu_us_hi": 8.6,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.44,
+     "cpu_us_lo": 6.36,
+     "cpu_us_hi": 6.63,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.8,
+      "p99": 14.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 6,
+   "host": {
+    "loadavg": "1.01 1.32 1.94",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.264,
+     "wall_us_row": 1.466,
+     "rows_s": 682335
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.19,
+     "cpu_us_lo": 6.09,
+     "cpu_us_hi": 6.26,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.3,
+      "p50": 13.5,
+      "p95": 14.2,
+      "p99": 14.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.02,
+     "cpu_us_lo": 6.96,
+     "cpu_us_hi": 7.79,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.5,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3724.81,
+     "cpu_us_lo": 3703.42,
+     "cpu_us_hi": 3750.81,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3817.0,
+      "p25": 3900.6,
+      "p50": 3914.0,
+      "p95": 3955.7,
+      "p99": 3984.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.92,
+     "cpu_us_lo": 15.67,
+     "cpu_us_hi": 17.37,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.9,
+      "p25": 27.6,
+      "p50": 29.2,
+      "p95": 30.8,
+      "p99": 50.6
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.58,
+     "cpu_us_lo": 6.49,
+     "cpu_us_hi": 6.9,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.16,
+     "cpu_us_lo": 6.07,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.6,
+      "p99": 15.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.986,
+     "wall_us_row": 3.374,
+     "rows_s": 296407
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.77,
+     "cpu_us_hi": 8.14,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.36,
+     "cpu_us_lo": 7.3,
+     "cpu_us_hi": 8.18,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.8,
+      "p99": 16.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3627.19,
+     "cpu_us_lo": 3614.59,
+     "cpu_us_hi": 3690.23,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3673.7,
+      "p25": 3746.9,
+      "p50": 3760.0,
+      "p95": 3910.5,
+      "p99": 3938.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.72,
+     "cpu_us_lo": 24.59,
+     "cpu_us_hi": 27.86,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.0,
+      "p25": 36.8,
+      "p50": 37.2,
+      "p95": 38.7,
+      "p99": 40.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.32,
+     "cpu_us_lo": 8.16,
+     "cpu_us_hi": 8.61,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.7,
+      "p95": 15.6,
+      "p99": 21.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.45,
+     "cpu_us_lo": 6.37,
+     "cpu_us_hi": 6.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.8,
+      "p99": 14.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 7,
+   "host": {
+    "loadavg": "0.93 1.29 1.93",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.228,
+     "wall_us_row": 1.439,
+     "rows_s": 695047
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.3,
+     "cpu_us_lo": 6.22,
+     "cpu_us_hi": 6.35,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.2,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.79,
+     "cpu_us_lo": 6.72,
+     "cpu_us_hi": 7.75,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.2,
+      "p99": 15.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3301.65,
+     "cpu_us_lo": 3278.29,
+     "cpu_us_hi": 3329.53,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3357.7,
+      "p25": 3417.2,
+      "p50": 3436.5,
+      "p95": 3488.3,
+      "p99": 3548.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.85,
+     "cpu_us_lo": 15.48,
+     "cpu_us_hi": 16.93,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.2,
+      "p50": 28.7,
+      "p95": 30.5,
+      "p99": 33.9
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.38,
+     "cpu_us_lo": 6.32,
+     "cpu_us_hi": 6.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 16.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.0,
+     "cpu_us_lo": 5.94,
+     "cpu_us_hi": 6.22,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.3,
+      "p50": 12.5,
+      "p95": 13.1,
+      "p99": 14.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.951,
+     "wall_us_row": 3.266,
+     "rows_s": 306155
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.78,
+     "cpu_us_lo": 6.7,
+     "cpu_us_hi": 8.03,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.6,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.32,
+     "cpu_us_lo": 7.23,
+     "cpu_us_hi": 8.13,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3273.85,
+     "cpu_us_lo": 3244.82,
+     "cpu_us_hi": 3306.49,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3306.0,
+      "p25": 3398.8,
+      "p50": 3413.0,
+      "p95": 3505.1,
+      "p99": 3584.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.04,
+     "cpu_us_lo": 24.87,
+     "cpu_us_hi": 28.26,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.1,
+      "p50": 37.5,
+      "p95": 39.4,
+      "p99": 56.2
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.16,
+     "cpu_us_lo": 8.01,
+     "cpu_us_hi": 8.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.3,
+      "p50": 14.5,
+      "p95": 15.5,
+      "p99": 21.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.48,
+     "cpu_us_lo": 6.38,
+     "cpu_us_hi": 6.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 7,
+   "host": {
+    "loadavg": "0.94 1.29 1.93",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.251,
+     "wall_us_row": 1.458,
+     "rows_s": 685869
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.24,
+     "cpu_us_hi": 6.32,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.03,
+     "cpu_us_lo": 6.95,
+     "cpu_us_hi": 7.72,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3729.46,
+     "cpu_us_lo": 3695.39,
+     "cpu_us_hi": 3777.07,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3782.6,
+      "p25": 3879.0,
+      "p50": 3916.3,
+      "p95": 4013.9,
+      "p99": 4057.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.76,
+     "cpu_us_lo": 15.5,
+     "cpu_us_hi": 17.33,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.5,
+      "p50": 29.0,
+      "p95": 30.7,
+      "p99": 46.8
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.56,
+     "cpu_us_lo": 6.5,
+     "cpu_us_hi": 6.84,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.2,
+      "p99": 16.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.18,
+     "cpu_us_lo": 6.11,
+     "cpu_us_hi": 6.67,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.6,
+      "p99": 15.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.975,
+     "wall_us_row": 3.363,
+     "rows_s": 297339
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.73,
+     "cpu_us_hi": 8.14,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.36,
+     "cpu_us_lo": 7.3,
+     "cpu_us_hi": 8.1,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3297.63,
+     "cpu_us_lo": 3272.53,
+     "cpu_us_hi": 3327.69,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3374.8,
+      "p25": 3416.8,
+      "p50": 3439.7,
+      "p95": 3497.5,
+      "p99": 3569.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.93,
+     "cpu_us_lo": 24.79,
+     "cpu_us_hi": 28.16,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.1,
+      "p50": 37.5,
+      "p95": 39.7,
+      "p99": 42.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.32,
+     "cpu_us_lo": 8.15,
+     "cpu_us_hi": 8.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.9,
+      "p25": 14.6,
+      "p50": 14.8,
+      "p95": 15.9,
+      "p99": 23.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.48,
+     "cpu_us_lo": 6.38,
+     "cpu_us_hi": 6.87,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 13.0,
+      "p95": 13.9,
+      "p99": 16.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 7,
+   "host": {
+    "loadavg": "0.94 1.29 1.93",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.21,
+     "wall_us_row": 1.405,
+     "rows_s": 711493
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.18,
+     "cpu_us_hi": 6.57,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.3,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 15.1
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.09,
+     "cpu_us_lo": 6.97,
+     "cpu_us_hi": 7.81,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.8,
+      "p99": 18.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3300.94,
+     "cpu_us_lo": 3279.69,
+     "cpu_us_hi": 3349.56,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3393.3,
+      "p25": 3473.3,
+      "p50": 3494.0,
+      "p95": 3652.7,
+      "p99": 3666.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.95,
+     "cpu_us_lo": 15.71,
+     "cpu_us_hi": 17.01,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.7,
+      "p50": 29.2,
+      "p95": 30.9,
+      "p99": 44.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.63,
+     "cpu_us_lo": 6.54,
+     "cpu_us_hi": 6.84,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.0,
+      "p99": 16.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.22,
+     "cpu_us_lo": 6.11,
+     "cpu_us_hi": 6.5,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.7,
+      "p99": 15.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.966,
+     "wall_us_row": 3.357,
+     "rows_s": 297855
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.94,
+     "cpu_us_lo": 6.79,
+     "cpu_us_hi": 7.98,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.54,
+     "cpu_us_lo": 7.45,
+     "cpu_us_hi": 9.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.5,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 15.3,
+      "p99": 17.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3276.2,
+     "cpu_us_lo": 3256.71,
+     "cpu_us_hi": 3319.75,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3364.1,
+      "p25": 3433.2,
+      "p50": 3456.9,
+      "p95": 3578.9,
+      "p99": 3594.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.34,
+     "cpu_us_lo": 25.18,
+     "cpu_us_hi": 29.57,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.9,
+      "p25": 37.9,
+      "p50": 38.2,
+      "p95": 40.1,
+      "p99": 42.9
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.42,
+     "cpu_us_lo": 8.31,
+     "cpu_us_hi": 8.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.3,
+      "p25": 14.8,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 21.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.65,
+     "cpu_us_lo": 6.55,
+     "cpu_us_hi": 7.13,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 8,
+   "host": {
+    "loadavg": "0.86 1.27 1.92",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.249,
+     "wall_us_row": 1.455,
+     "rows_s": 687172
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.46,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.6,
+      "p25": 13.3,
+      "p50": 13.6,
+      "p95": 14.2,
+      "p99": 14.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.89,
+     "cpu_us_lo": 6.82,
+     "cpu_us_hi": 8.0,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 15.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3723.14,
+     "cpu_us_lo": 3702.33,
+     "cpu_us_hi": 3741.78,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3838.4,
+      "p25": 3853.2,
+      "p50": 3864.0,
+      "p95": 4010.5,
+      "p99": 4024.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.73,
+     "cpu_us_lo": 15.29,
+     "cpu_us_hi": 17.1,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.1,
+      "p50": 28.6,
+      "p95": 30.1,
+      "p99": 33.2
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.44,
+     "cpu_us_lo": 6.4,
+     "cpu_us_hi": 6.67,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.8,
+      "p99": 16.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.05,
+     "cpu_us_lo": 6.01,
+     "cpu_us_hi": 6.39,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.4,
+      "p50": 12.5,
+      "p95": 13.2,
+      "p99": 14.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.973,
+     "wall_us_row": 3.287,
+     "rows_s": 304183
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.73,
+     "cpu_us_hi": 8.1,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.9,
+      "p50": 14.1,
+      "p95": 15.0,
+      "p99": 27.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.37,
+     "cpu_us_lo": 7.3,
+     "cpu_us_hi": 8.2,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3297.66,
+     "cpu_us_lo": 3262.11,
+     "cpu_us_hi": 3337.0,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3389.0,
+      "p25": 3418.4,
+      "p50": 3430.8,
+      "p95": 3513.5,
+      "p99": 3563.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.0,
+     "cpu_us_lo": 24.84,
+     "cpu_us_hi": 29.11,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.3,
+      "p50": 37.7,
+      "p95": 39.4,
+      "p99": 41.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.26,
+     "cpu_us_lo": 8.12,
+     "cpu_us_hi": 8.68,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.47,
+     "cpu_us_lo": 6.42,
+     "cpu_us_hi": 6.94,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 15.3
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 8,
+   "host": {
+    "loadavg": "0.79 1.25 1.91",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.219,
+     "wall_us_row": 1.429,
+     "rows_s": 699616
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.1,
+     "cpu_us_lo": 6.08,
+     "cpu_us_hi": 6.18,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 13.9,
+      "p99": 14.5
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.72,
+     "cpu_us_lo": 6.65,
+     "cpu_us_hi": 7.59,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.0,
+      "p99": 15.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3301.45,
+     "cpu_us_lo": 3282.29,
+     "cpu_us_hi": 3331.68,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3336.0,
+      "p25": 3416.8,
+      "p50": 3440.5,
+      "p95": 3502.5,
+      "p99": 3536.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.56,
+     "cpu_us_lo": 15.09,
+     "cpu_us_hi": 17.02,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.0,
+      "p25": 27.0,
+      "p50": 28.5,
+      "p95": 30.3,
+      "p99": 34.3
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.31,
+     "cpu_us_lo": 6.27,
+     "cpu_us_hi": 6.53,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.6,
+      "p50": 12.7,
+      "p95": 13.6,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.93,
+     "cpu_us_lo": 5.88,
+     "cpu_us_hi": 6.4,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.3,
+      "p50": 12.4,
+      "p95": 13.2,
+      "p99": 14.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.955,
+     "wall_us_row": 3.271,
+     "rows_s": 305720
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.76,
+     "cpu_us_lo": 6.65,
+     "cpu_us_hi": 7.94,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.7,
+      "p99": 15.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.18,
+     "cpu_us_lo": 7.12,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.9,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.5,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3269.94,
+     "cpu_us_lo": 3251.83,
+     "cpu_us_hi": 3321.64,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3282.7,
+      "p25": 3393.3,
+      "p50": 3407.6,
+      "p95": 3466.6,
+      "p99": 3524.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.91,
+     "cpu_us_lo": 24.72,
+     "cpu_us_hi": 28.07,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.1,
+      "p25": 37.0,
+      "p50": 37.3,
+      "p95": 39.2,
+      "p99": 41.2
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.04,
+     "cpu_us_lo": 7.92,
+     "cpu_us_hi": 8.32,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.5,
+      "p99": 21.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.33,
+     "cpu_us_lo": 6.29,
+     "cpu_us_hi": 6.81,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.6,
+      "p50": 12.8,
+      "p95": 13.7,
+      "p99": 14.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 8,
+   "host": {
+    "loadavg": "0.79 1.25 1.91",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.217,
+     "wall_us_row": 1.432,
+     "rows_s": 698121
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.37,
+     "cpu_us_lo": 6.34,
+     "cpu_us_hi": 6.43,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 15.0
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.05,
+     "cpu_us_lo": 6.95,
+     "cpu_us_hi": 7.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3294.9,
+     "cpu_us_lo": 3280.82,
+     "cpu_us_hi": 3349.06,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3331.9,
+      "p25": 3457.7,
+      "p50": 3475.3,
+      "p95": 3532.4,
+      "p99": 3586.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.95,
+     "cpu_us_lo": 15.41,
+     "cpu_us_hi": 16.86,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 27.0,
+      "p25": 27.7,
+      "p50": 29.2,
+      "p95": 30.9,
+      "p99": 33.3
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.68,
+     "cpu_us_lo": 6.51,
+     "cpu_us_hi": 6.86,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 19.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.29,
+     "cpu_us_lo": 6.04,
+     "cpu_us_hi": 7.41,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.5,
+      "p50": 12.7,
+      "p95": 13.8,
+      "p99": 16.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.992,
+     "wall_us_row": 3.317,
+     "rows_s": 301470
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.76,
+     "cpu_us_lo": 6.68,
+     "cpu_us_hi": 7.9,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 14.0,
+      "p95": 14.8,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.49,
+     "cpu_us_lo": 7.38,
+     "cpu_us_hi": 8.25,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.5,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 15.2,
+      "p99": 16.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3284.87,
+     "cpu_us_lo": 3259.72,
+     "cpu_us_hi": 3323.05,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3318.6,
+      "p25": 3461.6,
+      "p50": 3480.1,
+      "p95": 3583.7,
+      "p99": 3660.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.25,
+     "cpu_us_lo": 24.99,
+     "cpu_us_hi": 29.16,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.8,
+      "p50": 38.1,
+      "p95": 40.0,
+      "p99": 99.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.38,
+     "cpu_us_lo": 8.27,
+     "cpu_us_hi": 8.77,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.3,
+      "p25": 14.9,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 21.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.49,
+     "cpu_us_lo": 6.35,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.9,
+      "p99": 16.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 9,
+   "host": {
+    "loadavg": "0.73 1.22 1.89",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.25,
+     "wall_us_row": 1.444,
+     "rows_s": 692466
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.06,
+     "cpu_us_lo": 6.04,
+     "cpu_us_hi": 6.14,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 13.8,
+      "p99": 14.3
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.81,
+     "cpu_us_lo": 6.76,
+     "cpu_us_hi": 7.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 15.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3721.18,
+     "cpu_us_lo": 3696.09,
+     "cpu_us_hi": 3749.51,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3783.7,
+      "p25": 3850.1,
+      "p50": 3856.9,
+      "p95": 3914.1,
+      "p99": 3969.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.6,
+     "cpu_us_lo": 15.41,
+     "cpu_us_hi": 17.39,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.1,
+      "p25": 26.9,
+      "p50": 28.5,
+      "p95": 30.1,
+      "p99": 54.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.4,
+     "cpu_us_lo": 6.34,
+     "cpu_us_hi": 6.68,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.7,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.02,
+     "cpu_us_lo": 5.96,
+     "cpu_us_hi": 6.16,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.4,
+      "p50": 12.5,
+      "p95": 13.2,
+      "p99": 14.2
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.978,
+     "wall_us_row": 3.291,
+     "rows_s": 303866
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.69,
+     "cpu_us_lo": 6.66,
+     "cpu_us_hi": 8.0,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.5,
+      "p99": 15.1
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.35,
+     "cpu_us_lo": 7.27,
+     "cpu_us_hi": 8.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3300.13,
+     "cpu_us_lo": 3273.13,
+     "cpu_us_hi": 3328.83,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3408.6,
+      "p25": 3421.2,
+      "p50": 3436.7,
+      "p95": 3519.9,
+      "p99": 3617.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.99,
+     "cpu_us_lo": 24.84,
+     "cpu_us_hi": 28.75,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.2,
+      "p25": 37.1,
+      "p50": 37.5,
+      "p95": 39.1,
+      "p99": 42.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.31,
+     "cpu_us_lo": 8.17,
+     "cpu_us_hi": 8.66,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.7,
+      "p95": 15.7,
+      "p99": 22.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.45,
+     "cpu_us_lo": 6.37,
+     "cpu_us_hi": 6.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 14.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 9,
+   "host": {
+    "loadavg": "0.91 1.25 1.90",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.213,
+     "wall_us_row": 1.424,
+     "rows_s": 702459
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.31,
+     "cpu_us_lo": 6.27,
+     "cpu_us_hi": 6.38,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.2,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.03,
+     "cpu_us_lo": 6.92,
+     "cpu_us_hi": 7.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3297.9,
+     "cpu_us_lo": 3275.83,
+     "cpu_us_hi": 3366.36,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3393.8,
+      "p25": 3457.9,
+      "p50": 3471.3,
+      "p95": 3602.2,
+      "p99": 3663.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.86,
+     "cpu_us_lo": 15.64,
+     "cpu_us_hi": 16.92,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.7,
+      "p50": 29.2,
+      "p95": 30.6,
+      "p99": 32.4
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.57,
+     "cpu_us_lo": 6.48,
+     "cpu_us_hi": 6.78,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.0,
+      "p99": 20.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.15,
+     "cpu_us_lo": 6.09,
+     "cpu_us_hi": 6.45,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.96,
+     "wall_us_row": 3.341,
+     "rows_s": 299352
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.91,
+     "cpu_us_lo": 6.83,
+     "cpu_us_hi": 8.04,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.5,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.0,
+      "p99": 15.6
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.43,
+     "cpu_us_lo": 7.37,
+     "cpu_us_hi": 8.28,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.3,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 15.1,
+      "p99": 16.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3279.63,
+     "cpu_us_lo": 3253.54,
+     "cpu_us_hi": 3336.64,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3326.2,
+      "p25": 3440.8,
+      "p50": 3461.7,
+      "p95": 3579.8,
+      "p99": 3619.6
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.26,
+     "cpu_us_lo": 25.12,
+     "cpu_us_hi": 30.6,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 37.0,
+      "p25": 37.8,
+      "p50": 38.1,
+      "p95": 40.0,
+      "p99": 44.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.31,
+     "cpu_us_lo": 8.2,
+     "cpu_us_hi": 8.84,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.2,
+      "p25": 14.8,
+      "p50": 15.0,
+      "p95": 16.0,
+      "p99": 21.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.52,
+     "cpu_us_lo": 6.46,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 9,
+   "host": {
+    "loadavg": "0.92 1.25 1.90",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.212,
+     "wall_us_row": 1.413,
+     "rows_s": 707886
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.22,
+     "cpu_us_hi": 6.32,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.78,
+     "cpu_us_hi": 7.6,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.4,
+      "p99": 15.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3319.44,
+     "cpu_us_lo": 3294.4,
+     "cpu_us_hi": 3349.99,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3359.9,
+      "p25": 3477.5,
+      "p50": 3499.5,
+      "p95": 3624.7,
+      "p99": 3638.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.75,
+     "cpu_us_lo": 15.57,
+     "cpu_us_hi": 19.55,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.6,
+      "p50": 29.1,
+      "p95": 30.8,
+      "p99": 64.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.39,
+     "cpu_us_lo": 6.31,
+     "cpu_us_hi": 6.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.0,
+      "p50": 13.1,
+      "p95": 13.9,
+      "p99": 16.8
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.04,
+     "cpu_us_lo": 5.99,
+     "cpu_us_hi": 6.35,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.954,
+     "wall_us_row": 3.328,
+     "rows_s": 300476
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.64,
+     "cpu_us_lo": 6.62,
+     "cpu_us_hi": 7.95,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.6,
+      "p50": 13.9,
+      "p95": 14.6,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.29,
+     "cpu_us_lo": 7.2,
+     "cpu_us_hi": 8.29,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3279.45,
+     "cpu_us_lo": 3260.16,
+     "cpu_us_hi": 3325.83,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3369.6,
+      "p25": 3397.4,
+      "p50": 3419.7,
+      "p95": 3570.0,
+      "p99": 3618.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.46,
+     "cpu_us_lo": 25.31,
+     "cpu_us_hi": 28.91,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.7,
+      "p25": 37.7,
+      "p50": 38.1,
+      "p95": 39.8,
+      "p99": 43.2
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.06,
+     "cpu_us_lo": 7.92,
+     "cpu_us_hi": 8.46,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.5,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.34,
+     "cpu_us_lo": 6.28,
+     "cpu_us_hi": 6.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.6,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 10,
+   "host": {
+    "loadavg": "0.92 1.25 1.90",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.22,
+     "wall_us_row": 1.425,
+     "rows_s": 701657
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.17,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.27,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 13.9,
+      "p99": 14.4
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.9,
+     "cpu_us_lo": 6.79,
+     "cpu_us_hi": 7.62,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.2,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3290.11,
+     "cpu_us_lo": 3255.41,
+     "cpu_us_hi": 3334.67,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3306.5,
+      "p25": 3408.8,
+      "p50": 3420.8,
+      "p95": 3561.0,
+      "p99": 3596.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.63,
+     "cpu_us_lo": 15.3,
+     "cpu_us_hi": 16.68,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.2,
+      "p25": 27.0,
+      "p50": 28.6,
+      "p95": 30.1,
+      "p99": 33.8
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.39,
+     "cpu_us_lo": 6.3,
+     "cpu_us_hi": 6.61,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.7,
+      "p99": 16.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.0,
+     "cpu_us_lo": 5.97,
+     "cpu_us_hi": 6.47,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.4,
+      "p50": 12.5,
+      "p95": 13.3,
+      "p99": 14.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.989,
+     "wall_us_row": 3.307,
+     "rows_s": 302354
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.81,
+     "cpu_us_lo": 6.77,
+     "cpu_us_hi": 7.92,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.8,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.34,
+     "cpu_us_lo": 7.27,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3283.53,
+     "cpu_us_lo": 3253.53,
+     "cpu_us_hi": 3329.17,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3368.5,
+      "p25": 3414.2,
+      "p50": 3429.2,
+      "p95": 3507.3,
+      "p99": 3509.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.0,
+     "cpu_us_lo": 24.88,
+     "cpu_us_hi": 28.55,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.2,
+      "p25": 37.1,
+      "p50": 37.5,
+      "p95": 39.2,
+      "p99": 42.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.22,
+     "cpu_us_lo": 8.11,
+     "cpu_us_hi": 8.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.7,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.41,
+     "cpu_us_lo": 6.33,
+     "cpu_us_hi": 6.94,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 10,
+   "host": {
+    "loadavg": "0.93 1.25 1.89",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.258,
+     "wall_us_row": 1.473,
+     "rows_s": 678798
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.24,
+     "cpu_us_lo": 6.08,
+     "cpu_us_hi": 6.52,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.3,
+      "p50": 13.5,
+      "p95": 14.3,
+      "p99": 15.1
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.99,
+     "cpu_us_lo": 6.88,
+     "cpu_us_hi": 8.14,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.6,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3738.45,
+     "cpu_us_lo": 3714.96,
+     "cpu_us_hi": 3794.68,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3814.9,
+      "p25": 3912.7,
+      "p50": 3932.7,
+      "p95": 4009.1,
+      "p99": 4071.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.89,
+     "cpu_us_lo": 15.54,
+     "cpu_us_hi": 17.5,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.6,
+      "p50": 29.1,
+      "p95": 30.8,
+      "p99": 174.7
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.51,
+     "cpu_us_lo": 6.43,
+     "cpu_us_hi": 6.78,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 14.0,
+      "p99": 16.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.12,
+     "cpu_us_lo": 6.08,
+     "cpu_us_hi": 6.79,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 15.3
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 3.002,
+     "wall_us_row": 3.403,
+     "rows_s": 293860
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.76,
+     "cpu_us_lo": 6.69,
+     "cpu_us_hi": 7.91,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.8,
+      "p50": 14.1,
+      "p95": 14.8,
+      "p99": 15.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.29,
+     "cpu_us_lo": 7.21,
+     "cpu_us_hi": 8.21,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3296.24,
+     "cpu_us_lo": 3279.89,
+     "cpu_us_hi": 3349.25,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3349.2,
+      "p25": 3422.2,
+      "p50": 3432.4,
+      "p95": 3511.4,
+      "p99": 3535.2
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.76,
+     "cpu_us_lo": 24.62,
+     "cpu_us_hi": 28.54,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.0,
+      "p25": 36.9,
+      "p50": 37.3,
+      "p95": 38.8,
+      "p99": 41.8
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.27,
+     "cpu_us_lo": 8.14,
+     "cpu_us_hi": 8.65,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.9,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.42,
+     "cpu_us_lo": 6.31,
+     "cpu_us_hi": 7.06,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 14.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 10,
+   "host": {
+    "loadavg": "0.93 1.24 1.89",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.23,
+     "wall_us_row": 1.456,
+     "rows_s": 686946
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.09,
+     "cpu_us_lo": 6.06,
+     "cpu_us_hi": 6.18,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.5,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 13.8,
+      "p99": 14.3
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.78,
+     "cpu_us_lo": 6.67,
+     "cpu_us_hi": 7.81,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.2,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3291.84,
+     "cpu_us_lo": 3267.38,
+     "cpu_us_hi": 3359.57,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3377.4,
+      "p25": 3409.0,
+      "p50": 3426.9,
+      "p95": 3538.4,
+      "p99": 3544.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.6,
+     "cpu_us_lo": 15.34,
+     "cpu_us_hi": 16.45,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.0,
+      "p50": 28.5,
+      "p95": 29.9,
+      "p99": 73.3
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.32,
+     "cpu_us_lo": 6.25,
+     "cpu_us_hi": 6.52,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.6,
+      "p50": 12.7,
+      "p95": 13.6,
+      "p99": 16.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.94,
+     "cpu_us_lo": 5.87,
+     "cpu_us_hi": 6.26,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.3,
+      "p50": 12.4,
+      "p95": 13.1,
+      "p99": 14.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.94,
+     "wall_us_row": 3.255,
+     "rows_s": 307189
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.79,
+     "cpu_us_lo": 6.65,
+     "cpu_us_hi": 7.83,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.8,
+      "p50": 14.1,
+      "p95": 14.9,
+      "p99": 15.8
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.24,
+     "cpu_us_lo": 7.14,
+     "cpu_us_hi": 8.19,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.5,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3266.31,
+     "cpu_us_lo": 3247.24,
+     "cpu_us_hi": 3306.56,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3333.9,
+      "p25": 3397.0,
+      "p50": 3406.7,
+      "p95": 3481.8,
+      "p99": 3555.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.96,
+     "cpu_us_lo": 24.86,
+     "cpu_us_hi": 28.33,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.2,
+      "p50": 37.6,
+      "p95": 39.3,
+      "p99": 43.3
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.11,
+     "cpu_us_lo": 7.96,
+     "cpu_us_hi": 8.36,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.6,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.5,
+      "p99": 21.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.38,
+     "cpu_us_lo": 6.28,
+     "cpu_us_hi": 6.51,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.6,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 15.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 11,
+   "host": {
+    "loadavg": "0.93 1.24 1.89",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.217,
+     "wall_us_row": 1.42,
+     "rows_s": 704314
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.31,
+     "cpu_us_lo": 6.29,
+     "cpu_us_hi": 6.37,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.2,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.01,
+     "cpu_us_lo": 6.93,
+     "cpu_us_hi": 7.68,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 15.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3296.04,
+     "cpu_us_lo": 3263.08,
+     "cpu_us_hi": 3316.52,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3398.6,
+      "p25": 3443.1,
+      "p50": 3470.1,
+      "p95": 3602.7,
+      "p99": 3652.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.74,
+     "cpu_us_lo": 15.54,
+     "cpu_us_hi": 16.47,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.5,
+      "p50": 29.0,
+      "p95": 30.6,
+      "p99": 48.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.54,
+     "cpu_us_lo": 6.48,
+     "cpu_us_hi": 6.73,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.0,
+      "p99": 16.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.12,
+     "cpu_us_lo": 6.07,
+     "cpu_us_hi": 6.42,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 13.0,
+      "p95": 13.6,
+      "p99": 15.1
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.981,
+     "wall_us_row": 3.359,
+     "rows_s": 297716
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.76,
+     "cpu_us_lo": 6.72,
+     "cpu_us_hi": 7.94,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.6,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.36,
+     "cpu_us_lo": 7.3,
+     "cpu_us_hi": 8.19,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.8,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3276.17,
+     "cpu_us_lo": 3255.77,
+     "cpu_us_hi": 3321.15,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3369.9,
+      "p25": 3398.6,
+      "p50": 3421.2,
+      "p95": 3537.7,
+      "p99": 3612.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.11,
+     "cpu_us_lo": 24.94,
+     "cpu_us_hi": 28.44,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.2,
+      "p25": 37.3,
+      "p50": 37.7,
+      "p95": 39.3,
+      "p99": 197.2
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.23,
+     "cpu_us_lo": 8.14,
+     "cpu_us_hi": 8.67,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.7,
+      "p99": 21.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.38,
+     "cpu_us_lo": 6.33,
+     "cpu_us_hi": 6.72,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 11,
+   "host": {
+    "loadavg": "0.86 1.22 1.88",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.216,
+     "wall_us_row": 1.431,
+     "rows_s": 698664
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.25,
+     "cpu_us_lo": 6.22,
+     "cpu_us_hi": 6.34,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.2,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.3,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.89,
+     "cpu_us_lo": 6.8,
+     "cpu_us_hi": 7.71,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.5,
+      "p99": 15.8
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3310.89,
+     "cpu_us_lo": 3277.71,
+     "cpu_us_hi": 3387.78,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3336.1,
+      "p25": 3445.2,
+      "p50": 3481.1,
+      "p95": 3615.5,
+      "p99": 3632.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.74,
+     "cpu_us_lo": 15.34,
+     "cpu_us_hi": 17.14,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.4,
+      "p50": 28.7,
+      "p95": 30.6,
+      "p99": 33.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.34,
+     "cpu_us_lo": 6.25,
+     "cpu_us_hi": 6.53,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.6,
+      "p50": 12.8,
+      "p95": 13.7,
+      "p99": 16.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.91,
+     "cpu_us_lo": 5.87,
+     "cpu_us_hi": 6.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.3,
+      "p50": 12.4,
+      "p95": 13.3,
+      "p99": 14.4
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.993,
+     "wall_us_row": 3.378,
+     "rows_s": 296074
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.69,
+     "cpu_us_lo": 6.58,
+     "cpu_us_hi": 7.96,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.8,
+      "p50": 14.0,
+      "p95": 14.7,
+      "p99": 15.3
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.35,
+     "cpu_us_lo": 7.29,
+     "cpu_us_hi": 8.13,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.3,
+      "p25": 14.0,
+      "p50": 14.2,
+      "p95": 15.0,
+      "p99": 16.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3270.94,
+     "cpu_us_lo": 3253.69,
+     "cpu_us_hi": 3317.9,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3398.5,
+      "p25": 3436.3,
+      "p50": 3471.7,
+      "p95": 3626.9,
+      "p99": 3638.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.18,
+     "cpu_us_lo": 24.92,
+     "cpu_us_hi": 30.59,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 37.7,
+      "p50": 38.0,
+      "p95": 40.0,
+      "p99": 53.1
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.22,
+     "cpu_us_lo": 8.0,
+     "cpu_us_hi": 8.55,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.6,
+      "p25": 14.5,
+      "p50": 14.8,
+      "p95": 15.9,
+      "p99": 23.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.38,
+     "cpu_us_lo": 6.27,
+     "cpu_us_hi": 6.79,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 16.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 11,
+   "host": {
+    "loadavg": "0.87 1.22 1.87",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.248,
+     "wall_us_row": 1.459,
+     "rows_s": 685426
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.3,
+     "cpu_us_lo": 6.24,
+     "cpu_us_hi": 6.34,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.3,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.01,
+     "cpu_us_lo": 6.91,
+     "cpu_us_hi": 7.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.9,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3707.83,
+     "cpu_us_lo": 3682.84,
+     "cpu_us_hi": 3784.46,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3789.5,
+      "p25": 3889.8,
+      "p50": 3906.2,
+      "p95": 4066.2,
+      "p99": 4081.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.8,
+     "cpu_us_lo": 15.57,
+     "cpu_us_hi": 17.51,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.8,
+      "p25": 27.6,
+      "p50": 29.1,
+      "p95": 30.7,
+      "p99": 32.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.57,
+     "cpu_us_lo": 6.51,
+     "cpu_us_hi": 6.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.1,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.22,
+     "cpu_us_lo": 6.12,
+     "cpu_us_hi": 6.46,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.977,
+     "wall_us_row": 3.378,
+     "rows_s": 296025
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.86,
+     "cpu_us_lo": 6.77,
+     "cpu_us_hi": 8.05,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.4,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.0,
+      "p99": 15.6
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.43,
+     "cpu_us_lo": 7.36,
+     "cpu_us_hi": 8.25,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.3,
+      "p25": 14.0,
+      "p50": 14.3,
+      "p95": 15.0,
+      "p99": 16.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3350.69,
+     "cpu_us_lo": 3300.69,
+     "cpu_us_hi": 3410.66,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3387.4,
+      "p25": 3438.9,
+      "p50": 3506.9,
+      "p95": 3623.6,
+      "p99": 3635.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.17,
+     "cpu_us_lo": 24.83,
+     "cpu_us_hi": 28.91,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.7,
+      "p25": 37.7,
+      "p50": 38.1,
+      "p95": 40.5,
+      "p99": 195.7
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.34,
+     "cpu_us_lo": 8.06,
+     "cpu_us_hi": 8.83,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.4,
+      "p50": 14.7,
+      "p95": 15.9,
+      "p99": 22.9
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.49,
+     "cpu_us_lo": 6.4,
+     "cpu_us_hi": 7.0,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.7,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 15.1
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 12,
+   "host": {
+    "loadavg": "0.87 1.22 1.87",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.219,
+     "wall_us_row": 1.449,
+     "rows_s": 690199
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.23,
+     "cpu_us_lo": 6.04,
+     "cpu_us_hi": 6.29,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.3,
+      "p50": 13.6,
+      "p95": 14.1,
+      "p99": 14.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.72,
+     "cpu_us_lo": 6.65,
+     "cpu_us_hi": 7.47,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.0,
+      "p99": 15.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3309.02,
+     "cpu_us_lo": 3287.66,
+     "cpu_us_hi": 3407.65,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3317.2,
+      "p25": 3417.5,
+      "p50": 3449.5,
+      "p95": 3594.6,
+      "p99": 3680.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.51,
+     "cpu_us_lo": 15.33,
+     "cpu_us_hi": 16.51,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.1,
+      "p25": 26.9,
+      "p50": 28.4,
+      "p95": 30.0,
+      "p99": 36.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.25,
+     "cpu_us_lo": 6.18,
+     "cpu_us_hi": 6.48,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.5,
+      "p50": 12.7,
+      "p95": 13.5,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.86,
+     "cpu_us_lo": 5.81,
+     "cpu_us_hi": 6.0,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.7,
+      "p25": 12.2,
+      "p50": 12.3,
+      "p95": 13.0,
+      "p99": 14.3
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.972,
+     "wall_us_row": 3.29,
+     "rows_s": 303968
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.64,
+     "cpu_us_lo": 6.61,
+     "cpu_us_hi": 7.79,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.4,
+      "p99": 15.0
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.19,
+     "cpu_us_lo": 7.09,
+     "cpu_us_hi": 7.95,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.7,
+      "p99": 19.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3283.07,
+     "cpu_us_lo": 3266.64,
+     "cpu_us_hi": 3327.52,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3324.3,
+      "p25": 3440.1,
+      "p50": 3468.8,
+      "p95": 3628.2,
+      "p99": 3720.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.88,
+     "cpu_us_lo": 24.66,
+     "cpu_us_hi": 28.68,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.4,
+      "p25": 37.4,
+      "p50": 37.8,
+      "p95": 39.6,
+      "p99": 52.7
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.11,
+     "cpu_us_lo": 7.9,
+     "cpu_us_hi": 8.49,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.6,
+      "p25": 14.4,
+      "p50": 14.7,
+      "p95": 15.7,
+      "p99": 22.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.22,
+     "cpu_us_lo": 6.17,
+     "cpu_us_hi": 6.82,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.9,
+      "p25": 12.5,
+      "p50": 12.7,
+      "p95": 13.4,
+      "p99": 14.7
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 12,
+   "host": {
+    "loadavg": "0.80 1.20 1.86",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.213,
+     "wall_us_row": 1.427,
+     "rows_s": 700994
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.18,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.28,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 13.9,
+      "p99": 14.4
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.78,
+     "cpu_us_hi": 7.67,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 15.4
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3304.07,
+     "cpu_us_lo": 3268.83,
+     "cpu_us_hi": 3341.17,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3336.4,
+      "p25": 3415.8,
+      "p50": 3448.4,
+      "p95": 3543.2,
+      "p99": 3649.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.76,
+     "cpu_us_lo": 15.54,
+     "cpu_us_hi": 16.83,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.1,
+      "p50": 28.7,
+      "p95": 30.3,
+      "p99": 32.8
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.39,
+     "cpu_us_lo": 6.36,
+     "cpu_us_hi": 6.72,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 16.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 5.99,
+     "cpu_us_lo": 5.94,
+     "cpu_us_hi": 6.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 11.8,
+      "p25": 12.3,
+      "p50": 12.4,
+      "p95": 13.1,
+      "p99": 13.9
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.995,
+     "wall_us_row": 3.314,
+     "rows_s": 301754
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.77,
+     "cpu_us_lo": 6.7,
+     "cpu_us_hi": 7.91,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.5,
+      "p99": 15.1
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.36,
+     "cpu_us_lo": 7.29,
+     "cpu_us_hi": 8.21,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.3
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3271.84,
+     "cpu_us_lo": 3256.29,
+     "cpu_us_hi": 3307.79,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3343.5,
+      "p25": 3400.3,
+      "p50": 3415.8,
+      "p95": 3534.0,
+      "p99": 3596.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.29,
+     "cpu_us_lo": 25.1,
+     "cpu_us_hi": 28.85,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.6,
+      "p25": 37.6,
+      "p50": 38.2,
+      "p95": 179.6,
+      "p99": 2004.2
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.27,
+     "cpu_us_lo": 8.12,
+     "cpu_us_hi": 8.6,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.3,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.44,
+     "cpu_us_lo": 6.39,
+     "cpu_us_hi": 6.58,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 15.5
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 12,
+   "host": {
+    "loadavg": "0.90 1.21 1.86",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.249,
+     "wall_us_row": 1.461,
+     "rows_s": 684566
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.14,
+     "cpu_us_lo": 6.1,
+     "cpu_us_hi": 6.17,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 13.7,
+      "p99": 14.3
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.95,
+     "cpu_us_lo": 6.81,
+     "cpu_us_hi": 7.83,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 15.6
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3734.75,
+     "cpu_us_lo": 3706.23,
+     "cpu_us_hi": 3754.55,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3785.0,
+      "p25": 3859.3,
+      "p50": 3879.0,
+      "p95": 4001.5,
+      "p99": 4016.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.7,
+     "cpu_us_lo": 15.53,
+     "cpu_us_hi": 17.5,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.3,
+      "p25": 27.0,
+      "p50": 28.6,
+      "p95": 30.3,
+      "p99": 32.9
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=332 matched=100 sel=30% pages=3 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.45,
+     "cpu_us_lo": 6.35,
+     "cpu_us_hi": 6.65,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.06,
+     "cpu_us_lo": 5.98,
+     "cpu_us_hi": 6.25,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.4,
+      "p50": 12.5,
+      "p95": 13.3,
+      "p99": 14.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.966,
+     "wall_us_row": 3.283,
+     "rows_s": 304557
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.79,
+     "cpu_us_lo": 6.72,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.5,
+      "p99": 15.1
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.34,
+     "cpu_us_lo": 7.28,
+     "cpu_us_hi": 8.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3308.59,
+     "cpu_us_lo": 3272.99,
+     "cpu_us_hi": 3368.3,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3365.9,
+      "p25": 3429.9,
+      "p50": 3441.5,
+      "p95": 3641.5,
+      "p99": 3680.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 24.82,
+     "cpu_us_lo": 24.64,
+     "cpu_us_hi": 32.39,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 35.9,
+      "p25": 36.9,
+      "p50": 37.3,
+      "p95": 39.1,
+      "p99": 74.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.29,
+     "cpu_us_lo": 8.15,
+     "cpu_us_hi": 8.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 21.2
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.46,
+     "cpu_us_lo": 6.39,
+     "cpu_us_hi": 6.87,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.1,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 14.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 13,
+   "host": {
+    "loadavg": "0.90 1.21 1.86",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.254,
+     "wall_us_row": 1.475,
+     "rows_s": 678106
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.22,
+     "cpu_us_hi": 6.33,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.2,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.89,
+     "cpu_us_lo": 6.76,
+     "cpu_us_hi": 7.8,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.5,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3290.18,
+     "cpu_us_lo": 3278.92,
+     "cpu_us_hi": 3342.73,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3392.1,
+      "p25": 3447.3,
+      "p50": 3478.4,
+      "p95": 3599.4,
+      "p99": 3632.5
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.68,
+     "cpu_us_lo": 15.43,
+     "cpu_us_hi": 16.83,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.5,
+      "p50": 29.0,
+      "p95": 30.5,
+      "p99": 164.4
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.48,
+     "cpu_us_lo": 6.42,
+     "cpu_us_hi": 6.73,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 14.1,
+      "p99": 16.6
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.06,
+     "cpu_us_lo": 5.99,
+     "cpu_us_hi": 6.53,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 14.8
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.959,
+     "wall_us_row": 3.307,
+     "rows_s": 302392
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.74,
+     "cpu_us_lo": 6.66,
+     "cpu_us_hi": 7.89,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.9,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.5,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.22,
+     "cpu_us_lo": 7.15,
+     "cpu_us_hi": 8.47,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.9,
+      "p25": 13.5,
+      "p50": 13.7,
+      "p95": 14.6,
+      "p99": 16.0
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3267.67,
+     "cpu_us_lo": 3251.52,
+     "cpu_us_hi": 3311.9,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3310.5,
+      "p25": 3391.2,
+      "p50": 3403.7,
+      "p95": 3536.9,
+      "p99": 3538.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.1,
+     "cpu_us_lo": 25.01,
+     "cpu_us_hi": 28.14,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.1,
+      "p25": 37.2,
+      "p50": 37.6,
+      "p95": 39.4,
+      "p99": 42.2
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.06,
+     "cpu_us_lo": 7.92,
+     "cpu_us_hi": 8.46,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.6,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.4,
+      "p99": 21.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.37,
+     "cpu_us_lo": 6.31,
+     "cpu_us_hi": 6.49,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.6,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 14.8
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 13,
+   "host": {
+    "loadavg": "0.90 1.21 1.86",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.248,
+     "wall_us_row": 1.458,
+     "rows_s": 685802
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.27,
+     "cpu_us_lo": 6.25,
+     "cpu_us_hi": 6.33,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.8,
+      "p95": 14.4,
+      "p99": 14.9
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.02,
+     "cpu_us_lo": 6.93,
+     "cpu_us_hi": 7.92,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.1,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3721.56,
+     "cpu_us_lo": 3695.12,
+     "cpu_us_hi": 3755.22,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3820.3,
+      "p25": 3889.5,
+      "p50": 3905.6,
+      "p95": 3965.7,
+      "p99": 3978.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.79,
+     "cpu_us_lo": 15.49,
+     "cpu_us_hi": 17.54,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.5,
+      "p50": 29.0,
+      "p95": 30.6,
+      "p99": 32.9
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.56,
+     "cpu_us_lo": 6.52,
+     "cpu_us_hi": 6.89,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.1,
+      "p99": 16.7
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.19,
+     "cpu_us_lo": 6.11,
+     "cpu_us_hi": 6.87,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.9,
+      "p50": 13.0,
+      "p95": 13.7,
+      "p99": 15.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.98,
+     "wall_us_row": 3.369,
+     "rows_s": 296843
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.73,
+     "cpu_us_hi": 8.07,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.9,
+      "p50": 14.2,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.36,
+     "cpu_us_lo": 7.31,
+     "cpu_us_hi": 8.11,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3293.84,
+     "cpu_us_lo": 3265.48,
+     "cpu_us_hi": 3330.0,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3379.7,
+      "p25": 3420.0,
+      "p50": 3436.1,
+      "p95": 3489.0,
+      "p99": 3497.1
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.06,
+     "cpu_us_lo": 24.95,
+     "cpu_us_hi": 30.22,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.4,
+      "p25": 37.2,
+      "p50": 37.5,
+      "p95": 39.4,
+      "p99": 58.4
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.31,
+     "cpu_us_lo": 8.13,
+     "cpu_us_hi": 8.62,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.5,
+      "p50": 14.8,
+      "p95": 15.9,
+      "p99": 24.4
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.6,
+     "cpu_us_lo": 6.54,
+     "cpu_us_hi": 6.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.1,
+      "p99": 16.2
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 13,
+   "host": {
+    "loadavg": "0.83 1.19 1.85",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.216,
+     "wall_us_row": 1.426,
+     "rows_s": 701366
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.23,
+     "cpu_us_lo": 6.19,
+     "cpu_us_hi": 6.34,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.0,
+      "p99": 14.6
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.93,
+     "cpu_us_lo": 6.82,
+     "cpu_us_hi": 7.61,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.8,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 15.5
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3287.37,
+     "cpu_us_lo": 3262.32,
+     "cpu_us_hi": 3360.21,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3366.3,
+      "p25": 3399.0,
+      "p50": 3417.0,
+      "p95": 3517.5,
+      "p99": 3521.9
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.81,
+     "cpu_us_lo": 15.53,
+     "cpu_us_hi": 16.76,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.2,
+      "p25": 27.1,
+      "p50": 28.6,
+      "p95": 30.3,
+      "p99": 72.1
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.42,
+     "cpu_us_lo": 6.36,
+     "cpu_us_hi": 6.64,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 16.1
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.05,
+     "cpu_us_lo": 6.0,
+     "cpu_us_hi": 6.49,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.4,
+      "p50": 12.5,
+      "p95": 13.4,
+      "p99": 14.5
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.964,
+     "wall_us_row": 3.318,
+     "rows_s": 301417
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.88,
+     "cpu_us_lo": 6.82,
+     "cpu_us_hi": 8.02,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.4,
+      "p25": 14.1,
+      "p50": 14.3,
+      "p95": 14.9,
+      "p99": 15.5
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.57,
+     "cpu_us_lo": 7.48,
+     "cpu_us_hi": 8.39,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.5,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.2,
+      "p99": 16.7
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3274.35,
+     "cpu_us_lo": 3248.63,
+     "cpu_us_hi": 3349.47,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3396.0,
+      "p25": 3447.2,
+      "p50": 3459.8,
+      "p95": 3626.7,
+      "p99": 3629.0
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.42,
+     "cpu_us_lo": 25.24,
+     "cpu_us_hi": 29.6,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.8,
+      "p25": 38.0,
+      "p50": 38.4,
+      "p95": 40.2,
+      "p99": 190.3
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.37,
+     "cpu_us_lo": 8.25,
+     "cpu_us_hi": 8.68,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.2,
+      "p25": 14.8,
+      "p50": 15.0,
+      "p95": 16.0,
+      "p99": 21.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.59,
+     "cpu_us_lo": 6.53,
+     "cpu_us_hi": 6.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.5,
+      "p25": 13.2,
+      "p50": 13.4,
+      "p95": 14.2,
+      "p99": 16.6
+     }
+    }
+   }
+  },
+  {
+   "arm": "B",
+   "round": 14,
+   "host": {
+    "loadavg": "0.93 1.20 1.85",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.296,
+     "wall_us_row": 1.476,
+     "rows_s": 677514
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.29,
+     "cpu_us_lo": 6.13,
+     "cpu_us_hi": 6.33,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.7,
+      "p25": 13.4,
+      "p50": 13.6,
+      "p95": 14.2,
+      "p99": 14.8
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.01,
+     "cpu_us_lo": 6.91,
+     "cpu_us_hi": 7.76,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.6,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3744.36,
+     "cpu_us_lo": 3725.6,
+     "cpu_us_hi": 3771.49,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3842.5,
+      "p25": 3911.4,
+      "p50": 3925.6,
+      "p95": 4064.5,
+      "p99": 4104.4
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 16.19,
+     "cpu_us_lo": 15.88,
+     "cpu_us_hi": 23.39,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 27.1,
+      "p25": 28.0,
+      "p50": 29.4,
+      "p95": 31.1,
+      "p99": 124.5
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.54,
+     "cpu_us_lo": 6.49,
+     "cpu_us_hi": 6.84,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.1,
+      "p50": 13.2,
+      "p95": 14.1,
+      "p99": 16.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.13,
+     "cpu_us_lo": 6.07,
+     "cpu_us_hi": 6.69,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.3,
+      "p25": 12.8,
+      "p50": 12.9,
+      "p95": 13.6,
+      "p99": 15.0
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.989,
+     "wall_us_row": 3.384,
+     "rows_s": 295490
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.77,
+     "cpu_us_lo": 6.7,
+     "cpu_us_hi": 8.04,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.6,
+      "p99": 15.2
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.33,
+     "cpu_us_lo": 7.25,
+     "cpu_us_hi": 8.15,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3295.84,
+     "cpu_us_lo": 3281.24,
+     "cpu_us_hi": 3347.07,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3388.4,
+      "p25": 3425.5,
+      "p50": 3438.3,
+      "p95": 3511.8,
+      "p99": 3688.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 26.18,
+     "cpu_us_lo": 25.89,
+     "cpu_us_hi": 29.97,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 37.1,
+      "p25": 38.3,
+      "p50": 38.7,
+      "p95": 40.5,
+      "p99": 43.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.28,
+     "cpu_us_lo": 8.16,
+     "cpu_us_hi": 8.54,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.8,
+      "p25": 14.4,
+      "p50": 14.6,
+      "p95": 15.6,
+      "p99": 22.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.44,
+     "cpu_us_lo": 6.39,
+     "cpu_us_hi": 6.61,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 13.0,
+      "p95": 13.7,
+      "p99": 15.0
+     }
+    }
+   }
+  },
+  {
+   "arm": "A",
+   "round": 14,
+   "host": {
+    "loadavg": "0.93 1.20 1.85",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 2.9,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.223,
+     "wall_us_row": 1.434,
+     "rows_s": 697291
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.24,
+     "cpu_us_lo": 6.22,
+     "cpu_us_hi": 6.29,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.1,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.2,
+      "p99": 14.7
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 6.81,
+     "cpu_us_lo": 6.74,
+     "cpu_us_hi": 7.77,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.9,
+      "p25": 13.5,
+      "p50": 13.6,
+      "p95": 14.4,
+      "p99": 15.9
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3303.53,
+     "cpu_us_lo": 3270.72,
+     "cpu_us_hi": 3350.78,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3382.6,
+      "p25": 3451.8,
+      "p50": 3488.0,
+      "p95": 3596.5,
+      "p99": 3597.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.79,
+     "cpu_us_lo": 15.52,
+     "cpu_us_hi": 17.18,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.7,
+      "p25": 27.6,
+      "p50": 29.1,
+      "p95": 30.8,
+      "p99": 61.4
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.42,
+     "cpu_us_lo": 6.34,
+     "cpu_us_hi": 6.74,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 13.0,
+      "p50": 13.2,
+      "p95": 14.0,
+      "p99": 16.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.02,
+     "cpu_us_lo": 5.95,
+     "cpu_us_hi": 6.53,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.2,
+      "p25": 12.7,
+      "p50": 12.8,
+      "p95": 13.6,
+      "p99": 15.4
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.981,
+     "wall_us_row": 3.371,
+     "rows_s": 296659
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.74,
+     "cpu_us_lo": 6.66,
+     "cpu_us_hi": 8.19,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.0,
+      "p25": 13.7,
+      "p50": 14.0,
+      "p95": 14.7,
+      "p99": 15.4
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.28,
+     "cpu_us_lo": 7.21,
+     "cpu_us_hi": 8.01,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.0,
+      "p25": 13.6,
+      "p50": 13.8,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3279.49,
+     "cpu_us_lo": 3253.61,
+     "cpu_us_hi": 3334.06,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3328.0,
+      "p25": 3399.2,
+      "p50": 3414.5,
+      "p95": 3525.6,
+      "p99": 3571.7
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.01,
+     "cpu_us_lo": 24.8,
+     "cpu_us_hi": 28.41,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 36.3,
+      "p25": 37.1,
+      "p50": 37.5,
+      "p95": 39.3,
+      "p99": 57.5
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.08,
+     "cpu_us_lo": 7.92,
+     "cpu_us_hi": 8.44,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.7,
+      "p25": 14.2,
+      "p50": 14.5,
+      "p95": 15.5,
+      "p99": 21.3
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.37,
+     "cpu_us_lo": 6.28,
+     "cpu_us_hi": 6.57,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.0,
+      "p25": 12.7,
+      "p50": 12.9,
+      "p95": 13.7,
+      "p99": 14.9
+     }
+    }
+   }
+  },
+  {
+   "arm": "A2",
+   "round": 14,
+   "host": {
+    "loadavg": "0.93 1.20 1.84",
+    "cc1plus": "0"
+   },
+   "quiet_hold_s": 0.0,
+   "cell_s": 3.0,
+   "btree": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 1.222,
+     "wall_us_row": 1.431,
+     "rows_s": 698978
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.38,
+     "cpu_us_lo": 6.24,
+     "cpu_us_hi": 6.5,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 12.8,
+      "p25": 13.6,
+      "p50": 13.7,
+      "p95": 14.4,
+      "p99": 15.0
+     }
+    },
+    "read_step": "step 0 Lookup tb opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.05,
+     "cpu_us_lo": 6.97,
+     "cpu_us_hi": 7.87,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.2,
+      "p25": 13.7,
+      "p50": 13.9,
+      "p95": 14.7,
+      "p99": 16.1
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3313.71,
+     "cpu_us_lo": 3283.82,
+     "cpu_us_hi": 3392.02,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3418.3,
+      "p25": 3473.1,
+      "p50": 3520.3,
+      "p95": 9637.7,
+      "p99": 10355.3
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 15.88,
+     "cpu_us_lo": 15.57,
+     "cpu_us_hi": 17.36,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 26.9,
+      "p25": 27.6,
+      "p50": 29.2,
+      "p95": 30.8,
+      "p99": 158.9
+     }
+    },
+    "range_step": "step 0 Range tb opens=1 examined=166 matched=100 sel=60% pages=2 range_stopped_early=1",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 6.59,
+     "cpu_us_lo": 6.51,
+     "cpu_us_hi": 6.81,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.7,
+      "p25": 13.2,
+      "p50": 13.3,
+      "p95": 14.2,
+      "p99": 16.5
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.21,
+     "cpu_us_lo": 6.14,
+     "cpu_us_hi": 6.45,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.4,
+      "p25": 12.9,
+      "p50": 13.0,
+      "p95": 13.8,
+      "p99": 14.9
+     }
+    }
+   },
+   "heap": {
+    "load": {
+     "rows": 100000,
+     "cpu_us_row": 2.979,
+     "wall_us_row": 3.38,
+     "rows_s": 295817
+    },
+    "settle_s": 0.5,
+    "read": {
+     "stmts": 20000,
+     "cpu_us": 6.91,
+     "cpu_us_lo": 6.81,
+     "cpu_us_hi": 8.1,
+     "lat_us": {
+      "ops": 20000,
+      "p0": 13.3,
+      "p25": 14.2,
+      "p50": 14.4,
+      "p95": 15.1,
+      "p99": 15.7
+     }
+    },
+    "read_step": "step 0 Lookup th opens=1 examined=1 matched=1 sel=100% pages=1",
+    "update": {
+     "stmts": 4000,
+     "cpu_us": 7.71,
+     "cpu_us_lo": 7.54,
+     "cpu_us_hi": 8.38,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 13.5,
+      "p25": 14.3,
+      "p50": 14.5,
+      "p95": 15.5,
+      "p99": 17.2
+     }
+    },
+    "walked": {
+     "stmts": 40,
+     "cpu_us": 3274.18,
+     "cpu_us_lo": 3242.71,
+     "cpu_us_hi": 3348.46,
+     "lat_us": {
+      "ops": 40,
+      "p0": 3354.0,
+      "p25": 3446.9,
+      "p50": 3460.8,
+      "p95": 3581.8,
+      "p99": 3598.8
+     }
+    },
+    "range": {
+     "stmts": 1000,
+     "cpu_us": 25.47,
+     "cpu_us_lo": 25.11,
+     "cpu_us_hi": 29.48,
+     "lat_us": {
+      "ops": 1000,
+      "p0": 37.0,
+      "p25": 37.9,
+      "p50": 38.3,
+      "p95": 40.0,
+      "p99": 42.6
+     }
+    },
+    "range_step": "step 0 IndexRange th opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100",
+    "insert": {
+     "stmts": 4000,
+     "cpu_us": 8.49,
+     "cpu_us_lo": 8.27,
+     "cpu_us_hi": 8.88,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 14.3,
+      "p25": 14.9,
+      "p50": 15.1,
+      "p95": 16.1,
+      "p99": 22.0
+     }
+    },
+    "delete": {
+     "stmts": 4000,
+     "cpu_us": 6.72,
+     "cpu_us_lo": 6.59,
+     "cpu_us_hi": 6.96,
+     "lat_us": {
+      "ops": 4000,
+      "p0": 12.6,
+      "p25": 13.3,
+      "p50": 13.5,
+      "p95": 14.4,
+      "p99": 16.8
+     }
+    }
+   }
+  }
+ ],
+ "quiet_hold_s": 0.0,
+ "host_after": {
+  "loadavg": "0.93 1.20 1.84",
+  "cc1plus": "0"
+ },
+ "elapsed_s": 160.8
+}

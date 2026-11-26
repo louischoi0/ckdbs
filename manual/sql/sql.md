@@ -1137,6 +1137,17 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   not a row matches, naming both types and the byte. A bare literal keeps its
   per-row check, so `SET int_col = 'abc'` over a WHERE that matches nothing
   still answers `UPDATED 0`.
+- **A long UPDATE shares its core** (DT, v3.2.0). An UPDATE that walks its
+  relation gives its core to other sessions every 64 leaves, and one
+  driven by a list on the tuple key every 64 rows (16 for an `ANALYTIC`
+  session); it then carries on under the snapshot it began with and
+  writes each row once. A cancel - `C_CANCEL`, or the connection closing
+  - is taken there and answers `CANCELLED`: in autocommit nothing the
+  statement wrote stays, and inside a transaction the transaction is
+  failed and `ROLLBACK` undoes it. An UPDATE that needs no pause - one
+  key, or a walk under 64 leaves - runs to its end and takes no cancel.
+  While it is paused it holds its relation against `DROP TABLE` and every
+  other statement that takes the relation exclusively.
 - Reply: `UPDATED <n>`.
 
 ### The DML forms of BU-S8
@@ -1235,6 +1246,9 @@ and executes. It arrived with the transaction work (T01-T14). Semantics:
   forbidden — an older snapshot may still match), and has no assertion
   check (upper bounds only make DELETE check-free), though it does write the
   departure entry that keeps assertion group headers truthful.
+- A long DELETE shares its core and takes a cancel as a long UPDATE does
+  (above). A parent row's foreign-key check walks its child relations
+  without a pause.
 
 ---
 
@@ -1653,8 +1667,10 @@ is one of (verified — the `PredicateKind` enum):
   USING`, a subquery, `INSERT ... SELECT` - is a read and is keyed.) `LIKE`, `NOT BETWEEN` and `NOT IN` (a list of `!=`)
   key nothing. A relation of a few dozen rows is read faster by its walk
   than by a long list's descents; the engine takes the set at every size.
-  A statement driven by a list runs to its end without yielding its core,
-  taking a cancel or sending rows early, as one driven by `id = <v>` does.
+  A `SELECT` driven by a list runs to its end without yielding its core,
+  taking a cancel or sending rows early, as one driven by `id = <v>` does;
+  an `UPDATE` or `DELETE` driven by one gives its core back every 64 rows
+  and takes a cancel there (UPDATE, above).
 - **No type is converted implicitly** (types.md §3.1a). A literal must be
   written in the compared column's own spelling, and a statement that
   breaks the rule is refused at compile with the literal's byte - whether
@@ -2211,7 +2227,8 @@ Verified in `HandleBegin` / `HandleCommit` / `HandleRollback` /
   highest-numbered) and the others on the rest, so a bulk load or a report
   that says so stays off the cores serving short transactions; with none
   declared, every core serves every session. An `ANALYTIC` scan yields its
-  core every 16 pages instead of 64. `TRANSACTIONAL` needs the `admin`
+  core every 16 pages instead of 64, and so does an `ANALYTIC` session's
+  walked `UPDATE` or `DELETE`. `TRANSACTIONAL` needs the `admin`
   role and is placed like `NORMAL`; a level never limits access (an
   `ANALYTIC` session may write) and touches no buffer, log or lock order.
   `sys.meta` prints `batch_sessions`, `batch_cores` and each core's
