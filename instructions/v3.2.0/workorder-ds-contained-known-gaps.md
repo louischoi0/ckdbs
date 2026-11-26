@@ -1,7 +1,15 @@
 # Work order DS - four contained known gaps: the backup tool behind authentication, a bound on a hung archive command, and two refusals that name no byte
 
-Status: **WRITTEN and OPENED 2026-11-26 on the operator's standing
-go-ahead** (`raft-marks-2026-11-26.md` §2), on worktree
+Status: **CLOSED 2026-11-26 on the operator's word**
+(`raft-marks-2026-11-26.md` §6), every stage landed on the work branch and
+the close measured at `cc46c0d85`
+(`bench/v3.5.0/results-ds-close-v3.4.17-151-gcc46c0d85.md`): no `INSERT`
+delta reaches the control. **It closes without a green run of the suite at
+`cc46c0d85`** - three runs, each failing one or two cells that fail at a
+like rate on the commit DS opened from, read as the flaky cells they are on
+the operator's choice of CLA's option (a); §7's DS-S5 has the figures.
+**Not landed**: nothing is merged to `main` or pushed. Written and opened
+2026-11-26 on the operator's standing go-ahead (§2), on worktree
 `ds-known-gaps-contained` from `8274c951` (`v3.4.17-148-g8274c951e`).
 **DS-Q0..Q8 are adopted on that standing go-ahead** - CLA's proposals, not
 the operator's per-item marks. §7 is the stage log.
@@ -269,6 +277,66 @@ reviewed tree was still running when the session was handed off, and its
 result is not in this log**; the 70 cells of the touched suites are green.
 Overhead not measured; measured at the milestone's close.
 
+### DS-S5 - the close (2026-11-26)
+
+On `ds-known-gaps-contained` at `cc46c0d85`, in the session that took §8's
+handoff, on the operator's word (`raft-marks-2026-11-26.md` §6). The
+section is below §8 in time and above it on the page.
+
+**The suite §8 owed did not run green, and the close proceeds on the
+operator's choice.** Three runs at `cc46c0d85`, `-j8`, less `bs-nightly`:
+
+| Run | Passed | Failed |
+|---|---|---|
+| 1 | 5,238 of 5,239 | `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes` |
+| 2 | 5,238 of 5,239 | the same cell |
+| 3 | 5,237 of 5,239 | the same cell, and `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement` |
+
+Both cells fail on the test binary built from `8274c951`, the commit DS
+opened from, eight copies at once and the two binaries alternating: the
+first 8 of 32 on each; the second 163 of 400 there and 196 of 400 at
+`cc46c0d85`, a difference the rounds do not resolve (the later binary
+failed more in 19 of the last 40 rounds, the earlier in 14, 7 tied). DS's
+engine change is on neither cell's path: a successful `INSERT` and an
+`UPDATE` run none of its lines. `known-gaps.md` ("Testing") carries both
+with what this session saw - the first cell's passes take multiples of the
+rig's 5 s idle block, a skipped kick's price, and the second fails by its
+retry budget and loses no increment. `DurableKickRigTest`'s cell, which
+failed at DS-S2 and at DS-S4, passed in all three. **CLA put three options
+to the operator - (a) read the two as the flaky cells they are and close,
+the suite reported by its figures and never as green; (b) run again until
+a run is green; (c) fix the cells first - and the operator chose (a).**
+
+**DS-Q7's measurement**, `ck-tester`, `build-release`,
+`bench/v3.5.0/results-ds-close-v3.4.17-151-gcc46c0d85.md`: `tools/dr_close.py
+--part ab` unmodified, `8274c951` (A), a second copy of it (A2, the
+control) and `cc46c0d85` (B), `cores = 1`, `relaxed`, 100,000-row
+relations, 5 rounds, run twice. Server CPU, B - A, run 1 and run 2, with
+the control's A2 - A:
+
+| Statement | Relation | B - A | A2 - A |
+|---|---|---|---|
+| one-row `INSERT` | btree | +0.09 and +0.01 us a statement (+1.4 %, +0.2 %) | +0.18 and +0.13 us (+2.8 %, +2.0 %) |
+| one-row `INSERT` | heap | +0.11 and +0.01 us a statement (+1.4 %, +0.1 %) | +0.28 and +0.26 us (+3.4 %, +3.2 %) |
+| 500-row `INSERT` | btree | +0.005 and +0.003 us a row (+0.4 %, +0.2 %) | +0.002 and +0.001 us a row |
+| 500-row `INSERT` | heap | +0.019 and +0.010 us a row (+0.6 %, +0.3 %) | +0.020 and +0.016 us a row |
+
+**No delta reaches the control.** Of the driver's other phases one is
+outside it: a walked `UPDATE` reads 0.7 to 0.8 % cheaper on B in three of
+four cells, on a statement DS does not touch, and is left unexplained, not
+called a gain. Not measured: a refused `INSERT` (the one path S3 adds
+instructions to), an `INSERT ... SELECT` (the loop S3 added), `strict`.
+The time: about 3 minutes of builds, 162 s of runs, 5 s held at the quiet
+gate. The same driver's last file, DR's close, was measured on another
+host and no delta is taken against it.
+
+**Documents.** `known-gaps.md`: the two cells above ("Testing"), and what
+§8 found and left - `tools/kds_backup.py` cannot spell a label or a target
+holding a single quote ("Backup and restore"). `CLAUDE.md`: the archive
+bound and the tool's authentication in the Backup row. The order's rows in
+`index.md` and `milestones.md`. The specs and the manual were brought to
+the code by the stage that changed it (S1 to S4) and S5 changes none.
+
 ## 8. Handoff (2026-11-26 14:21 UTC)
 
 The session ended here on the operator's word ("handoff"). State:
@@ -293,4 +361,4 @@ The session ended here on the operator's word ("handoff"). State:
   it. A results file takes whatever `git describe` prints.
 - **Found and left**: `tools/kds_backup.py`'s `quote()` doubles a single
   quote, which the lexer does not read as an escape, so a backup target
-  holding one cannot be spelled; no entry was written.
+  holding one cannot be spelled; no entry was written. (DS-S5 wrote it.)

@@ -240,6 +240,21 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   goes through `AwaitWriteBlock`, which it did not touch. The wait prints
   no per-writer progress, so slow cannot be told from stopped. **Owner:
   none**.
+  **It also fails without timing out** (2026-11-26, on
+  `ds-known-gaps-contained` at `cc46c0d85`, DS's close): in 1 of 3 `-j8`
+  suites the cell failed in 86 ms - core 0 spent all of
+  `kRetriesPerIncrement` (200) on its eleventh increment, every attempt
+  refused `TXN_CONFLICT retryable=1 row id=1 was written by transaction
+  <n>`, while core 1 applied its 600; the row read 610, the increments
+  applied, so none was lost and the cell's claim held where its retry
+  budget did not. Eight copies at once, the two binaries alternating: 196
+  of 400 failed at `cc46c0d85` and 163 of 400 on the test binary built
+  from `8274c951`, the commit DS opened from (every failure this form, no
+  timeout); of the last 40 rounds the later binary failed more in 19, the
+  earlier in 14, and 7 tied, so a difference between them is not resolved
+  and DS's change is on no `UPDATE`'s path. Why one core loses 200
+  attempts in a row is not established, and the 32 of 32 above was not
+  repeated on this host. **Owner: none**; the budget is not raised.
 
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
@@ -258,6 +273,27 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   a reading by analogy. The sibling now commits `relaxed` and `group` only,
   with fewer rows and a longer bound. **Owner: none**; the bound is not
   widened.
+
+- **`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+  expires at its 60 s bound, and a run that passes takes a multiple of the
+  rig's idle block.** On `ds-known-gaps-contained` at `cc46c0d85`,
+  2026-11-26 (DS's close): it failed in 3 of 3 `-j8` suites and passed 6
+  of 6 alone, every expiry with core 0 (`relaxed`) at 200 of 200 rows and
+  core 1 (`group`) part-way, 103 to 178. Eight copies at once, the two
+  binaries alternating, four rounds: 8 of 32 failed at `cc46c0d85` and 8
+  of 32 on the test binary built from `8274c951`, the commit DS opened
+  from, so DS did not change the rate. The 54 runs that passed took about
+  0.05 s or a multiple of 5 s - 5, 10, 15, 20, 25, 30, 35, 45, 50 and, past
+  one round's bound and so across rounds of the cell, 70 s - on both
+  binaries; `TwoCoreRig`'s
+  `max_idle_block_ms` is 5,000 (`tests/two_core_rig.hpp:158`). That is the
+  price of a skipped kick, one idle block each, as in the
+  `DurableKickRigTest` entry above, and it is against the entry above's
+  "slow, not a lost wake": the rig's files are under `/tmp`, tmpfs on this
+  host, and the host's load was under 1.1 before every round. Not read:
+  the rig's count of kicks skipped, which would confirm it. The cell
+  bounds what the kick does not promise. **Owner: none**; the bound is
+  not widened.
 
 - **An expeditor's `Start()` failed once under `-j8` and did not reproduce.**
   Seen once, on `ay-s2-containment-wake` at `33b9433`, in
@@ -1717,6 +1753,15 @@ the procedures are `manual/server/backup-restore.md`.
   channel binding, as the server offers none, so SCRAM over an unverified
   TLS channel (`--tls-insecure`) does not notice a relay. Verified on
   `ds-known-gaps-contained` over `8274c951` (DS-S1).
+- **`tools/kds_backup.py` cannot spell a label or a target that holds a
+  single quote**: its `quote()` (`tools/kds_backup.py:72`) doubles the
+  quote, and the lexer reads no escape - "No escaping, deliberately - a
+  string literal cannot contain a quote" (`src/parser/lexer.cpp:120`) - so
+  the literal the tool sends ends at the first quote. Read on
+  `ds-known-gaps-contained` at `cc46c0d85` (DS's handoff); not run, so
+  what the server answers such a statement is not recorded here. The
+  escape itself is the string-literal grammar's question (the DS order's
+  §6). **Owner: none.**
 - **The LVM reference script is not run here**: the development VM grants no
   root (`br-s0-census.md` H9); path D's drills use the freeze script.
 - **A hung `archive_command` is bounded only where an operator set the
