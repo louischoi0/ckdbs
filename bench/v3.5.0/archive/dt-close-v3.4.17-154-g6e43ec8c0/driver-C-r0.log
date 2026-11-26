@@ -1,0 +1,11 @@
+probe {'p0_us': 3.2, 'p25_us': 87.6, 'p50_us': 92.5, 'p95_us': 150.9, 'p99_us': 232.8, 'p99.9_us': 311.1, 'max_us': 2237.8, 'n': 2000} cold_rate=2000.0/s
+dt-ivw-C-r0 load 2.39 cached=1.00 hot p50=301.4 p95=395.5 p99=447.3 max=1910.0 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-ivr-C-r0 load 1.39 cached=1.00 hot p50=276.1 p95=432.3 p99=493.3 max=4294.2 n=20005 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-i-C-r0 load 1.45 cached=1.00 hot p50=522.4 p95=650.4 p99=724.8 max=3371.5 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-ivu-C-r0 load 1.06 cached=1.00 hot p50=1579.3 p95=47398.8 p99=54633.6 max=80780.0 n=20005 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-aw-C-r0 load 1.20 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-au-C-r0 load 1.06 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 327.8 s
+probe {'p0_us': 5.7, 'p25_us': 91.0, 'p50_us': 95.7, 'p95_us': 151.1, 'p99_us': 269.5, 'p99.9_us': 317.1, 'max_us': 347.2, 'n': 2000} cold_rate=2000.0/s
+dt-ivw-C-r0 load 1.45 cached=1.00 hot p50=309.2 p95=410.1 p99=467.1 max=1921.2 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 73.4 s

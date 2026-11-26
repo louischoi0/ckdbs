@@ -16,6 +16,13 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
+#include "kds/sched/clock.hpp"
+#include "kds/txn/lock_table.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/memory_log_device.hpp"
 
 // CU-S1 and CU-S2: a value list on the tuple key, on a column of an index's
 // equality prefix or on a cabined column is a key set - one descent per
@@ -839,10 +846,12 @@ TEST_F(KeySetTest, AWriteOnAHeapsDeclaredFirstColumnWalks) {
 
 // ---- The descents, seen by their holds ------------------------------------------
 //
-// A write has no `ANALYZE`. What tells a descent from a walk is the hold: a
-// write walk takes every leaf of the relation exclusive, a descent the leaf
-// its key is in. `LeafWatchingStore` (leaf_watching_store.hpp) records the
-// pages of one relation pinned exclusive, and can fail one fetch.
+// A write has no `ANALYZE`. What tells a descent from a walk is the leaves it
+// pins: a write walk looks at every leaf of the relation - under a shared
+// hold, taking exclusive only the ones it writes a row in (DT) - and a
+// descent pins the leaf its key is in, exclusive. `LeafWatchingStore`
+// (leaf_watching_store.hpp) records the leaves of one relation pinned at all
+// and the pages pinned exclusive, and can fail one fetch.
 
 class KeySetWriteHoldTest : public ::testing::Test {
 protected:
@@ -865,19 +874,33 @@ protected:
         ASSERT_NE(at, std::string::npos) << inserted;
         oid_ = std::strtoull(inserted.c_str() + at + 4, nullptr, 10);
 
-        // What a write walk holds: every leaf.
+        // What a write walk looks at: every leaf. One that writes no row
+        // takes none of them exclusive (DT: a leaf is looked at under a
+        // shared hold before it is taken for writing).
         store_.Watch(oid_);
         ASSERT_EQ(Run("UPDATE w SET v = 0 WHERE v < 0"), "UPDATED 0");
-        every_leaf_ = store_.held();
+        every_leaf_ = store_.leaves();
         ASSERT_GE(every_leaf_, 4u) << "the relation is too small to tell a descent from a walk";
+        ASSERT_EQ(store_.held(), 0u) << "a walk that wrote no row took a leaf for writing";
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
-    // The leaves `sql` took exclusive.
+    // The leaves `sql` took exclusive, for a statement that must not walk.
+    // **The count alone no longer tells a descent from a walk**: a walk takes
+    // exclusive only the leaves it writes a row in (DT), so a walk writing
+    // rows of one leaf holds one, as a descent to that leaf does. What a
+    // walk cannot avoid is looking at every leaf, so that is asked too.
     std::size_t Held(const std::string& sql, const std::string& want) {
         store_.Watch(oid_);
         EXPECT_EQ(Run(sql), want) << sql;
+        EXPECT_LT(store_.leaves(), every_leaf_) << sql << ": walked the relation";
         return store_.held();
+    }
+    // The leaves `sql` pinned at all: every one for a walk.
+    std::size_t Leaves(const std::string& sql, const std::string& want) {
+        store_.Watch(oid_);
+        EXPECT_EQ(Run(sql), want) << sql;
+        return store_.leaves();
     }
 
     storage::InMemoryPageStore inner_{kFirstUserPageId};
@@ -894,7 +917,7 @@ TEST_F(KeySetWriteHoldTest, AnUpdateByListHoldsOnlyTheLeavesItsKeysAreIn) {
     // A key past the relation is a descent too, to the last leaf, where the
     // tree answers that there is no such row.
     EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE id IN (5, 3, 4, 999999)", "UPDATED 3"), 2u);
-    EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE " + Walked("id IN (5, 3, 4)", "id = 3"),
+    EXPECT_EQ(Leaves("UPDATE w SET v = v + 1 WHERE " + Walked("id IN (5, 3, 4)", "id = 3"),
                    "UPDATED 3"),
               every_leaf_);
     // The first and the last row: two leaves.
@@ -905,7 +928,7 @@ TEST_F(KeySetWriteHoldTest, AnUpdateByListHoldsOnlyTheLeavesItsKeysAreIn) {
 
 TEST_F(KeySetWriteHoldTest, ADeleteByListHoldsOnlyTheLeavesItsKeysAreIn) {
     EXPECT_EQ(Held("DELETE FROM w WHERE id IN (5, 3, 4, 3, -1, NULL)", "DELETED 3"), 1u);
-    EXPECT_EQ(Held("DELETE FROM w WHERE " + Walked("id IN (8, 9)", "id = 8"), "DELETED 2"),
+    EXPECT_EQ(Leaves("DELETE FROM w WHERE " + Walked("id IN (8, 9)", "id = 8"), "DELETED 2"),
               every_leaf_);
     EXPECT_EQ(Held("DELETE FROM w WHERE id = 1200 OR id = 1", "DELETED 2"), 2u);
     // A deleted key's descent finds its delete-marked row and writes nothing.
@@ -945,18 +968,21 @@ TEST_F(KeySetWriteHoldTest, AKeyOrAListBesideOtherConjunctsHoldsOnlyItsLeaves) {
 // but its walk is the leaves of its window since DU-S1
 // (`keyed_write_test.cpp`).
 TEST_F(KeySetWriteHoldTest, AWriteBesideASubqueryOrByAnotherColumnsListWalks) {
-    EXPECT_EQ(Held("UPDATE w SET v = 4 WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 21)",
+    EXPECT_EQ(Leaves("UPDATE w SET v = 4 WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 21)",
                    "UPDATED 1"),
               every_leaf_);
-    EXPECT_EQ(Held("UPDATE w SET v = 5 WHERE id IN (22, 23) AND "
+    EXPECT_EQ(Leaves("UPDATE w SET v = 5 WHERE id IN (22, 23) AND "
                    "EXISTS (SELECT id FROM w WHERE id = 1)",
                    "UPDATED 2"),
               every_leaf_);
-    EXPECT_EQ(Held("DELETE FROM w WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 20)",
+    EXPECT_EQ(Leaves("DELETE FROM w WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 20)",
                    "DELETED 1"),
               every_leaf_);
-    EXPECT_LE(Held("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), 2u);
-    EXPECT_EQ(Held("UPDATE w SET v = 9 WHERE v IN (5, 6)", "UPDATED 4"), every_leaf_);
+    // The bounded walk looks at its window's leaves and no more (DU-S1), and
+    // takes exclusive only the leaf its two rows are in (DT).
+    EXPECT_EQ(Held("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), 1u);
+    EXPECT_LE(store_.leaves(), 2u);
+    EXPECT_EQ(Leaves("UPDATE w SET v = 9 WHERE v IN (5, 6)", "UPDATED 4"), every_leaf_);
     // The single key alone is the point write it was.
     EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id = 6", "UPDATED 1"), 1u);
 }
@@ -970,7 +996,7 @@ TEST_F(KeySetWriteHoldTest, ADescentThatDeclinesHandsTheRestToTheWalkFromItsKey)
         if (id == 5) store_.FailNextFetch();
     });
     const std::size_t held =
-        Held("UPDATE w SET v = v + 1 WHERE id IN (3, 5, 700, 1100, 1300)", "UPDATED 4");
+        Leaves("UPDATE w SET v = v + 1 WHERE id IN (3, 5, 700, 1100, 1300)", "UPDATED 4");
     dispatcher_->SetAfterUpdateRowAppliedForTest(nullptr);
     EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
     // The walk took over at 700: more leaves than the list's keys are in,
@@ -990,12 +1016,14 @@ TEST_F(KeySetWriteHoldTest, ASingleKeysDescentThatDeclinesIsAnsweredByTheListOrT
     EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 700 AND v = 0"), "UPDATED 1");
     EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
     EXPECT_LE(store_.held(), 2u);
+    EXPECT_LT(store_.leaves(), every_leaf_);
 
     store_.Watch(oid_);
     store_.FailNextFetch();
     EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 3 AND id IN (3, 4)"), "UPDATED 1");
     EXPECT_EQ(store_.failed(), 2);
-    EXPECT_EQ(store_.held(), 1u) << "the list's descents answered, not the walk";
+    EXPECT_EQ(store_.held(), 1u);
+    EXPECT_LT(store_.leaves(), every_leaf_) << "the list's descents answered, not the walk";
     EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n3,1\\n700,1");
 }
 
@@ -1265,6 +1293,117 @@ TEST_F(KeySetTxnTest, ARepeatableReadSnapshotKeepsTheVersionsItBeganWith) {
     EXPECT_EQ(Listed(1, reader), "id,v\\n2,20\\n3,30\\n5,50");
     ASSERT_EQ(Run(1, reader, "COMMIT").rfind("COMMIT", 0), 0u);
     EXPECT_EQ(Listed(1, reader), "id,v\\n2,21\\n3,30\\n7,70");
+}
+
+// ---- DT: a declined descent, then a walk that gives its core back -----------
+//
+// A walk pauses between two leaves and its statement is dispatched again
+// (`instructions/v3.2.0/workorder-dt-write-path-yield.md` §2.3). **The
+// resumed run is past its single-key arm** (DT-R3): the arm's descent
+// declined, the walk took the statement from the head and wrote the key's row
+// in its first slice, and a run that offered the key again would find the
+// row under the statement's own version, pass its `WHERE` and write it a
+// second time. A pause needs a transaction and a lock table, which
+// `KeySetWriteHoldTest`'s bare dispatcher has none of; the store that fails
+// one fetch is the same.
+//
+// **Since DU a single key's declined descent meets a whole walk only on a
+// heap with `indexes` off**: a btree's walk is its key's window, under one
+// slice, and a heap's key is found again through its Keystone index
+// (`WriteWalk::WriteByKeys`). The dispatcher here has `indexes` off, so the
+// heap's statement is the case the rule guards and the btree's shows the
+// window.
+class KeyedWritePauseTest : public ::testing::Test {
+protected:
+    // `txns_` gives its borrows back through the table at teardown, so the
+    // table is declared first and dies last (`lock_family_fixture.hpp`).
+    std::unique_ptr<txn::LockTable> locks_;
+
+    void SetUp() override {
+        auto device = wal::MemoryLogDevice::Create(1 << 20);
+        ASSERT_TRUE(device.ok()) << device.status().message();
+        log_device_ = std::move(device.value());
+        wal::WalManagerConfig config;
+        config.ring_capacity = wal::kMinRingCapacity;
+        auto wal = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0, config);
+        ASSERT_TRUE(wal.ok()) << wal.status().message();
+        wal_ = std::move(wal.value());
+        auto boot = bootstrap::BootstrapDatabase(store_, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+        ids_.emplace(boot_->superblock);
+        undo_.emplace(store_, wal_.get());
+        auto table = txn::LockTable::Create(/*core_count=*/1, txn::kMaxLocksPerTxnDefault);
+        ASSERT_TRUE(table.ok()) << table.status().message();
+        locks_ = std::move(table.value());
+        txns_.emplace(*ids_, *undo_, store_, wal_.get(), /*visibility=*/nullptr, /*core=*/0,
+                      locks_.get());
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
+                            wal_.get(), wal::DurabilityClass::kRelaxed, exec::Budget(),
+                            /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_,
+                            txn::IsolationLevel::kReadCommitted, /*core_id=*/0,
+                            /*indexes=*/false);
+        dispatcher_->set_locks(locks_.get());
+    }
+
+    std::string Run(const std::string& sql, Session* s = nullptr) {
+        return dispatcher_->Dispatch(sql, s).response;
+    }
+
+    storage::InMemoryPageStore inner_{kFirstUserPageId};
+    LeafWatchingStore store_{inner_};
+    sched::ManualClock clock_;
+    std::unique_ptr<wal::MemoryLogDevice> log_device_;
+    std::unique_ptr<wal::WalManager> wal_;
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<txn::TrxIdSequence> ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> txns_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+TEST_F(KeyedWritePauseTest, AResumedWalkDoesNotOfferItsSingleKeyAgain) {
+    for (const std::string form : {"HEAP", "BTREE"}) {
+        // About seven rows a page, so 300 rows are some forty leaves: two
+        // pauses at the `analytic` level's slice of sixteen.
+        const std::string t = form == "HEAP" ? "ph" : "pb";
+        ASSERT_EQ(Run("CREATE TABLE " + t + " (id int64 PRIMARY KEY, v int64, pad char(1000)) " +
+                      form)
+                      .rfind("CREATED", 0),
+                  0u);
+        for (int at = 1; at <= 300;) {
+            std::string values;
+            for (int n = 0; n < 50 && at <= 300; ++n, ++at) {
+                values += (values.empty() ? "(" : ", (") + std::to_string(at) + ", 0, 'p')";
+            }
+            ASSERT_EQ(Run("INSERT INTO " + t + " VALUES " + values).rfind("INSERTED", 0), 0u);
+        }
+        Session s;
+        ASSERT_EQ(Run("SET PRIORITY analytic", &s), "SET priority=analytic");
+
+        const int failed_before = store_.failed();
+        const std::uint64_t pauses_before = dispatcher_->write_walk_pauses();
+        // The key's descent declines. A heap's walk from the head writes row
+        // 5 in its first slice and pauses after it; a btree's walk is the
+        // key's window and ends inside one slice.
+        store_.FailNextFetch();
+        EXPECT_EQ(Run("UPDATE " + t + " SET v = v + 1 WHERE id = 5", &s), "UPDATED 1") << form;
+        EXPECT_EQ(store_.failed(), failed_before + 1) << form << ": no descent declined";
+        if (form == "HEAP") {
+            EXPECT_GE(dispatcher_->write_walk_pauses() - pauses_before, 1u)
+                << "the walk took no pause, so no run was a resume";
+        } else {
+            EXPECT_EQ(dispatcher_->write_walk_pauses(), pauses_before)
+                << "a btree's walk of one key's window paused";
+        }
+        EXPECT_EQ(Run("SELECT id, v FROM " + t + " WHERE v > 0"), "id,v\\n5,1")
+            << form << ": the resumed run wrote the key's row again";
+
+        store_.FailNextFetch();
+        EXPECT_EQ(Run("DELETE FROM " + t + " WHERE id = 7", &s), "DELETED 1") << form;
+        EXPECT_EQ(Run("SELECT COUNT(*) FROM " + t), "count(*)\\n299") << form;
+    }
 }
 
 }  // namespace

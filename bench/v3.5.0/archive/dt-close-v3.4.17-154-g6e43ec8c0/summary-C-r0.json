@@ -1,0 +1,36 @@
+{
+ "argv": [
+  "--bin",
+  "/home/ukjin/bench-runs/dt/close/bin/kds_server.C",
+  "--arm",
+  "C",
+  "--cells",
+  "ivw",
+  "--runs",
+  "1",
+  "--run-base",
+  "0",
+  "--port",
+  "32771",
+  "--workdir",
+  "/home/ukjin/bench-runs/dt/close/work",
+  "--out",
+  "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/bench/v3.5.0/archive/dt-close-v3.4.17-154-g6e43ec8c0",
+  "--keep",
+  "--walk-sql",
+  "UPDATE dt_big SET c0 = c0 + 1 WHERE c0 >= 1 AND c0 <= 50000"
+ ],
+ "started": "2026-11-26T20:13:40Z",
+ "probe_o_direct_8k_qd1": {
+  "p0_us": 5.7,
+  "p25_us": 91.0,
+  "p50_us": 95.7,
+  "p95_us": 151.1,
+  "p99_us": 269.5,
+  "p99.9_us": 317.1,
+  "max_us": 347.2,
+  "n": 2000
+ },
+ "cold_rate": 2000.0,
+ "total_s": 73.4
+}
