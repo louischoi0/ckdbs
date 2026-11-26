@@ -273,8 +273,9 @@ public:
     // **§10's cancel flag** (docs/spec/protocol.md, BA-S15). Set from any
     // core - a cancel connection's, through `CancelRegistry`, or this
     // connection's own teardown - and taken by whoever observes it first:
-    // a `SELECT`'s walk at its slice boundary, or the KWP session at its
-    // next frame. Taken, so one cancel cancels one statement. Shared so a
+    // a `SELECT`'s walk or a build's at its slice boundary, a walked
+    // `UPDATE` or `DELETE` where it gives its core back (DT), or the KWP
+    // session at its next frame. Taken, so one cancel cancels one statement. Shared so a
     // cancel racing this session's close sets a flag that is still there.
     const std::shared_ptr<std::atomic<bool>>& cancel_flag() const noexcept { return cancel_; }
     void RequestCancel() noexcept { cancel_->store(true, std::memory_order_release); }

@@ -3011,6 +3011,13 @@ private:
     // which resumes the walk from `Session::parked_write`. Takes
     // `out->walk_pause`.
     sched::Coro AwaitWalkPause(std::string_view line, Session* session, DispatchOutcome* out);
+    // **A cancel taken at a write's pause** (DT §2.4): where `waiting`'s
+    // flag is set it is taken - one cancel, one statement - the park's scope
+    // is ended and `*out` becomes `Cancelled`. In autocommit the statement's
+    // transaction is aborted; inside an explicit one the transaction is
+    // failed, as a walking `SELECT`'s cancel leaves it. False where no
+    // cancel is pending.
+    bool CancelPausedWalk(Session& waiting, DispatchOutcome* out);
     // The slice a write's walk runs under for `scope` (`WalkSlice`): none
     // where there is no transaction to keep open across a pause, no lock
     // table to hold the relation by (DT-R7) or no driver that resumes one.

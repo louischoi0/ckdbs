@@ -866,10 +866,31 @@ sched::Coro CommandDispatcher::AwaitWalkPause(std::string_view line, Session* se
     const std::uint64_t statement = out->statement;
     // One turn of the run queue, booked there (`sched.run_queue`), as a
     // `SELECT`'s slice boundary is.
+    //
+    // **And where a cancel is taken** (DT §2.4, `protocol.md` §10): before
+    // the yield and again after it, as a walking `SELECT`'s boundary takes
+    // one. A `C_CANCEL` and a connection closed under its statement set the
+    // same flag (`TcpServer::CloseClient`), so either ends the write here
+    // instead of at its last row.
+    Session& waiting = session != nullptr ? *session : autocommit_session_;
+    if (CancelPausedWalk(waiting, out)) co_return Status::OK();
     co_await sched::Yield{};
+    if (CancelPausedWalk(waiting, out)) co_return Status::OK();
     const MayParkScope parking(*this, /*allowed=*/true, statement);
     *out = DispatchAndStage(line, session);
     co_return Status::OK();
+}
+
+bool CommandDispatcher::CancelPausedWalk(Session& waiting, DispatchOutcome* out) {
+    if (!waiting.TakeCancel()) return false;
+    // The park's scope ends as a refused resume's does: an owned
+    // transaction is aborted, so no row of the statement stays written, and
+    // an explicit one keeps its rows and is failed - the client's `ROLLBACK`
+    // undoes them (`RefuseParkedWrite`).
+    const CurrentCoreGuard as_this_core(core_id_);
+    RefuseParkedWrite(*out, waiting, Status::Cancelled("cancelled by request"));
+    out->walk_pause = false;
+    return true;
 }
 
 sched::Coro CommandDispatcher::AwaitRelationLock(std::string_view line, Session* session,
@@ -1703,6 +1724,9 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
             // the walk is resumed at once, as a `SELECT`'s yield is under
             // `RunInline`, so it crosses the boundaries a served walk does.
             if (outcome.walk_pause) {
+                // A cancel is taken here too, as `RunInline`'s boundary takes
+                // a `SELECT`'s.
+                if (CancelPausedWalk(waiting, &outcome)) break;
                 paused = true;
                 outcome = DispatchAndStage(line, session);
                 continue;

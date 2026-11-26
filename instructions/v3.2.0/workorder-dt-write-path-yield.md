@@ -184,7 +184,7 @@ none is the operator's own mark on the item.
 | DT-Q3 | (a) | no subject: §2.1 is not built. The census's reading stands for whoever builds it (§7, Census B) |
 | DT-Q4 | (a) | DT-S3 |
 | DT-Q5 | (a) | confirmed by reading (§7) |
-| DT-Q6 | (a) | DT-S3 |
+| DT-Q6 | **(b), revised by CLA at DT-S3 from its own (a)** | (a) read "each made a `BuildRun` as `PURGE INDEX` is", and read against the tree that holds for none of the three (§7, DT-S3): `PURGE INDEX`'s run holds no transaction, and `PURGE DROPPED COLUMNS` holds a DDL transaction, an epoch gate and a re-run of its own; the catalog's purge and the controller's seeded build are not statements and have no session a `BuildRun` is built on. The three stay in `known-gaps.md`, outside DT |
 | DT-Q7 | (a) | a locking read's walk carries an empty slice |
 
 ## 5. Stages
@@ -529,3 +529,72 @@ The one failure both times is
 this stage's: run twelve at a time, it fails 23 of 60 at `60dc593af`
 (built from `git archive` outside the tree) and 27 of 60 here. Overhead
 not measured; measured at the milestone's close.
+
+### DT-S3: a cancel taken where a write gives its core back (2026-11-26)
+
+§2.4, and DT-Q6 revised to (b).
+
+**Built** (`CommandDispatcher::CancelPausedWalk`). At a write's pause the
+session's cancel flag is taken - before the yield and after it in
+`AwaitWalkPause`, and before the inline resume in `Dispatch`'s loop - and
+the park's scope is ended through `RefuseParkedWrite` with `Cancelled`: an
+owned transaction is aborted, so no row the statement wrote stays; inside
+an explicit transaction the rows stay until the client's `ROLLBACK` and
+the transaction is failed, as a walking `SELECT`'s cancel leaves it. One
+cancel, one statement. A `C_CANCEL` (through the cancel registry) and a
+connection closed under its statement (`TcpServer::CloseClient`) set that
+one flag, so a dropped connection's long autocommit write is now aborted
+at its next pause instead of applied in full. A write that takes no pause
+- an `INSERT`, a write by one key, a walk or a key loop under one slice -
+looks at no flag.
+
+**DT-Q6, read against the tree, and why (a) is not adopted.** (a) was
+"each made a `BuildRun` as `PURGE INDEX` is".
+
+- `PurgeIndexRun` holds no transaction: each slice asks the relation's
+  `IX` under a read holder, try-only, re-reads the catalog and writes
+  images at `kNoTxnId`.
+- `PURGE DROPPED COLUMNS` (`HandlePurgeDroppedColumns`) runs in a DDL
+  transaction it writes its flag in, under an `IX` held to the decide, an
+  epoch gate (`purge_wait`) and `DispatchAsync`'s re-run of the statement.
+  Made a run it is `IndexBuildRun`'s shape - a write scope held across
+  yields, the DDL undo hook uninstalled and installed, a destructor that
+  aborts - and its gate is `[quiet-wrong]` (CD §3: a zeroed cell read as
+  NULL, a released spill followed). Not `PURGE INDEX`'s shape.
+- The catalog's delete-mark purge (`Catalog::PurgeSettledDeleteMarks`,
+  core 0's tick) and the controller's seeded build
+  (`CabinOptimizerExecutor::BuildSeededSets`, the tick's timer callback)
+  are not statements: no session, no statement frame, and
+  `BuildRun(CommandDispatcher&, Session&)` is built on both.
+
+No measurement of DT's sizes any of the three. So the three stay where
+they are in `known-gaps.md`, with this reading beside them, and DT builds
+none.
+
+**Cells** (`tests/dt_write_yield_test.cpp`, five more, a heap and a btree
+each): an autocommit `UPDATE` and `DELETE` cancelled at a pause leave no
+row written, no unit held and no transaction open; inside a transaction
+both leave their rows on the trail and the transaction failed; a walk
+under one slice and a write by one key take no cancel; the synchronous
+path takes one; a key loop's pause takes one. **No cell drives `C_CANCEL`
+or a closing connection over the wire**: both reach the write as the
+session's flag, which the cells set directly.
+
+**Review** (`critics-developer`): no defect found; nine mutations built,
+five caught, four not - the two checks around the yield (either alone
+still takes the cancel within a turn), the core guard (the fixture has
+one core) and a clear that did nothing. **Applied**: that clear deleted;
+two stale comments (`TcpServer::CloseClient`'s, by the reviewer, and the
+session flag's); the transaction cell shows the rows stayed on the trail
+and runs `DELETE` too; the no-pause cell walks a relation under one slice
+where it had written one key; a cell for a key loop's cancel; the
+autocommit cell shows another writer takes a row at once. **Rejected**:
+logging the cancelled write through `LogStatement` - it needs the
+statement's start carried to the pause, and what the log gets today is
+`RefuseParkedWrite`'s warning with no statement text; stated in
+`known-gaps.md`.
+
+**Suite**: 5,241 of 5,242, and 5,241 of 5,241 in the reviewer's run of
+the tree before the cells above were added; the one failure is
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` again (DT-S2).
+Overhead not measured; measured at the milestone's close.

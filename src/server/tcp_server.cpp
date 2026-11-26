@@ -1235,11 +1235,13 @@ void TcpServer::CloseClient(int client_fd) {
     // from under a task that is still on a ready queue.
     //
     // Marked instead, and torn down by OnStatementComplete. **The
-    // statement is asked to stop** (BA-S15): a `SELECT`'s walk sees the
-    // flag at its next slice boundary, and nothing else observes it - a
-    // write may park on a lock or a commit, but runs to its end - bounded
-    // by the statement's own row-touch budget (exec/budget.hpp), which is
-    // what stops a hung client from pinning a connection forever.
+    // statement is asked to stop** (BA-S15): a `SELECT`'s walk, a
+    // relation-`X` build and a walked `UPDATE`/`DELETE` (DT §2.4, at the
+    // pause where it gives its core back) see the flag at their next slice
+    // boundary. Nothing else observes it - an `INSERT` or a write shorter
+    // than a slice may park on a lock or a commit, but runs to its end -
+    // bounded by the statement's own row-touch budget (exec/budget.hpp),
+    // which is what stops a hung client from pinning a connection forever.
     if (conn.in_flight) {
         conn.closing = true;
         conn.session.RequestCancel();

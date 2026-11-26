@@ -377,5 +377,116 @@ TEST_F(WriteYieldTest, CollectedTargetsAreCarriedAcrossAPause) {
     }
 }
 
+// ---- DT §2.4: a cancel is taken where a write gives its core back ----------
+//
+// The session's flag is what a `C_CANCEL` sets through the cancel registry
+// and what a connection closed under its statement sets
+// (`TcpServer::CloseClient`), so these cells set it directly.
+
+TEST_F(WriteYieldTest, ACancelAtAPauseEndsAnAutocommitWriteWithNoRowWritten) {
+    Make("a", 400);
+    for (const std::string table : {"ah", "ab"}) {
+        for (const std::string write : {"UPDATE " + table + " SET v = v + 1 WHERE v >= 0",
+                                        "DELETE FROM " + table + " WHERE v >= 0"}) {
+            Session w;
+            Analytic(w);
+            Started walk = Start(write, w);
+            Pump(1);
+            ASSERT_FALSE(*walk.done) << write;
+            w.RequestCancel();
+            TurnsToFinish(walk);
+            EXPECT_EQ(walk.out->status.code(), StatusCode::kCancelled) << walk.out->response;
+            EXPECT_FALSE(w.TakeCancel()) << "the write took the cancel: one cancel, one statement";
+            EXPECT_FALSE(w.parked_write().has_value()) << write;
+            // The slices it had written are undone with its transaction.
+            EXPECT_EQ(Count(table, "v = 0"), 400) << write;
+            EXPECT_EQ(locks_->EntryCount(), 0u) << write << ": the cancelled write kept a unit";
+            // Aborted, not left open: another writer takes a row it wrote.
+            EXPECT_EQ(Local("UPDATE " + table + " SET v = v WHERE id = 1"), "UPDATED 1") << write;
+        }
+    }
+}
+
+TEST_F(WriteYieldTest, ACancelAtAPauseInsideATransactionFailsTheTransaction) {
+    Make("f", 400);
+    for (const std::string table : {"fh", "fb"}) {
+        for (const std::string write : {"UPDATE " + table + " SET v = v + 1 WHERE v >= 0",
+                                        "DELETE FROM " + table + " WHERE v >= 0"}) {
+            Session w;
+            Analytic(w);
+            ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &w).response.rfind("BEGIN", 0), 0u);
+            const std::size_t mark = w.transaction()->trail().size();
+            Started walk = Start(write, w);
+            Pump(1);
+            ASSERT_FALSE(*walk.done) << write;
+            w.RequestCancel();
+            TurnsToFinish(walk);
+            EXPECT_EQ(walk.out->status.code(), StatusCode::kCancelled) << walk.out->response;
+            EXPECT_TRUE(w.failed()) << write << ": a cancelled statement fails its transaction";
+            EXPECT_FALSE(w.parked_write().has_value()) << write;
+            // Its rows stay written until the client rolls back, as any
+            // failed statement's do.
+            ASSERT_NE(w.transaction(), nullptr) << write;
+            EXPECT_GT(w.transaction()->trail().size(), mark) << write;
+            EXPECT_EQ(dispatcher_->Dispatch("COMMIT", &w).response.rfind("ERR", 0), 0u);
+            ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &w).response.rfind("ROLLBACK", 0), 0u);
+            EXPECT_EQ(Count(table, "v = 0"), 400) << write;
+            EXPECT_EQ(locks_->EntryCount(), 0u) << write;
+        }
+    }
+}
+
+TEST_F(WriteYieldTest, AWriteThatTakesNoPauseTakesNoCancel) {
+    // A walk shorter than a slice - sixty rows, some nine leaves - gives no
+    // core back and sees no flag, and neither does a write by one key; the
+    // cancel stays for whoever takes it next - the KWP session at its frame.
+    Make("n", 60);
+    for (const std::string table : {"nh", "nb"}) {
+        for (const char* where : {"v >= 0", "id = 5"}) {
+            Session w;
+            w.RequestCancel();
+            const std::uint64_t before = dispatcher_->write_walk_pauses();
+            const DispatchOutcome out =
+                RunAsync("UPDATE " + table + " SET v = v + 1 WHERE " + where, w);
+            EXPECT_EQ(out.response.rfind("UPDATED", 0), 0u) << out.response;
+            EXPECT_EQ(dispatcher_->write_walk_pauses(), before) << table << " " << where;
+            EXPECT_TRUE(w.TakeCancel()) << table << " " << where;
+        }
+    }
+}
+
+TEST_F(WriteYieldTest, ACancelIsTakenAtAKeyLoopsPauseToo) {
+    Make("j", 100);
+    std::string list;
+    for (int id = 2; id <= 100; id += 2) list += (list.empty() ? "" : ", ") + std::to_string(id);
+    for (const std::string table : {"jh", "jb"}) {
+        Session w;
+        Analytic(w);
+        Started walk = Start("UPDATE " + table + " SET v = v + 1 WHERE id IN (" + list + ")", w);
+        Pump(1);
+        ASSERT_FALSE(*walk.done) << table;
+        w.RequestCancel();
+        TurnsToFinish(walk);
+        EXPECT_EQ(walk.out->status.code(), StatusCode::kCancelled) << walk.out->response;
+        EXPECT_EQ(Count(table, "v = 0"), 100) << table;
+        EXPECT_EQ(locks_->EntryCount(), 0u) << table;
+    }
+}
+
+TEST_F(WriteYieldTest, TheSynchronousPathTakesACancelAtAPauseToo) {
+    Make("q", 400);
+    for (const std::string table : {"qh", "qb"}) {
+        Session w;
+        Analytic(w);
+        w.RequestCancel();
+        const DispatchOutcome out =
+            dispatcher_->Dispatch("UPDATE " + table + " SET v = v + 1 WHERE v >= 0", &w);
+        EXPECT_EQ(out.status.code(), StatusCode::kCancelled) << out.response;
+        EXPECT_FALSE(w.parked_write().has_value()) << table;
+        EXPECT_EQ(Count(table, "v = 0"), 400) << table;
+        EXPECT_EQ(locks_->EntryCount(), 0u) << table;
+    }
+}
+
 }  // namespace
 }  // namespace kds::server
