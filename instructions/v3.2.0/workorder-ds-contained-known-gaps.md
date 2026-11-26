@@ -179,3 +179,39 @@ capture; ten runs since have not shown it. Not explained.
 **Suite**: 5,224 of 5,224 at `-j8`, less `bs-nightly`, on this tree's
 build inputs (S1 changes none). Overhead not measured; measured at the
 milestone's close.
+
+### DS-S2 - `archive_command_timeout_s` (2026-11-26)
+
+On `ds-known-gaps-contained` over `5ae44e5f`. A boot key, `0` by default
+and then nothing changed: the old spawn and the old blocking wait. Set, the
+command leads its own process group; a 20 ms poll reads the bound and a
+stop; `SIGTERM` at either, `SIGKILL` 5 s later, the group cleared once more
+at the shell's exit before the exit is reaped. Refused at boot without
+`archive_command`.
+
+**Review** (`critics-developer`), three findings applied, each a change of
+behaviour from the first draft:
+- **a signalled command archived nothing, whatever it exited with.** The
+  draft took an exit 0 read after the bound as the command's word; a
+  handler that cleans up and exits 0 would have had its segment recycled
+  with no copy in the archive. §3's "nothing is recycled on a killed
+  command's word" now holds as written.
+- **a stop gives a bounded command the grace, not the rest of its bound**:
+  the wait reads the stop, where the draft would have held a shutdown for
+  `bound + 5 s` on a command that ignores `SIGTERM`.
+- **the group is cleared before the shell is reaped** (`waitid` with
+  `WNOWAIT`), so the signal cannot reach a group that took the id over.
+- the cells read a pid file only once its line is whole, and count a zombie
+  as ended; cells added for the stop, the exit 0 and "`0` waits".
+
+Rejected: refusing a value above 32 bits inside the config's `number()` -
+it would change every numeric key's behaviour, outside DS; `known-gaps.md`
+states the cast.
+
+**Cells**: eight in `backup_archive_test.cpp`, one in
+`config_file_test.cpp`; 13 archiver and config cells, three repeats, green.
+**Suite**: the first run failed 1 of 5,229,
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the kick race
+`known-gaps.md` ("Testing") names, 3 of 6 alone and untouched by this
+stage; **the run on the reviewed tree is 5,232 of 5,232** at `-j8`, less
+`bs-nightly`. Overhead not measured; measured at the milestone's close.

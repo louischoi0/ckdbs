@@ -114,6 +114,29 @@ destination; nothing else is needed.
 is skipped (a restart), and with different bytes stops archiving with
 `wal_archive_last_error`. An `archive_command` must be idempotent.
 
+**A command that never exits holds the archive**, and with it every segment
+after its own. Bound it:
+
+```
+archive_command_timeout_s = 300     # 0, the default: no bound
+```
+
+A command still running after that many seconds is sent `SIGTERM`, and
+`SIGKILL` five seconds later, together with everything still in its process
+group. The attempt is a failure - `wal_archive_failures` counts it and
+`wal_archive_last_error` names the bound - and the segment is tried again
+under the usual backoff. **A command that was signalled archived nothing,
+whatever it exited with**: a handler that cleans up and exits 0 does not get
+its segment removed from the log. Choose a bound well above the slowest
+upload of one segment: a bound below it fails every attempt.
+
+A bounded command runs in a process group of its own, which is how the
+signal reaches what it started; a process it moves to another group or
+session outlives the bound, and a terminal's Ctrl-C does not reach it. A
+server stop ends a bounded command the same way, waiting the five seconds
+at most. The key is a boot key, applies to `archive_command` only, and is
+refused at startup without one.
+
 **Lineage.** A volume's history has a lineage id (`SHOW META`:
 `wal_lineage`). Every restore that opens takes a new one, so a restored
 instance archiving into the same place never writes over the original's
@@ -208,6 +231,7 @@ note it before an operation you may want to undo, and restore to it.
 | `restore: the archive's history ... ends at lsn E ... segment K is missing` | the archive does not reach the target | a lower target, or find segment K |
 | `restore: the WAL archive <dir> does not exist` / `cannot be read` / `is not a directory` | the archive path is mistyped, not mounted, or not readable | fix or mount the archive path; the restore wrote nothing |
 | `archive_command: its exit could not be read (waitpid: ...)` in `wal_archive_last_error` | the server was started with SIGCHLD ignored and it was set so again after start | start the server with SIGCHLD at its default; the segment is retried |
+| `archive_command ran past archive_command_timeout_s = N and was ended` in `wal_archive_last_error` | the command hung, or the bound is shorter than one segment's upload | fix the destination, or raise the bound; the segment is retried |
 | `restore of backup N (start ..., stop ...) did not complete; the instance does not open` | the log does not reach the stop, or recovery failed | the message's tail says which; a restore that stops short never opens |
 | `ERR ... the WAL archive is failing (...)` on a write | §4's fail-closed | fix the archive destination |
 

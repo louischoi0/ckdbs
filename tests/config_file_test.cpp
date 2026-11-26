@@ -187,6 +187,32 @@ TEST(ExpeditorConfigTest, EveryKnownKeyIsApplied) {
     EXPECT_EQ(config.LogPath(), "/var/log/kds/server.log");
 }
 
+TEST(ExpeditorConfigTest, TheArchiveCommandsBoundIsOffByDefaultAndRefusedWithoutACommand) {
+    // DS-S2: `0` by default; it bounds `archive_command` and nothing else,
+    // so beside `archive_dir` or alone it is refused, not accepted and
+    // ignored.
+    Expeditor::Config config;
+    EXPECT_EQ(config.archive.command_timeout_s, 0u);
+    ASSERT_TRUE(config
+                    .ApplyFile(WithPool("archive_command = cp %p /archive/%f\n"
+                                        "archive_command_timeout_s = 120\n"))
+                    .ok());
+    EXPECT_EQ(config.archive.command_timeout_s, 120u);
+
+    Expeditor::Config with_dir;
+    const Status beside_dir = with_dir.ApplyFile(
+        WithPool("archive_dir = /archive\narchive_command_timeout_s = 120\n"));
+    ASSERT_FALSE(beside_dir.ok());
+    EXPECT_NE(beside_dir.message().find("archive_command_timeout_s"), std::string::npos)
+        << beside_dir.message();
+
+    Expeditor::Config alone;
+    EXPECT_FALSE(alone.ApplyFile(WithPool("archive_command_timeout_s = 120\n")).ok());
+
+    Expeditor::Config zero;
+    EXPECT_TRUE(zero.ApplyFile(WithPool("archive_command_timeout_s = 0\n")).ok());
+}
+
 TEST(ExpeditorConfigTest, TheJoinOrderIsOneOfThreeValuesAndFixedByDefault) {
     // CX-S0: `fixed` by default, `planned` and `written` by name, and a
     // fourth word refuses the file rather than reading as any of them.

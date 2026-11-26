@@ -1719,9 +1719,13 @@ the procedures are `manual/server/backup-restore.md`.
   `ds-known-gaps-contained` over `8274c951` (DS-S1).
 - **The LVM reference script is not run here**: the development VM grants no
   root (`br-s0-census.md` H9); path D's drills use the freeze script.
-- **An `archive_command` that hangs holds the archive**: it is not timed out,
-  only ended at shutdown; the archive's lag and `wal_archive_blocking` are
-  what an operator watches.
+- **A hung `archive_command` is bounded only where an operator set the
+  bound** (DS-S2, verified on `ds-known-gaps-contained` over `5ae44e5f`):
+  `archive_command_timeout_s` is `0` by default, and unset a command that
+  never exits still holds the archive until a restart. A bounded command's
+  exit is read by a 20 ms poll on the archiver's thread. A process the
+  command moved to another process group or session outlives the bound.
+  The value is cast to 32 bits unchecked, as every numeric key's is.
 - **A backup starts a thread after startup, which `sched.md` §9's invariant
   1 forbids and no document declares.** Read at `a4d2fb3b` while DE was
   reviewed: `BACKUP COPY` starts the copier's thread and `BACKUP STOP` the

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -48,9 +49,21 @@
 // by name (the dispatcher's gate), until archiving recovers.
 namespace kds::server {
 
+// **A command may be bounded** (DS-S2): with `archive_command_timeout_s`
+// set, a command still running at the bound is sent `SIGTERM`, and
+// `SIGKILL` `kCommandKillGrace` later if it has not exited - to its whole
+// process group, so what the shell started and left in that group ends
+// with it. The attempt is a failure naming the bound, retried under the
+// backoff like any other, **whatever the signalled command exited with**:
+// an exit 0 from a handler is not a durable segment. A stop ends a bounded
+// command the same way, waiting the grace at most. `0`, the default, waits
+// without end, as before the key existed.
+// The bound is the command's only: `archive_dir`'s copy is the server's
+// own I/O and the key is refused beside it.
 struct ArchiveSettings {
     std::string archive_dir;
     std::string archive_command;
+    std::uint32_t command_timeout_s = 0;  // `archive_command_timeout_s`; 0 = no bound
     bool enabled() const noexcept { return !archive_dir.empty() || !archive_command.empty(); }
 };
 
@@ -99,6 +112,10 @@ public:
     // failing archive refuses writes (BR-Q2 (a)).
     static constexpr std::uint64_t kReserveSegments = 4;
 
+    // What a bounded command is given between `SIGTERM` and `SIGKILL`
+    // (DS-Q5): time to remove a partial upload, not to finish one.
+    static constexpr std::chrono::seconds kCommandKillGrace{5};
+
 private:
     void Run();
     Status ArchiveOne(std::uint64_t segment);
@@ -109,11 +126,17 @@ private:
     std::atomic<bool> blocking_{false};
     std::atomic<std::uint64_t> archived_{0};
     std::atomic<std::uint64_t> failures_{0};
-    std::atomic<int> child_{0};  // a running archive_command's pid
+    // A running archive_command's pid; **negative when the command leads
+    // its own process group** (a bounded one), so `kill(child_, ...)` reaches
+    // the group and `Stop` need not know which it was.
+    std::atomic<int> child_{0};
 
     mutable std::mutex mu_;
     std::condition_variable wake_;
     bool stopping_ = false;
+    // `stopping_` for the one reader that holds no `mu_`: a bounded
+    // command's wait loop (`ArchiveOne`).
+    std::atomic<bool> stop_requested_{false};
     bool kicked_ = false;
     std::string last_error_;
     std::thread thread_;
