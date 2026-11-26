@@ -311,7 +311,7 @@ TEST_F(KeyedWriteTest, AnUpdateAndADeleteNamingTheWholeKeyDescendByIt) {
     Ok("DELETE FROM h WHERE a = 2 AND b = 1", "DELETED 0");
     // Half a key is no key, and since DU-S2 it is an equality prefix of the
     // key's index: the rows are collected through it, one probe. A range
-    // on the next column is no probe.
+    // on the next column is a range of it (DU-S3), and no probe.
     const std::uint64_t half = Probes();
     Ok("UPDATE h SET v = v + 100 WHERE a = 1", "UPDATED 2");
     EXPECT_EQ(Probes(), half + 1);

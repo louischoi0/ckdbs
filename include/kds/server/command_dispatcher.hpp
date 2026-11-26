@@ -31,6 +31,7 @@
 #include "kds/exec/plan_advice.hpp"
 #include "kds/exec/captured_plans.hpp"
 #include "kds/exec/plan_catalog.hpp"
+#include "kds/exec/plan_ddl.hpp"
 #include "kds/exec/plan_memo.hpp"
 #include "kds/exec/step_compiler.hpp"
 #include "kds/stats/plan_stats.hpp"
@@ -1694,6 +1695,26 @@ private:
     // administrator's plan for a statement shape, made, enabled, disabled
     // and edited. Admin, autocommit only, answered once durable.
     DispatchOutcome HandleCreatePlan(std::string_view line, Session& session);
+    // **`CREATE PLAN ... FOR <update | delete>`** (DU-S3, DU-Q4 (a)): a
+    // write's plan is a one-relation statement's - `ORDER (<the relation>)`
+    // and at most one `ACCESS` pin - keyed by the write's own fetch id.
+    // Each variant's pin is settled against the example as a statement's is
+    // at its run (`WriteWalk::BoundBy`): one no arm of the example meets is
+    // refused here, as a `SELECT`'s is (CX-R2). The row, not yet installed.
+    StatusOr<exec::PlanRow> WritePlanRow(const exec::CreatePlanStmt& create,
+                                         const std::string& example,
+                                         const parser::Statement& statement,
+                                         std::uint64_t fetch_id, std::uint32_t arguments,
+                                         Session& session, std::optional<ReadBorrow>& hold);
+    // The plan DDL's claim, the one-plan-a-shape check and the row's write.
+    StatusOr<exec::PlanRow> InstallAdminPlan(exec::PlanRow row, const exec::CreatePlanStmt& create);
+    // What a write's plan may not pin, said the same by `CREATE PLAN` and
+    // `ALTER PLAN ... REPLACE VARIANT`: a join's `BUILD`, and a Cabin, which
+    // no write reads through. OK otherwise.
+    static Status WritePinAdmitted(const exec::PlanVariantSpec& spec, const exec::ArmPin& pin);
+    // `CREATE PLAN`'s end: the durability wait and the reply, or the refusal.
+    DispatchOutcome CreatedPlan(StatusOr<exec::PlanRow> created,
+                                const exec::CreatePlanStmt& create);
     DispatchOutcome HandleAlterPlan(std::string_view line, Session& session);
     // `ADVISE PLAN FOR <select>` (CX-S7): the search's order for the
     // statement as a `CREATE PLAN` text, priced against the plan in force,
@@ -1703,9 +1724,11 @@ private:
     // as every layer below sees it - the rest of the command blanked, so a
     // byte any of them names is the command's own: refused where it is no
     // SELECT (`<head> takes a SELECT`), or holds a `?` (by example, with
-    // literals).
+    // literals). With `writes`, an `UPDATE` or a `DELETE` is a statement it
+    // takes too (`CREATE PLAN`, DU-S3).
     StatusOr<std::string> PlanExampleText(std::string_view line, std::size_t at,
-                                          std::size_t size, std::string_view head);
+                                          std::size_t size, std::string_view head,
+                                          bool writes = false);
     // The `IS` of every relation `key` names, taken into `hold` and kept
     // until it is destroyed: what keeps a `DROP TABLE` from committing
     // under a plan DDL's install. A plan DDL is not a read that must never
@@ -2528,11 +2551,12 @@ private:
     StatusOr<std::optional<std::vector<std::uint64_t>>> UniqueKeyRun(
         const exec::WriteIndexKey& by_key, bool first);
     // A heap's rows in the tuple key window `bound`, as its Keystone index
-    // names them (DU-S1): `CollectWriteKeys` over that index's one range.
-    // nullopt, for the walk to answer, where `indexes` is off or the
-    // collection is past its bound.
+    // `keystone` names them (DU-S1): `CollectWriteKeys` over that index's
+    // one range. nullopt, for the walk to answer, where the collection is
+    // past its bound.
     StatusOr<std::optional<std::vector<std::uint64_t>>> KeystoneWindowKeys(
-        const catalog::TableAccess& ta, const WalkBound& bound, bool first);
+        const catalog::TableAccess& ta, const catalog::TableAccess::IndexRef& keystone,
+        const WalkBound& bound, bool first);
     // The rows `arm`'s index names for a write's WHERE (DU-S2):
     // `CollectWriteKeys` over the arm's bounds - one pair, or a list's pair a
     // value - inside `bound`, where the statement has one.
@@ -2677,7 +2701,30 @@ private:
                                  const txn::Snapshot& snapshot, WalkCursor resume_from,
                                  const exec::StatementContext& context,
                                  std::vector<exec::SubqueryResult>& subqueries,
-                                 std::optional<std::uint64_t> arm_target);
+                                 std::optional<std::uint64_t> arm_target,
+                                 std::string_view statement = {});
+
+    // **A write's plan** (DU-S3, DU-Q4 (a)): the administrator's plan for
+    // this `UPDATE`'s or `DELETE`'s shape - the statement's own fetch id and
+    // its one relation - and the variant its arguments choose, asked as a
+    // one-relation `SELECT`'s is (`exec::AdminPlans::any_single`, one
+    // relaxed load where no such plan is enabled). `statement` is the
+    // write's text, which the variant's rule reads. Empty for a statement
+    // with no fetch id or no text in hand - an `ON CONFLICT` arm.
+    struct WritePlan {
+        std::shared_ptr<const exec::AdminPlan> plan;
+        const exec::PlanVariant* variant = nullptr;
+        // The variant's pin on the relation, or null where it states none.
+        const exec::ArmPin* pin() const noexcept {
+            return variant != nullptr && !variant->access.empty() && variant->access[0].pins()
+                       ? &variant->access[0]
+                       : nullptr;
+        }
+    };
+    WritePlan WritePlanFor(catalog::Oid oid, std::string_view statement);
+    // What became of it, for `sys.statement_stats` and `ANALYZE`: served,
+    // or declined for this statement (CX-R2), counted either way.
+    void NoteWritePlan(const WritePlan& plan, bool declined);
 
     // **A scalar subquery in an UPDATE's SET value** (BJ-S7, BJ-Q6): run once,
     // before the walk, through the SELECT path under the session's view, and
@@ -3254,9 +3301,28 @@ private:
     // copied onto the outcome the same way.
     stats::StatementBinding statement_binding_;
     // The running `SELECT`'s plan source and plan, set by its compile and
-    // copied onto its outcome the same way (CX-R11).
+    // copied onto its outcome the same way (CX-R11); a write's, set where
+    // its plan is asked (`NoteWritePlan`).
     std::string_view statement_plan_source_;
     std::string statement_plan_label_;
+    // **`ANALYZE` of a write** (DU-S3): set by `DispatchInner` for an
+    // `ANALYZE UPDATE` or `ANALYZE DELETE`, whose statement then runs as
+    // itself - every role, read-only and archive gate reads the write - and
+    // is answered with how it found its rows instead of its count's
+    // sentence (`AnalyzedWrite`). `arm` is the arm that answered, as
+    // `WriteWalk` named it; `declined` the collections it read and did not
+    // write from; `plan` its plan's line. Empty for every other statement,
+    // which then builds none of it.
+    struct WriteAnalysis {
+        std::string arm;
+        std::string declined;
+        std::string plan;
+    };
+    std::optional<WriteAnalysis> write_analysis_;
+    DispatchOutcome AnalyzedWrite(DispatchOutcome out, bool is_delete);
+    // `ANALYZE` of a write with `RETURNING`: the reply is the plan, and the
+    // rows would have no result set of their own.
+    std::optional<Status> AnalyzeWithReturning(const parser::Returning& returning) const;
     // The running statement's head instant and, once its own chain is
     // compiled, the time to it (DF-S1); copied onto its outcome the same way.
     sched::MonoTimeNs statement_head_ns_ = 0;

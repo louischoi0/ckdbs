@@ -206,11 +206,12 @@ struct WriteIndexKey {
 std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
                                              const Step& where);
 
-// **The index a write finds its rows through** (DU-S2): the read ladder's
-// own literal index choice for the same conjuncts (`IndexProbeOf`, section
-// 4 of `Compile`) - the longest equality prefix, one value list standing as
-// a prefix column - so a write and the `SELECT` of its WHERE enter the same
-// index by the same bounds. The entries between the bounds name a superset
+// **The index a write finds its rows through** (DU-S2, DU-S3): the read
+// ladder's own literal index choice for the same conjuncts (`IndexProbeOf`,
+// section 4 of `Compile`) - the longest equality prefix, one value list
+// standing as a prefix column, a range on the column after it - so a write
+// and the `SELECT` of its WHERE enter the same index by the same bounds.
+// `only`, where not empty, is the one index a plan's pin names (CX-S3a). The entries between the bounds name a superset
 // of the rows the WHERE can pass (IX1): the caller collects their tuple
 // keys before it writes a row and tests every row it finds against the
 // whole WHERE (DU-R1). `set`, where a list stands, holds one pair of bounds
@@ -226,7 +227,7 @@ struct WriteIndexArm {
     std::optional<KeySet> set;
 };
 std::optional<WriteIndexArm> WriteIndexArmOf(const catalog::TableAccess& access,
-                                             const Step& where);
+                                             const Step& where, std::string_view only = {});
 
 // **Whether the WHERE's tuple key range outranks its index arm** (DU-S2),
 // by the read ladder's own rule (`Compile`, section 4): on a btree, a

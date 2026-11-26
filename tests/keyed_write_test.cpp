@@ -654,6 +654,330 @@ TEST_F(IndexWriteHoldTest, WithIndexesOffAnIndexedWriteWalks) {
               every_page_);
 }
 
+// ---- DU-S3: a range after the prefix ------------------------------------------
+
+TEST_F(IndexWriteHoldTest, ARangeOnAnIndexedColumnHoldsOnlyItsRowsLeaves) {
+    LoadIndexed("BTREE");
+    EXPECT_LE(Held(x_, "UPDATE x SET v = v + 1 WHERE owner BETWEEN 7 AND 8", "UPDATED 8"), 8u);
+    // After an equality prefix: grp 1 holds owner 7 alone of 7, 8 and 9.
+    EXPECT_LE(Held(x_, "UPDATE x SET v = v + 1 WHERE grp = 1 AND owner BETWEEN 7 AND 9",
+                   "UPDATED 4"),
+              4u);
+    EXPECT_LE(Held(x_, "DELETE FROM x WHERE owner >= 298 AND owner <= 299 AND v = 0", "DELETED 8"),
+              8u);
+    EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner BETWEEN 400 AND 500", "UPDATED 0"), 0u);
+    // A one-sided range on the column is none to the ladder, read or write.
+    EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner > 298", "UPDATED 0"), every_page_);
+    EXPECT_EQ(Run("SELECT name, probes, ranges FROM sys.indexes WHERE rel_name = 'x' "
+                  "AND name != 'x_tag'"),
+              "name,probes,ranges\\nx_owner,0,3\\nx_grp_owner,0,1");
+    EXPECT_EQ(Run("SELECT id, v FROM x WHERE v > 0"),
+              "id,v\\n7,2\\n8,1\\n307,2\\n308,1\\n607,2\\n608,1\\n907,2\\n908,1");
+}
+
+// ---- DU-S3: `ANALYZE` names the arm a write took ------------------------------
+
+TEST_F(IndexWriteHoldTest, AnalyzeRunsAWriteAndNamesItsArm) {
+    LoadIndexed("BTREE");
+    const auto analyzed = [&](const std::string& sql) { return Run("ANALYZE " + sql); };
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE id = 7"),
+              "analyze rows=1 class=Update\\nwrite Lookup x");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE id IN (7, 8, 5000)"),
+              "analyze rows=2 class=Update\\nwrite Lookup x key_set=3");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE id BETWEEN 7 AND 8"),
+              "analyze rows=2 class=Update\\nwrite Range x range=[7, 8]");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE owner = 7"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe x index=x_owner keys=4");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE owner IN (7, 8)"),
+              "analyze rows=8 class=Update\\nwrite IndexProbe x index=x_owner key_set=2 keys=8");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE owner BETWEEN 7 AND 8"),
+              "analyze rows=8 class=Update\\nwrite IndexRange x index=x_owner keys=8");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE grp = 1 AND owner = 7"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe x index=x_grp_owner keys=4");
+    // The keys an index named and a bound beside it dropped are not counted.
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE owner = 7 AND id > 600"),
+              "analyze rows=2 class=Update\\nwrite IndexProbe x index=x_owner keys=2");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE v > 100"),
+              "analyze rows=0 class=Update\\nwrite Scan x");
+    // A strict range on an indexed column is no range to the ladder.
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 0 WHERE owner > 6 AND owner < 9"),
+              "analyze rows=8 class=Update\\nwrite Scan x");
+    EXPECT_EQ(analyzed("UPDATE x SET v = v + 1 WHERE owner = 7 AND "
+                       "EXISTS (SELECT id FROM x WHERE id = 1)"),
+              "analyze rows=4 class=Update\\nwrite Scan x");
+    EXPECT_EQ(analyzed("DELETE FROM x WHERE owner = 9"),
+              "analyze rows=4 class=Delete\\nwrite IndexProbe x index=x_owner keys=4");
+    // The run was real: every statement above wrote its rows.
+    EXPECT_EQ(Run("SELECT id, v FROM x WHERE owner = 7"), "id,v\\n7,8\\n307,5\\n607,6\\n907,6");
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM x WHERE owner = 9"), "count(*)\\n0");
+
+    // A refusal is the write's own, and `RETURNING` under `ANALYZE` is
+    // refused before a row is written.
+    const std::string unknown = analyzed("UPDATE x SET nope = 1 WHERE owner = 7");
+    EXPECT_EQ(unknown.rfind("ERR", 0), 0u) << unknown;
+    const std::string returning = analyzed("UPDATE x SET v = v + 1 WHERE owner = 8 RETURNING id");
+    EXPECT_EQ(returning.rfind("ERR", 0), 0u) << returning;
+    EXPECT_NE(returning.find("RETURNING"), std::string::npos) << returning;
+    const std::string deleting = analyzed("DELETE FROM x WHERE owner = 8 RETURNING id");
+    EXPECT_EQ(deleting.rfind("ERR", 0), 0u) << deleting;
+    EXPECT_EQ(Run("SELECT id, v FROM x WHERE owner = 8"), "id,v\\n8,4\\n308,2\\n608,2\\n908,2");
+}
+
+TEST_F(IndexWriteHoldTest, AnalyzeNamesAHeapsArms) {
+    LoadIndexed("HEAP");
+    const std::string keystone = "$keystone_" + std::to_string(x_);
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE id BETWEEN 7 AND 8"),
+              "analyze rows=2 class=Update\\nwrite IndexRange x index=" + keystone + " keys=2");
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 7 AND id BETWEEN 300 AND 310"),
+              "analyze rows=1 class=Update\\nwrite IndexProbe x index=x_owner keys=1");
+    EXPECT_EQ(Run("ANALYZE DELETE FROM x WHERE id = 7"),
+              "analyze rows=1 class=Delete\\nwrite Lookup x");
+    EXPECT_EQ(Run("ANALYZE DELETE FROM x WHERE v > 100"),
+              "analyze rows=0 class=Delete\\nwrite Scan x");
+    // `ANALYZE DELETE STATISTICS` is no row write and keeps its own refusal.
+    const std::string statistics = Run("ANALYZE DELETE STATISTICS ON x");
+    EXPECT_EQ(statistics.rfind("ERR", 0), 0u) << statistics;
+    EXPECT_EQ(statistics.find("analyze"), std::string::npos) << statistics;
+
+    // With `indexes = off` a heap's window is its walk, and no collection was
+    // read for `ANALYZE` to call past its bound.
+    Open(/*indexes=*/false);
+    LoadIndexed("HEAP");
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE id BETWEEN 7 AND 8"),
+              "analyze rows=2 class=Update\\nwrite Scan x");
+}
+
+// ---- DU-S3: an administrator's plan pins a write's arm (DU-Q4 (a)) ------------
+
+class WritePlanTest : public IndexWriteHoldTest {
+protected:
+    void Ok(const std::string& sql, const std::string& prefix) {
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.rfind(prefix, 0), 0u) << sql << " -> " << reply;
+    }
+    void Refused(const std::string& sql, const std::string& needle) {
+        const std::string reply = Run(sql);
+        EXPECT_EQ(reply.rfind("ERR", 0), 0u) << sql << " -> " << reply;
+        EXPECT_NE(reply.find(needle), std::string::npos) << sql << " -> " << reply;
+    }
+};
+
+// `SCAN` holds a write to its walk, the variant chosen by the statement's
+// arguments at every run, and the rows are the unpinned statement's.
+TEST_F(WritePlanTest, AScanPinWalksAndItsVariantIsChosenByTheArguments) {
+    LoadIndexed("BTREE");
+    Ok("CREATE PLAN w_owner FOR UPDATE x SET v = v + 1 WHERE owner = 7 "
+       "VARIANT big WHEN ARG(2) = 7 ORDER (x) ACCESS x SCAN VARIANT rest ELSE ORDER (x)",
+       "CREATED PLAN name=w_owner");
+    EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 7", "UPDATED 4"), every_page_);
+    EXPECT_LE(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 8", "UPDATED 4"), 4u);
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 7"),
+              "analyze rows=4 class=Update\\nwrite Scan x arm=plan\\nplanned plan=w_owner/big");
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 8"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe x index=x_owner keys=4\\n"
+              "planned plan=w_owner/rest");
+    EXPECT_EQ(Run("SELECT id, v FROM x WHERE v > 0"),
+              "id,v\\n7,2\\n8,2\\n307,2\\n308,2\\n607,2\\n608,2\\n907,2\\n908,2");
+    // Another statement's shape is not this plan's: a DELETE by the same WHERE.
+    EXPECT_EQ(Run("ANALYZE DELETE FROM x WHERE owner = 7"),
+              "analyze rows=4 class=Delete\\nwrite IndexProbe x index=x_owner keys=4");
+
+    // Disabled, the plan is asked of nothing; dropped, it is gone.
+    Ok("ALTER PLAN w_owner DISABLE", "ALTERED PLAN");
+    EXPECT_LE(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 307", "UPDATED 0"), 0u);
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 8"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe x index=x_owner keys=4");
+    Ok("DROP PLAN w_owner", "DROPPED PLAN");
+}
+
+// The classes are the read ladder's: the tuple key (a btree's bounded walk
+// among its arms), a named index, and what a forbidden class leaves.
+TEST_F(WritePlanTest, APinNamesAClassAnIndexOrWhatIsForbidden) {
+    LoadIndexed("BTREE");
+    // Unpinned, the index outranks a one-sided bound; `TUPLE_KEY` takes the
+    // bound's walk instead.
+    Ok("CREATE PLAN w_key FOR UPDATE x SET v = v + 1 WHERE owner = 8 AND id > 600 "
+       "VARIANT k ELSE ORDER (x) ACCESS x TUPLE_KEY",
+       "CREATED PLAN name=w_key");
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 8 AND id > 600"),
+              "analyze rows=2 class=Update\\nwrite Range x range=[601, 281474976710655] "
+              "arm=plan\\nplanned plan=w_key/k");
+    // The composite index is the longer prefix; the pin names the other.
+    Ok("CREATE PLAN w_named FOR UPDATE x SET v = v + 1 WHERE grp = 1 AND owner = 7 "
+       "VARIANT o ELSE ORDER (x) ACCESS x INDEX x_owner",
+       "CREATED PLAN name=w_named");
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE grp = 1 AND owner = 7"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe x index=x_owner keys=4 arm=plan\\n"
+              "planned plan=w_named/o");
+    Ok("CREATE PLAN w_not FOR DELETE FROM x WHERE owner = 9 "
+       "VARIANT n ELSE ORDER (x) ACCESS x NOT INDEX",
+       "CREATED PLAN name=w_not");
+    EXPECT_EQ(Held(x_, "DELETE FROM x WHERE owner = 9", "DELETED 4"), every_page_);
+    EXPECT_EQ(Run("SELECT id, v FROM x WHERE v > 0"),
+              "id,v\\n7,1\\n307,1\\n607,1\\n608,1\\n907,1\\n908,1");
+
+    // An empty window is the tuple key's arm too, and reads nothing.
+    EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 8 AND id > 281474976710656"),
+              "analyze rows=0 class=Update\\nwrite Range x range=empty arm=plan\\n"
+              "planned plan=w_key/k");
+    // **A pin a statement's arguments leave no arm for is declined for that
+    // statement** (CX-R2), which then runs unpinned: a value wider than its
+    // column enters no index of it, and the walk answers that no row holds it.
+    Ok("CREATE TABLE n (id int64, k int32, v int64) BTREE", "CREATED");
+    Ok("CREATE INDEX n_k ON n (k)", "CREATED INDEX");
+    Ok("INSERT INTO n VALUES (1, 5, 0)", "INSERTED");
+    Ok("INSERT INTO n VALUES (2, 6, 0)", "INSERTED");
+    Ok("CREATE PLAN w_n FOR UPDATE n SET v = v + 1 WHERE k = 5 VARIANT a ELSE ORDER (n) ACCESS n INDEX",
+       "CREATED PLAN name=w_n");
+    EXPECT_EQ(Run("ANALYZE UPDATE n SET v = v + 1 WHERE k = 5"),
+              "analyze rows=1 class=Update\\nwrite IndexProbe n index=n_k keys=1 arm=plan\\n"
+              "planned plan=w_n/a");
+    EXPECT_EQ(Run("ANALYZE UPDATE n SET v = v + 1 WHERE k = 99999999999"),
+              "analyze rows=0 class=Update\\nwrite Scan n\\n"
+              "planned plan=w_n/a plan_declined=1");
+}
+
+TEST_F(WritePlanTest, APlanAWriteCannotRunIsRefusedWhenItIsMade) {
+    LoadIndexed("BTREE");
+    const std::string by_owner = "FOR DELETE FROM x WHERE owner = 9 VARIANT a ELSE ORDER (x) ";
+    // No arm of the statement is of the pinned class.
+    Refused("CREATE PLAN bad " + by_owner + "ACCESS x TUPLE_KEY", "cannot run for this statement");
+    Refused("CREATE PLAN bad " + by_owner + "ACCESS x CABIN", "reads through no Cabin");
+    Refused("CREATE PLAN bad " + by_owner + "ACCESS x INDEX x_tag", "cannot run for this statement");
+    Refused("CREATE PLAN bad " + by_owner + "ACCESS x INDEX nope", "no index named 'nope'");
+    Refused("CREATE PLAN bad " + by_owner + "BUILD x ON", "a write has no join");
+    Refused("CREATE PLAN bad FOR DELETE FROM x WHERE owner = 9 AS SEARCHED", "AS SEARCHED");
+    Refused("CREATE PLAN bad FOR DELETE FROM x WHERE owner = 9 AND "
+            "EXISTS (SELECT id FROM x WHERE id = 1) VARIANT a ELSE ORDER (x) ACCESS x SCAN",
+            "subquery");
+    // The statement's own refusal comes first: a SET list that does not compile.
+    Refused("CREATE PLAN bad FOR UPDATE x SET nope = 1 WHERE owner = 9 "
+            "VARIANT a ELSE ORDER (x) ACCESS x SCAN",
+            "nope");
+    Refused("CREATE PLAN bad FOR UPDATE x SET id = 1 WHERE owner = 9 "
+            "VARIANT a ELSE ORDER (x) ACCESS x SCAN",
+            "id");
+    Refused("CREATE PLAN bad FOR DELETE FROM nowhere WHERE owner = 9 "
+            "VARIANT a ELSE ORDER (nowhere) ACCESS nowhere SCAN",
+            "nowhere");
+    Refused("CREATE PLAN bad FOR INSERT INTO x VALUES (1, 1, 1, 't', 0) "
+            "VARIANT a ELSE ORDER (x) ACCESS x SCAN",
+            "takes a SELECT, an UPDATE or a DELETE");
+    // `ADVISE PLAN` searches a join order, which a write has none of.
+    Refused("ADVISE PLAN FOR DELETE FROM x WHERE owner = 9", "takes a SELECT");
+    EXPECT_EQ(Run("SELECT name FROM sys.plans"), "name");
+
+    // One plan a shape, a write's as a read's.
+    Ok("CREATE PLAN one " + by_owner + "ACCESS x SCAN", "CREATED PLAN name=one");
+    Refused("CREATE PLAN two FOR DELETE FROM x WHERE owner = 4 VARIANT a ELSE ORDER (x)",
+            "already holds this statement's shape");
+    // `ALTER PLAN` keeps `CREATE PLAN`'s refusals for a write's plan.
+    Refused("ALTER PLAN one REPLACE VARIANT a ELSE ORDER (x) BUILD x ON", "a write has no join");
+    Refused("ALTER PLAN one REPLACE VARIANT a ELSE ORDER (x) ACCESS x CABIN",
+            "reads through no Cabin");
+    Ok("ALTER PLAN one REPLACE VARIANT a ELSE ORDER (x) ACCESS x NOT INDEX", "ALTERED PLAN");
+    EXPECT_EQ(Run("ANALYZE DELETE FROM x WHERE owner = 9"),
+              "analyze rows=4 class=Delete\\nwrite Scan x arm=plan\\nplanned plan=one/a");
+}
+
+// The pin picks how the rows are found and never which: one write under
+// every pin, and under none, leaves one relation.
+TEST_F(WritePlanTest, EveryPinLeavesTheRelationTheUnpinnedWriteLeaves) {
+    std::string unpinned;
+    for (const char* pin : {"", "ACCESS x SCAN", "ACCESS x INDEX", "ACCESS x INDEX x_owner",
+                            "ACCESS x TUPLE_KEY", "ACCESS x NOT INDEX", "ACCESS x NOT TUPLE_KEY"}) {
+        Open(/*indexes=*/true);
+        LoadIndexed("BTREE");
+        if (*pin != 0) {
+            Ok(std::string("CREATE PLAN w FOR UPDATE x SET owner = owner + 1, v = v + 1 "
+                           "WHERE owner = 7 AND id > 300 VARIANT a ELSE ORDER (x) ") + pin,
+               "CREATED PLAN");
+            Ok(std::string("CREATE PLAN d FOR DELETE FROM x WHERE grp = 2 AND owner = 8 AND "
+                           "id < 900 VARIANT a ELSE ORDER (x) ") + pin,
+               "CREATED PLAN");
+        }
+        EXPECT_EQ(Run("UPDATE x SET owner = owner + 1, v = v + 1 WHERE owner = 7 AND id > 300"),
+                  "UPDATED 3")
+            << pin;
+        EXPECT_EQ(Run("UPDATE x SET owner = owner + 1, v = v + 1 WHERE owner = 8 AND id > 300"),
+                  "UPDATED 6")
+            << pin;
+        EXPECT_EQ(Run("DELETE FROM x WHERE grp = 2 AND owner = 8 AND id < 900"), "DELETED 1")
+            << pin;
+        const std::string left = Run("SELECT id, owner, grp, v FROM x WHERE v > 0 OR owner = 8");
+        if (*pin == 0) unpinned = left;
+        EXPECT_EQ(left, unpinned) << pin;
+    }
+}
+
+// Served and declined are counted, as a read's plan is (`SHOW META`).
+TEST_F(WritePlanTest, AWritesPlanIsCountedServedAndDeclined) {
+    LoadIndexed("BTREE");
+    Ok("CREATE TABLE n (id int64, k int32, v int64) BTREE", "CREATED");
+    Ok("CREATE INDEX n_k ON n (k)", "CREATED INDEX");
+    Ok("INSERT INTO n VALUES (1, 5, 0)", "INSERTED");
+    Ok("CREATE PLAN w_n FOR UPDATE n SET v = v + 1 WHERE k = 5 VARIANT a ELSE ORDER (n) ACCESS n INDEX",
+       "CREATED PLAN");
+    // `SHOW META` is rows of `section,key,value`.
+    const auto meta = [&](const std::string& key) {
+        const std::string all = Run("SHOW META");
+        const std::string row = "join_order," + key + ",";
+        const auto at = all.find(row);
+        if (at == std::string::npos) return std::string("absent");
+        const auto from = at + row.size();
+        return all.substr(from, all.find('\\', from) - from);
+    };
+    const std::string served = meta("plan_served");
+    const std::string declined = meta("plan_declined");
+    ASSERT_NE(served, "absent");
+    EXPECT_EQ(Run("UPDATE n SET v = v + 1 WHERE k = 5"), "UPDATED 1");
+    EXPECT_EQ(meta("plan_served"), std::to_string(std::stoull(served) + 1));
+    EXPECT_EQ(meta("plan_declined"), declined);
+    EXPECT_EQ(Run("UPDATE n SET v = v + 1 WHERE k = 99999999999"), "UPDATED 0");
+    EXPECT_EQ(meta("plan_served"), std::to_string(std::stoull(served) + 2));
+    EXPECT_EQ(meta("plan_declined"), std::to_string(std::stoull(declined) + 1));
+}
+
+// A relation named with its namespace, and a column the plan's statement
+// writes by its binding: renamed, the plan reads `invalid` (DI).
+TEST_F(WritePlanTest, AWritesPlanFollowsItsNamespaceAndItsQualifiedColumns) {
+    Ok("CREATE NAMESPACE led", "CREATED");
+    Ok("CREATE TABLE led.acct (id int64, owner int64, v int64) BTREE", "CREATED");
+    Ok("CREATE INDEX acct_owner ON led.acct (owner)", "CREATED INDEX");
+    Ok("INSERT INTO led.acct VALUES (1, 7, 0)", "INSERTED");
+    Ok("CREATE PLAN w_led FOR DELETE FROM led.acct WHERE acct.owner = 7 "
+       "VARIANT a ELSE ORDER (acct) ACCESS acct SCAN",
+       "CREATED PLAN");
+    EXPECT_EQ(Run("SELECT name, state FROM sys.plans"), "name,state\\nw_led,enabled");
+    EXPECT_EQ(Run("ANALYZE DELETE FROM led.acct WHERE acct.owner = 7"),
+              "analyze rows=1 class=Delete\\nwrite Scan acct arm=plan\\nplanned plan=w_led/a");
+    Ok("ALTER TABLE led.acct RENAME COLUMN owner TO holder", "RENAMED");
+    EXPECT_EQ(Run("SELECT name, state FROM sys.plans"), "name,state\\nw_led,invalid");
+}
+
+// An enabled plan RESTRICTs what it names, and a rename puts it out of reach
+// (DI): it reads `invalid`, serves nothing and restricts nothing.
+TEST_F(WritePlanTest, AWritesPlanRestrictsItsRelationAndItsIndexUntilARename) {
+    LoadIndexed("BTREE");
+    Ok("CREATE PLAN w_named FOR UPDATE x SET v = v + 1 WHERE grp = 1 AND owner = 7 "
+       "VARIANT o ELSE ORDER (x) ACCESS x INDEX x_owner",
+       "CREATED PLAN name=w_named");
+    Refused("DROP INDEX x_owner", "w_named");
+    Refused("DROP TABLE x", "w_named");
+    EXPECT_EQ(Run("SELECT name, state FROM sys.plans"), "name,state\\nw_named,enabled");
+
+    Ok("ALTER TABLE x RENAME TO y", "RENAMED TABLE");
+    EXPECT_EQ(Run("SELECT name, state FROM sys.plans"), "name,state\\nw_named,invalid");
+    EXPECT_EQ(Run("ANALYZE UPDATE y SET v = v + 1 WHERE grp = 1 AND owner = 7"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe y index=x_grp_owner keys=4");
+    // The pinned index stays the plan's until the plan is dropped; the
+    // relation does not (DI).
+    Refused("DROP INDEX x_owner", "w_named");
+    Ok("DROP PLAN w_named", "DROPPED PLAN");
+    Ok("DROP INDEX x_owner", "DROPPED INDEX");
+    Ok("DROP TABLE y", "DROPPED TABLE");
+}
+
 // ---- DU-R1 for an index-driven write ----------------------------------------
 
 TEST(KeyedWriteSameRowsTest, EveryIndexedWriteLeavesWhatItsWalkLeaves) {
@@ -702,6 +1026,14 @@ TEST(KeyedWriteSameRowsTest, EveryIndexedWriteLeavesWhatItsWalkLeaves) {
         twin.Same(update, "owner = 3 AND id < 100 AND grp = 0", all);
         twin.Same(update, "grp = 1 AND code = 5004", all);  // the unique key whole
         twin.Same(update, "grp = 1 AND code > 5200", all);
+        // A range on an indexed column, and after an equality prefix (DU-S3).
+        twin.Same(update, "owner BETWEEN 3 AND 5", all);
+        twin.Same(update, "owner >= 4 AND owner <= 4 AND grp = 2", all);
+        twin.Same(update, "grp = 1 AND owner BETWEEN 2 AND 4", all);
+        twin.Same(update, "grp = 2 AND code BETWEEN 5100 AND 5200", all);
+        twin.Same(update, "owner BETWEEN 9 AND 3", all);
+        twin.Same(std::string("UPDATE ") + relation + " SET owner = owner + 1 WHERE ",
+                  "owner BETWEEN 5 AND 6", all);
         twin.Same(update, "tag = 'a-tag-longer-than-its-indexed-prefix-2'", all);
         twin.Same(update, "tag = 'a-tag-longer-than-its-indexed-prefix-2' AND owner = 2", all);
         // A statement that moves the key it is found by: off it, onto
@@ -878,6 +1210,95 @@ TEST_F(IndexWriteLockTest, AnIndexedWriteMeetingANewerCommittedVersionIsRefusedA
     EXPECT_EQ(locks_->EntryCount(), 0u);
 }
 
+// ---- DU-S3: `ANALYZE` of a write is the write, to every gate -------------------
+
+// A `READ ONLY` transaction refuses it as the write it is, and one that
+// parks on a held row is answered when it has finished, not when it parked.
+TEST_F(IndexWriteLockTest, AnalyzeOfAWriteIsRefusedAndParkedAsTheWriteIs) {
+    Session reader;
+    ASSERT_EQ(In(reader, "BEGIN READ ONLY").rfind("BEGIN", 0), 0u);
+    const std::string refused = In(reader, "ANALYZE UPDATE b SET v = v + 1 WHERE owner = 1");
+    EXPECT_EQ(refused.rfind("ERR", 0), 0u) << refused;
+    EXPECT_NE(refused.find("READ ONLY"), std::string::npos) << refused;
+    // A read's `ANALYZE` is still a read there.
+    EXPECT_EQ(In(reader, "ANALYZE SELECT id FROM b WHERE owner = 1").rfind("analyze", 0), 0u);
+    ASSERT_EQ(In(reader, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Local("SELECT COUNT(*) FROM b WHERE v > 0"), "count(*)\\n0");
+
+    // In a transaction it is the transaction's write, taken back with it;
+    // in a failed one it is refused as every statement is.
+    Session txn;
+    ASSERT_EQ(In(txn, "BEGIN").rfind("BEGIN", 0), 0u);
+    EXPECT_EQ(In(txn, "ANALYZE UPDATE b SET v = v + 1 WHERE owner = 2"),
+              "analyze rows=4 class=Update\\nwrite IndexProbe b index=b_owner keys=4");
+    EXPECT_EQ(In(txn, "ANALYZE UPDATE b SET nope = 1 WHERE owner = 2").rfind("ERR", 0), 0u);
+    const std::string failed = In(txn, "ANALYZE UPDATE b SET v = v + 1 WHERE owner = 2");
+    EXPECT_EQ(failed.rfind("ERR", 0), 0u) << failed;
+    ASSERT_EQ(In(txn, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+    EXPECT_EQ(Local("SELECT COUNT(*) FROM b WHERE v > 0"), "count(*)\\n0");
+
+    // A `readonly` connection is told it is an UPDATE it may not run.
+    Session reading;
+    reading.set_role(Role::kReadOnly);
+    const std::string role = In(reading, "ANALYZE UPDATE b SET v = v + 1 WHERE owner = 1");
+    EXPECT_EQ(role.rfind("ERR permission: UPDATE", 0), 0u) << role;
+    EXPECT_EQ(In(reading, "ANALYZE SELECT id FROM b WHERE owner = 1").rfind("analyze", 0), 0u);
+
+    Session holder;
+    ASSERT_EQ(In(holder, "BEGIN").rfind("BEGIN", 0), 0u);
+    ASSERT_EQ(In(holder, "UPDATE b SET v = 50 WHERE id = 7"), "UPDATED 1");
+    Session writer;
+    Started write = Start("ANALYZE UPDATE b SET v = v + 100 WHERE owner = 1", writer);
+    Pump();
+    ASSERT_FALSE(*write.done) << write.out->response;
+    ASSERT_EQ(In(holder, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+    Pump();
+    ASSERT_TRUE(*write.done);
+    EXPECT_EQ(write.out->response,
+              "analyze rows=4 class=Update\\nwrite IndexProbe b index=b_owner keys=4");
+    EXPECT_EQ(Local("SELECT id, v FROM b WHERE v > 0"),
+              "id,v\\n1,100\\n4,100\\n7,100\\n10,100");
+    EXPECT_EQ(locks_->EntryCount(), 0u);
+}
+
+// **The arm a write parked in may be gone at its resume** - here a plan made
+// meanwhile pins the shape to `SCAN`. A btree's walk takes the statement up
+// at the key it stopped on, and every row is written once. A heap's walk
+// resumes by place and has none for a key loop's cursor: the statement is
+// refused and taken back whole, never answered a count short of its rows.
+TEST_F(IndexWriteLockTest, AWriteResumedUnderAnotherArmIsTheWalkOrARefusal) {
+    for (const char* relation : {"b", "h"}) {
+        const std::string name = relation;
+        const std::string write_sql = "UPDATE " + name + " SET v = v + 100 WHERE owner = 1";
+        Session holder;
+        ASSERT_EQ(In(holder, "BEGIN").rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(In(holder, "UPDATE " + name + " SET v = 50 WHERE id = 7"), "UPDATED 1");
+        Session writer;
+        Started write = Start(write_sql, writer);
+        Pump();
+        ASSERT_FALSE(*write.done) << name << ": " << write.out->response;
+        ASSERT_EQ(Local("CREATE PLAN p_" + name + " FOR " + write_sql +
+                        " VARIANT a ELSE ORDER (" + name + ") ACCESS " + name + " SCAN")
+                      .rfind("CREATED PLAN", 0),
+                  0u);
+        ASSERT_EQ(In(holder, "ROLLBACK").rfind("ROLLBACK", 0), 0u);
+        Pump();
+        ASSERT_TRUE(*write.done) << name;
+        if (name == "b") {
+            EXPECT_EQ(write.out->response, "UPDATED 4");
+            EXPECT_EQ(Local("SELECT id, v FROM b WHERE v > 0"),
+                      "id,v\\n1,100\\n4,100\\n7,100\\n10,100");
+        } else {
+            EXPECT_EQ(write.out->response.rfind("ERR", 0), 0u) << write.out->response;
+            EXPECT_NE(write.out->response.find("retry the statement"), std::string::npos)
+                << write.out->response;
+            EXPECT_EQ(Local("SELECT COUNT(*) FROM h WHERE v > 0"), "count(*)\\n0");
+        }
+        ASSERT_EQ(Local("DROP PLAN p_" + name).rfind("DROPPED PLAN", 0), 0u);
+        EXPECT_EQ(locks_->EntryCount(), 0u) << name;
+    }
+}
+
 // DU-Q2 (a): a first collection past `max_locks_per_txn` is not written
 // from, and the walk answers - here a statement whose index run names more
 // rows than the cap while its WHERE passes fewer, which a refusal on the
@@ -901,7 +1322,11 @@ TEST_F(IndexWriteCapTest, ACollectionPastTheCapIsAnsweredByTheWalk) {
                         " SET owner = 5 WHERE id BETWEEN 1 AND 12 AND id IN (1, 2, 4, 5, 7, 8, 10, 11)"),
                   "UPDATED 8");
         const std::string unused = Local(use);
-        EXPECT_EQ(Local("UPDATE " + name + " SET v = v + 1 WHERE owner = 0"), "UPDATED 4") << name;
+        // `ANALYZE` says which collection the walk answered for.
+        EXPECT_EQ(Local("ANALYZE UPDATE " + name + " SET v = v + 1 WHERE owner = 0"),
+                  "analyze rows=4 class=Update\\nwrite Scan " + name + " past_cap=" + name +
+                      "_owner")
+            << name;
         EXPECT_EQ(Local(use), unused) << name << ": a collection the walk answered for was counted";
         EXPECT_EQ(Local("SELECT id, v FROM " + name + " WHERE v > 0 ORDER BY id"),
                   "id,v\\n3,1\\n6,1\\n9,1\\n12,1")

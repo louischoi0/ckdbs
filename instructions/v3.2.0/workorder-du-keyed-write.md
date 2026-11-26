@@ -497,3 +497,110 @@ this host measured at the base commit (5 of 30 alone at `60dc593af`),
 which passed 13 of 15 alone on this tree, as it did on the tree before the
 review's changes. Overhead not measured; measured at the milestone's
 close.
+
+### DU-S3 - a range after the prefix, `ANALYZE` of a write, a write's plan (2026-11-26)
+
+On `du-keyed-write`, from `3abb5ea39`.
+
+**Built.**
+
+- **A range after the prefix.** `exec::WriteIndexArmOf` takes the read
+  ladder's ranged choice too: an inclusive range on the column after the
+  equality prefix, or on an index's first column (`owner BETWEEN 1 AND 3`,
+  `grp = 1 AND owner BETWEEN 2 AND 4`), collected as one range and counted
+  in `sys.indexes` as a range. A one-sided or strict range on a column is
+  no range to the ladder, read or write, and that write walks.
+- **`ANALYZE UPDATE` and `ANALYZE DELETE`.** The prefix comes off in
+  `DispatchInner`, above everything that reads a statement's first word,
+  so the statement is routed, authorized, refused in a `READ ONLY`
+  transaction, gated by the archive, parked and resumed as the write it
+  is. **It runs**: the rows are written, as an analyzed `SELECT` is run.
+  Its reply is two or three lines - `analyze rows=<n> class=Update|Delete`,
+  then `write <arm> <relation> ...` under the name `ANALYZE` prints a
+  read's step of that kind by (`Lookup`, with `key_set=<n>` for a list;
+  `Range range=[lo, hi]`; `IndexProbe` or `IndexRange` with `index=<name>`,
+  `key_set=<n>` and `keys=<n>`, the rows the write then descended for;
+  `Scan`), ` past_cap=<index>` for a collection DU-Q2's bound declined,
+  ` arm=plan` under a pin, and `planned plan=<name>/<variant>` with
+  ` plan_declined=1` where the statement's plan was declined for it.
+  `RETURNING` under it is refused `NotImplemented` before a row is
+  written; `ANALYZE DELETE STATISTICS` keeps its own refusal. A byte a
+  refusal names is counted from the write's first word, as an analyzed
+  `SELECT`'s is from its `SELECT`.
+- **A write's plan** (DU-Q4 (a)). `CREATE PLAN <name> FOR <update |
+  delete> VARIANT ... ORDER (<relation>) [ACCESS <relation> <pin>]` makes
+  an administrator's plan for a write's shape, keyed by the write's own
+  fetch id and its relation - a one-relation statement's plan (CX-S3b),
+  with its variants' rules over the statement's arguments, one plan a
+  shape, `ALTER PLAN` and `DROP PLAN`, the RESTRICT on its relation's
+  `DROP TABLE` and a pinned index's `DROP INDEX`, and `invalid` after a
+  rename, all as a `SELECT`'s. At a run the plan is asked for where a
+  one-relation plan is enabled (`AdminPlans::any_single`, one relaxed
+  load otherwise) and its variant's pin is settled before a row is read
+  (`WriteWalk::BoundBy`, `PinIsMet`). **A pin restricts the arms and
+  never forces one**, by the classes a read's step kinds are
+  (`exec::ArmClassOf`): `TUPLE_KEY` - a key, a list, a btree's bounded
+  walk; `INDEX [<name>]` - a unique key, an index the `WHERE` enters, a
+  heap's Keystone range; `SCAN` - the walk, whole; `NOT <class>` - what is
+  left. A pin naming a class no arm of the statement is of is declined
+  for that statement, counted, and the statement runs unpinned (CX-R2).
+  Refused at `CREATE PLAN`: a variant the example cannot run, an index the
+  relation does not have, `BUILD` and `CABIN` (a write has no join and
+  reads through no Cabin; `ALTER PLAN ... REPLACE VARIANT` refuses the
+  same two), `AS SEARCHED`, a `WHERE` holding a subquery (DU-Q5), and the
+  example's own refusals - its relation, its `WHERE`, its `SET` list. A
+  `SET` value's subquery is refused there too: nothing runs it.
+  `ADVISE PLAN` takes a `SELECT` only.
+- **A heap's walk takes no resume from a key loop**
+  (`WriteWalk::Visit`): `TxnConflict`, the statement taken back and run
+  again. Reached where the arm a write parked in is gone at its resume,
+  which a plan makes possible: one made, altered or dropped between the
+  park and the resume. A btree's walk takes the statement up at the key
+  it stopped on; a heap's resumes by place, and without the refusal it
+  would start at no page and the statement would answer a count short of
+  its rows (`[quiet-wrong]`). Before a write had a plan no arm could
+  change under a parked statement: `indexes` is a boot key, and a `DROP
+  INDEX` waits for the writer.
+
+**The simulator** (`sim/workload.cpp`) already draws `UPDATE` and `DELETE`
+by `v = <n>` over relations it has indexed on `v`, some assigning `v`
+itself; since DU-S2 those are index-driven writes that move their own key.
+`scripts/sim.sh` on this tree's Debug build: 290 runs, 0 failures. No
+shape was added to it.
+
+**Cells** (`tests/keyed_write_test.cpp`): a range's leaves and its
+`ranges` count; `ANALYZE`'s line for every arm on a btree and a heap, the
+rows it wrote, its refusals, a transaction, a failed one, a `readonly`
+role, a `READ ONLY` transaction, a park and its resume; a `SCAN` pin and a
+variant chosen by an argument; a class, a named index and a forbidden
+class; a pin declined at a run and counted; one write under seven pins
+leaving one relation; every refusal of `CREATE PLAN` and `ALTER PLAN`
+above; RESTRICT and a rename, of the relation and of a qualified column; a
+namespace-qualified relation; a write resumed under another arm, on a
+btree and a heap. Ranges joined the twin (64 statements now) and the
+contract family (30 writes).
+
+**Reviewed** (`critics-developer`, the working tree over `3abb5ea39`): no
+defect in the rows written under any pin or across a resume; the pin's
+pointer is held for the statement. Applied: `CREATE PLAN` compiles the
+example's `SET` list, which it had accepted unread; `ALTER PLAN` refuses
+what `CREATE PLAN` refuses of a write; `past_cap=` no longer printed where
+`indexes = off` read no collection; the relation's `IS` given back before
+the durability wait; `ANALYZE`'s state one optional struct, cleared with
+the statement's other fields; the arms named and classed by
+`exec::AccessKind`, the read ladder's own mapping, instead of by strings;
+an unused accessor cut; cells for the resume under another arm, the pins'
+twin, the role, the transaction, the counters, the names. Stated, not
+changed: byte positions under the prefix (the analyzed `SELECT`'s
+practice). Rejected: a KWP cell for `ANALYZE UPDATE` with a bound `?` -
+the prefix is stripped below the wire and the reply is the multi-line
+text KWP already delivers for an analyzed `SELECT`; it was run by hand
+over KWP at this stage; one helper for the two "has an index named"
+checks - they read different structures and share one `none_of`.
+
+The suite: 5,261 of 5,262 on the tree the stage commits. The one failure,
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`, is not
+DU's: it fails 12 of 60 runs alone on this tree and 12 of 60 at
+`60dc593af`, built apart (`docs/inflight/bugs/two-core-increment-starves-one-core.md`,
+filed with this stage). `DurableKickRigTest`, the host's other flake,
+passed. Overhead not measured; measured at the milestone's close.

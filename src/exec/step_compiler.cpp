@@ -2688,11 +2688,11 @@ std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
 }
 
 std::optional<WriteIndexArm> WriteIndexArmOf(const catalog::TableAccess& access,
-                                             const Step& where) {
+                                             const Step& where, std::string_view only) {
     if (!where.sub_chains.empty()) return std::nullopt;
-    std::optional<IndexChoice> choice = IndexProbeOf(access, where, /*slot=*/0, /*with_lists=*/true);
-    // A range after the prefix is DU-S3's.
-    if (!choice.has_value() || choice->probe.ranged) return std::nullopt;
+    std::optional<IndexChoice> choice =
+        IndexProbeOf(access, where, /*slot=*/0, /*with_lists=*/true, only);
+    if (!choice.has_value()) return std::nullopt;
     const auto index =
         std::find_if(access.indexes.begin(), access.indexes.end(),
                      [&](const catalog::TableAccess::IndexRef& ix) {

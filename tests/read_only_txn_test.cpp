@@ -292,10 +292,12 @@ TEST_F(ReadOnlyTxnTest, ReadsAndSessionStatementsAreAdmitted) {
         const std::string reply = Run(1, s, sql);
         EXPECT_FALSE(StartsWith(reply, "ERR")) << sql << ": " << reply;
     }
-    // A write behind ANALYZE's prefix is still not run.
+    // A write behind ANALYZE's prefix is the write it is (DU-S3): refused
+    // by the transaction's mode, which leaves the transaction as it was.
     const std::string analyzed = Run(1, s, "ANALYZE UPDATE t SET v = 9 WHERE id = 1");
     EXPECT_TRUE(StartsWith(analyzed, "ERR")) << analyzed;
-    // A failed statement poisons as in any transaction; ROLLBACK ends it.
+    EXPECT_NE(analyzed.find("READ ONLY"), std::string::npos) << analyzed;
+    EXPECT_EQ(Run(1, s, "SELECT v FROM t WHERE id = 1"), "v\\n1");
     EXPECT_EQ(Run(1, s, "ROLLBACK"), "ROLLBACK trx_id=none");
     EXPECT_EQ(Run(1, s, "SELECT v FROM t WHERE id = 1"), "v\\n1");
 

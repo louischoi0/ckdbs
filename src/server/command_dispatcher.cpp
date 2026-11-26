@@ -1326,6 +1326,7 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     statement_binding_ = {};
     statement_plan_source_ = {};
     statement_plan_label_.clear();
+    write_analysis_.reset();
     statement_head_ns_ = NowNs();
     statement_compile_ns_.reset();
 
@@ -1730,6 +1731,28 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
 
     auto [cmd, rest] = SplitFirstToken(line);
 
+    // **`ANALYZE` of a write** (DU-S3): the prefix comes off here, above
+    // everything that reads the statement's first word, so the write is
+    // judged as the write it is - its role, a `READ ONLY` transaction's
+    // refusal, the archive's gate - and runs by its own route, park and
+    // resume included. The reply is `AnalyzedWrite`'s. `DELETE STATISTICS`
+    // is no row write and keeps `ANALYZE`'s own refusal.
+    //
+    // **A byte a refusal names is counted from the write's first word**, as
+    // `ANALYZE` of a `SELECT` counts from the `SELECT`: every layer below
+    // sees the stripped text (`sql.md`, `ANALYZE`).
+    write_analysis_.reset();
+    if (IEquals(cmd, "ANALYZE")) {
+        const auto [verb, verb_rest] = SplitFirstToken(rest);
+        if (IEquals(verb, "UPDATE") ||
+            (IEquals(verb, "DELETE") && !IEquals(SplitFirstToken(verb_rest).first, "STATISTICS"))) {
+            write_analysis_.emplace();
+            line = Trim(rest);
+            cmd = verb;
+            rest = verb_rest;
+        }
+    }
+
     if (cmd.empty()) {
         return {"ERR empty command", false};
     }
@@ -2017,7 +2040,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         return HandleWaystone(Trim(line), session);
     }
     if (IEquals(cmd, "UPDATE")) {
-        return HandleUpdate(Trim(line), session);
+        return AnalyzedWrite(HandleUpdate(Trim(line), session), /*is_delete=*/false);
     }
     // **The statistics statements** (CY-S1b, CY-S4): dispatcher verbs as
     // `WAYSTONE` is, so they need no grammar production, reserve no word and
@@ -2037,7 +2060,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
         }
     }
     if (IEquals(cmd, "DELETE")) {
-        return HandleDelete(Trim(line), session);
+        return AnalyzedWrite(HandleDelete(Trim(line), session), /*is_delete=*/true);
     }
     // Unclassified in `RequiredRole`, so admin's (BH-Q10): it lifts an
     // identity guarantee, which is not a read-write session's decision.
@@ -11536,13 +11559,12 @@ StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::UniqueKey
 }
 
 StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::KeystoneWindowKeys(
-    const catalog::TableAccess& ta, const WalkBound& bound, bool first) {
-    const catalog::TableAccess::IndexRef* const keystone = exec::KeystoneIndexOf(ta);
-    if (!indexes_enabled_ || keystone == nullptr) return std::optional<std::vector<std::uint64_t>>{};
-    auto bounds = exec::KeystoneIndexBounds(ta, *keystone, bound.lo, bound.hi);
+    const catalog::TableAccess& ta, const catalog::TableAccess::IndexRef& keystone,
+    const WalkBound& bound, bool first) {
+    auto bounds = exec::KeystoneIndexBounds(ta, keystone, bound.lo, bound.hi);
     if (!bounds.ok()) return bounds.status();
     const IndexRange range{bounds.value().first, bounds.value().second};
-    return CollectWriteKeys(*keystone, std::span<const IndexRange>(&range, 1), /*ranged=*/true,
+    return CollectWriteKeys(keystone, std::span<const IndexRange>(&range, 1), /*ranged=*/true,
                             /*bound=*/nullptr, first);
 }
 
@@ -11846,6 +11868,59 @@ void CommandDispatcher::RecordOptimizerSignals(const std::optional<StatementIden
 
 DispatchOutcome CommandDispatcher::HandleUpdate(std::string_view line, Session& session) {
     return RunWalkWrite(line, session, /*is_delete=*/false);
+}
+
+DispatchOutcome CommandDispatcher::AnalyzedWrite(DispatchOutcome out, bool is_delete) {
+    // A refusal is the write's own, and a parked write is not finished: its
+    // resume comes back through `DispatchInner` and is answered then.
+    if (!write_analysis_.has_value() || !out.status.ok() || out.parked_mid_walk ||
+        out.response.rfind(is_delete ? "DELETED " : "UPDATED ", 0) != 0) {
+        return out;
+    }
+    // The run was real: the rows are written, and the count is the write's.
+    const WriteAnalysis& how = *write_analysis_;
+    std::string reply = "analyze rows=" + std::to_string(out.rows_affected) +
+                        " class=" + (is_delete ? "Delete" : "Update") + "\\nwrite " + how.arm +
+                        how.declined;
+    if (!how.plan.empty()) reply += "\\n" + how.plan;
+    out.response = std::move(reply);
+    return out;
+}
+
+std::optional<Status> CommandDispatcher::AnalyzeWithReturning(
+    const parser::Returning& returning) const {
+    if (!write_analysis_.has_value() || returning.items.empty()) return std::nullopt;
+    return Status::NotImplemented(
+        "ANALYZE of a write with RETURNING is not implemented: the reply is how the write "
+        "found its rows, and the rows it returns would have no result set to leave in (byte " +
+        std::to_string(returning.byte_offset) + ")");
+}
+
+CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
+                                                             std::string_view statement) {
+    if (statement.empty() || statement_fetch_id_ == 0 || !admin_plans_->any_single()) return {};
+    exec::CapturedKey key;
+    key.fetch_id = statement_fetch_id_;
+    key.n = 1;
+    key.oids[0] = oid;
+    WritePlan found;
+    found.plan = admin_plans_->Find(key);
+    if (found.plan == nullptr) return {};
+    found.variant = &found.plan->Choose(statement);
+    return found;
+}
+
+void CommandDispatcher::NoteWritePlan(const WritePlan& plan, bool declined) {
+    if (plan.variant == nullptr) return;
+    admin_plans_->CountServed();
+    if (declined) admin_plans_->CountDeclined();
+    statement_plan_source_ = exec::PlanSourceName(declined ? exec::PlanSource::kAdminDeclined
+                                                          : exec::PlanSource::kAdmin);
+    statement_plan_label_ = plan.plan->name + "/" + plan.variant->name;
+    if (write_analysis_.has_value()) {
+        write_analysis_->plan =
+            "planned plan=" + statement_plan_label_ + (declined ? " plan_declined=1" : "");
+    }
 }
 
 DispatchOutcome CommandDispatcher::RunWalkWrite(std::string_view line, Session& session,
@@ -12966,7 +13041,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
         return {"ERR expected an UPDATE statement", false};
     }
     return UpdateParsed(std::get<parser::UpdateStmt>(parsed.value()), scope, snapshot, resume_from,
-                        context, subqueries, /*arm_target=*/std::nullopt);
+                        context, subqueries, /*arm_target=*/std::nullopt, line);
 }
 
 // ---- The row walk UPDATE and DELETE share -----------------------------------
@@ -13303,19 +13378,26 @@ public:
     template <typename WriteAt>
     StatusOr<std::optional<bool>> WriteByKeys(WalkCursor& cursor, WriteAt&& write_at) {
         if (cursor.active && cursor.walked) return std::optional<bool>{false};
-        if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates_);
-            set.has_value()) {
-            auto done = WriteKeySet(*set, cursor, write_at);
-            if (!done.ok()) return done.status();
-            return std::optional<bool>{done.value()};
+        using Kind = exec::AccessKind;
+        if (Admits(Kind::kLookup)) {
+            if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates_);
+                set.has_value()) {
+                Note(Kind::kLookup,
+                     [&] { return " key_set=" + std::to_string(set->items.size()); });
+                auto done = WriteKeySet(*set, cursor, write_at);
+                if (!done.ok()) return done.status();
+                return std::optional<bool>{done.value()};
+            }
         }
         // A resume collects again, and the statement's use of an index is
         // counted once, at its first collection (DR-Q23).
         const bool first = !cursor.active;
         if (const std::optional<exec::WriteIndexKey> by_key =
-                exec::WriteIndexKeyOf(ta_, predicates_);
-            by_key.has_value()) {
-            auto done = WriteCollected(d_.UniqueKeyRun(*by_key, first), cursor, write_at);
+                Admits(Kind::kIndexProbe) ? exec::WriteIndexKeyOf(ta_, predicates_)
+                                          : std::nullopt;
+            by_key.has_value() && AdmitsIndex(*by_key->index)) {
+            auto done = WriteCollected(Kind::kIndexProbe, *by_key->index,
+                                       d_.UniqueKeyRun(*by_key, first), cursor, write_at);
             if (!done.ok() || done.value().has_value()) return done;
         }
         // An empty window names no row: no arm, and the walk visits nothing.
@@ -13325,28 +13407,41 @@ public:
         // heap's pages are in no key order, so its walk cannot be bounded
         // (`VisitRelation`), and the rows of a tuple key window are found
         // as its Keystone index names them, under the window the statement
-        // declared.
+        // declared. An index's arm, as a read's range of a heap's Keystone
+        // is (`IndexRange`), so a pin on the index class is what admits it
+        // and `indexes = off` takes it away.
         const auto by_keystone = [&]() -> StatusOr<std::optional<bool>> {
-            if (!ta_.heap() || bound == nullptr) return std::optional<bool>{};
-            return WriteCollected(d_.KeystoneWindowKeys(ta_, *bound, first), cursor, write_at);
+            const catalog::TableAccess::IndexRef* const keystone =
+                bound != nullptr && d_.indexes_enabled_ ? exec::KeystoneIndexOf(ta_) : nullptr;
+            if (keystone == nullptr || !AdmitsIndex(*keystone)) return std::optional<bool>{};
+            return WriteCollected(Kind::kIndexRange, *keystone,
+                                  d_.KeystoneWindowKeys(ta_, *keystone, *bound, first), cursor,
+                                  write_at);
         };
-        // **The read ladder's rank** (DU-S2; `BoundBy`): a btree's two-sided
-        // tuple key range and an embedded key's window are taken before an
-        // index - and a btree's window is its walk's (`Visit`).
-        if (window_outranks_index_) return std::optional<bool>{};
-        // **An index the WHERE enters** (DU-S2; `exec::WriteIndexArmOf`):
+        // **The read ladder's rank** (DU-S2; `exec::WriteRangeOutranksIndex`):
+        // a btree's two-sided tuple key range and an embedded key's window
+        // are taken before an index - and a btree's window is its walk's
+        // (`Visit`).
+        if (Admits(Kind::kRange) &&
+            (embedded_window_ || exec::WriteRangeOutranksIndex(ta_, predicates_))) {
+            return std::optional<bool>{};
+        }
+        // **An index the WHERE enters** (DU-S2, DU-S3; `exec::WriteIndexArmOf`):
         // the tuple keys its entries name are collected before a row is
         // written - so a statement that moves the indexed column never
         // meets an entry it appended - and each is written by the point
         // arm, ascending, the whole WHERE asked of the row found (DU-R1).
         // `indexes = off` takes the arm away, as it takes a read's
         // (`index.md` section 12.3).
-        if (d_.indexes_enabled_) {
-            if (const std::optional<exec::WriteIndexArm> arm =
-                    exec::WriteIndexArmOf(ta_, predicates_);
+        if (d_.indexes_enabled_ && Admits(Kind::kIndexProbe)) {
+            if (const std::optional<exec::WriteIndexArm> arm = exec::WriteIndexArmOf(
+                    ta_, predicates_, pin_ != nullptr ? std::string_view(pin_->name) : "");
                 arm.has_value()) {
-                auto done =
-                    WriteCollected(d_.IndexArmKeys(*arm, bound, first), cursor, write_at);
+                auto done = WriteCollected(arm->probe.ranged ? Kind::kIndexRange
+                                                              : Kind::kIndexProbe,
+                                           *arm->index, d_.IndexArmKeys(*arm, bound, first),
+                                           cursor, write_at,
+                                           arm->set.has_value() ? arm->set->items.size() : 0);
                 if (!done.ok() || done.value().has_value()) return done;
             }
         }
@@ -13355,16 +13450,37 @@ public:
 
     // One collection through the point arm (`WriteKeys`' contract, a
     // resume's included); nullopt where the collection declined, for the
-    // next arm or the walk.
+    // next arm or the walk - past DU-Q2's bound, the one reason a collection
+    // has. `kind` and `ix` are what `ANALYZE` names it by.
     template <typename WriteAt>
     StatusOr<std::optional<bool>> WriteCollected(
+        exec::AccessKind kind, const catalog::TableAccess::IndexRef& ix,
         StatusOr<std::optional<std::vector<std::uint64_t>>> keys, WalkCursor& cursor,
-        WriteAt&& write_at) {
+        WriteAt&& write_at, std::size_t key_set = 0) {
         if (!keys.ok()) return keys.status();
-        if (!keys.value().has_value()) return std::optional<bool>{};
+        if (!keys.value().has_value()) {
+            if (d_.write_analysis_.has_value()) {
+                d_.write_analysis_->declined += " past_cap=" + ix.name;
+            }
+            return std::optional<bool>{};
+        }
+        Note(kind, [&] {
+            return " index=" + ix.name +
+                   (key_set != 0 ? " key_set=" + std::to_string(key_set) : std::string()) +
+                   " keys=" + std::to_string(keys.value()->size());
+        });
         auto done = WriteKeys(*keys.value(), cursor, write_at);
         if (!done.ok()) return done.status();
         return std::optional<bool>{done.value()};
+    }
+
+    // **The single key a write descends to** (`exec::WriteKeyOf`), where the
+    // statement's pin admits the tuple key's arms.
+    std::optional<std::uint64_t> PointKey() {
+        if (!Admits(exec::AccessKind::kLookup)) return std::nullopt;
+        std::optional<std::uint64_t> key = exec::WriteKeyOf(ta_, predicates_);
+        if (key.has_value()) Note(exec::AccessKind::kLookup, [] { return std::string(); });
+        return key;
     }
 
     // **The tuple keys the walk visits** (DU-S1; `WalkBound`), read off the
@@ -13373,8 +13489,22 @@ public:
     // conjuncts name. **A WHERE holding a subquery is not bounded** (DU-Q5
     // (a)): its collection pass and its write walk stay whole until
     // `docs/pending/keyed-write-beside-a-subquery.md` is ruled on.
-    void BoundBy(const TupleKeyWindow& folded) {
-        if (!predicates_.sub_chains.empty()) return;
+    //
+    // **`pin`, where an administrator's plan gave the statement one, is
+    // settled here** (DU-S3, DU-Q4 (a); `exec::ArmPin`): it restricts the
+    // arms below to the classes it admits, by their own rules, and never
+    // forces one. A pin naming a class no arm of this statement is of -
+    // `INDEX` where the WHERE enters none, `CABIN`, a join's `BUILD` - is
+    // **declined for the statement**, which then runs unpinned
+    // (`pin_declined()`), as a read's is (CX-R2). The classes are the read
+    // ladder's: the tuple key (a key, a list, a btree's bounded walk), an
+    // index (a unique key, an index the WHERE enters, a heap's Keystone
+    // range) and the walk, whole, which `SCAN` holds a write to.
+    void BoundBy(const TupleKeyWindow& folded, const exec::ArmPin* pin = nullptr) {
+        if (!predicates_.sub_chains.empty()) {
+            pin_declined_ = pin != nullptr;
+            return;
+        }
         WalkBound bound;
         bool bounded = folded.bounded;
         if (folded.bounded) {
@@ -13389,19 +13519,51 @@ public:
             bounded = true;
         }
         if (bounded) bound_ = bound;
-        window_outranks_index_ =
-            embedded.has_value() || exec::WriteRangeOutranksIndex(ta_, predicates_);
+        embedded_window_ = embedded.has_value();
+        if (pin != nullptr) {
+            pin_ = pin;
+            if (!PinIsMet()) {
+                pin_ = nullptr;
+                pin_declined_ = true;
+            }
+        }
     }
+    bool pin_declined() const noexcept { return pin_declined_; }
 
     // The statement's walk: `VisitRelation` under the bound. An empty bound
     // names no row, and no page is fetched for it.
+    //
+    // **A heap's walk takes no resume from a key loop** (`[quiet-wrong]`
+    // otherwise): a key loop parks at a key and no page, and a heap's walk
+    // resumes at a page, so it would start at none and the statement would
+    // answer a count short of its rows. `DescentDeclined` refuses that for
+    // a descent; this refuses it for an arm that answered the first run and
+    // is gone at the resume - `indexes` switched off, a plan altered -
+    // which the statement, run again, answers by its walk from the head.
     Status Visit(storage::PageAccess page_access,
                  const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                                      std::uint16_t)>& fn,
                  WalkCursor* cursor) {
-        if (bound_.has_value() && bound_->lo >= bound_->hi) return Status::OK();
-        return d_.VisitRelation(ta_, page_access, fn, cursor,
-                                bound_.has_value() ? &*bound_ : nullptr);
+        if (bound_.has_value() && bound_->lo >= bound_->hi) {
+            Note(exec::AccessKind::kRange, [] { return std::string(" range=empty"); });
+            return Status::OK();
+        }
+        if (ta_.heap() && cursor != nullptr && cursor->active && !cursor->walked) {
+            return Status::TxnConflict(
+                "the key arm this write parked in no longer answers it, and a heap's walk "
+                "cannot take up its rows by key; retry the statement");
+        }
+        // A btree's bound is the tuple key class's arm (`Range`); a heap's
+        // walk has none to take.
+        const WalkBound* const bound =
+            bound_.has_value() && !ta_.heap() && Admits(exec::AccessKind::kRange) ? &*bound_
+                                                                                 : nullptr;
+        Note(bound != nullptr ? exec::AccessKind::kRange : exec::AccessKind::kScan, [&] {
+            return bound != nullptr ? " range=[" + std::to_string(bound->lo) + ", " +
+                                          std::to_string(bound->hi - 1) + "]"
+                                    : std::string();
+        });
+        return d_.VisitRelation(ta_, page_access, fn, cursor, bound);
     }
 
     // **A key loop's descent declined at `key`** - a damaged descent or an
@@ -13521,11 +13683,75 @@ private:
     // The leaf of the WHERE's list whose value the descent in hand was made
     // for (`WriteKeySet`); null on a walk and on a single-key write.
     const exec::BoolLeafFirst* first_leaf_ = nullptr;
+    // Whether the statement's pin, if it has one, lets it take an arm of
+    // `kind` - by the class a read's step of that kind is
+    // (`exec::ArmClassOf`), so a pin means to a write what it means to a
+    // read - and an index arm over `ix`.
+    bool Admits(exec::AccessKind kind) const noexcept {
+        return pin_ == nullptr || pin_->Admits(exec::ArmClassOf(kind));
+    }
+    bool AdmitsIndex(const catalog::TableAccess::IndexRef& ix) const {
+        return Admits(exec::AccessKind::kIndexProbe) &&
+               (pin_ == nullptr || pin_->name.empty() || exec::SameName(ix.name, pin_->name));
+    }
+
+    // Whether an arm of the class a positive pin names fits this statement:
+    // each arm's own rule, asked before a row is read. A pin that forbids a
+    // class is always met - the walk is what is left - and `BUILD` names a
+    // join's method, which a write has none of. **A second reading of the
+    // arms `PointKey`, `WriteByKeys` and `Visit` take**: an arm added there
+    // is added here, or a pin naming its class is declined for a statement
+    // that could meet it.
+    bool PinIsMet() const {
+        using Arm = exec::ArmPin::Arm;
+        if (pin_->build != exec::ArmPin::Build::kLadder) return false;
+        if (pin_->arm == Arm::kLadder || pin_->forbid) return true;
+        // An empty window is its class's arm too: it reads nothing.
+        const bool window = bound_.has_value();
+        switch (pin_->arm) {
+            case Arm::kTupleKey:
+                return exec::WriteKeyOf(ta_, predicates_).has_value() ||
+                       exec::WriteKeySetOf(predicates_).has_value() || (window && !ta_.heap());
+            case Arm::kIndex: {
+                if (const auto by_key = exec::WriteIndexKeyOf(ta_, predicates_);
+                    by_key.has_value() && AdmitsIndex(*by_key->index)) {
+                    return true;
+                }
+                if (!d_.indexes_enabled_) return false;
+                if (exec::WriteIndexArmOf(ta_, predicates_, pin_->name).has_value()) return true;
+                const catalog::TableAccess::IndexRef* const keystone =
+                    window ? exec::KeystoneIndexOf(ta_) : nullptr;
+                return keystone != nullptr && AdmitsIndex(*keystone);
+            }
+            case Arm::kScan: return true;
+            case Arm::kCabin:
+            case Arm::kLadder: return false;
+        }
+        return false;
+    }
+
+    // The arm in hand, for `ANALYZE` of a write (`CommandDispatcher::
+    // WriteAnalysis`), under the name `ANALYZE` prints a read's step of that
+    // kind by: the last one named is the one that answered. `detail` is
+    // built only where an `ANALYZE` asked.
+    template <typename Detail>
+    void Note(exec::AccessKind kind, Detail&& detail) {
+        if (!d_.write_analysis_.has_value()) return;
+        d_.write_analysis_->arm = std::string(exec::AccessKindName(kind)) + " " +
+                                  d_.RelationNameOf(ta_.oid) + detail() +
+                                  (pin_ != nullptr ? " arm=plan" : "");
+    }
+
     // The tuple keys the walk visits (`BoundBy`); empty for the whole
     // relation.
     std::optional<WalkBound> bound_;
-    // Whether that window ranks above an index the WHERE enters (`BoundBy`).
-    bool window_outranks_index_ = false;
+    // An embedded primary key's conjuncts gave the bound: its window ranks
+    // above an index, as a read's does.
+    bool embedded_window_ = false;
+    // The statement's plan's pin, once settled met (`BoundBy`); null for
+    // none, and for one declined.
+    const exec::ArmPin* pin_ = nullptr;
+    bool pin_declined_ = false;
 };
 
 DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteScope& scope,
@@ -13533,7 +13759,9 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                                                 WalkCursor resume_from,
                                                 const exec::StatementContext& context,
                                                 std::vector<exec::SubqueryResult>& subqueries,
-                                                std::optional<std::uint64_t> arm_target) {
+                                                std::optional<std::uint64_t> arm_target,
+                                                std::string_view statement) {
+    if (auto refused = AnalyzeWithReturning(stmt.returning)) return Refused(*refused);
     // Resolved under the writing session's view (DT3c): a write to a
     // relation another transaction created and has not committed must not
     // find it.
@@ -13741,8 +13969,15 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         arm_target.has_value() ? std::nullopt : DeclaredWriteBorrow(ta, stmt.where);
     // What the walk visits, off the same conjuncts (DU-S1): the window
     // above bounds the leaves read whether or not it was wide enough to
-    // declare. An arm's row is never walked for.
-    if (!arm_target.has_value()) walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where));
+    // declare. An arm's row is never walked for. The statement's plan, where
+    // an administrator gave its shape one, pins the arm it finds its rows
+    // by (DU-S3); the window declared above is the statement's whatever arm
+    // that is.
+    const WritePlan plan = arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement);
+    if (!arm_target.has_value()) {
+        walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
+        NoteWritePlan(plan, walk.pin_declined());
+    }
     if (declared.has_value()) {
         // `kFutile`: a declared unit is refused by whoever conflicts with
         // it, and the table reports who and not what they hold - so a
@@ -14184,7 +14419,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         }
     };
     if (std::optional<std::uint64_t> tuple_key =
-            arm_target.has_value() ? arm_target : exec::WriteKeyOf(ta, predicates.value());
+            arm_target.has_value() ? arm_target : walk.PointKey();
         tuple_key.has_value()) {
         StatusOr<PointWrite> wrote = write_at(*tuple_key);
         if (!wrote.ok()) return Refused(wrote.status());
@@ -14415,7 +14650,7 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     // Whether an arm answered for every row, so the walk is not owed.
     bool answered = false;
     WalkCursor cursor;
-    if (std::optional<std::uint64_t> key = exec::WriteKeyOf(ta, predicates.value()); key.has_value()) {
+    if (std::optional<std::uint64_t> key = walk.PointKey(); key.has_value()) {
         StatusOr<PointWrite> at = claim_at(*key);
         if (!at.ok()) return ended(Refused(at.status()));
         if (at.value() == PointWrite::kParked) return ended(Refused(walk.blocked_verdict));
@@ -16378,7 +16613,7 @@ Status CommandDispatcher::HoldPlanRelations(const exec::CapturedKey& key,
 
 StatusOr<std::string> CommandDispatcher::PlanExampleText(std::string_view line, std::size_t at,
                                                          std::size_t size,
-                                                         std::string_view head) {
+                                                         std::string_view head, bool writes) {
     // The command's text with everything around the SELECT blanked, so a
     // byte a parser or the compiler names is the command's own
     // (`HandleWaystone`'s shape).
@@ -16386,8 +16621,13 @@ StatusOr<std::string> CommandDispatcher::PlanExampleText(std::string_view line, 
     const auto begin = padded.begin() + static_cast<std::ptrdiff_t>(at);
     std::fill(padded.begin(), begin, ' ');
     std::fill(begin + static_cast<std::ptrdiff_t>(size), padded.end(), ' ');
-    if (!IEquals(SplitFirstToken(Trim(padded)).first, "SELECT")) {
-        return Status::InvalidArgument(std::string(head) + " takes a SELECT" + ByteSuffix(at));
+    const std::string_view verb = SplitFirstToken(Trim(padded)).first;
+    if (!IEquals(verb, "SELECT") &&
+        !(writes && (IEquals(verb, "UPDATE") || IEquals(verb, "DELETE")))) {
+        return Status::InvalidArgument(std::string(head) +
+                                       (writes ? " takes a SELECT, an UPDATE or a DELETE"
+                                               : " takes a SELECT") +
+                                       ByteSuffix(at));
     }
     // The statement's two words, `CREATE PLAN` or `ADVISE PLAN`.
     const std::string_view command = head.substr(0, head.find(' ', head.find(' ') + 1));
@@ -16402,6 +16642,139 @@ StatusOr<std::string> CommandDispatcher::PlanExampleText(std::string_view line, 
             ByteSuffix(tok.byte_offset));
     }
     return padded;
+}
+
+StatusOr<exec::PlanRow> CommandDispatcher::InstallAdminPlan(exec::PlanRow row,
+                                                            const exec::CreatePlanStmt& create) {
+    const exec::PlanDdlClaim claim(*admin_plans_);
+    if (!claim.held()) return PlanDdlBusy();
+    // One administrator's plan a shape (CX-S1).
+    if (const auto other = admin_plans_->Holder(row.key); other.has_value()) {
+        return Status::AlreadyExists("plan '" + *other +
+                                     "' already holds this statement's shape; ALTER PLAN "
+                                     "or DROP PLAN it" +
+                                     ByteSuffix(create.name_at));
+    }
+    auto created = exec::CreateAdminPlan(catalog_, page_store_, wal_, *admin_plans_,
+                                         std::move(row), exec::StatementContextNow().now_us);
+    if (!created.ok()) return AtByte(created.status(), create.name_at);
+    return created;
+}
+
+Status CommandDispatcher::WritePinAdmitted(const exec::PlanVariantSpec& spec,
+                                           const exec::ArmPin& pin) {
+    if (pin.build != exec::ArmPin::Build::kLadder) {
+        return Status::InvalidArgument("variant '" + spec.name +
+                                       "': BUILD pins a join's method, and a write has no join" +
+                                       ByteSuffix(spec.order_at));
+    }
+    if (pin.arm == exec::ArmPin::Arm::kCabin && !pin.forbid) {
+        return Status::InvalidArgument("variant '" + spec.name +
+                                       "': a write reads through no Cabin, so no arm of it "
+                                       "meets a CABIN pin" +
+                                       ByteSuffix(spec.order_at));
+    }
+    return Status::OK();
+}
+
+StatusOr<exec::PlanRow> CommandDispatcher::WritePlanRow(const exec::CreatePlanStmt& create,
+                                                        const std::string& example,
+                                                        const parser::Statement& statement,
+                                                        std::uint64_t fetch_id,
+                                                        std::uint32_t arguments, Session& session,
+                                                        std::optional<ReadBorrow>& hold) {
+    const auto* const update = std::get_if<parser::UpdateStmt>(&statement);
+    const auto* const remove = std::get_if<parser::DeleteStmt>(&statement);
+    const auto& [table, schema, table_at, where] =
+        update != nullptr ? std::tie(update->table_name, update->schema,
+                                     update->table_byte_offset, update->where)
+                          : std::tie(remove->table_name, remove->schema,
+                                     remove->table_byte_offset, remove->where);
+    if (create.searched) {
+        return Status::Unsupported(
+            "CREATE PLAN ... AS SEARCHED takes a join: a write names one relation and has no "
+            "join order to search; state its plan as VARIANT ... ORDER (...) ACCESS ..." +
+            ByteSuffix(create.statement_at));
+    }
+
+    exec::PlanRow row;
+    row.name = create.name;
+    row.arguments = arguments;
+    row.statement = parser::ShapeText(example);
+    row.bindings.push_back(table);
+
+    const exec::StatementContext context = StatementContextFor(session);
+    auto oid = ResolveNames(session, [&](const txn::ReadView* v) {
+        return catalog_.ResolveRelation(schema, table, context.default_namespace, table_at, v);
+    });
+    if (!oid.ok()) return AtByte(oid.status(), create.statement_at);
+    row.key.fetch_id = fetch_id;
+    row.key.n = 1;
+    row.key.oids[0] = oid.value();
+    if (Status s = HoldPlanRelations(row.key, hold); !s.ok()) return s;
+    auto access = catalog_.InitTableAccess(oid.value());
+    if (!access.ok()) {
+        return access.status().code() == StatusCode::kNotFound
+                   ? Status::TxnConflict("the statement's relation was dropped while the plan "
+                                         "was made; retry (byte 0)")
+                   : access.status();
+    }
+    const catalog::TableAccess& ta = *access.value();
+    ReadBorrow borrow(locks_, NextReadHolder(), &read_borrows_, nullptr);
+    auto predicates = ResolveNames(session, [&](const txn::ReadView* v) {
+        return exec::CompileWhere(catalog_, ta, table, where, v, &borrow, &context);
+    });
+    if (!predicates.ok()) return AtByte(predicates.status(), create.statement_at);
+    // The statement's own refusals before anything is said of its variants,
+    // as a `SELECT`'s example gives them: a `SET` list that does not compile
+    // - an unknown column, the tuple key, a mistyped expression - is a
+    // statement no plan can serve. (A subquery in a `SET` value is run by
+    // its statement, and there is none here: it keeps that refusal.)
+    if (update != nullptr) {
+        if (Status s = exec::CompileAssignments(ta, update->assignments); !s.ok()) {
+            return AtByte(s, create.statement_at);
+        }
+    }
+    // DU-Q5 (a): such a write collects its rows by a walk and takes no arm.
+    if (!predicates.value().sub_chains.empty()) {
+        return Status::Unsupported(
+            "a write whose WHERE holds a subquery walks its relation whatever a plan says, "
+            "and takes none" +
+            ByteSuffix(create.statement_at));
+    }
+
+    // Settled as a statement's pin is at its run - no row is read for it.
+    const WriteScope no_scope;
+    const txn::Snapshot no_snapshot;
+    for (const exec::PlanVariantSpec& spec : create.variants) {
+        auto variant = exec::ResolvePlanVariant(row.bindings, row.arguments, spec);
+        if (!variant.ok()) return variant.status();
+        if (!variant.value().access.empty()) {
+            const exec::ArmPin& pin = variant.value().access[0];
+            if (Status s = WritePinAdmitted(spec, pin); !s.ok()) return s;
+            // A pinned index is one the relation has, by name.
+            if (pin.arm == exec::ArmPin::Arm::kIndex && !pin.name.empty() &&
+                std::none_of(ta.indexes.begin(), ta.indexes.end(), [&](const auto& ix) {
+                    return exec::SameName(ix.name, pin.name);
+                })) {
+                return Status::NotFound("variant '" + spec.name + "': '" + table +
+                                        "' has no index named '" + pin.name + "'" +
+                                        ByteSuffix(spec.access.front().name_at));
+            }
+            WriteWalk walk(*this, no_scope, ta, no_snapshot, predicates.value(),
+                           /*resumed_targets=*/nullptr);
+            walk.BoundBy(FoldTupleKeyWindow(ta, where), &pin);
+            if (walk.pin_declined()) {
+                return Status::InvalidArgument(
+                    "variant '" + spec.name +
+                    "' cannot run for this statement: no arm the write can take is of the "
+                    "class its pin names" +
+                    ByteSuffix(spec.order_at));
+            }
+        }
+        row.variants.push_back(std::move(variant.value()));
+    }
+    return row;
 }
 
 DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Session& session) {
@@ -16432,16 +16805,34 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
     }
 
     auto example = PlanExampleText(line, create.statement_at, create.statement_size,
-                                   "CREATE PLAN ... FOR");
+                                   "CREATE PLAN ... FOR", /*writes=*/true);
     if (!example.ok()) return Refused(example.status());
     const std::string& padded = example.value();
     parser::Parser parser(padded);
     auto parsed = parser.Parse();
     if (!parsed.ok()) return Refused(parsed.status());
     const auto fingerprint = parser.fingerprint();
+    // **A write's plan** (DU-S3): an `UPDATE` or a `DELETE` is a statement
+    // over one relation with an arm to pin, as a one-relation `SELECT` is
+    // (CX-S3b). Nothing below is its - no block is absorbed, ordered or
+    // compiled for a write - but the install and the reply.
+    if (fingerprint.has_value() && (std::holds_alternative<parser::UpdateStmt>(parsed.value()) ||
+                                    std::holds_alternative<parser::DeleteStmt>(parsed.value()))) {
+        const auto create_row = [&]() -> StatusOr<exec::PlanRow> {
+            // The relation's `IS`, held to the row's install and no further
+            // (`HoldPlanRelations`): not across the durability wait.
+            std::optional<ReadBorrow> hold;
+            auto row = WritePlanRow(create, padded, parsed.value(), fingerprint->fetch_id,
+                                    fingerprint->literal_count, session, hold);
+            if (!row.ok()) return row.status();
+            return InstallAdminPlan(std::move(row.value()), create);
+        };
+        return CreatedPlan(create_row(), create);
+    }
     if (!std::holds_alternative<parser::SelectStmt>(parsed.value()) || !fingerprint.has_value()) {
-        return Refused(Status::InvalidArgument("CREATE PLAN ... FOR takes one SELECT" +
-                                               ByteSuffix(create.statement_at)));
+        return Refused(Status::InvalidArgument(
+            "CREATE PLAN ... FOR takes one SELECT, UPDATE or DELETE" +
+            ByteSuffix(create.statement_at)));
     }
     const auto& written_stmt = std::get<parser::SelectStmt>(parsed.value());
     // **Through a view, the plan is the absorbed block's** (DP-R4, DP-Q7):
@@ -16565,21 +16956,13 @@ DispatchOutcome CommandDispatcher::HandleCreatePlan(std::string_view line, Sessi
             }
         }
 
-        const exec::PlanDdlClaim claim(*admin_plans_);
-        if (!claim.held()) return PlanDdlBusy();
-        // One administrator's plan a shape (CX-S1).
-        if (const auto other = admin_plans_->Holder(row.key); other.has_value()) {
-            return Status::AlreadyExists("plan '" + *other +
-                                         "' already holds this statement's shape; ALTER PLAN "
-                                         "or DROP PLAN it" +
-                                         ByteSuffix(create.name_at));
-        }
-        auto created = exec::CreateAdminPlan(catalog_, page_store_, wal_, *admin_plans_,
-                                             std::move(row), exec::StatementContextNow().now_us);
-        if (!created.ok()) return AtByte(created.status(), create.name_at);
-        return created;
+        return InstallAdminPlan(std::move(row), create);
     };
-    auto created = create_row();
+    return CreatedPlan(create_row(), create);
+}
+
+DispatchOutcome CommandDispatcher::CreatedPlan(StatusOr<exec::PlanRow> created,
+                                               const exec::CreatePlanStmt& create) {
     if (!created.ok()) return Refused(created.status());
     if (Status s = AwaitDdlDurability(); !s.ok()) return Refused(s);
     const exec::PlanRow& plan = created.value();
@@ -16669,6 +17052,15 @@ DispatchOutcome CommandDispatcher::HandleAlterPlan(std::string_view line, Sessio
                 }
                 auto variant = exec::ResolvePlanVariant(row.bindings, row.arguments, spec);
                 if (!variant.ok()) return variant.status();
+                // A write's plan (DU-S3) keeps `CREATE PLAN`'s refusals: the
+                // row holds the statement's shape, whose first word says so.
+                const std::string_view verb = SplitFirstToken(Trim(row.statement)).first;
+                if ((IEquals(verb, "UPDATE") || IEquals(verb, "DELETE")) &&
+                    !variant.value().access.empty()) {
+                    if (Status s = WritePinAdmitted(spec, variant.value().access[0]); !s.ok()) {
+                        return s;
+                    }
+                }
                 // A pinned index is one the relation has, by name, and a
                 // named Cabin one its column carries: the one thing of a
                 // pin that can be asked with no statement.
@@ -17343,6 +17735,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         return {"ERR expected a DELETE statement", false};
     }
     const auto& stmt = std::get<parser::DeleteStmt>(parsed.value());
+    if (auto refused = AnalyzeWithReturning(stmt.returning)) return Refused(*refused);
 
     // As INSERT and UPDATE (DT3c): a write resolves under its session.
     auto oid = ResolveNames(scope.session, [&](const txn::ReadView* v) {
@@ -17392,7 +17785,10 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The unit this write declares, as UPDATE - `UpdateParsed`'s site
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
-    walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where));  // DU-S1, as UPDATE's
+    // DU-S1 and DU-S3, as UPDATE's: the bound, and the plan's pin.
+    const WritePlan plan = WritePlanFor(ta.oid, line);
+    walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
+    NoteWritePlan(plan, walk.pin_declined());
     if (declared.has_value()) {
         // `kFutile`, and `UpdateParsed`'s site states the argument.
         if (std::optional<Status> held =
@@ -17578,8 +17974,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // leaves `mark` answering OK with nothing marked.
         return walk.parked_on_row ? PointWrite::kParked : PointWrite::kOffered;
     };
-    if (std::optional<std::uint64_t> tuple_key = exec::WriteKeyOf(ta, predicates.value());
-        tuple_key.has_value()) {
+    if (std::optional<std::uint64_t> tuple_key = walk.PointKey(); tuple_key.has_value()) {
         StatusOr<PointWrite> marked = mark_at(*tuple_key);
         if (!marked.ok()) return Refused(marked.status());
         switch (marked.value()) {

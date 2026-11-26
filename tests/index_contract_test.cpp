@@ -387,6 +387,13 @@ const std::vector<std::string>& Writes() {
         "UPDATE b SET owner = 0 WHERE owner IN (0, 5)",
         "UPDATE b SET sym = 's9' WHERE sym = 's2'",
         "UPDATE b SET code = code + 1 WHERE owner = 1 AND qty > 100",
+        // Ranges (DU-S3): on the leading column, after an equality prefix,
+        // on the unique key, and one that moves the column it ranges over.
+        "UPDATE b SET qty = qty + 5 WHERE owner BETWEEN 1 AND 3",
+        "UPDATE b SET qty = qty + 5 WHERE owner = 2 AND qty BETWEEN 100 AND 200",
+        "UPDATE b SET qty = qty + 5 WHERE code BETWEEN 0 AND 60",
+        "UPDATE b SET owner = owner + 10 WHERE owner BETWEEN 5 AND 6",
+        "DELETE FROM b WHERE owner BETWEEN 15 AND 16 AND qty > 1000",
         // Deletes, and writes over what they left.
         "DELETE FROM b WHERE owner = 9",
         "DELETE FROM b WHERE owner IN (2, 3) AND qty > 105",
