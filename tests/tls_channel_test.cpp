@@ -43,10 +43,15 @@ TestCert MakeSelfSigned() {
     X509_gmtime_adj(X509_getm_notAfter(cert), 3600);
     X509_set_pubkey(cert, key);
 
-    X509_NAME* name = X509_get_subject_name(cert);
+    // A fresh name rather than the certificate's own: OpenSSL 4 returns
+    // X509_get_subject_name() as const, so the subject is set, not edited.
+    X509_NAME* name = X509_NAME_new();
+    EXPECT_NE(name, nullptr);
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
                                reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_set_subject_name(cert, name);
     X509_set_issuer_name(cert, name);
+    X509_NAME_free(name);
     EXPECT_GT(X509_sign(cert, key, EVP_sha256()), 0);
 
     TestCert out;
