@@ -182,8 +182,9 @@ nothing else.
   - **It holds what it read until `COMMIT`**, so read the shared row
     last, as you would write it last (below), and do not wait on a user
     while holding it.
-  - **Lock by tuple key** (`WHERE id = k` or `IN (...)`). Any other
-    predicate walks the whole relation.
+  - **Lock by a key**: the tuple key (`WHERE id = k` or `IN (...)`), a
+    range of it, or an indexed column. Any other predicate walks the
+    whole relation.
   - It is a `SELECT` on the wire - a description, rows, `SELECT` as the
     completion - but its rows arrive together at the end, not as the
     statement runs.

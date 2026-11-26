@@ -78,7 +78,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | DX | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | the buffer pool under pressure: a full pool that waits for its writeback, an abort never refused a frame | v3.2.0/workorder-dx-pool-under-pressure.md |
 | DW | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | what a btree relation's deletes leave, purged unasked: index entries first | v3.2.0/workorder-dw-btree-purge-driver.md |
 | DV | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | pages no root reaches: counted, then reclaimed | v3.2.0/workorder-dv-unreachable-page-reclaim.md |
-| DU | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | a write that finds its rows by a key: a bound on the tuple key, an index | v3.2.0/workorder-du-keyed-write.md |
+| DU | closed | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | - | - | a write that finds its rows by a key: a bound on the tuple key, an index | v3.2.0/workorder-du-keyed-write.md |
 | DT | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | a write that gives its core back: the write path's page miss off the reactor, a write walk that yields | v3.2.0/workorder-dt-write-path-yield.md |
 | DR | closed | 2026-11-23 | 2026-11-23 | 2026-11-23 | 2026-11-23 | 71a148e1 | - | a primary key of any type and column count over an unchanged Keystone | v3.2.0/workorder-dr-primary-key-over-keystone.md |
 | BG | closed-narrow | 2026-11-23 | 2026-10-07 | 2026-10-07 | 2026-11-23 | b27916f3 | v3.1.0 | scan resistance: a scan's frames reclaimed before the hand laps | v3.0.0/workorder-bg-scan-queue.md |

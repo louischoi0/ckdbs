@@ -98,6 +98,12 @@ struct WalkCursor {
     PageId page = kInvalidPageId;
     std::uint16_t slot = 0;
     bool active = false;
+    // **The walk stopped here, not a key loop** (DU-S2): set where a walk of
+    // the relation parks, on either storage. A statement that reaches its
+    // walk - no key arm, a descent that declined, a collection past its
+    // bound - resumes in that walk, so no arm it did not take the first
+    // time is asked again with rows already written.
+    bool walked = false;
     // **How many rows the statement has written so far**, carried because
     // the count a client is told is the *statement's* and the resume is a
     // fresh call with a fresh counter. Without it a ten-row UPDATE that

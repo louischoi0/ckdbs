@@ -999,7 +999,25 @@ key's or any other - declares nothing and takes a row unit per row it
 writes, the rows found by one descent per tuple key the key's run names,
 in ascending tuple key order, and it parks at a held row as the list
 does. A bound on the tuple key beside it declares its window, as beside
-the list. And the wait is the ordinary one: it ends at the
+the list. **An index the `WHERE` enters names no window either** (DU,
+`index.md` §9a): `WHERE owner = 7` over an index on `owner` declares
+nothing and takes a row unit per row it writes, in ascending tuple key
+order, the rows found by one descent per tuple key the index names. The
+units are the walk's - the same row function asks them, of a row that has
+qualified - and a row the index named and the `WHERE` declined takes none.
+**A window bounds what its statement reads as well as what it declares**,
+unless a plan's pin leaves its arm out (`parser-v2.md` I12): a btree's
+walk visits the window's leaves and no others, and a heap's rows in the
+window are read through its Keystone index, under the same declaration
+and with no row unit. **One wait differs**: a version whose
+writer the statement's view cannot see, put on the page after the
+statement's collection passed its entry, is not met, where a walk that
+reached it would wait on that writer or be refused - a wait forgone, and
+under `READ COMMITTED` the row a re-run after it would have written. Both
+are answers the level allows: under the statement's own view the row does
+not match. **On a heap the keyed arms ask their units in key order** and
+the walk in page order (DU-Q7). And the wait is the ordinary one: it ends
+at the
 holder's decide, it is an edge in the wait-for graph, and it is refused
 rather than entered where it would close a cycle.
 
@@ -1066,9 +1084,10 @@ or locking read of a returned row waits.
   key, the window declared in `U` before the walk, and with no `WHERE` the
   whole id space - exactly as the paragraphs above state for an `UPDATE`.
   It reaches rows as an `UPDATE` does: an equality or a list on the tuple
-  key descends, a unique key named whole descends by its run (DR-S3a),
-  and every other predicate walks the whole relation without yielding its
-  core (`known-gaps.md`, Locks).
+  key descends, a unique key named whole descends by its run (DR-S3a), a
+  bound on the tuple key bounds the walk, an index the `WHERE` enters is
+  read for its rows (DU), and every other predicate walks the whole
+  relation without yielding its core (`known-gaps.md`, Locks).
 - **`U` under the spelling `FOR UPDATE`** (DC-Q1 (a), `[quiet-wrong]`). A
   foreign key child's share passes the claim, so a child `INSERT` naming a
   locked parent proceeds and commits, and the holder's later `DELETE` of
