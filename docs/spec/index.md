@@ -717,6 +717,80 @@ walk, which returns the identical rows because the residual is untouched.
 
 ---
 
+### 9a. A write's index arm (DU)
+
+> **IX9a - an `UPDATE`, a `DELETE` and a locking read enter the index a
+> `SELECT` of their `WHERE` would enter, and write what their walk would
+> write.** The choice is `IndexProbeOf`'s over the write's compiled `WHERE`
+> (`exec::WriteIndexArmOf`): the longest equality prefix, one value list as
+> a prefix column, an inclusive range on the column after it, the lowest
+> oid at a tie, never a building index, a named one under a plan's pin. A
+> correlated form has no meaning for a write and no Cabin is read.
+
+**Collect, then write.** The statement reads the entries between the
+arm's bounds holding no page of the relation - one range, or a list's one
+range a value -
+keeps their tuple keys, sorts them and makes them distinct, and writes
+each by the point arm (`CommandDispatcher::CollectWriteKeys`,
+`WriteWalk::WriteKeys`). Three properties follow, and each is a
+correctness statement:
+
+- **An entry finds a candidate and never decides a row** (IX1, IX2): the
+  row is found at its slot, qualified on the whole `WHERE` and claimed by
+  the row function the walk runs, so a stale entry, a truncated string
+  key's neighbour (IX6) and a deleted row's entry write nothing, and a row
+  two entries name is written once.
+- **The collection ends before the first write**, so a statement that
+  moves the column it is found by never meets an entry it appended; a
+  statement parked on a held row collects again at its resume and starts
+  at the key it stopped on, every row it wrote sorting below that key.
+  **A statement that gave its core back at a slice boundary** (DT,
+  `sched.md` §3: every 64 descents, 16 for an `analytic` session) **takes
+  its collection with it** and goes on from the same key, reading no
+  index again and choosing no arm again: the collection is the one made
+  before its first write, under a view the pause keeps.
+- **A row the collection missed is a row the statement's view cannot see
+  matching.** A version the view sees, or one this transaction wrote, had
+  its entry appended under the leaf hold that wrote it, before the
+  collection; it is owed while the view is live (IX2a), so no purge
+  removes it. What the collection can miss is a version an undecided or
+  later writer put on the page after the collection passed it: a walk
+  that met it would wait on that writer or be refused, and the collection
+  does not meet it. That is a wait forgone and, under `READ COMMITTED`,
+  the row a re-run after that wait would have written - both answers the
+  level allows (`txn.md` §5).
+
+**The rank is the read ladder's** (`parser-v2.md` I10): after a tuple key
+equality, a list on it, a unique key named whole, a btree's two-sided
+tuple key range and an embedded key's window; before a one-sided or strict
+bound on the tuple key and any bound on a heap, which then drop the
+collected keys outside them. **A heap's tuple key window is a range of its
+Keystone index** by the same collection, for every window shape, where a
+read ranges a heap's Keystone only for `>=` with `<=`.
+
+**The collection is bounded** (DU-Q2): a statement's first collection is
+read to one entry past `max_locks_per_txn` - 65,536 by default - and past
+it nothing is written from it and the next arm in rank answers: a heap's
+Keystone range, a btree's bounded walk, or the walk. The bound is on
+entries, which is what lets the read stop; a held row's resume reads its
+collection whole, a pause's resume reads none, and a statement run again
+whole counts its use of the index again.
+
+**What it costs where it does not pay.** The arm is taken by rank, never
+by a count, as a read's is (IX9): a write of more than about 1 row in 9
+to 11 of its relation costs more through an index than by its walk - 11.2 %
+more at 1 row in 2 of a 100,000-row relation, measured
+(`bench/v3.5.0/results-du-close-v3.4.17-155-g0babe36e6.md`,
+`known-gaps.md`). The bound caps it (DU-Q8), and an administrator's plan
+pinning the shape to `SCAN` gives the walk back, measured level with it
+(`parser-v2.md` I12).
+
+**On a heap the arm writes in key order and the walk in page order**
+(DU-Q7): per-row checks against the rows as they stand - a unique key, an
+assertion - can answer one order and refuse the other (`known-gaps.md`).
+
+---
+
 ## 10. Grammar
 
 ```
@@ -728,7 +802,7 @@ SHOW INDEXES
 
 `CREATE UNIQUE INDEX` declares a unique one (IX11); it is the one spelling
 of a unique key, and `UNIQUE` before anything but `INDEX` is refused
-`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`, and, since the instance started, how often each index served a read: `probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used` (`sys-views.md` §6.2b; a statistic nothing in the engine reads). **A write that descends by a unique key counts one probe** (DR-Q23): the key's run is one walk, its entries scanned and its tuple keys resolved, counted at the statement's first collection and not at a resume's. **`PURGE INDEX` takes an engine-named index by the name `sys.indexes` shows** (DR-Q21): `PURGE INDEX $pkey_<oid>`, a primary key's, or `$keystone_<oid>`; the `$` spelling is a name in that statement alone.
+`InvalidArgument` at the next token's byte. `sys.indexes` (and so `SHOW INDEXES`) prints `unique`, and, since the instance started, how often each index served a read: `probes`, `ranges`, `entries_scanned`, `rows_resolved`, `last_used` (`sys-views.md` §6.2b; a statistic nothing in the engine reads). **A write that descends by a unique key counts one probe** (DR-Q23): the key's run is one walk, its entries scanned and its tuple keys resolved, counted at the statement's first collection and not at a resume's. **So does every write that collects through an index** (DU): one use a statement - a probe for an equality prefix, one a value for a list, a range for a range and for a heap's Keystone window - the entries it read and the rows it then descended for, counted where the collection is written from and not where the walk answered for it. **`PURGE INDEX` takes an engine-named index by the name `sys.indexes` shows** (DR-Q21): `PURGE INDEX $pkey_<oid>`, a primary key's, or `$keystone_<oid>`; the `$` spelling is a name in that statement alone.
 
 > **IX10 — nothing is reserved.** `index` and `covering` follow the rule the
 > aggregate function names settled: a keyword hashes exactly as the
@@ -1257,7 +1331,10 @@ the same kind.
 
 ## 12.3 The switch
 
-`indexes` (default on) is a **read-path** switch. Off makes an index step take
+`indexes` (default on) is a **read-path** switch - and a write's read of an
+index is a read (§9a): off, a write's index arm and a heap's Keystone range
+are not taken and its walk answers, `ANALYZE` of the write naming the walk
+it ran. Off makes an index step take
 the walk it would have taken had the index not existed, and **the compiled
 chain is unchanged either way** — the kind is still `kIndexProbe` and `ANALYZE`
 still says so. That is the same arrangement `cabins` has, and it keeps the plan

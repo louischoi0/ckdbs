@@ -5,10 +5,10 @@ Status: **CLOSED NARROW 2026-11-26** at `6e43ec8c0`
 write's page miss not (§7, "DT-S4: the close"): closed on CLA's reading of
 the close measurement, adopted on the standing go-ahead and not the
 operator's mark, and landed on `main` under the push the operator
-authorized ahead of the close (`raft-marks-2026-11-26.md` §4). Opened
+authorized ahead of the close (`raft-marks-2026-11-26.md` §5). Opened
 2026-11-26 on worktree `dt-write-path-yield` (branch
 `worktree-dt-write-path-yield`) from `60dc593af`, under the operator's
-standing go-ahead of 2026-11-26 (`raft-marks-2026-11-26.md` §4): every
+standing go-ahead of 2026-11-26 (`raft-marks-2026-11-26.md` §5): every
 DT-Q item is **adopted on that go-ahead, never marked by the operator item
 by item** (§4, "Marks"). **DT-S0 read DT-Q1's bar per mechanism** (§7):
 the cold-write stall is under the bar, so §2.1 and §2.2 - the run-again
@@ -227,7 +227,7 @@ it.
 Opened on worktree `dt-write-path-yield` (branch
 `worktree-dt-write-path-yield`) from `60dc593af`
 (`v3.4.17-150-g60dc593af`), under the operator's standing go-ahead of
-2026-11-26 (`raft-marks-2026-11-26.md` §4). Every `path:line` below was
+2026-11-26 (`raft-marks-2026-11-26.md` §5). Every `path:line` below was
 read at `60dc593af`, whose sources are `8274c951`'s (the merge between
 them brought documents only). The suite at `60dc593af`, before any
 change: 5,224 of 5,224 passed in 80.75 s (`ctest -LE bs-nightly -j 12`,
@@ -724,3 +724,74 @@ failures the two cells that fail at `60dc593af` too
 `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`;
 `known-gaps.md`, Testing). The close's commit after it brings documents,
 `bench/` and `tools/dt_close.py` only, no build input.
+### The merge with DU (2026-11-26)
+
+`origin/main` moved while DT closed: DU (`workorder-du-keyed-write.md`)
+landed at `5f9b6546`, its record at `9f8f8b354`. DU and DT edit one write
+walk, DU's marks left their join to whichever landed second
+(`raft-marks-2026-11-26.md` §4), and that is DT. Seven files conflicted;
+the join was made on DT's branch.
+
+**What the join is.**
+
+- `WalkBtreeLeaves` takes DU's bound beside DT's slice and look: a
+  bounded walk seeks to its low key, pauses between two leaves inside the
+  window and ends at the first key at or past its high one - in the look,
+  where no row before that key in the leaf is wanted, so a window whose
+  rows the rest of the `WHERE` declines takes no leaf for writing and
+  looks at none past it.
+- `WriteWalk::Visit` hands every write walk its slice and its look; a
+  locking read's gets neither (DT-Q7 (a)).
+- The single-key arm is `WriteWalk::PointKey` (DU) and is skipped on a
+  resume (DT-R3).
+- DU's key loops - an index the `WHERE` enters, a heap's tuple key window
+  through its Keystone index - pause every slice of descents, as the
+  list's loop does.
+- **New in the merge: a paused collected loop carries its collection**
+  (`WalkCursor::collected`). DU's resume reads its index again, whole,
+  and a pause every slice would make an indexed write of N keys read it
+  N / 64 times. The pause hands the collection to the resume, which goes
+  on at its key and chooses no arm again; a held row's park carries none
+  and its resume collects again, as DU wrote it. CLA's choice, adopted on
+  the standing go-ahead; the alternative read was no pause in a collected
+  loop, which leaves an indexed write of 65,536 rows holding its core.
+
+**Tests.** DU's suite told a walk from a descent by the leaves held
+exclusive, which since DT a walk holds only where it writes: the watching
+store (`tests/leaf_watching_store.hpp`) records the leaves pinned in any
+mode too, and `keyed_write_test.cpp` reads a whole walk by those
+(`Whole`, `Leaves`) and a descent or a bounded walk by its exclusive
+pages (`Held`), which also asserts it pinned fewer leaves than a whole
+walk. DT-R3's cell (`KeyedWritePauseTest`) runs with `indexes` off: since
+DU a single key's declined descent meets a whole walk only on a heap with
+no Keystone range. Four cells added to `dt_write_yield_test.cpp`: an
+indexed write pauses and collects once (a row committed between two
+slices makes a second collection read `keys=121`), a held row after a
+pause collects again, a tuple key window pauses inside the window on both
+forms, a cancel at an indexed write's pause.
+
+**Review** (`critics-developer`): no defect in the engine's code; five
+mutations, four caught. **Applied**: a cell for the look's stop at the
+bound, which no cell pinned (the mutant walked to the relation's end and
+passed all 186 cells); a missing baseline that left one bounded-walk
+check unable to tell a whole walk; the baselines cleared at a reopen; two
+comments that overstated the carry (it is the first collection or a held
+row's resume's, and is then not bounded by `max_locks_per_txn`); one
+redundant line. **Rejected**: one helper for the bound test the look and
+the visit each make - the two differ in what they do at the high key, and
+the merge is kept to what it must change. **Stated, not fixed**
+(`known-gaps.md`, "A write found by a key (DU)"): a planned write's
+`plan_served` counts every run of a paused statement.
+
+**Suite** on the merged tree (`scripts/test.sh`, serial): 5,283 of 5,284,
+then **5,284 of 5,284**. The first run's failure,
+`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+(an `INSERT`; "core 1 at 152 of 200" after 60 s), fails 4 of 20 runs
+alone at `60dc593af` and 2 of 20 on the merged tree (`known-gaps.md`,
+Testing).
+
+**Not measured: the joined tree.** DT's close is `6e43ec8c0`'s and DU's
+`0babe36e6`'s; no measurement has an indexed write that pauses, or a
+bounded walk under the look. The time DT's close had was spent
+(`CLAUDE.md`, the measurement budget), and the join is recorded as
+unmeasured in `known-gaps.md`.

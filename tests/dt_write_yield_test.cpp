@@ -488,5 +488,129 @@ TEST_F(WriteYieldTest, TheSynchronousPathTakesACancelAtAPauseToo) {
     }
 }
 
+// ---- Beside DU: a write that finds its rows by a key -------------------------
+//
+// `instructions/v3.2.0/workorder-du-keyed-write.md`: a write's rows are found
+// through an index its WHERE enters, a heap's tuple key window through its
+// Keystone index, a btree's by a walk of the window. Each is a loop of
+// descents or a walk, and each gives its core back as the list's loop and
+// the whole walk do.
+
+TEST_F(WriteYieldTest, AnIndexedWritePausesBetweenDescentsAndCollectsItsKeysOnce) {
+    // Every row's `v` is 0, so `v`'s index names all 120 rows and the write
+    // is 120 descents: seven pauses at sixteen a slice. **Another session
+    // commits a row the index names between two slices**: an index read
+    // again at a resume would name 121 keys, and `ANALYZE`'s `keys=` is the
+    // collection the last run wrote from, so 120 says the paused loop took
+    // up its first one (`WalkCursor::collected`). The row is invisible to
+    // the statement's view either way, and is left as it was placed.
+    Make("i", 120);
+    for (const std::string table : {"ih", "ib"}) {
+        ASSERT_EQ(Local("CREATE INDEX " + table + "_v ON " + table + " (v)").rfind("CREATED", 0),
+                  0u);
+        Session w;
+        Analytic(w);
+        const std::uint64_t before = dispatcher_->write_walk_pauses();
+        Started walk = Start("ANALYZE UPDATE " + table + " SET v = v + 1 WHERE v = 0", w);
+        Pump(1);
+        ASSERT_FALSE(*walk.done) << table << ": 120 descents took no pause";
+        ASSERT_TRUE(w.parked_write().has_value()) << table;
+        ASSERT_NE(w.parked_write()->cursor.collected, nullptr)
+            << table << ": the loop paused with no collection to take up";
+        EXPECT_EQ(w.parked_write()->cursor.collected->keys.size(), 120u) << table;
+        ASSERT_EQ(Local("INSERT INTO " + table + " VALUES (1000, 0, 'p')").rfind("INSERTED", 0),
+                  0u);
+        TurnsToFinish(walk);
+        EXPECT_EQ(dispatcher_->write_walk_pauses() - before, 7u)
+            << table << ": 120 descents in slices of sixteen";
+        const std::string& reply = walk.out->response;
+        EXPECT_EQ(reply.rfind("analyze rows=120 ", 0), 0u) << reply;
+        EXPECT_NE(reply.find(" index=" + table + "_v"), std::string::npos) << reply;
+        EXPECT_NE(reply.find(" keys=120"), std::string::npos)
+            << table << ": the resume read the index again: " << reply;
+        EXPECT_EQ(Count(table, "v = 1"), 120) << table << ": a row was missed or written twice";
+        EXPECT_EQ(Count(table, "v = 0 AND id = 1000"), 1)
+            << table << ": the row placed after the statement's view was written";
+        EXPECT_FALSE(w.parked_write().has_value()) << table;
+        EXPECT_EQ(locks_->EntryCount(), 0u) << table;
+    }
+}
+
+TEST_F(WriteYieldTest, AnIndexedWriteHeldAfterAPauseCollectsAgainAndWritesEachRowOnce) {
+    // The two stops of one loop: slice boundaries, then a row an undecided
+    // writer holds. A held row's park hands no collection on (DU-S2: its
+    // resume collects again), and every row is still written once.
+    Make("j", 120);
+    for (const std::string table : {"jh", "jb"}) {
+        ASSERT_EQ(Local("CREATE INDEX " + table + "_v ON " + table + " (v)").rfind("CREATED", 0),
+                  0u);
+        Session holder;
+        ASSERT_EQ(dispatcher_->Dispatch("BEGIN", &holder).response.rfind("BEGIN", 0), 0u);
+        ASSERT_EQ(dispatcher_->Dispatch("UPDATE " + table + " SET pad = 'q' WHERE id = 110", &holder)
+                      .response.rfind("UPDATED 1", 0),
+                  0u);
+        Session w;
+        Analytic(w);
+        const std::uint64_t before = dispatcher_->write_walk_pauses();
+        Started walk = Start("UPDATE " + table + " SET v = v + 1 WHERE v = 0", w);
+        Pump(200);
+        ASSERT_FALSE(*walk.done) << table << ": the loop passed a held row";
+        EXPECT_GE(dispatcher_->write_walk_pauses() - before, 2u)
+            << table << ": the loop met the held row before its first boundary";
+        ASSERT_TRUE(w.parked_write().has_value()) << table;
+        EXPECT_EQ(w.parked_write()->cursor.collected, nullptr)
+            << table << ": a held row's park carried a collection";
+        ASSERT_EQ(dispatcher_->Dispatch("ROLLBACK", &holder).response.rfind("ROLLBACK", 0), 0u);
+        TurnsToFinish(walk);
+        EXPECT_EQ(walk.out->response.rfind("UPDATED 120", 0), 0u) << walk.out->response;
+        EXPECT_EQ(Count(table, "v = 1"), 120) << table;
+        EXPECT_EQ(locks_->EntryCount(), 0u) << table;
+    }
+}
+
+TEST_F(WriteYieldTest, AWriteOverATupleKeyWindowGivesItsCoreBackInsideTheWindow) {
+    // `id BETWEEN 50 AND 350`: a btree walks the window's leaves and pauses
+    // between two of them (DU-S1), a heap descends for each key its Keystone
+    // index names in it and pauses between two descents. Nothing outside the
+    // window is written, on either side of a pause.
+    Make("n", 400);
+    for (const std::string table : {"nh", "nb"}) {
+        Session w;
+        Analytic(w);
+        const std::uint64_t before = dispatcher_->write_walk_pauses();
+        Started walk =
+            Start("UPDATE " + table + " SET v = v + 1 WHERE id BETWEEN 50 AND 350", w);
+        Pump(1);
+        ASSERT_FALSE(*walk.done) << table << ": a window of 301 rows took no pause";
+        TurnsToFinish(walk);
+        EXPECT_GE(dispatcher_->write_walk_pauses() - before, 2u) << table;
+        EXPECT_EQ(walk.out->response.rfind("UPDATED 301", 0), 0u) << walk.out->response;
+        EXPECT_EQ(Count(table, "v = 1"), 301) << table;
+        EXPECT_EQ(Count(table, "v = 1 AND id < 50"), 0) << table;
+        EXPECT_EQ(Count(table, "v = 1 AND id > 350"), 0) << table;
+        EXPECT_EQ(Count(table, "v > 1"), 0) << table << ": a row was written twice";
+        EXPECT_EQ(locks_->EntryCount(), 0u) << table;
+    }
+}
+
+TEST_F(WriteYieldTest, ACancelIsTakenAtAnIndexedWritesPause) {
+    Make("o", 120);
+    for (const std::string table : {"oh", "ob"}) {
+        ASSERT_EQ(Local("CREATE INDEX " + table + "_v ON " + table + " (v)").rfind("CREATED", 0),
+                  0u);
+        Session w;
+        Analytic(w);
+        Started walk = Start("UPDATE " + table + " SET v = v + 1 WHERE v = 0", w);
+        Pump(1);
+        ASSERT_FALSE(*walk.done) << table;
+        w.RequestCancel();
+        TurnsToFinish(walk);
+        EXPECT_EQ(walk.out->status.code(), StatusCode::kCancelled) << walk.out->response;
+        EXPECT_EQ(Count(table, "v = 0"), 120) << table;
+        EXPECT_FALSE(w.parked_write().has_value()) << table;
+        EXPECT_EQ(locks_->EntryCount(), 0u) << table;
+    }
+}
+
 }  // namespace
 }  // namespace kds::server

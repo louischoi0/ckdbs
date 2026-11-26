@@ -152,21 +152,30 @@ TEST_F(IndexUsageRig, ARangeIsCountedApartFromAProbe) {
     EXPECT_EQ(w.entries_scanned, 6u);
 }
 
-TEST_F(IndexUsageRig, AWriteMaintainsAnIndexAndUsesNone) {
-    // An UPDATE's and a DELETE's WHERE is walked by the dispatcher, never
-    // served by a secondary index, and the entries a write adds are no read.
+TEST_F(IndexUsageRig, AWriteUsesTheIndexItsWhereEntersAndNoOther) {
+    // An UPDATE's and a DELETE's WHERE that enters an index collects its
+    // rows through it (DU-S2): one use a statement, as a read's probe of it
+    // is - the entries it read and the rows the write then descended for.
+    // The entries a write adds are no read, and an INSERT reads none.
     // (A write's read through the query layer - `INSERT ... SELECT`'s
     // source - is a run of its own and is counted; no cell here.)
     ASSERT_EQ(Run(0, "UPDATE t SET w = 100 WHERE v = 3"), "UPDATED 2");
     ASSERT_EQ(Run(0, "DELETE FROM t WHERE v = 4"), "DELETED 2");
     ASSERT_TRUE(StartsWith(Run(0, "INSERT INTO t VALUES (11, 3, 11)"), "INSERTED"));
-    for (const char* index : {"t_v", "t_w"}) {
-        const Usage unused = UsageOf(0, index);
-        EXPECT_EQ(unused.probes + unused.ranges + unused.entries_scanned + unused.rows_resolved,
-                  0u)
-            << index;
-        EXPECT_EQ(unused.last_used, "NULL") << index;
-    }
+    const Usage v = UsageOf(0, "t_v");
+    EXPECT_EQ(v.probes, 2u);
+    EXPECT_EQ(v.ranges, 0u);
+    EXPECT_EQ(v.entries_scanned, 4u);
+    EXPECT_EQ(v.rows_resolved, 4u);
+    EXPECT_NE(v.last_used, "NULL");
+    // `w` is written and never asked.
+    const Usage unused = UsageOf(0, "t_w");
+    EXPECT_EQ(unused.probes + unused.ranges + unused.entries_scanned + unused.rows_resolved, 0u);
+    EXPECT_EQ(unused.last_used, "NULL");
+    // A tuple key range with both ends outranks the index, as on a read:
+    // the walk is bounded and `w`'s index is a use of nothing.
+    ASSERT_EQ(Run(0, "UPDATE t SET w = 101 WHERE id BETWEEN 1 AND 100 AND w = 100"), "UPDATED 2");
+    EXPECT_EQ(UsageOf(0, "t_w").probes + UsageOf(0, "t_w").ranges, 0u);
 }
 
 TEST_F(IndexUsageRig, ARebuiltIndexIsANewIndexAndStartsAtZero) {

@@ -8,6 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/embedded_key.hpp"
 #include "kds/exec/join_order.hpp"
 #include "kds/exec/set_expr.hpp"
 #include "kds/exec/step_chain.hpp"
@@ -173,6 +174,18 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 std::optional<std::uint64_t> WriteKeyOf(const catalog::TableAccess& access, const Step& where);
 std::optional<KeySet> WriteKeySetOf(const Step& where);
 
+// **The tuple keys an embedded primary key's conjuncts bound for a write's
+// walk** (DU-S1): the window the read ladder ranges over for the same
+// conjuncts (`EmbeddedKeyWindowOnStep`; DR-S3e) - the leading key columns
+// pinned by an equality, then an inclusive range on the next - inclusive at
+// both ends. A superset of the ids of every row the WHERE can pass, because
+// the ids ascend as the keys do and the conjuncts stay in the WHERE. nullopt
+// on a relation with no embedded key, where no leading column is pinned or
+// ranged, where a value does not encode, and where the WHERE holds a
+// subquery (`WriteKeyOf`'s reason).
+std::optional<EmbeddedKeyWindow> WriteEmbeddedWindowOf(const catalog::TableAccess& access,
+                                                       const Step& where);
+
 // **A write that names a unique key whole descends too** (DR-S3a): where
 // the WHERE pins every key column of a unique index by an equality with a
 // literal, the rows it can write are the ones that key's run names
@@ -192,6 +205,38 @@ struct WriteIndexKey {
 };
 std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
                                              const Step& where);
+
+// **The index a write finds its rows through** (DU-S2, DU-S3): the read
+// ladder's own literal index choice for the same conjuncts (`IndexProbeOf`,
+// section 4 of `Compile`) - the longest equality prefix, one value list
+// standing as a prefix column, a range on the column after it - so a write
+// and the `SELECT` of its WHERE enter the same index by the same bounds.
+// `only`, where not empty, is the one index a plan's pin names (CX-S3a). The entries between the bounds name a superset
+// of the rows the WHERE can pass (IX1): the caller collects their tuple
+// keys before it writes a row and tests every row it finds against the
+// whole WHERE (DU-R1). `set`, where a list stands, holds one pair of bounds
+// a value (`KeySet::bounds`) and `probe` the index; otherwise `probe.low`
+// and `probe.high` are the one pair.
+//
+// nullopt where no index is entered, where the WHERE holds a subquery
+// (`WriteKeyOf`'s reason), and - a building index's entries being
+// incomplete (CI-R1) - never a building index.
+struct WriteIndexArm {
+    const catalog::TableAccess::IndexRef* index = nullptr;  // into `access.indexes`
+    IndexProbe probe;
+    std::optional<KeySet> set;
+};
+std::optional<WriteIndexArm> WriteIndexArmOf(const catalog::TableAccess& access,
+                                             const Step& where, std::string_view only = {});
+
+// **Whether the WHERE's tuple key range outranks its index arm** (DU-S2),
+// by the read ladder's own rule (`Compile`, section 4): on a btree, a
+// tuple key range with both ends, neither strict, is taken before any
+// index. A strict end, a one-sided bound and every range on a heap are no
+// such range to a read, and an index entered beside one is taken first.
+// (An embedded primary key's window outranks an index too; its caller has
+// it from `WriteEmbeddedWindowOf`.)
+bool WriteRangeOutranksIndex(const catalog::TableAccess& access, const Step& where);
 
 // **The select list of a statement over one relation, as `Compile` resolves
 // a chain's**: each written column's reference, heading, type and type mod,

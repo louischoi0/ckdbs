@@ -1,3 +1,4 @@
+#include "leaf_watching_store.hpp"
 #include "two_core_rig.hpp"
 
 #include <gtest/gtest.h>
@@ -848,70 +849,9 @@ TEST_F(KeySetTest, AWriteOnAHeapsDeclaredFirstColumnWalks) {
 // A write has no `ANALYZE`. What tells a descent from a walk is the leaves it
 // pins: a write walk looks at every leaf of the relation - under a shared
 // hold, taking exclusive only the ones it writes a row in (DT) - and a
-// descent pins the leaf its key is in, exclusive. The store below records
-// the leaves of one relation pinned at all and the pages pinned exclusive,
-// and can fail one fetch.
-
-class LeafWatchingStore final : public storage::PageStore {
-public:
-    explicit LeafWatchingStore(storage::InMemoryPageStore& inner) : inner_(inner) {}
-
-    StatusOr<std::span<std::byte, kPageSize>> CreateAtUnpinned(PageId page_id) override {
-        return inner_.CreateAtUnpinned(page_id);
-    }
-    StatusOr<std::pair<PageId, std::span<std::byte, kPageSize>>> CreateNewUnpinned() override {
-        return inner_.CreateNewUnpinned();
-    }
-    StatusOr<std::span<std::byte, kPageSize>> GetUnpinned(PageId page_id) override {
-        if (Fails()) return Status::IoError("a fetch the test failed");
-        return inner_.GetUnpinned(page_id);
-    }
-    StatusOr<std::span<std::byte, kPageSize>> GetForReadUnpinned(PageId page_id) override {
-        if (Fails()) return Status::IoError("a fetch the test failed");
-        return inner_.GetForReadUnpinned(page_id);
-    }
-    Status RaiseAllocationFloor(PageId first_allocatable_page_id) override {
-        return inner_.RaiseAllocationFloor(first_allocatable_page_id);
-    }
-    void PinFrame(PageId page_id, storage::PinMode mode) noexcept override {
-        if (watched_oid_ == 0) return;
-        auto bytes = inner_.GetForReadUnpinned(page_id);
-        if (!bytes.ok() || storage::GetOwnerOid(bytes.value()) != watched_oid_) return;
-        if (mode == storage::PinMode::kExclusive) held_.insert(page_id);
-        const std::uint8_t type = storage::RawPageType(bytes.value());
-        if (type == static_cast<std::uint8_t>(PageType::kBtreeLeaf) ||
-            type == static_cast<std::uint8_t>(PageType::kHeapData)) {
-            leaves_.insert(page_id);
-        }
-    }
-
-    // From now on, the pages `oid` owns that are pinned exclusive, and its
-    // leaves pinned in any mode.
-    void Watch(std::uint64_t oid) {
-        watched_oid_ = oid;
-        held_.clear();
-        leaves_.clear();
-    }
-    std::size_t held() const noexcept { return held_.size(); }
-    std::size_t leaves() const noexcept { return leaves_.size(); }
-    void FailNextFetch() noexcept { fail_next_ = true; }
-    int failed() const noexcept { return failed_; }
-
-private:
-    bool Fails() noexcept {
-        if (!fail_next_) return false;
-        fail_next_ = false;
-        ++failed_;
-        return true;
-    }
-
-    storage::InMemoryPageStore& inner_;
-    std::unordered_set<PageId> held_;
-    std::unordered_set<PageId> leaves_;
-    std::uint64_t watched_oid_ = 0;
-    bool fail_next_ = false;
-    int failed_ = 0;
-};
+// descent pins the leaf its key is in, exclusive. `LeafWatchingStore`
+// (leaf_watching_store.hpp) records the leaves of one relation pinned at all
+// and the pages pinned exclusive, and can fail one fetch.
 
 class KeySetWriteHoldTest : public ::testing::Test {
 protected:
@@ -1023,10 +963,11 @@ TEST_F(KeySetWriteHoldTest, AKeyOrAListBesideOtherConjunctsHoldsOnlyItsLeaves) {
 
 // What still walks. A WHERE holding a subquery: its rows are collected by a
 // read walk and written by a write walk, key or no key
-// (docs/pending/keyed-write-beside-a-subquery.md). A bound on the tuple key,
-// which declares a lock window and names no descent. A list on another
-// column.
-TEST_F(KeySetWriteHoldTest, AWriteBesideASubqueryOverABoundOrByAnotherColumnsListWalks) {
+// (docs/pending/keyed-write-beside-a-subquery.md). A list on another column,
+// which has no index here. A bound on the tuple key names no descent either,
+// but its walk is the leaves of its window since DU-S1
+// (`keyed_write_test.cpp`).
+TEST_F(KeySetWriteHoldTest, AWriteBesideASubqueryOrByAnotherColumnsListWalks) {
     EXPECT_EQ(Leaves("UPDATE w SET v = 4 WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 21)",
                    "UPDATED 1"),
               every_leaf_);
@@ -1037,9 +978,10 @@ TEST_F(KeySetWriteHoldTest, AWriteBesideASubqueryOverABoundOrByAnotherColumnsLis
     EXPECT_EQ(Leaves("DELETE FROM w WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 20)",
                    "DELETED 1"),
               every_leaf_);
-    EXPECT_EQ(Leaves("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), every_leaf_);
-    // And of those it took exclusive only the leaf its two rows are in.
-    EXPECT_EQ(store_.held(), 1u);
+    // The bounded walk looks at its window's leaves and no more (DU-S1), and
+    // takes exclusive only the leaf its two rows are in (DT).
+    EXPECT_EQ(Held("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), 1u);
+    EXPECT_LE(store_.leaves(), 2u);
     EXPECT_EQ(Leaves("UPDATE w SET v = 9 WHERE v IN (5, 6)", "UPDATED 4"), every_leaf_);
     // The single key alone is the point write it was.
     EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id = 6", "UPDATED 1"), 1u);
@@ -1066,13 +1008,15 @@ TEST_F(KeySetWriteHoldTest, ADescentThatDeclinesHandsTheRestToTheWalkFromItsKey)
 
 // The single key's descent declines, beside a conjunct and beside a list:
 // the statement falls to the list's loop where there is one, and to the walk
-// otherwise, and writes its row once.
+// otherwise, and writes its row once. The walk is bounded by the key's own
+// window (DU-S1), so it takes the key's leaf and at most the one after.
 TEST_F(KeySetWriteHoldTest, ASingleKeysDescentThatDeclinesIsAnsweredByTheListOrTheWalk) {
     store_.Watch(oid_);
     store_.FailNextFetch();
     EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 700 AND v = 0"), "UPDATED 1");
     EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
-    EXPECT_EQ(store_.leaves(), every_leaf_);
+    EXPECT_LE(store_.held(), 2u);
+    EXPECT_LT(store_.leaves(), every_leaf_);
 
     store_.Watch(oid_);
     store_.FailNextFetch();
@@ -1362,6 +1306,13 @@ TEST_F(KeySetTxnTest, ARepeatableReadSnapshotKeepsTheVersionsItBeganWith) {
 // second time. A pause needs a transaction and a lock table, which
 // `KeySetWriteHoldTest`'s bare dispatcher has none of; the store that fails
 // one fetch is the same.
+//
+// **Since DU a single key's declined descent meets a whole walk only on a
+// heap with `indexes` off**: a btree's walk is its key's window, under one
+// slice, and a heap's key is found again through its Keystone index
+// (`WriteWalk::WriteByKeys`). The dispatcher here has `indexes` off, so the
+// heap's statement is the case the rule guards and the btree's shows the
+// window.
 class KeyedWritePauseTest : public ::testing::Test {
 protected:
     // `txns_` gives its borrows back through the table at teardown, so the
@@ -1390,7 +1341,9 @@ protected:
         dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
                             wal_.get(), wal::DurabilityClass::kRelaxed, exec::Budget(),
                             /*recorder=*/nullptr, /*replay_enabled=*/false,
-                            /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
+                            /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_,
+                            txn::IsolationLevel::kReadCommitted, /*core_id=*/0,
+                            /*indexes=*/false);
         dispatcher_->set_locks(locks_.get());
     }
 
@@ -1431,13 +1384,19 @@ TEST_F(KeyedWritePauseTest, AResumedWalkDoesNotOfferItsSingleKeyAgain) {
 
         const int failed_before = store_.failed();
         const std::uint64_t pauses_before = dispatcher_->write_walk_pauses();
-        // The key's descent declines; the walk from the head writes row 5 in
-        // its first slice and pauses after it.
+        // The key's descent declines. A heap's walk from the head writes row
+        // 5 in its first slice and pauses after it; a btree's walk is the
+        // key's window and ends inside one slice.
         store_.FailNextFetch();
         EXPECT_EQ(Run("UPDATE " + t + " SET v = v + 1 WHERE id = 5", &s), "UPDATED 1") << form;
         EXPECT_EQ(store_.failed(), failed_before + 1) << form << ": no descent declined";
-        EXPECT_GE(dispatcher_->write_walk_pauses() - pauses_before, 1u)
-            << form << ": the walk took no pause, so no run was a resume";
+        if (form == "HEAP") {
+            EXPECT_GE(dispatcher_->write_walk_pauses() - pauses_before, 1u)
+                << "the walk took no pause, so no run was a resume";
+        } else {
+            EXPECT_EQ(dispatcher_->write_walk_pauses(), pauses_before)
+                << "a btree's walk of one key's window paused";
+        }
         EXPECT_EQ(Run("SELECT id, v FROM " + t + " WHERE v > 0"), "id,v\\n5,1")
             << form << ": the resumed run wrote the key's row again";
 

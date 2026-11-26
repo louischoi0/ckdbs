@@ -618,11 +618,23 @@ bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
     // A statement stored cut short, or one this grammar no longer reads:
     // nothing is established.
     if (!parsed.ok()) return true;
-    const auto* stmt = std::get_if<parser::SelectStmt>(&parsed.value());
-    if (stmt == nullptr) return true;
     std::vector<const parser::RelationRef*> refs;
-    refs.push_back(&stmt->from);
-    for (const parser::JoinClause& join : stmt->joins) refs.push_back(&join.relation);
+    // A write's plan (DU-S3) names one relation, read as a reference.
+    parser::RelationRef written;
+    if (const auto* stmt = std::get_if<parser::SelectStmt>(&parsed.value())) {
+        refs.push_back(&stmt->from);
+        for (const parser::JoinClause& join : stmt->joins) refs.push_back(&join.relation);
+    } else if (const auto* update = std::get_if<parser::UpdateStmt>(&parsed.value())) {
+        written.table_name = update->table_name;
+        written.schema = update->schema;
+        refs.push_back(&written);
+    } else if (const auto* remove = std::get_if<parser::DeleteStmt>(&parsed.value())) {
+        written.table_name = remove->table_name;
+        written.schema = remove->schema;
+        refs.push_back(&written);
+    } else {
+        return true;
+    }
     if (refs.size() != row.key.n) return true;
     // **The text must be the statement the key was made from, whole**: a row
     // stores it cut to one var-heap value, and a cut that falls inside a
@@ -665,7 +677,8 @@ bool PlanRowCanMatch(catalog::Catalog& catalog, const PlanRow& row,
     };
     while (tok.type != parser::TokenType::kEof) {
         const bool relation_position =
-            word(before) && (SameName(before.text, "FROM") || SameName(before.text, "JOIN"));
+            word(before) && (SameName(before.text, "FROM") || SameName(before.text, "JOIN") ||
+                             SameName(before.text, "UPDATE"));
         if (word(tok) && !relation_position && lexer.Peek().type == parser::TokenType::kDot) {
             const parser::Token qualifier = tok;
             lexer.Next();  // the '.'

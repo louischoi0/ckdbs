@@ -428,7 +428,10 @@ read**: an index step under another step counts once per row of the outer,
 a value list once per value (`index.md` IX8b), and a step that names an
 index and walks its relation instead - the `indexes` key off, the index
 dropped under a compiled chain, a correlated probe that could not key -
-counts nothing.
+counts nothing. **A write's collection through an index is a use of it**
+(DU, `index.md` §9a): counted by the dispatcher where the statement first
+collects and writes from what it read - not at a resume, and not where the
+collection was past its bound and the walk answered.
 
 **A run is folded when it completes.** A stopped run (a `LIMIT`) folds the
 prefix it ran; an `ANALYZE` runs its statement, and that run is a use like

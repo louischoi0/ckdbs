@@ -351,6 +351,90 @@ TEST(IndexContractTest, EveryConfigurationReturnsTheSameBytes) {
     }
 }
 
+// ---- The write family (DU-R1) ----------------------------------------------
+//
+// A write reads the index too since DU-S2: an `UPDATE` or a `DELETE` whose
+// WHERE enters an index collects its rows through it. So the contract is
+// held for writes as it is for reads - **the same writes over the same data
+// in every configuration leave the same relation** - with each statement's
+// reply compared first, since a count is an answer too. `indexes = off` and
+// `plain` walk; the others collect through an index the write hook filled,
+// the backfill filled, or a rebuild made.
+const std::vector<std::string>& Writes() {
+    static const std::vector<std::string> kWrites = {
+        // An equality: a hit, the key a row moved to, the key that came
+        // back, the key a row left, a miss.
+        "UPDATE b SET qty = qty + 10 WHERE owner = 1",
+        "UPDATE b SET qty = qty + 10 WHERE owner = 9",
+        "UPDATE b SET qty = qty + 10 WHERE owner = 0",
+        "UPDATE b SET qty = qty + 10 WHERE owner = 3",
+        "UPDATE b SET qty = qty + 10 WHERE owner = 42",
+        // The composite index by one column and by two, beside a filter.
+        "UPDATE b SET code = code + 100000 WHERE owner = 2 AND qty = 2",
+        "UPDATE b SET code = code + 200000 WHERE owner = 2 AND sym = 's1'",
+        // Lists: on the leading column, on the second, beside a bound.
+        "UPDATE b SET qty = qty + 100 WHERE owner IN (1, 3, 9, 42)",
+        "UPDATE b SET qty = qty + 100 WHERE owner = 4 AND qty IN (0, 1, 2, 3)",
+        "UPDATE b SET qty = qty + 100 WHERE owner IN (0, 4) AND id > 20",
+        // The truncated string key and the unique key.
+        "UPDATE b SET qty = qty + 1000 WHERE sym = 's1'",
+        "UPDATE b SET qty = qty + 1000 WHERE sym = 'nope'",
+        "UPDATE b SET qty = qty + 1000 WHERE code = 21",
+        "UPDATE b SET qty = qty + 1000 WHERE code IN (1000, 14, 35, 42)",
+        // A statement that moves the key it was found by, and one that
+        // moves a unique key.
+        "UPDATE b SET owner = owner + 1 WHERE owner = 4",
+        "UPDATE b SET owner = 0 WHERE owner IN (0, 5)",
+        "UPDATE b SET sym = 's9' WHERE sym = 's2'",
+        "UPDATE b SET code = code + 1 WHERE owner = 1 AND qty > 100",
+        // Ranges (DU-S3): on the leading column, after an equality prefix,
+        // on the unique key, and one that moves the column it ranges over.
+        "UPDATE b SET qty = qty + 5 WHERE owner BETWEEN 1 AND 3",
+        "UPDATE b SET qty = qty + 5 WHERE owner = 2 AND qty BETWEEN 100 AND 200",
+        "UPDATE b SET qty = qty + 5 WHERE code BETWEEN 0 AND 60",
+        "UPDATE b SET owner = owner + 10 WHERE owner BETWEEN 5 AND 6",
+        "DELETE FROM b WHERE owner BETWEEN 15 AND 16 AND qty > 1000",
+        // Deletes, and writes over what they left.
+        "DELETE FROM b WHERE owner = 9",
+        "DELETE FROM b WHERE owner IN (2, 3) AND qty > 105",
+        "DELETE FROM b WHERE sym = 's9' AND owner = 0",
+        "UPDATE b SET qty = 1 WHERE owner = 9",
+        "UPDATE b SET qty = 2 WHERE owner IN (2, 3)",
+        "DELETE FROM b WHERE code = 21",
+        "DELETE FROM b WHERE owner = 0",
+    };
+    return kWrites;
+}
+
+TEST(IndexContractTest, EveryConfigurationIsLeftTheSameByEveryWrite) {
+    Instance maintained(/*indexes=*/true);
+    Instance backfilled(/*indexes=*/true);
+    Instance ignored(/*indexes=*/false);
+    Instance plain(/*indexes=*/true);
+    Instance rebuilt(/*indexes=*/true);
+
+    LoadMaintained(maintained);
+    LoadBackfilled(backfilled);
+    LoadMaintained(ignored);
+    LoadPlain(plain);
+    LoadRebuilt(rebuilt);
+
+    const std::string all = "SELECT id, owner, qty, sym, code FROM b";
+    for (const std::string& sql : Writes()) {
+        const std::string expected = plain.Run(sql);
+        ASSERT_NE(expected.rfind("ERR", 0), 0u) << sql << " -> " << expected;
+        EXPECT_EQ(maintained.Run(sql), expected) << "write-hook-filled index: " << sql;
+        EXPECT_EQ(backfilled.Run(sql), expected) << "backfilled index: " << sql;
+        EXPECT_EQ(ignored.Run(sql), expected) << "indexes = off: " << sql;
+        EXPECT_EQ(rebuilt.Run(sql), expected) << "rebuilt index: " << sql;
+        const std::string left = plain.Run(all);
+        EXPECT_EQ(maintained.Run(all), left) << "write-hook-filled index, after: " << sql;
+        EXPECT_EQ(backfilled.Run(all), left) << "backfilled index, after: " << sql;
+        EXPECT_EQ(ignored.Run(all), left) << "indexes = off, after: " << sql;
+        EXPECT_EQ(rebuilt.Run(all), left) << "rebuilt index, after: " << sql;
+    }
+}
+
 // CC-S3: the same five configurations once each has learned the join
 // planner's statistics from the query set - so the comparison runs the
 // planner that ships, not only its cold, data-free path.
