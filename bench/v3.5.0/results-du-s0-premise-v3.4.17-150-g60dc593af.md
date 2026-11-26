@@ -14,12 +14,15 @@ second parse, a reply carrying the ids and a second round trip.
 **DU-Q1 (a) passes: DU does not stop at the bounded walk.**
 
 **The saving is not unconditional, and the cells say where it ends.** The
-walk costs 33 ns a row visited; the keyed form 2.7 µs a row written at
-1,000 rows a key (10.7 µs a row at 10, where the two statements' fixed
-costs dominate). The two meet where the statement writes about 1 row in 80
-of the relation - 1.2 % - and past that the walk is the cheaper arm. The
-upper bound overstates the keyed form's cost a row, so the true crossing is
-at a larger share; DU-S4's close measures it on the built arm.
+walk costs 33 ns a row visited and, by the difference of its two cells,
+0.5 µs (W2) to 2.1 µs (W) more a row written; the keyed form costs 2.7 µs
+a row written at the margin (the difference of its two cells; 10.7 µs a
+row at 10 rows a key, where the two statements' fixed costs dominate). The
+two meet where the statement writes between 1 row in 16 and 1 row in 65 of
+the relation - 1.5 % to 6 % - and past that the walk is the cheaper arm.
+The interval is as wide as the walk's two arms disagree, and the upper
+bound overstates the keyed form; DU-S4's close measures the crossing on
+the built arm.
 
 | field | value |
 |---|---|
@@ -74,9 +77,15 @@ and 111,000, the warm pass's three groups included).
 | 1,000 rows | W2 | 33,596 µs | 33,727 µs | 33,803 µs | 33,947 µs | 64,317 µs | 64,317 µs |
 
 With 36 groups an arm the p99 is the maximum. The W and W2 maxima of the
-1,000-row cell (80.7 ms and 64.3 ms against a 34 ms median) are single
-groups the other session's build took the CPU from; the on-CPU unit above
-does not carry them.
+1,000-row cell are single groups (80.7 ms and 64.3 ms against a 34 ms
+median). **W's is in its on-CPU figure**: W's mean, 35,212 µs, is above
+its p75 latency, and the excess over 36 groups is about the outlier's 47
+ms - on-CPU time is summed over every thread of the server, so a
+checkpoint or a log write that fell in that group is charged to the arm
+running. W2's mean is below its median, so its outlier was not on the
+server's CPU. That one group is the whole of the cell's 4.3 % control
+spread, and it counts for W: against W2, which has no such group, the
+saving is 12.3x, not 12.9x.
 
 ## 2. What the two statements of K are
 
@@ -107,6 +116,11 @@ its server CPU plus the client's round trips - one for W, two for K.
 - No `DELETE` cell. Its walk is `UPDATE`'s (`WriteWalk`).
 - The crossing in the thesis is computed from the two cells, not measured:
   no cell writes more than 0.1 % of the relation.
+- K's `UPDATE` names its rows by `id IN (...)` alone and does not repeat
+  `owner = K`, which the built arm tests on every row it finds; the test
+  is one comparison a row.
+- The host's load is one sample a cell in effect: `/proc/loadavg` moves
+  every 5 s and a cell's arms start inside that.
 - The host was not quiet (the stamp). The bar is a ratio of 5 and the
   measured ratios are 12.9 and 308, against a control that moved 4.3 % at
   most; the verdict does not depend on the contention, and the absolute

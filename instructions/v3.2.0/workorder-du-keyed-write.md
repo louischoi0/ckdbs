@@ -162,7 +162,7 @@ unless a line names another file. No behaviour changed.
 |---|---|---|
 | none | the range `[0, kIdSpaceEnd)` | nothing: the declaration covers the row |
 | a tuple key window of more than one key (`FoldTupleKeyWindow`: `=`, `<`, `<=`, `>`, `>=`, `BETWEEN` on the tuple key by name, one-sided included) | the range `[lo, hi)` | nothing |
-| a window of one key; a list on the tuple key; a unique key named whole; any conjunct that bounds no tuple key | nothing | the row's tuple unit, asked once the row has qualified, in the order the rows are met |
+| a window of one key; a list on the tuple key; a unique key named whole; a `WHERE` none of whose conjuncts bounds the tuple key | nothing | the row's tuple unit, asked once the row has qualified, in the order the rows are met |
 | an empty window (`lo >= hi`) | nothing | nothing qualifies |
 
 Above either column the relation's `IX`, taken with the statement's first
@@ -190,8 +190,12 @@ collection read the index's entries after `V` was minted, holding no page.
   (`txn.md` §5's table; a version reached through undo is never written).
   That version was on its page before `V` was minted or before this
   statement began, and its index entry was appended under the same leaf
-  hold (`MaintainIndexes`, IX2). It is the row's head from then until the
-  write, and a head's entries are owed (IX2a), so no purge removes one.
+  hold (`MaintainIndexes`, IX2) - **for an index that is not building**:
+  an online build's backfill appends later, and the argument rests on no
+  write choosing a building index, as no read does (`IndexProbeOf`,
+  `step_compiler.cpp:1430`; `WriteIndexKeyOf`, `:2657`). It is the row's
+  head from then until the write, and a head's entries are owed (IX2a), so
+  no purge removes one.
   The entry lies inside the probe's bounds because the version passes the
   `WHERE` and the bounds are the read ladder's own superset of it (IX1).
 - *A row the walk would wait on or refuse through F4 is collected.* The
@@ -200,15 +204,25 @@ collection read the index's entries after `V` was minted, holding no page.
   the horizon, `manager.cpp:672`), so its entry is owed too.
 - *Every collected row is judged where it is written*, by `Qualify` and
   `Claim` on the slot the descent finds: the walk's verdict for a walk
-  that reached the row at that moment.
+  that reached the row at that moment. **The whole `WHERE` is asked
+  there**, which is the point arm's `Qualify` and not the collection
+  pass's: a row offered as a collected target (`WalkCursor::targets`)
+  returns before its `WHERE` is tested (`:12969`), so the keys an index
+  names - a superset (IX1) - must never be carried as targets.
 - *A row the collection missed* therefore has no version passing the
   `WHERE` that `V` sees or that this transaction wrote: at most a head by
   a writer `V` cannot see, whose entry was appended after the collection
   passed it. A walk that met that head would wait on its writer or be
-  refused; the collection does not meet it. **This is the one difference,
-  and it is a refusal or a wait forgone, never a row written or missed**:
-  under either level the statement's state says the row does not match.
-  DR-S3a's unique-key run and every index read share it.
+  refused; the collection does not meet it. **This is the one
+  difference: a wait forgone, and with it the row the wait could buy.**
+  The walk asks that row's unit and parks; where it has written nothing
+  yet, `READ COMMITTED` runs it again under a fresh view once the writer
+  commits, and that run writes the row. The index-driven statement
+  neither waits nor writes it. Both are answers its level allows - under
+  the statement's own view the row does not match, and PostgreSQL's
+  index scan answers as the collection does - so DU-R1 is read as the
+  order's DU-R2 words it: the rows written are the rows the statement's
+  view can see matching. DR-S3a's unique-key run shares it.
 
 **A statement that moves its own key** is covered by the order of the
 work and by the resume: the first collection ends before the first write,
@@ -218,8 +232,11 @@ statement wrote sorts below that key, and an entry it appended names a row
 it wrote.
 
 **DU-R3.** The index-driven write reaches `Claim` through the same row
-function as the walk and the declaration is taken before either, so the
-units are the walk's, unit for unit. **One order differs, on a heap**: the
+function as the walk and the declaration is taken before either, so for
+every row both meet the unit is the walk's. The one row the walk meets
+and the collection does not (above) is a unit the walk asks and is
+refused, so the index-driven write holds no unit the walk would not hold
+and none fewer among the rows it writes. **One order differs, on a heap**: the
 walk meets rows in page order and a key loop in key order, as CU-S3's list
 and DR-S3a's run already do there.
 
@@ -273,10 +290,22 @@ tuple keys it returned - 308x and 12.9x, against a control arm that moved
 host was not quiet (another session's build and suite ran through every
 cell); the unit is on-CPU time and the verdict is a ratio 2.6 times its
 bar at the least. **The same cells bound the gain**: the walk costs 33 ns
-a row visited and the keyed form up to 2.7 µs a row written, so past about
-1 row in 80 of the relation the walk is the cheaper arm, which the arm
-taken by rank alone does not see; DU-Q2's bound caps the cost and DU-Q4's
-pin is the operator's lever. DU-S4 measures the built arm on both sides of
-that crossing.
+a row visited and 0.5-2.1 µs more a row written, the keyed form 2.7 µs a
+row written at the margin, so somewhere between 1 row in 16 and 1 row in
+65 of the relation the walk becomes the cheaper arm, which the arm taken
+by rank alone does not see; DU-Q2's bound caps the cost and DU-Q4's pin is
+the operator's lever. DU-S4 measures the built arm on both sides of that
+crossing.
+
+**Reviewed** (`critics-developer`, at `c2b138317`): the census's code
+facts hold. Applied: DU-R2's conclusion and DU-R3's "unit for unit"
+reworded to what the code does (a wait forgone, and the row a re-run
+could write); the building-index premise and the collected-targets hazard
+named; the units table's fourth-row wording; the results file's crossing
+recomputed with the walk's own cost a row written, and its claim that the
+on-CPU unit does not carry the 1,000-row cell's outlier withdrawn (it
+does: W's mean is above its p75). Rejected: moving the two paragraphs on
+`ANALYZE` and on the DT branch out of the census - both are facts a later
+stage acts on, and the stage log is where a stage's facts are kept.
 
 Overhead not measured; measured at the milestone's close.
