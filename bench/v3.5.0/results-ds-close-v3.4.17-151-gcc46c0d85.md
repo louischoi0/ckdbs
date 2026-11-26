@@ -26,7 +26,7 @@ the control is not an `INSERT` (section 4).
 
 | item | value |
 |---|---|
-| executed | 2026-11-26 23:06:42 to 23:11:28 UTC (run 1 23:06:42-23:07:44, run 2 23:09:37-23:10:41, 10,000-row run 23:11:28-23:12:04); builds 23:03 to about 23:06 UTC |
+| executed | 2026-11-26 23:06:42 to 23:12:04 UTC (run 1 23:06:42-23:07:44, run 2 23:09:37-23:10:41, 10,000-row run 23:11:28-23:12:04); builds 23:03 to about 23:06 UTC |
 | branch / commit | `worktree-ds-known-gaps-contained` at `cc46c0d85` (close); base `8274c951e` |
 | `git describe --tags` | `v3.4.17-151-gcc46c0d85` (this clone has no `v3.5.0` tag, so the describe reads `v3.4.17-...`) |
 | tree | the ordering session edits documents (`docs/`, `instructions/`, `manual/`, `CLAUDE.md`) in the worktree during the run and changes no source or build file; `git status --short` at the moment B was built (23:06:42 UTC): ` M CLAUDE.md`, ` M docs/inflight/known-gaps.md`, nothing else, and the same two lines after the runs |
@@ -86,8 +86,8 @@ Run 2 (5 rounds, separate servers and data files, same binaries):
 The control is not zero and is one-sided: A2 reads above A on every `insert`
 cell in both runs (+2.0 % to +3.4 %), the signature of a second copy of the
 binary (another inode and layout) and not of the engine. B sits between A and
-A2 on all four `insert` readings and below A2 on three of four `load`
-readings, so B - A is not distinguishable from the control's own spread. The
+A2 on all four `insert` readings and below A2 on two of four `load`
+readings (the heap's; on the btree it is 0.002-0.003 µs/row above A2), so B - A is not distinguishable from the control's own spread. The
 noise floor for a single-row `INSERT` is taken as 3.4 % (0.28 µs on the heap,
 0.18 µs on the btree) and for `load` as 0.7 % (0.02 µs/row on the heap).
 
@@ -124,8 +124,10 @@ round's percentile, run 1 (4,000 statements a round and arm), `µs`:
 Run 2: btree A 12.5/13.0/13.2/14.1/21.3, A2 12.3/12.9/13.0/13.9/16.5, B
 12.2/12.7/12.9/13.7/17.2; heap A 13.6/14.5/14.7/15.8/22.2, A2
 14.2/14.9/15.1/16.1/23.5, B 13.7/14.4/14.6/15.7/21.7 µs (p0/p25/p50/p95/p99).
-B is at or between A and A2 at every percentile but the btree run-1 p0 to p50
-(B +0.3 to +0.4 µs above A and above A2, run 2 reverses it); the tight body (p25
+B is within 0.5 µs of the nearer of A and A2 at every percentile: above both
+at the btree run-1 p0 to p50 (+0.4 µs over A), below both at the btree run-2
+p0 to p95 and the heap run-2 p25 to p99 (0.1 to 0.5 µs), at or between them
+elsewhere but the btree run-1 p99 (0.1 µs below A); the tight body (p25
 to p50 within 0.2 µs) and the p95 within 1 µs of p50 say the path is a fixed
 cost, and the 0.3 to 0.4 µs spreads between arms are at the control's size. The
 `load` phase reports a whole-phase CPU a row, not a latency distribution, so it
@@ -158,7 +160,7 @@ B - A vs A2 - A):
 | heap | `read` (point) | 6.78 µs | +0.02 µs (+0.3 %) | +0.06 µs (+0.9 %) | 0.00 µs (0.0 %) | +0.02 µs (+0.3 %) | no |
 | heap | `update` (by key) | 7.30 µs | +0.10 µs (+1.4 %) | +0.14 µs (+1.9 %) | +0.07 µs (+1.0 %) | +0.19 µs (+2.6 %) | no |
 | heap | `walked` (UPDATE, no key) | 3,274.2 µs | -6.1 µs (-0.2 %) | +5.6 µs (+0.2 %) | -24.7 µs (-0.8 %) | +0.4 µs (0.0 %) | run 2 only, run 1 inside |
-| heap | `range` (100 rows) | 25.10 µs | +0.37 µs (+1.5 %) | +0.11 µs (+0.4 %) | +0.33 µs (+1.3 %) | +0.34 µs (+1.4 %) | no (inside run 2's control, above run 1's) |
+| heap | `range` (100 rows) | 25.10 µs | +0.37 µs (+1.5 %) | +0.11 µs (+0.4 %) | +0.33 µs (+1.3 %) | +0.34 µs (+1.4 %) | run 1 only, run 2 inside |
 | heap | `delete` (by key) | 6.50 µs | -0.01 µs (-0.2 %) | +0.10 µs (+1.5 %) | -0.02 µs (-0.3 %) | +0.17 µs (+2.6 %) | no |
 
 One reading falls outside the control and repeats: the **walked `UPDATE`** (a
@@ -169,6 +171,9 @@ any line the diff names (the walk's `UPDATE` write goes through neither
 `EncodeRow`'s refusal nor `InsertSelectRows`), and it is not explained: the
 binaries differ in layout (194 source lines added and 14 removed in `src` and
 `include`), which could shift code placement; no cause was tested. It is reported as unresolved, not as a gain.
+The heap's 100-row `range` is the other reading outside a control, by the
+same per-run rule: +1.5 % on B in run 1 against a +0.4 % control, +1.3 % in
+run 2 inside its +1.4 %; a statement DS does not touch either, unexplained.
 
 ## 5. Against this engine's previous number
 
@@ -186,13 +191,14 @@ host is read against** (btree `insert` 6.32 µs, heap `insert` 8.13 µs, btree
 ## 6. What this teaches about the engine
 
 - A single-row `INSERT` costs 6.4 µs (btree) or 8.2 µs (heap) of server CPU on
-  one core, `relaxed` (the heap's 1.8 µs more is not attributed here). Inside a 500-row statement a row costs 1.2 µs (btree) and 3.0
+  one core, `relaxed`. Inside a 500-row statement a row costs 1.2 µs (btree) and 3.0
   µs (heap): the per-statement fixed cost is about 5.2 µs on the btree and about
   5.2 µs on the heap (6.4 minus 1.2; 8.2 minus 3.0), the same fixed cost, so the
-  per-statement fixed part does not separate the two storages. Derived from
-  the two phases above, not measured separately.
-- DS's refusal-path changes cost nothing on the accepting path: the check is
-  one comparison made only after `EncodeRow` has already failed.
+  per-statement fixed part does not separate the two storages and the heap's
+  1.8 µs more a single-row statement is its row's. Derived from the two
+  phases above, not measured separately.
+- DS's refusal-path changes cost nothing on the accepting path: `AtValue`'s
+  tests run only after `EncodeRow` has already failed.
 
 ## 7. What was cut or not verified
 

@@ -8,6 +8,8 @@ delta reaches the control. **It closes without a green run of the suite at
 `cc46c0d85`** - three runs, each failing one or two cells that fail at a
 like rate on the commit DS opened from, read as the flaky cells they are on
 the operator's choice of CLA's option (a); §7's DS-S5 has the figures.
+On the tree merged with `origin/main` (`4055d666a`) the suite ran 5,298
+and then 5,299 of 5,299.
 **Not landed**: nothing is merged to `main` or pushed. Written and opened
 2026-11-26 on the operator's standing go-ahead (§2), on worktree
 `ds-known-gaps-contained` from `8274c951` (`v3.4.17-148-g8274c951e`).
@@ -295,14 +297,17 @@ operator's choice.** Three runs at `cc46c0d85`, `-j8`, less `bs-nightly`:
 Both cells fail on the test binary built from `8274c951`, the commit DS
 opened from, eight copies at once and the two binaries alternating: the
 first 8 of 32 on each; the second 163 of 400 there and 196 of 400 at
-`cc46c0d85`, a difference the rounds do not resolve (the later binary
-failed more in 19 of the last 40 rounds, the earlier in 14, 7 tied). DS's
+`cc46c0d85`, a difference the rounds do not resolve (of the 50 rounds the
+later binary failed more in 25, the earlier in 15, 10 tied; the last 40
+alone 19, 14 and 7). DS's
 engine change is on neither cell's path: a successful `INSERT` and an
-`UPDATE` run none of its lines. `known-gaps.md` ("Testing") carries both
-with what this session saw - the first cell's passes take multiples of the
-rig's 5 s idle block, a skipped kick's price, and the second fails by its
-retry budget and loses no increment. `DurableKickRigTest`'s cell, which
-failed at DS-S2 and at DS-S4, passed in all three. **CLA put three options
+`UPDATE` run none of its lines. The first cell's passes take multiples of
+the rig's 5 s idle block, whole blocks waited out with the missing wake
+not observed (`known-gaps.md`, "Testing"); the second fails by its retry
+budget and loses no increment
+(`docs/inflight/bugs/two-core-increment-starves-one-core.md`).
+`DurableKickRigTest`'s cell, which failed at DS-S2 and at DS-S4, passed in
+all three. **CLA put three options
 to the operator - (a) read the two as the flaky cells they are and close,
 the suite reported by its figures and never as green; (b) run again until
 a run is green; (c) fix the cells first - and the operator chose (a).**
@@ -321,21 +326,62 @@ the control's A2 - A:
 | 500-row `INSERT` | btree | +0.005 and +0.003 us a row (+0.4 %, +0.2 %) | +0.002 and +0.001 us a row |
 | 500-row `INSERT` | heap | +0.019 and +0.010 us a row (+0.6 %, +0.3 %) | +0.020 and +0.016 us a row |
 
-**No delta reaches the control.** Of the driver's other phases one is
-outside it: a walked `UPDATE` reads 0.7 to 0.8 % cheaper on B in three of
-four cells, on a statement DS does not touch, and is left unexplained, not
-called a gain. Not measured: a refused `INSERT` (the one path S3 adds
+**No delta reaches the control.** Of the driver's other phases two are
+outside it in some run, each on a statement DS does not touch and left
+unexplained: a walked `UPDATE` reads 0.7 to 0.8 % cheaper on B in three of
+four cells, not called a gain, and a heap's 100-row range 1.5 % dearer in
+run 1, above that run's control (+0.4 %), and 1.3 % in run 2, inside its
++1.4 %. Not measured: a refused `INSERT` (the one path S3 adds
 instructions to), an `INSERT ... SELECT` (the loop S3 added), `strict`.
 The time: about 3 minutes of builds, 162 s of runs, 5 s held at the quiet
 gate. The same driver's last file, DR's close, was measured on another
 host and no delta is taken against it.
 
-**Documents.** `known-gaps.md`: the two cells above ("Testing"), and what
-§8 found and left - `tools/kds_backup.py` cannot spell a label or a target
-holding a single quote ("Backup and restore"). `CLAUDE.md`: the archive
-bound and the tool's authentication in the Backup row. The order's rows in
-`index.md` and `milestones.md`. The specs and the manual were brought to
-the code by the stage that changed it (S1 to S4) and S5 changes none.
+**Documents.** `known-gaps.md`: the first cell's figures ("Testing"), and
+what §8 found and left, corrected at S5's review - `tools/kds_backup.py`'s
+doubled quote is read back by BACKUP's own word splitter, and no cell
+sends one ("Backup and restore"). The second cell's figures are in its bug
+file. `CLAUDE.md`: the archive bound and the tool's authentication in the
+Backup row. The order's rows in `index.md` and `milestones.md`. The specs
+and the manual were brought to the code by the stage that changed it (S1
+to S4) and S5 changes none.
+
+**The merge.** `origin/main` at `6c98f7c32` - DT, DU and the twelve orders
+written the same day, source included - merged into the work branch at
+`4055d666a`. Conflicts in `CLAUDE.md`, `milestones.md`, `index.md` and the
+day's raft marks, each resolved by keeping both sides;
+`command_dispatcher.cpp` merged without one. **The suite on the merged
+tree**, `-j8`, less `bs-nightly`: 5,298 of 5,299, the one failure
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` ("kicks skipped
+1", the cell `known-gaps.md` gives five of 30 alone at `60dc593af`); then
+**5,299 of 5,299**. The two cells that failed at `cc46c0d85` passed in
+both.
+
+**Review** (`critics-developer`), of S5's documents and the merge, by
+reading; nothing built or run. The merged code is sound: DS's change and
+DT's and DU's each arrive whole, nothing DT or DU added reads a value's
+byte offset, and `EncodeRow` keeps its two callers. Six claims in S5's
+documents were wrong or said more than was seen, and each is corrected:
+- **the `quote()` entry was false.** §8 and S5 read the lexer; a `BACKUP`
+  statement never reaches it (`SplitBackupWords`, which reads `''` as one
+  quote), so the tool's doubling is the matching escape. The entry now
+  says what is true: no cell sends a quote, and the round trip is not run.
+- the first cell's 5 s multiples were written as skipped kicks. A second
+  mechanism gives the same durations - the cell raises each script's `go`
+  flag with no kick - and only an expiry singles out the writer's kick.
+  The entry names both and says the missing wake was not observed.
+- the second cell's rounds were quoted as the last 40 of 50.
+- a second phase is outside the control in one run (a heap's 100-row
+  range, run 1), where the order and the results file said one.
+- two counts and an end time in the results file.
+- `index.md`'s header still said DS was on its own branch.
+
+Applied at CLA's reading of the rest: `known-gaps.md` carried each of the
+two cells twice after the merge, DT's and DU's records beside DS's, and
+each is now one entry - DS's figures folded into DT's entry for the first
+cell and into DU's bug file for the second. Rejected: citing §7 from the
+raft marks and the index row in place of the suite's figures - a mark
+carries what it rests on, as the day's other marks do.
 
 ## 8. Handoff (2026-11-26 14:21 UTC)
 
@@ -361,4 +407,8 @@ The session ended here on the operator's word ("handoff"). State:
   it. A results file takes whatever `git describe` prints.
 - **Found and left**: `tools/kds_backup.py`'s `quote()` doubles a single
   quote, which the lexer does not read as an escape, so a backup target
-  holding one cannot be spelled; no entry was written. (DS-S5 wrote it.)
+  holding one cannot be spelled; no entry was written. (DS-S5 wrote it,
+  and its review found the reading wrong: a `BACKUP` statement never
+  reaches that lexer, and `SplitBackupWords` in
+  `src/server/command_dispatcher.cpp` reads `''` as one quote, so the
+  doubling is the matching escape.)

@@ -4,9 +4,8 @@ Opened 2026-10-14 on `worktree-cn4-transition-refresh` at `b0bc959c`
 (`v3.1.0-31-gb0bc959c`). **The operator named the version v3.2.0 on
 2026-10-14** for the work this directory holds, and the annotated tag
 `v3.2.0` was taken on `main` at `2dc67c6d` the same day. The directory
-holds BV through DR and DT through EE (DS is on its own branch); every
-later version's work order is written here too, since no version has
-opened a directory of its own.
+holds BV through EE; every later version's work order is written here
+too, since no version has opened a directory of its own.
 
 | document | what it is |
 |---|---|

@@ -38,3 +38,15 @@ a waiter that lost first-updater-wins to a committed writer something
 better than an immediate re-run that can lose again - EE's decide slot
 (`instructions/v3.2.0/workorder-ee-decide-slot.md`) is the order nearest
 it. No work order carries it.
+
+**Seen again, at a higher rate with copies running at once** (DS's close,
+2026-11-26, on `ds-known-gaps-contained` at `cc46c0d85`, Debug, the same
+host). In 1 of 3 full-suite runs the cell failed in 86 ms: core 0 out of
+retries on its eleventh increment, core 1's 600 applied, the row at 610.
+Eight copies of the cell at once, two test binaries alternating over 50
+rounds: 196 of 400 runs failed at `cc46c0d85` and 163 of 400 at
+`8274c951`, the commit DS opened from, every failure this form and none a
+timeout. The later binary failed more in 25 rounds, the earlier in 15,
+and 10 tied; DS's change is on no `UPDATE`'s path, and whether the two
+rates differ is not resolved by the rounds. Alone the cell fails about
+one run in five (above); eight at once, 359 of 800.
