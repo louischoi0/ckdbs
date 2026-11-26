@@ -224,6 +224,22 @@ StatusOr<std::vector<std::uint64_t>> IndexRunTupleKeys(storage::PageStore& store
                                                        std::span<const std::byte> encoded_key,
                                                        std::uint64_t* entries_read = nullptr);
 
+// **The tuple keys of `ix`'s entries between two bounds** (DU): every entry
+// at or above `low` and at or below `high`, each a whole entry of the
+// index's sort key width as an `IndexProbe`'s bounds are, **appended to
+// `named` in entry order, neither sorted nor made distinct** - a caller
+// that reads several ranges into one vector (a key set's, one a value)
+// sorts and dedupes once. A superset of the rows whose keys lie between
+// the bounds, as `IndexRunTupleKeys`' run is of its key's. **The read stops
+// once `named` holds more than `limit` keys**, so a caller that will not
+// use a longer collection pays for no more of it, and tells by `named`'s
+// size. **Called holding no page**, and it returns holding none.
+Status AppendIndexRangeTupleKeys(storage::PageStore& store,
+                                 const catalog::TableAccess::IndexRef& ix,
+                                 std::span<const std::byte> low, std::span<const std::byte> high,
+                                 std::vector<std::uint64_t>& named,
+                                 std::size_t limit = static_cast<std::size_t>(-1));
+
 // ---- Unique indexes (BX, `instructions/v3.2.0/workorder-bx-unique-index.md`)
 //
 // A unique index refuses a write that would give two live rows one key

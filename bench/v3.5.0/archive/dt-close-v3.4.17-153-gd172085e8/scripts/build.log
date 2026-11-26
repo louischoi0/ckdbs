@@ -1,0 +1,887 @@
+-- Configuring done (0.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build-release
+[  0%] Built target kds_version
+[  0%] Building CXX object CMakeFiles/kds.dir/src/txn/recovery_undo.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/storage/btree/btree.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/storage/device_page_store.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/server/backup.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/server/core_runtime.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/server/mount_recovery.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/stats/plan_stats.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/catalog/catalog.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/server/command_dispatcher.cpp.o
+[  0%] Building CXX object CMakeFiles/kds.dir/src/server/sys_views.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/server/tcp_server.cpp.o
+[  2%] Building CXX object CMakeFiles/kds.dir/src/server/expeditor.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In function ‘kds::server::DispatchOutcome kds::server::{anonymous}::Refused(const kds::Status&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:367:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+  367 | DispatchOutcome Refused(const Status& status) { return {ErrorReply(status), false, 0, status}; }
+      |                                                                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:367:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:367:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::PageId kds::server::CommandDispatcher::BeginMissRerun(kds::server::Session&, kds::server::DispatchOutcome*)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:745:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+  745 |         *out = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:745:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:745:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::sched::Coro kds::server::CommandDispatcher::DispatchAsync(std::string_view, kds::server::Session*, kds::server::DispatchOutcome*)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1278:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1278 |             *out = {ErrorReply(refused), out->should_stop, 0, refused};
+      |                                                                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1278:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1278:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1436 |         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1469:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1469 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DispatchInternal(std::string_view, kds::server::Session*)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1754:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1754 |         DispatchOutcome refused{ErrorReply(s), outcome.should_stop, 0, s};
+      |                                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1754:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1754:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DispatchInner(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1840:43: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1840 |         return {"ERR empty command", false};
+      |                                           ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1840:43: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1840:43: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1853:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1853 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1853:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1853:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1895:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1895 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1895:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1895:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1946:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1946 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1946:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1946:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1949:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1949 |         return {"PONG", false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1949:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1949:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1952:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1952 |         return {"OK bye", true};
+      |                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1952:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1952:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2027:51: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2027 |         return {"ERR unknown CREATE target", false};
+      |                                                   ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2027:51: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2027:51: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2080:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2080 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2080:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2080:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2099:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2099 |             return {"ERR ANALYZE needs a statement to analyze", false};
+      |                                                                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2099:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2099:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2175:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2175 |     return {"ERR unknown command", false};
+      |                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2175:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2175:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2238:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2238 |         return r.ok() ? DispatchOutcome{r.value(), false} : Refused(r.status());
+      |                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2238:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2238:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleBackup(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2250:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2250 |         return {backup_->StatusLine(), false};
+      |                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2250:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2250:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSync()’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2325:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 2325 |     return {"OK synced", false};
+      |                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2325:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:2325:31: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetCabinOptimizer(std::string_view)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3010:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3010 |         return {"ERR SET CABIN_OPTIMIZER takes exactly one value, on or off", false};
+      |                                                                                    ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3010:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3010:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3018:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3018 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3018:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3018:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3021:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3021 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3021:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3021:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+  105 | };
+      | ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetJoinOrder(std::string_view, std::string_view)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3057:80: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3057 |     return {"OK join_order=" + std::string(exec::JoinOrderName(*parsed)), false};
+      |                                                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3057:80: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3057:80: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/sys_views.cpp:105:1: warning: missing initializer for member ‘kds::server::SysViewSpec::key_column’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleDropPlan(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3120:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3120 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3120:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3120:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetAsh(std::string_view, std::string_view)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3156:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3156 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3156:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3156:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3167:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3167 |         return {"OK ash_interval_ms=" + std::to_string(ms), false};
+      |                                                                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3167:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3167:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3197:62: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3197 |             return {"ERR CREATE TABLE requires a name", false};
+      |                                                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3197:62: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3197:62: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘virtual kds::server::DispatchOutcome kds::server::IndexBuildRun::Tail(const kds::Status&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3650:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3650 |         return {os.str(), false};
+      |                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3650:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3650:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3661:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3661 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3661:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3661:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::DeclarationBuildRunOf<Build>::Publish(const kds::Status&) [with Build = kds::exec::AssertionBuild]’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3777:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3777 |     return {os.str(), false};
+      |                            ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3777:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3777:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::DeclarationBuildRunOf<Build>::Publish(const kds::Status&) [with Build = kds::exec::TransitionBuild]’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3792:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3792 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3792:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3792:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘virtual kds::server::DispatchOutcome kds::server::GatherRun::Tail(const kds::Status&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3873:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 3873 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3873:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3873:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘virtual kds::server::DispatchOutcome kds::server::PurgeIndexRun::Tail(const kds::Status&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4010:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4010 |                 false, removed_};
+      |                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4010:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4010:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4320:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4320 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4320:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4320:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4324:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4324 |         return {std::move(reply), false};
+      |                                        ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4324:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4324:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleIndex(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4432:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4432 |         return {"ERR expected a CREATE INDEX or DROP INDEX statement", false};
+      |                                                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4432:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4432:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4601:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4601 |                                            false};
+      |                                                 ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4601:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4601:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4617:36: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4617 |             return {os.str(), false};
+      |                                    ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4617:36: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4617:36: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCabin(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4664:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4664 |         return {"ERR expected a CREATE CABIN or DROP CABIN statement", false};
+      |                                                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4664:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4664:77: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunCabinDdl(const kds::parser::CabinStmt&, kds::catalog::Oid)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4718:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4718 |                                            false};
+      |                                                 ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4718:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4718:49: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4743:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4743 |         return {os.str(), false};
+      |                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4743:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4743:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4778:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4778 |     return {os.str(), false};
+      |                            ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4778:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4778:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAlter(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4788:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4788 |         return {"ERR expected an ALTER TABLE statement", false};
+      |                                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4788:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4788:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4860:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4860 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4860:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4860:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4941:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 4941 |     return {os.str(), false};
+      |                            ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4941:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:4941:28: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5183:29: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5183 |         return {reply, false};
+      |                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5183:29: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5183:29: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5244:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5244 |                     false};
+      |                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5244:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5244:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5264:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5264 |         return {"DROPPED COLUMN " + stmt.table_name + "." + stmt.old_column, false};
+      |                                                                                   ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5264:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5264:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5282:65: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5282 |             return {"ERR expected a DROP TABLE statement", false};
+      |                                                                 ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5282:65: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5282:65: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5316:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5316 |                                        false};
+      |                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5316:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5316:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5328:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5328 |                                        false};
+      |                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5328:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5328:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5337:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5337 |                                        false};
+      |                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5337:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5337:45: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5354:72: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5354 |                 return DispatchOutcome{"ERR " + *planned.value(), false};
+      |                                                                        ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5354:72: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5354:72: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5435:98: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5435 |         return {"DROPPED TABLE " + stmt.table_name + " oid=" + std::to_string(oid.value()), false};
+      |                                                                                                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5435:98: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5435:98: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleNamespace(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5484:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5484 |         return {"ERR expected a CREATE NAMESPACE or DROP NAMESPACE statement", false};
+      |                                                                                     ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5484:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5484:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5504:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5504 |                     false};
+      |                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5504:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5504:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5531:96: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5531 |         return {"DROPPED NAMESPACE " + stmt.name + " oid=" + std::to_string(oid.value()), false};
+      |                                                                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5531:96: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5531:96: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAssertion(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5583:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5583 |         return {"ERR expected a CREATE ASSERTION or DROP ASSERTION statement", false};
+      |                                                                                     ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5583:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5583:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5600:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5600 |         return {os.str(), false};
+      |                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5600:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5600:32: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleTransition(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5680:87: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5680 |         return {"ERR expected a CREATE TRANSITION or DROP TRANSITION statement", false};
+      |                                                                                       ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5680:87: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5680:87: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5754:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 5754 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5754:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:5754:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘std::optional<kds::server::DispatchOutcome> kds::server::CommandDispatcher::ColumnRowOf(const kds::parser::ColumnDef&, uint32_t, kds::catalog::SysColumnRow&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6560:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6560 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6560:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6560:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6570:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6570 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6570:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6570:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6597:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6597 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6597:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6597:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6627:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6627 |                     false};
+      |                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6627:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6627:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6639:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6639 |                     false};
+      |                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6639:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6639:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6662:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6662 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6662:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6662:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6682:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6682 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6682:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6682:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6703:67: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6703 |             return {"ERR expected a CREATE TABLE statement", false};
+      |                                                                   ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6703:67: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6703:67: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6962:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 6962 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6962:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:6962:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7027:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7027 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7027:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7027:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7058:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7058 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7058:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7058:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7107:37: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7107 |         return {created.str(), false};
+      |                                     ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7107:37: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7107:37: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+[  2%] Building CXX object CMakeFiles/kds.dir/src/server/load_placer.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::SelectRun::Finish(const kds::Status&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7885:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7885 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7885:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7885:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::InsertInner(std::string_view, WriteScope&, const kds::exec::StatementContext&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7926:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 7926 |         return {"ERR expected an INSERT statement", false};
+      |                                                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7926:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:7926:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In function ‘kds::server::DispatchOutcome kds::server::{anonymous}::WroteRows(std::string, uint64_t, kds::catalog::Oid)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8069:54: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8069 |     DispatchOutcome out{std::move(reply), false, rows};
+      |                                                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8069:54: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8069:54: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8089:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8089 |                                    false};
+      |                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8089:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8089:41: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8101:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8101 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8101:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8101:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::InsertParsed(const kds::parser::InsertStmt&, WriteScope&, const kds::exec::StatementContext&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8217:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8217 |             return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+      |                                                                                        ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8217:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8217:88: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8273:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8273 |         return {"INSERTED oid=" + std::to_string(oid.value()) + " rows=0", false, 0};
+      |                                                                                    ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8273:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8273:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::InsertOnConflict(kds::catalog::Oid, const kds::catalog::TableAccess&, const kds::parser::InsertStmt&, const kds::parser::InsertStmt&, const kds::catalog::TableAccess::IndexRef*, WriteScope&, const kds::exec::StatementContext&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8780:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 8780 |     if (inserted == 0) return {"INSERTED oid=" + std::to_string(oid) + " rows=0", false, 0};
+      |                                                                                           ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8780:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:8780:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+[  2%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_load_server.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘std::optional<kds::server::DispatchOutcome> kds::server::CommandDispatcher::ExistingRelationReply(kds::catalog::Oid, std::string_view)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:9935:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 9935 |     return DispatchOutcome{"EXISTS oid=" + std::to_string(existing.value()), false};
+      |                                                                                   ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:9935:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:9935:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCatalogView(const kds::parser::SelectStmt&, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10327:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10327 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10327:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10327:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10449:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10449 |                     "correlate against", false};
+      |                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10449:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10449:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10469:39: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10469 |                     "supported", false};
+      |                                       ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10469:39: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10469:39: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10591:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10591 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10591:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10591:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunAggregated(kds::server::ResultSink&, kds::server::TextResultSink&, const kds::exec::StepChain&, kds::exec::TrailCollector*, const kds::exec::TrailReplay*, const std::optional<kds::server::StatementIdentity>&, const kds::txn::Snapshot&, kds::exec::ExecStats&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10697:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10697 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10697:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10697:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunAnalyze(const kds::exec::StepChain&, kds::exec::TrailCollector*, const kds::exec::TrailReplay*, const std::optional<kds::server::StatementIdentity>&, const kds::txn::Snapshot&, kds::exec::OutputSort&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10843:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10843 |     DispatchOutcome out{os.str(), false};
+      |                                        ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10843:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10843:40: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSelect(std::string_view, kds::server::Session&, bool, const kds::txn::Snapshot*, const kds::exec::StatementContext*, bool)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10907:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10907 |         return {"ERR expected a SELECT statement", false};
+      |                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10907:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10907:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleLockingRead(const kds::parser::SelectStmt&, kds::server::Session&, bool, bool, const kds::exec::StatementContext&, const kds::txn::Snapshot&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10952:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+10952 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10952:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:10952:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::SelectBody(const std::shared_ptr<kds::server::SelectRun>&, kds::server::Session&, bool, const kds::exec::StatementContext*, std::string_view)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11048:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+11048 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11048:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11048:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11054:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+11054 |                         false};
+      |                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11054:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11054:30: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11074:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+11074 |                     false};
+      |                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11074:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11074:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11387:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+11387 |         return {"ERR " + described.message(), false, 0, described};
+      |                                                                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11387:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:11387:66: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:12750:92: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12750 |             return {"DROPPED VIEW " + stmt.name + " oid=" + std::to_string(view_oid), false};
+      |                                                                                            ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:12750:92: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:12750:92: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:12955:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+12955 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:12955:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:12955:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘std::optional<kds::server::DispatchOutcome> kds::server::CommandDispatcher::TryQueryLayer(std::string_view, kds::server::Session&, const kds::txn::Snapshot&, const kds::exec::StatementContext*)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:13014:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13014 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:13014:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:13014:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::UpdateInner(std::string_view, WriteScope&, const kds::txn::Snapshot&, kds::server::WalkCursor, const kds::exec::StatementContext&, std::vector<kds::exec::SubqueryResult>&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:13029:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+13029 |         return {"ERR expected an UPDATE statement", false};
+      |                                                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:13029:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:13029:58: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::UpdateParsed(kds::parser::UpdateStmt&, WriteScope&, const kds::txn::Snapshot&, kds::server::WalkCursor, const kds::exec::StatementContext&, std::vector<kds::exec::SubqueryResult>&, std::optional<long unsigned int>)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14212:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14212 |                 return {"UPDATED 0", false, 0};
+      |                                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14212:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14212:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14259:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14259 |     if (!any.value()) return {"UPDATED " + std::to_string(updated), false, updated};
+      |                                                                                   ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14259:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14259:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RunLockingRead(const kds::parser::SelectStmt&, kds::server::Session&, const kds::exec::StatementContext&, const kds::txn::Snapshot&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14511:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14511 |     DispatchOutcome out{text_sink.Take(), false};
+      |                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14511:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14511:48: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleBegin(std::string_view, std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14521:81: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14521 |         return {"ERR this server was built without a transaction manager", false};
+      |                                                                                 ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14521:81: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14521:81: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14527:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14527 |         return {"ERR a transaction is already open; COMMIT or ROLLBACK first", false};
+      |                                                                                     ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14527:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14527:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14613:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14613 |                     false};
+      |                          ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14613:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14613:26: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14643:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14643 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14643:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14643:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+[  2%] Building CXX object CMakeFiles/kds.dir/src/server/kwp_session.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::BeginReadOnly(kds::txn::IsolationLevel, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14673:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14673 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14673:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14673:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCommit(kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14678:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14678 |         return {"ERR no transaction is open", false};
+      |                                                    ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14678:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14678:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14684:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14684 |         return {"ERR current transaction is aborted; ROLLBACK", false};
+      |                                                                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14684:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14684:70: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14691:44: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14691 |         return {"COMMIT trx_id=none", false};
+      |                                            ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14691:44: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14691:44: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::CommitLocal(kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14759:61: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14759 |         return {"COMMIT trx_id=" + std::to_string(id), false};
+      |                                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14759:61: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14759:61: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14780:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14780 |     return {"COMMIT trx_id=" + std::to_string(id), false};
+      |                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14780:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14780:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleRollback(kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14785:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14785 |         return {"ERR no transaction is open", false};
+      |                                                    ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14785:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14785:52: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14792:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14792 |         return {"ROLLBACK trx_id=" + TrxIdText(expired), false};
+      |                                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14792:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14792:63: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14797:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14797 |         return {"ROLLBACK trx_id=none", false};
+      |                                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14797:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14797:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::RollbackLocal(kds::server::Session&, kds::stats::TxnEnd)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14844:59: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14844 |     return {"ROLLBACK trx_id=" + std::to_string(id), false};
+      |                                                           ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14844:59: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14844:59: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleUse(std::string_view, std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14885:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14885 |     return {"USE namespace=" + std::string(name), false};
+      |                                                        ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14885:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14885:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleReset(std::string_view, std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14934:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14934 |     DispatchOutcome out{"RESET SESSION", false};
+      |                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14934:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14934:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetIsolation(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14942:64: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14942 |         return {"ERR expected LEVEL after SET ISOLATION", false};
+      |                                                                ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14942:64: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14942:64: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14951:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14951 |         return {"ERR cannot change the isolation level inside a transaction", false};
+      |                                                                                    ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14951:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14951:84: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14954:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14954 |     return {std::string("SET isolation=") + txn::IsolationLevelName(parsed.value()), false};
+      |                                                                                           ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14954:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14954:91: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetDurability(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14981:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14981 |         return {"ERR cannot change the durability class inside a transaction", false};
+      |                                                                                     ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14981:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14981:85: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14984:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+14984 |     return {std::string("SET durability=") + wal::DurabilityClassName(parsed.value()), false};
+      |                                                                                             ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14984:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:14984:93: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleSetPriority(std::string_view, std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:15010:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15010 |                 false};
+      |                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:15010:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:15010:22: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:15013:79: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+15013 |     return {"SET priority=" + std::string(PriorityName(parsed.value())), false};
+      |                                                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:15013:79: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:15013:79: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleWaystone(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16291:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16291 |     return {reply, false};
+      |                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16291:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16291:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleCreatePlan(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16609:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16609 |     return {reply, false};
+      |                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16609:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16609:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAlterPlan(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16736:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16736 |             false};
+      |                  ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16736:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16736:18: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+[  2%] Building CXX object CMakeFiles/kds.dir/src/wal/redo.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandleAdvisePlan(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16887:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16887 |     return {reply, false};
+      |                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16887:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16887:25: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::HandlePurge(std::string_view, kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16901:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16901 |         return {"ERR expected a PURGE statement", false};
+      |                                                        ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16901:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16901:56: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16980:69: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16980 |         if (!keyed.value().has_value()) return {"PURGED 0", false, 0};  // names no key
+      |                                                                     ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16980:69: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16980:69: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16992:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+16992 |     if (lo >= hi) return {"PURGED 0", false, 0};  // names no key
+      |                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16992:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:16992:47: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17130:17: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+17130 |     return ended({"PURGED " + std::to_string(purged), false, purged}, purged);
+      |            ~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17130:17: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17130:17: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In lambda function:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17346:38: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+17346 |         return {reply, false, cleaned};
+      |                                      ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17346:38: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17346:38: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In member function ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::DeleteInner(std::string_view, WriteScope&, const kds::txn::Snapshot&, kds::server::WalkCursor, const kds::exec::StatementContext&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17358:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+17358 |         return {"ERR expected a DELETE statement", false};
+      |                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17358:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17358:57: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17604:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+17604 |                 return {"DELETED 0", false, 0};
+      |                                              ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17604:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17604:46: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17632:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+17632 |     if (!any.value()) return {"DELETED " + std::to_string(deleted), false, deleted};
+      |                                                                                   ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17632:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:17632:83: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+[  2%] Building CXX object CMakeFiles/kds.dir/src/exec/purge_key.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In instantiation of ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&) [with Body = kds::server::CommandDispatcher::DispatchAndStage(std::string_view, kds::server::Session*)::<lambda(kds::server::Session&)>]’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1352:23:   required from here
+ 1352 |         StageStatement(session, [&](Session& active) { return DispatchInner(line, active); });
+      |         ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1436 |         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1469:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1469 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp: In instantiation of ‘kds::server::DispatchOutcome kds::server::CommandDispatcher::StageStatement(kds::server::Session*, Body&&) [with Body = kds::server::BuildRun::Execute(_ZN3kds6server8BuildRun7ExecuteEPNS0_15DispatchOutcomeE.Frame*)::<lambda(kds::server::Session&)>]’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:3430:29:   required from here
+ 3430 |     *out = d_.StageStatement(&session_, [&](Session& active) {
+      |            ~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3431 |         d_.StampStatement(active);
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3432 |         // The head took the statement's boundary; a second would re-mint an
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3433 |         // explicit transaction's view mid-statement.
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3434 |         d_.statement_boundary_taken_ = true;
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3435 |         DispatchOutcome reply = FramedTail(active, ran);
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3436 |         // A cancelled statement leaves an open transaction failed
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3437 |         // (`protocol.md` §10), whatever the build's own refusals leave - a
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3438 |         // declaration's own refusals poison nothing (the operator's ruling of
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3439 |         // 2026-10-21).
+      |         ~~~~~~~~~~~~~~~      
+ 3440 |         if (ran.code() == StatusCode::kCancelled) active.Poison();
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 3441 |         decided_ = true;
+      |         ~~~~~~~~~~~~~~~~     
+ 3442 |         return reply;
+      |         ~~~~~~~~~~~~~        
+ 3443 |     });
+      |     ~~                       
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::binding’ [-Wmissing-field-initializers]
+ 1436 |         outcome = DispatchOutcome{ErrorReply(refused), false, 0, refused};
+      |                                                                         ^
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::examined’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1436:73: warning: missing initializer for member ‘kds::server::DispatchOutcome::compile_ns’ [-Wmissing-field-initializers]
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/command_dispatcher.cpp:1469:95: warning: missing initializer for member ‘kds::server::DispatchOutcome::WriteBlock::slot’ [-Wmissing-field-initializers]
+ 1469 |         outcome.write_block = DispatchOutcome::WriteBlock{blocking_writer_, blocked_tuple_key_};
+      |                                                                                               ^
+[  5%] Building CXX object CMakeFiles/kds.dir/src/exec/clean_dropped.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/fk_check.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/join_order.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/step_vm.cpp.o
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/kwp_session.cpp: In function ‘constexpr uint8_t kds::server::{anonymous}::TxnStateOf(const kds::server::Session&)’:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/kwp_session.cpp:35:51: warning: call to non-‘constexpr’ function ‘kds::server::Session::State kds::server::Session::state() const’ [-Winvalid-constexpr]
+   35 |     return static_cast<std::uint8_t>(session.state());
+      |                                      ~~~~~~~~~~~~~^~
+In file included from /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include/kds/server/command_dispatcher.hpp:64,
+                 from /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include/kds/server/kwp_session.hpp:16,
+                 from /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/src/server/kwp_session.cpp:1:
+/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include/kds/server/session.hpp:173:11: note: ‘kds::server::Session::State kds::server::Session::state() const’ declared here
+  173 |     State state() const noexcept { return state_; }
+      |           ^~~~~
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/index_ddl.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_build.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/assertion_catalog.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/transition.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/cabin_optimizer_exec.cpp.o
+[  8%] Building CXX object CMakeFiles/kds.dir/src/exec/index_maintain.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/exec/heap_store.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/exec/heap_release.cpp.o
+[ 11%] Building CXX object CMakeFiles/kds.dir/src/exec/index_purge.cpp.o
+[ 11%] Linking CXX static library libkds.a
+[ 97%] Built target kds
+[ 97%] Building CXX object CMakeFiles/kds_server.dir/src/server/main.cpp.o
+[100%] Linking CXX executable kds_server
+[100%] Built target kds_server
+
+real	0m24.244s
+user	1m40.477s
+sys	0m4.585s

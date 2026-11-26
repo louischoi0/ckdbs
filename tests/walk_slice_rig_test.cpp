@@ -122,6 +122,17 @@ protected:
         })) << "the scripts never finished";
     }
 
+    // **For a cell whose writer walks** (DT): a walked `UPDATE` or `DELETE`
+    // gives its core back every 64 leaves as the read walk does, so a writer
+    // of several walks no longer ends inside the reader's first suspension.
+    // At the `analytic` level the read walk's slice is 16 leaves, and it is
+    // still walking when the writer's last statement ends - which is what
+    // these cells assert before they read the reply.
+    void SliceTheReadWalkFiner() {
+        ASSERT_EQ(d().Dispatch("SET PRIORITY analytic", &long_).response,
+                  "SET priority=analytic");
+    }
+
     std::unique_ptr<TwoCoreRig> rig_;
     Session long_, other_;
 };
@@ -264,6 +275,7 @@ TEST_F(WalkSliceRigTest, UpdatesAndDeletesInsideAReverseWalkLeaveItsViewWhole) {
     // suspensions, so the walk reads them through their undo under a held
     // leaf: it still returns every row, in order, as its view saw them.
     Load(1, 1, kRows);
+    SliceTheReadWalkFiner();
     Script walk{&long_, {"SELECT id FROM t WHERE name = 'x' ORDER BY id DESC LIMIT 100000"}};
     Script writer{&other_,
                   {"UPDATE t SET name = 'y' WHERE id BETWEEN 1 AND 400",
@@ -369,6 +381,7 @@ TEST_F(WalkSliceRigTest, AReverseOrderedIndexWalkYieldsAndMissesAndRepeatsNoRowU
     const std::string ordered = "SELECT id FROM o ORDER BY k DESC LIMIT 100000";
     ASSERT_NE(d().Dispatch("ANALYZE " + ordered).response.find("order=index_desc"),
               std::string::npos);
+    SliceTheReadWalkFiner();
     Script walk{&long_, {ordered}};
     Script writer{&other_, {"SELECT id FROM o WHERE id = 5"}};
     for (int i = 0; i < kRows; ++i) {

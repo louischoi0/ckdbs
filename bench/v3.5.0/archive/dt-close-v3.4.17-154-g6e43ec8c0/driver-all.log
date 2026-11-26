@@ -1,0 +1,48 @@
+19:28:31 invoke arm A run 0 cells ivw,ivr,i,ivu,aw,au load 0.53 3.55 4.58 3/1078 441576 competing: 0
+19:31:43 done arm A run 0 rc=0 load 1.06 2.38 3.92 1/1077 444941 competing: 0
+19:31:43 invoke arm B run 0 cells ivw,ivu,aw,au load 1.06 2.38 3.92 1/1077 444947 competing: 0
+19:40:22 done arm B run 0 rc=0 load 5.46 5.19 4.92 13/1117 463748 competing: 2
+19:40:22 invoke arm C run 0 cells ivw,ivr,i,ivu,aw,au load 5.46 5.19 4.92 13/1117 463754 competing: 2
+19:45:49 done arm C run 0 rc=0 load 1.21 2.78 3.99 1/1077 477266 competing: 0
+19:45:49 invoke arm C run 1 cells ivw,ivu,aw,au load 1.21 2.78 3.99 1/1077 477272 competing: 0
+19:48:06 done arm C run 1 rc=0 load 2.10 2.44 3.69 8/1101 479673 competing: 9
+19:48:06 invoke arm B run 1 cells ivw,ivu,aw,au load 2.10 2.44 3.69 8/1101 479679 competing: 9
+19:52:04 HOLD: killed chain; another worktree (du-keyed-write) started ctest -j12 at ~19:50:30
+quiet at 19:54:17
+19:54:17 invoke arm B run 1 cells ivw,ivu,aw,au load 1.83 4.08 4.16 1/1083 495056 competing(exact names): 0
+19:59:21 done arm B run 1 rc=0 load 2.00 2.70 3.52 1/1080 500365 competing(exact names): 0
+19:59:21 invoke arm A run 1 cells ivw,ivu,aw,au load 2.00 2.70 3.52 1/1080 500374 competing(exact names): 0
+20:03:31 done arm A run 1 rc=0 load 2.19 2.21 3.10 1/1081 505095 competing(exact names): 0
+20:03:31 cells finished
+20:10:43 HOLD/RERUN: other-session builds/ctest overlapped B r0 (ivu,aw,au), C r0 ivw, A r1 ivw starts; those cells moved to contaminated/ and rerun under a strict gate
+20:11:02 gate open after waiting 0 s
+20:11:02 invoke arm B run 0 cell ivw try 1 load 2.62 3.77 3.69 5/1087 522599
+20:13:40 cell B r0 ivw try 1 clean (no competitor sampled during it)
+20:13:40 gate open after waiting 0 s
+20:13:40 invoke arm C run 0 cell ivw try 1 load 2.38 3.06 3.42 1/1076 526349
+20:14:53 cell C r0 ivw try 1 clean (no competitor sampled during it)
+20:14:53 gate open after waiting 0 s
+20:14:53 invoke arm A run 1 cell ivw try 1 load 1.38 2.60 3.23 1/1078 527920
+20:15:26 cell A r1 ivw try 1 clean (no competitor sampled during it)
+20:15:26 gate open after waiting 0 s
+20:15:26 invoke arm B run 0 cell ivu try 1 load 1.37 2.47 3.16 1/1067 528677
+20:16:04 cell B r0 ivu try 1 clean (no competitor sampled during it)
+20:16:04 gate open after waiting 0 s
+20:16:04 invoke arm B run 0 cell aw try 1 load 2.26 2.55 3.16 1/1078 529475
+20:17:21 cell B r0 aw try 1 clean (no competitor sampled during it)
+20:17:21 gate open after waiting 0 s
+20:17:21 invoke arm B run 0 cell au try 1 load 1.94 2.34 3.03 1/1074 531119
+20:18:35 cell B r0 au try 1 clean (no competitor sampled during it)
+20:18:35 rerun cells finished
+20:18:35 gate open after waiting 0 s
+20:18:35 cell5 start try 1 load 2.36 2.31 2.97 3/1076 532629
+20:22:36 cell5 done rc=0 load 9.29 4.36 3.51 1/1074 539600
+20:22:36 cell5 try 1 overlapped a competitor
+20:25:19 gate open after waiting 162 s
+20:25:19 cell5 start try 2 load 4.76 4.63 3.74 1/1074 551910
+20:32:25 cell5 done rc=0 load 1.15 3.69 3.95 1/1079 565352
+20:32:25 cell5 try 2 overlapped a competitor
+20:32:25 gate open after waiting 0 s
+20:32:25 cell5 start try 3 load 1.15 3.69 3.95 1/1079 565363
+20:35:34 cell5 done rc=0 load 1.90 2.73 3.50 1/1067 569912
+20:35:34 cell5 try 3 clean

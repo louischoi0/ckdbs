@@ -1,0 +1,40 @@
+{
+ "argv": [
+  "--bin",
+  "/home/ukjin/bench-runs/dt/close/bin/kds_server.B",
+  "--arm",
+  "Boff",
+  "--cells",
+  "ivw,au",
+  "--runs",
+  "1",
+  "--seconds",
+  "20",
+  "--warmup",
+  "4",
+  "--port",
+  "32771",
+  "--workdir",
+  "/home/ukjin/bench-runs/dt/close/work",
+  "--out",
+  "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/bench/v3.5.0/archive/dt-close-v3.4.17-153-gd172085e8/probe-ckpt-off",
+  "--keep",
+  "--conf-extra",
+  "checkpoint_interval_ms = 0",
+  "--walk-sql",
+  "UPDATE dt_big SET c0 = c0 + 1 WHERE c0 >= 1 AND c0 <= 50000"
+ ],
+ "started": "2026-11-26T18:50:19Z",
+ "probe_o_direct_8k_qd1": {
+  "p0_us": 4.2,
+  "p25_us": 89.4,
+  "p50_us": 95.2,
+  "p95_us": 329.8,
+  "p99_us": 3724.5,
+  "p99.9_us": 3997.2,
+  "max_us": 4015.0,
+  "n": 2000
+ },
+ "cold_rate": 2000.0,
+ "total_s": 95.2
+}

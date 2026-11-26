@@ -1,0 +1,705 @@
+{
+ "rows": 1000000,
+ "reps": 3,
+ "arms": {
+  "base": {
+   "binary_sha256": "d9e683d9b312c7e2f3aa4ddf26d81a1b215afc10ce840ae7abe8ac65c22da9cc",
+   "binary_mtime": 1795724890.261535,
+   "create_plan": "refused: CREATE PLAN ... FOR takes a SELECT (byte 26)",
+   "analyze": {
+    "idx-10": "refused: expected a SELECT statement",
+    "idx-1000": "refused: expected a SELECT statement",
+    "idx-10000": "refused: expected a SELECT statement",
+    "idx-50000": "refused: expected a SELECT statement",
+    "range-1k": "refused: expected a SELECT statement",
+    "pinned-50k": "refused: expected a SELECT statement"
+   }
+  },
+  "close": {
+   "binary_sha256": "559262fbf6b4a16e3cf23769409df7a98bf103c1c400988d6acbd4ba452e4391",
+   "binary_mtime": 1795724915.4811113,
+   "create_plan": "CREATED PLAN name=du_pinned plan_id=1 fetch_id=3537649130853186542 variants=1",
+   "analyze": {
+    "idx-10": "analyze rows=10 class=Update | write IndexProbe b index=b_o10 keys=10",
+    "idx-1000": "analyze rows=1000 class=Update | write IndexProbe b index=b_o1k keys=1000",
+    "idx-10000": "analyze rows=10000 class=Update | write IndexProbe b index=b_o10k keys=10000",
+    "idx-50000": "analyze rows=50000 class=Update | write IndexProbe b index=b_o50k keys=50000",
+    "range-1k": "analyze rows=1000 class=Update | write Range b range=[497624, 498623]",
+    "pinned-50k": "analyze rows=50000 class=Update | write Scan b arm=plan | planned plan=du_pinned/walk"
+   }
+  }
+ },
+ "shapes": [
+  {
+   "shape": "point",
+   "statements_per_block": 3000,
+   "rows_per_statement": 1,
+   "arms": {
+    "base": {
+     "statements": 9000,
+     "server_cpu_us_per_statement": 7.72,
+     "latency": {
+      "n": 9000,
+      "p0_us": 14.3,
+      "p25_us": 14.7,
+      "p50_us": 14.9,
+      "p75_us": 15.2,
+      "p99_us": 680.7,
+      "max_us": 7344.5
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 1/1100 562191",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1100 562195",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562197",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 9000,
+     "server_cpu_us_per_statement": 7.46,
+     "latency": {
+      "n": 9000,
+      "p0_us": 14.1,
+      "p25_us": 14.7,
+      "p50_us": 14.9,
+      "p75_us": 15.1,
+      "p99_us": 17.8,
+      "max_us": 3176.8
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 1/1100 562192",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1100 562193",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562198",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "list3",
+   "statements_per_block": 2000,
+   "rows_per_statement": 3,
+   "arms": {
+    "base": {
+     "statements": 6000,
+     "server_cpu_us_per_statement": 9.92,
+     "latency": {
+      "n": 6000,
+      "p0_us": 17.5,
+      "p25_us": 17.9,
+      "p50_us": 18.1,
+      "p75_us": 18.3,
+      "p99_us": 20.2,
+      "max_us": 371.7
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562199",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562202",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562203",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 6000,
+     "server_cpu_us_per_statement": 9.9,
+     "latency": {
+      "n": 6000,
+      "p0_us": 17.4,
+      "p25_us": 17.9,
+      "p50_us": 18.1,
+      "p75_us": 18.3,
+      "p99_us": 20.8,
+      "max_us": 1728.0
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562200",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562201",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562204",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "walk-small",
+   "statements_per_block": 1000,
+   "rows_per_statement": 0,
+   "arms": {
+    "base": {
+     "statements": 3000,
+     "server_cpu_us_per_statement": 40.55,
+     "latency": {
+      "n": 3000,
+      "p0_us": 46.6,
+      "p25_us": 49.7,
+      "p50_us": 50.3,
+      "p75_us": 51.2,
+      "p99_us": 58.3,
+      "max_us": 369.9
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 1/1101 562205",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1101 562213",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1100 562214",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 3000,
+     "server_cpu_us_per_statement": 41.11,
+     "latency": {
+      "n": 3000,
+      "p0_us": 47.5,
+      "p25_us": 49.6,
+      "p50_us": 50.4,
+      "p75_us": 51.6,
+      "p99_us": 59.0,
+      "max_us": 144.1
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 2/1101 562206",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 3/1101 562208",
+       "busy_processes": "1"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1100 562215",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "delete-miss",
+   "statements_per_block": 3000,
+   "rows_per_statement": 0,
+   "arms": {
+    "base": {
+     "statements": 9000,
+     "server_cpu_us_per_statement": 6.44,
+     "latency": {
+      "n": 9000,
+      "p0_us": 12.6,
+      "p25_us": 15.7,
+      "p50_us": 16.1,
+      "p75_us": 16.6,
+      "p99_us": 20.5,
+      "max_us": 362.1
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 2/1100 562217",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562227",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562228",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 9000,
+     "server_cpu_us_per_statement": 6.35,
+     "latency": {
+      "n": 9000,
+      "p0_us": 12.2,
+      "p25_us": 14.8,
+      "p50_us": 15.0,
+      "p75_us": 15.6,
+      "p99_us": 969.0,
+      "max_us": 2603.8
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 3/1107 562225",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562226",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 3/1107 562229",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "read-point",
+   "statements_per_block": 3000,
+   "rows_per_statement": null,
+   "arms": {
+    "base": {
+     "statements": 9000,
+     "server_cpu_us_per_statement": 6.7,
+     "latency": {
+      "n": 9000,
+      "p0_us": 15.6,
+      "p25_us": 16.2,
+      "p50_us": 16.5,
+      "p75_us": 17.7,
+      "p99_us": 20.6,
+      "max_us": 377.0
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562233",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1107 562242",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 3/1127 562270",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 9000,
+     "server_cpu_us_per_statement": 6.86,
+     "latency": {
+      "n": 9000,
+      "p0_us": 15.4,
+      "p25_us": 16.0,
+      "p50_us": 16.3,
+      "p75_us": 17.1,
+      "p99_us": 1549.2,
+      "max_us": 3014.1
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562234",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1107 562235",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1109 562321",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "idx-10",
+   "statements_per_block": 12,
+   "rows_per_statement": 10,
+   "arms": {
+    "base": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 33547.18,
+     "latency": {
+      "n": 36,
+      "p0_us": 33622.5,
+      "p25_us": 33890.8,
+      "p50_us": 33936.5,
+      "p75_us": 33991.3,
+      "p99_us": 34154.8,
+      "max_us": 34154.8
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562323",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 3/1107 562331",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1107 562333",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 69.68,
+     "latency": {
+      "n": 36,
+      "p0_us": 45.4,
+      "p25_us": 65.9,
+      "p50_us": 73.7,
+      "p75_us": 100.5,
+      "p99_us": 279.8,
+      "max_us": 279.8
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562329",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1107 562330",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 2/1107 562337",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "idx-1000",
+   "statements_per_block": 12,
+   "rows_per_statement": 1000,
+   "arms": {
+    "base": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 34458.43,
+     "latency": {
+      "n": 36,
+      "p0_us": 34645.9,
+      "p25_us": 34781.4,
+      "p50_us": 34828.6,
+      "p75_us": 34910.9,
+      "p99_us": 81982.5,
+      "max_us": 81982.5
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 3/1107 562341",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 2/1107 562347",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 2/1108 562352",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 1918.78,
+     "latency": {
+      "n": 36,
+      "p0_us": 1357.0,
+      "p25_us": 1477.1,
+      "p50_us": 1605.2,
+      "p75_us": 2822.4,
+      "p99_us": 61310.1,
+      "max_us": 61310.1
+     },
+     "host": [
+      {
+       "loadavg": "2.91 4.95 4.33 1/1107 562345",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.91 4.95 4.33 1/1107 562346",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 1/1101 562358",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "idx-10000",
+   "statements_per_block": 12,
+   "rows_per_statement": 10000,
+   "arms": {
+    "base": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 44079.11,
+     "latency": {
+      "n": 36,
+      "p0_us": 42888.5,
+      "p25_us": 43106.6,
+      "p50_us": 43360.7,
+      "p75_us": 43576.2,
+      "p99_us": 560498.2,
+      "max_us": 560498.2
+     },
+     "host": [
+      {
+       "loadavg": "2.92 4.92 4.32 3/1101 562362",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 5/1096 562380",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 1/1094 562438",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 16117.84,
+     "latency": {
+      "n": 36,
+      "p0_us": 15001.0,
+      "p25_us": 15233.1,
+      "p50_us": 16472.8,
+      "p75_us": 23190.3,
+      "p99_us": 909474.3,
+      "max_us": 909474.3
+     },
+     "host": [
+      {
+       "loadavg": "2.92 4.92 4.32 1/1100 562369",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 2/1100 562370",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "2.92 4.92 4.32 1/1100 562451",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "idx-50000",
+   "statements_per_block": 12,
+   "rows_per_statement": 50000,
+   "arms": {
+    "base": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 138290.39,
+     "latency": {
+      "n": 36,
+      "p0_us": 133620.9,
+      "p25_us": 136026.8,
+      "p50_us": 139119.3,
+      "p75_us": 239807.3,
+      "p99_us": 1225833.7,
+      "max_us": 1225833.7
+     },
+     "host": [
+      {
+       "loadavg": "2.93 4.89 4.31 3/1100 562481",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.09 4.86 4.31 2/1094 562692",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.08 4.83 4.30 1/1098 562800",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 123850.96,
+     "latency": {
+      "n": 36,
+      "p0_us": 119658.4,
+      "p25_us": 120667.6,
+      "p50_us": 121733.9,
+      "p75_us": 127854.0,
+      "p99_us": 1532062.9,
+      "max_us": 1532062.9
+     },
+     "host": [
+      {
+       "loadavg": "3.09 4.89 4.32 3/1093 562580",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.09 4.89 4.32 2/1092 562613",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.08 4.83 4.30 1/1098 562830",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "range-1k",
+   "statements_per_block": 12,
+   "rows_per_statement": 1000,
+   "arms": {
+    "base": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 33605.58,
+     "latency": {
+      "n": 36,
+      "p0_us": 32831.5,
+      "p25_us": 33349.0,
+      "p50_us": 34212.2,
+      "p75_us": 34913.2,
+      "p99_us": 115186.5,
+      "max_us": 115186.5
+     },
+     "host": [
+      {
+       "loadavg": "3.15 4.81 4.30 2/1105 562952",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.15 4.81 4.30 2/1105 562958",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.15 4.81 4.30 2/1105 562965",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 642.11,
+     "latency": {
+      "n": 36,
+      "p0_us": 622.8,
+      "p25_us": 695.0,
+      "p50_us": 718.9,
+      "p75_us": 802.4,
+      "p99_us": 1412.9,
+      "max_us": 1412.9
+     },
+     "host": [
+      {
+       "loadavg": "3.15 4.81 4.30 2/1105 562956",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.15 4.81 4.30 2/1105 562957",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.15 4.81 4.30 3/1105 562994",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "shape": "pinned-50k",
+   "statements_per_block": 12,
+   "rows_per_statement": 50000,
+   "arms": {
+    "base": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 136683.68,
+     "latency": {
+      "n": 36,
+      "p0_us": 133830.9,
+      "p25_us": 135551.6,
+      "p50_us": 137681.1,
+      "p75_us": 161095.0,
+      "p99_us": 2041014.9,
+      "max_us": 2041014.9
+     },
+     "host": [
+      {
+       "loadavg": "3.30 4.82 4.30 1/1104 563032",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.20 4.77 4.29 3/1102 563236",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.26 4.76 4.29 3/1095 563255",
+       "busy_processes": "0"
+      }
+     ]
+    },
+    "close": {
+     "statements": 36,
+     "server_cpu_us_per_statement": 139325.18,
+     "latency": {
+      "n": 36,
+      "p0_us": 135540.0,
+      "p25_us": 136914.4,
+      "p50_us": 138501.8,
+      "p75_us": 142321.9,
+      "p99_us": 1174830.0,
+      "max_us": 1174830.0
+     },
+     "host": [
+      {
+       "loadavg": "3.20 4.77 4.29 2/1110 563165",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.20 4.77 4.29 2/1102 563182",
+       "busy_processes": "0"
+      },
+      {
+       "loadavg": "3.26 4.76 4.29 1/1095 563353",
+       "busy_processes": "0"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

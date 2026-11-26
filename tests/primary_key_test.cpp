@@ -309,11 +309,14 @@ TEST_F(KeyedWriteTest, AnUpdateAndADeleteNamingTheWholeKeyDescendByIt) {
     // A key no row holds, and a key a row held: nothing is written.
     Ok("UPDATE h SET v = 0 WHERE a = 9 AND b = 9", "UPDATED 0");
     Ok("DELETE FROM h WHERE a = 2 AND b = 1", "DELETED 0");
-    // Half a key is no key: the walk answers, and the index is not asked.
-    const std::uint64_t walked = Probes();
+    // Half a key is no key, and since DU-S2 it is an equality prefix of the
+    // key's index: the rows are collected through it, one probe. A range
+    // on the next column is a range of it (DU-S3), and no probe.
+    const std::uint64_t half = Probes();
     Ok("UPDATE h SET v = v + 100 WHERE a = 1", "UPDATED 2");
+    EXPECT_EQ(Probes(), half + 1);
     Ok("UPDATE h SET v = v + 100 WHERE a = 2 AND b >= 2 AND b <= 2", "UPDATED 1");
-    EXPECT_EQ(Probes(), walked);
+    EXPECT_EQ(Probes(), half + 1);
     EXPECT_EQ(Rows("SELECT a, b, v FROM h").rows,
               (Table{{"1", "1", "110"}, {"1", "2", "121"}, {"2", "2", "140"}}));
 }
@@ -401,10 +404,11 @@ TEST_F(KeyedWriteTest, AnyUniqueIndexNamedWholeIsAKeyAWriteDescendsBy) {
     Ok("UPDATE t SET v = 1 WHERE u = 200", "UPDATED 1");
     Ok("DELETE FROM t WHERE u = 300", "DELETED 1");
     EXPECT_EQ(Probes("t_u"), unique_before + 2);
-    // An index that is not unique is no key: its run may be the relation.
+    // An index that is not unique is no key, and since DU-S2 it is an arm
+    // all the same: the write collects its rows through it.
     const std::uint64_t plain_before = Probes("t_w");
     Ok("UPDATE t SET v = v + 5 WHERE w = 7", "UPDATED 2");
-    EXPECT_EQ(Probes("t_w"), plain_before);
+    EXPECT_EQ(Probes("t_w"), plain_before + 1);
     EXPECT_EQ(Rows("SELECT id, v FROM t").rows, (Table{{"1", "5"}, {"2", "6"}}));
     // The tuple key's own arm stands ahead of the key's.
     Ok("UPDATE t SET v = 9 WHERE id = 1 AND u = 100", "UPDATED 1");

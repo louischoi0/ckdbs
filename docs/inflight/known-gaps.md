@@ -133,6 +133,34 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **Two rig cells fail intermittently on a 24-CPU host, at `60dc593af` as
+  at `6e43ec8c0`** (found during DT, 2026-11-26; neither is DT's).
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`
+  (`tests/durable_kick_rig_test.cpp:100`, "commit i on core 1 was not
+  kicked" inside its 2,000 ms bound): alone, 5 of 30 runs fail at
+  `60dc593af`, built from `git archive` outside the tree; twelve at a
+  time, 23 of 60 there and 27 of 60 at DT's tree. It failed in more than half of
+  DT's full-suite runs (`ctest -j 12`), where a suite of 5,242 otherwise passed.
+  `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement` (out
+  of retries on `row id=1`) fails 5 of 30 runs alone at `60dc593af` and 8
+  of 30 at DT's tree; it is a point `UPDATE` on a one-leaf relation and
+  reaches no pause (DU recorded the same cell as
+  `bugs/two-core-increment-starves-one-core.md`). Whether either is
+  a test's bound or an engine's wake is not known: the first names a
+  kick that did not arrive in 2 s. **Owner: none.**
+- **`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+  expires alone, on a quiet host** (found at the merge of DT and DU,
+  2026-11-26; an `INSERT`, which neither reaches): "the writes never
+  finished: core 0 at 200, core 1 at 152 of 200" after its 60 s bound, in
+  a serial full suite at a load average near 2. Alone, 20 runs each: **4
+  fail at `60dc593af`** (built from `git archive` outside the tree) and 2
+  on the merged tree; the 20 runs took 532 s and 477 s, where the cell
+  passed in 0.06 s in a suite run of the same day, so a run that passes
+  can be slow too. The entry below
+  on its sibling reads the same expiry under load as slow, not stopped;
+  one writer finished and the other 48 rows short after 60 s with no load
+  is not explained by that reading. **Owner: none.**
+
 - **DH's close measured five cells and one recovery round; the controls
   were not measured.** On `dh-page-image-volume`, 2026-11-20
   (`bench/v3.4.15/results-dh-close-v3.4.15-5-g22818e44.md`): the operator
@@ -578,9 +606,9 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     and the sweep reaches only a session's explicit one; a long autocommit
     `SELECT` holds its view for as long as it walks.
   - **A statement in flight defers the sweep for as long as it runs.** It
-    is never interrupted, and a write does not yield (Statement
-    scheduling, below), so one that never ends holds its transaction past
-    the ceiling.
+    is never interrupted - a walked write gives its core back (Statement
+    scheduling, below) but the sweep does not end it - so one that never
+    ends holds its transaction past the ceiling.
   - **Background read views are not reached** (`txn.md` §1, exemption 2,
     `[PROPOSED]`): the sweep walks connections, and the re-mint it would
     need is unbuilt.
@@ -781,7 +809,10 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   so DL did not close it; what DL closed is the other cores' wait behind
   it: `SHOW CABIN_OPTIMIZER` and `SHOW META` read a published copy and wait
   for no tick. Off by default (`cabin_optimizer`). Verified on worktree
-  `dl-statistics-queue-no-statement` at `b0a824db` by reading. Owner:
+  `dl-statistics-queue-no-statement` at `b0a824db` by reading. DT read
+  it and built nothing (DT-Q6 (b), `workorder-dt-write-path-yield.md` §7,
+  at `6e43ec8c0`): the build runs in the tick's timer callback, no
+  statement, and has no session a `BuildRun` is built on. Owner:
   `docs/spec/cabin-controller.md`.
 
 - **A multi-core test instance binds its probed port with SO_REUSEPORT.**
@@ -1181,22 +1212,140 @@ pages and the cases it does not reach.
 Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
 `docs/spec/protocol.md` §10.
 
-- **Only a `SELECT`'s outermost walk, a relation-`X` build (or an online `CREATE INDEX`), a `GATHER STATISTICS` and a `PURGE INDEX` yield.**
+- **Only a `SELECT`'s outermost walk, a write's walk and key loop, a relation-`X` build (or an online `CREATE INDEX`), a `GATHER STATISTICS` and a `PURGE INDEX` yield.**
   The walk yields every `exec::SlicePolicy::pages_per_slice` (64) pages, a
   `CREATE INDEX`, `REINDEX INDEX`, `CREATE ASSERTION` or `CREATE
   TRANSITION` build every 64 relation leaves (`CREATE ASSERTION` and
   `CREATE TRANSITION` since A1 stage 2b, `IndexBuildSliceRigTest`). A
   `GATHER STATISTICS` (CY) and a `PURGE INDEX` (DD) give it back every 16
   leaves (`GatherRun`, `PurgeIndexRun`, each a `BuildRun`; re-read at
-  `bf289a82`). Nothing else running gives its core back:
-  - a write;
+  `bf289a82`). A walked `UPDATE` or `DELETE` gives it back every 64
+  leaves, and one that finds its rows by keys - a list on the tuple key,
+  a unique key named whole, an index its `WHERE` enters, a heap's tuple
+  key window (DU) - every 64 descents, 16 for an `analytic` session (DT,
+  verified at the merge of DT and DU; `sched.md` §3). Nothing else running
+  gives its core back:
+  - **the collection of a write found through an index**: its index range
+    is read whole, to `max_locks_per_txn` entries, before the first row is
+    written and inside one hold;
+  - an `INSERT`, of one row or of many (`VALUES` lists, `INSERT ...
+    SELECT`): it has no resume path;
+  - a write by one key;
+  - **the read pass of a write whose `WHERE` holds a subquery**
+    (`WriteWalk::CollectTargets`): a whole-relation walk with no cursor,
+    so nowhere to stop; the write walk after it is sliced;
+  - **every fetch a written row makes under its leaf** - its undo chain, a
+    spilled cell, its index entries - and above all **a parent `DELETE`'s
+    reverse foreign-key check** (`CheckNoChildrenBeforeDelete`), which
+    walks a child relation whole under the parent leaf's exclusive hold:
+    no slice boundary splits it, so one row of such a `DELETE` can hold
+    its core for a child's whole walk. Named by DT-S0's review, not sized;
+  - a locking read's walk (DT-Q7 (a));
   - a tuple key descent, run inline by design, and a key set's descents
     (CU-Q8; "Key sets (CU)" below states the bound);
   - an index walk (`RunIndexStep`);
   - a join's inner walk under one outer page.
 
   Each holds its core until it ends or `exec::Budget` stops it. 64 is
-  BA-Q11's value, not re-measured in BA-S15.
+  BA-Q11's value, not re-measured in BA-S15, and not re-measured for a
+  write: a write walk's slice is a `SELECT`'s by DT-Q2 (a), and a slice of
+  leaves whose every row is written costs more than one that is read.
+- **What a write's pause costs and what it can refuse** (DT, verified at
+  `6e43ec8c0`; `instructions/v3.2.0/workorder-dt-write-path-yield.md`
+  §7):
+  - **each resume parses and compiles the statement again**, resolves its
+    foreign-key parents again and, on a btree, descends to its place and
+    passes over the last leaf it finished. **Priced at the close**
+    (`bench/v3.5.0/results-dt-close-v3.4.17-154-g6e43ec8c0.md`, `cores =
+    1`, `relaxed`, one host): a keyless walked `UPDATE` writing 100 rows
+    of 100,000 costs **+212.5 µs of server CPU (+6.4 %) on a btree**
+    against `60dc593af`, in 15 of 15 rounds, and -77.3 µs (-2.4 %) on a
+    heap, whose walk no longer dirties the pages it writes nothing in.
+    How much of the btree's figure is the pause and how much the look
+    below was not separated. A walk under one slice and a write by one
+    key pay nothing (DT-R4: the eight point statements are -10 ns to
+    -240 ns against the same base, its control within 50 ns);
+  - **a write walk reads a leaf twice where it writes it**: the look under
+    a shared hold, then the write fetch (`sched.md` §3). A leaf it writes
+    costs one more fetch and stage 1 again for its rows up to the first
+    that qualifies - at worst every row, where the one qualifying row is
+    the leaf's last. Not skipped at the visit by what the look found: a
+    slot is not a row across an in-place compaction. **Its worst case is
+    not measured**: a walk whose written rows are spread over every leaf
+    (the close's relation admits no such predicate without a reload);
+  - **a long write walk's pages are now the checkpoint's between two
+    slices, and each page it copies is imaged again at its next write**
+    (`wal.md` §10). Before DT a walk held its core and the cadence
+    checkpoint did not run during it. Measured at the close on a walk
+    writing the same 7,150 leaves about 70 times in 20 s: 57,094 to
+    64,001 page images in the window where `60dc593af` logs 1,152 to
+    3,584, and **9 % to 21 % more WAL a walk**. The same window's WAL
+    sync-gate wait is 1.4 s to 1.5 s against 5.8 s to 6.3 s and no walk
+    passes 1 s where 9 to 11 did; that the checkpoint's run is what lets
+    the log recycle was not isolated;
+  - **a co-located read still waits about 50 ms at p99 beside a walk that
+    writes 50,000 rows** (50.9 ms and 51.1 ms; 0.66 s and 3.39 s at
+    `60dc593af`; 0.32 ms to 0.37 ms beside a walk that writes nothing).
+    **Not located**: the window holds 117 holds of 10 ms or more outside
+    a run, the longest 50.6 ms, against 68 commits and 1.36 s of log-roll
+    holds (22.3 ms the longest); no wait event accounts for it. A
+    per-poll attribution of `sched_hold_out_run` would say whether it is
+    the statement's end;
+  - **not measured at the close**: `cores > 1`, `strict`, an `analytic`
+    session's 16-leaf slice, a write driven by a list, a cancel's latency
+    at the pause, a pool smaller than the relation, a heap as the long
+    walk's target;
+  - **the relation's `IX` is asked before the first pause** (DT-R7), so a
+    walk that claimed no row holds it to its decide from there, and the
+    first-intention memo check runs there: a catalog write between the
+    statement's resolution and its first pause re-runs it, or under the
+    synchronous `Dispatch` answers `TXN_CONFLICT`; a transaction at
+    `max_locks_per_txn` that claimed nothing is refused at its first
+    pause;
+  - **a subquery's relation dropped or renamed between two slices refuses
+    the statement mid-walk**, as it did at a held row's park: the resume
+    resolves it again and nothing holds it across the pause;
+  - **a heap key loop whose descent declines after a pause is refused
+    `TXN_CONFLICT`** though it may have written nothing
+    (`WriteWalk::DescentDeclined` reads a resume as "rows were offered"):
+    a refusal, never a wrong answer, and no cell forces a declined descent
+    there;
+  - **a cancelled write is not logged as a statement**: the log gets
+    `RefuseParkedWrite`'s warning, with no statement text.
+- **A write's page miss still stops its core: DT measured it and built
+  nothing for it** (DT-S0, `bench/v3.5.0/results-dt-s0-premise-v3.4.17-150-g60dc593af.md`,
+  measured at `60dc593af`). On that host - a device whose probe p50 is
+  47 µs - a cold point `UPDATE` holds the reactor 87 µs to 91 µs a read
+  on average, p99 in [256, 512) µs, 27 % to 28 % of the core at 2,000
+  writes a second, and the co-located sessions' p95 rises from 0.40 ms to
+  1.5 ms to 2.0 ms while their p99 does not move against the same writers
+  with no device in the path. DT-Q1's bar read p99 and stopped the
+  run-again and the cold-leaf park there. **One host, one rate, `cores =
+  1`, `relaxed`**: on a device as slow as DE-S0's (463 µs a read) one read
+  is near the bar. Owned by nobody until an order reopens it; the census
+  that order would start from is DT's §7 (Census B and C).
+- **Three things DT-S0's measurement met and nobody owns** (measured at
+  `60dc593af`, the same file):
+  - the co-located sessions' p99 is near 5 ms beside 2,000 point
+    `UPDATE`s a second with the page cache answering - no device wait,
+    cause not attributed;
+  - a walked `UPDATE` that matches no row still commits and takes 2.7
+    times a `SELECT` walk's time (121 ms against 45 ms over 128,960 pages
+    at `6e43ec8c0`). The 1.05 MB of WAL a walk it appended there was the
+    images of leaves it fetched for writing and wrote nothing in: 0 at
+    `6e43ec8c0`, where it looks first (DT);
+  - a walked `UPDATE` under a pool a quarter of its relation, the page
+    cache kept from answering, was refused five times `buffer pool full
+    ... 32768 resident (0 pinned, 32753 dirty), nothing reclaimable`
+    before the cell's memory limit killed the server. One attempt, not
+    repeated (DX's subject).
+- **A `DELETE` on a relation with an assertion opens no no-refuse window
+  between its reservation and its undo record** (read at `60dc593af`,
+  `DeleteInner`'s `mark`; DT-S0's review). Read: a refusal at the undo
+  append fails the statement and the transaction's abort gives the
+  reservation back, so nothing is left half done. **Unverified**: no cell
+  refuses that append; a pool at its floor under a `DELETE` on an asserted
+  relation, with the append's fetch failed, would check it.
 - **A page read still stops its core for every reader but two** (DE,
   verified at `1942cb9a`; `page.md` §12). A read that would have to wait
   for the device leaves the reactor only for a statement that is itself a
@@ -1300,11 +1449,15 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   yield with a checkpoint between its slices: `AssertionPublishRigTest`'s
   relations fit one slice, so its publish seam runs in a tail that never
   yielded.
-- **A cancel is observed only where a walk or a build run (a relation-`X`
-  build, `GATHER STATISTICS`, `PURGE INDEX`)
-  yields, or at the next frame.** A write that `C_CANCEL` or a closing connection asks to stop
-  runs to its end, and the cancel then refuses the session's next frame.
-  So a dropped connection can still find its write applied.
+- **A cancel is observed only where a walk - a `SELECT`'s or a write's -
+  or a build run (a relation-`X` build, `GATHER STATISTICS`, `PURGE
+  INDEX`) yields, or at the next frame** (a write's since DT, verified at
+  `6e43ec8c0`). An `INSERT`, a write by one key, and a write walk or key
+  loop shorter than one slice that `C_CANCEL` or a closing connection asks
+  to stop run to their end, and the cancel then refuses the session's next
+  frame. So a dropped connection can still find such a write applied. No
+  cell drives a write's cancel over the wire: the cells set the session's
+  flag, which is what both set.
 - **A core holds at most 256 suspended walks.** Each holds one of its
   manager's `txn::kMaxRegisteredReaders` reader-lease slots across its
   suspensions. The 257th walk suspended at once on one core is refused
@@ -1871,7 +2024,11 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   ruling and is not built.
 - **`PURGE DROPPED COLUMNS` does not yield its core** (CD-OI-11 (a)): an
   O(rows) walk on one core; its stall is CD's close measurement's cell 4. It holds no
-  page across leaf windows, so a yield could be added without a redesign.
+  page across leaf windows. **DT read it and built nothing** (DT-Q6 (b),
+  `workorder-dt-write-path-yield.md` §7, DT-S3, at `6e43ec8c0`): it runs
+  in a DDL transaction it writes its flag in, under an epoch gate and a
+  re-run of its own, so made a run it is an index build's shape, not
+  `PURGE INDEX`'s, and its gate is `[quiet-wrong]`.
 - **The CABIN AUTO controller's memory-resident entry is keyed by
   (relation, position)** and survives a drop and a reuse: a candidate
   parked in BUILDING after a refused create on a dropped position stays
@@ -2209,7 +2366,9 @@ change's stages found and left.
   (`CommandDispatcher::SweepSettledDeleteMarks`, gated on the mark count
   and the settlement's progress), so its cost is the whole catalog's size,
   which the old 128-step bound used to cap. Performance only: what it
-  retires is correct. **No owner.**
+  retires is correct. DT read it and built nothing (DT-Q6 (b)): it is a
+  tick's call, no statement, and has no session a `BuildRun` is built on.
+  **No owner.**
 - **A cycle among `sys.statistics` growth pages that all carry its oid is
   re-formatted for the whole walk budget before it is cut.**
   `Catalog::DiscardUnloggedChain` cuts at once a link back to page 17 (its
@@ -3056,19 +3215,20 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
   subquery under the leaf it holds exclusive. Keying either pass is
   deferred on the operator's word of 2026-11-17
   (`docs/pending/keyed-write-beside-a-subquery.md`).
-- **A write over a bound on the tuple key walks the relation.** `UPDATE
-  ... WHERE id BETWEEN 10 AND 20` declares its lock window off the bound
-  and finds its rows by visiting every leaf: a write's walk has a resume
-  position and no end. Before CU and after; in no stage.
+- **A write over a bound on the tuple key reads its window since DU-S1**
+  ("A write found by a key (DU)", below): a btree's walk has an end, and
+  a heap's window is a range of its Keystone index.
 - **A list on a relation the write only reads** (`UPDATE ... FROM`,
   `DELETE ... USING`, a subquery, `INSERT ... SELECT`) is keyed.
   `PURGE` by list is refused `NotImplemented` and is in no stage.
-- **A write finds its rows through no index and no Cabin**, for a list as
-  for a single value: `UPDATE ... WHERE owner IN (1, 9)` walks the
-  relation whatever index `owner` has. CU-Q5 names the point-write
-  target; an index-driven write is no stage of CU.
-- **A write by list holds its core for all its descents**, as every write
-  does for its whole walk: no write yields (`sched.md` §3). It takes a
+- **A write finds its rows through an index since DU-S2, and through no
+  Cabin**: `UPDATE ... WHERE owner IN (1, 9)` reads `owner`'s index for
+  its rows ("A write found by a key (DU)", below). A Cabin set is
+  authoritative only for values observed and a write observes nothing
+  (DU-Q0), so a write's `WHERE` on a cabined column with no index walks.
+- **A write by list gives its core back every slice of descents** (DT,
+  verified at the merge of DT and DU; `sched.md` §3), and reads a descent
+  whose page would wait where it stands. It takes a
   row unit per row written and no window, so a list naming more rows than
   `max_locks_per_txn` admits is refused at the cap, as the walk of it was;
   a bound on the tuple key beside the list declares a window, and the
@@ -3143,6 +3303,112 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
   holds no entry for a set step, which is pinned only through
   `IsTrailReplayable(const Step&)` and the absence of `replays=`.
 
+## A write found by a key (DU)
+
+Verified on `du-keyed-write` at `0babe36e6` (DU-S3, the closing code; on
+`main` by `5f9b6546`); the measured numbers at the same commit (DU-S4). Owned by `docs/spec/index.md`
+§9a and `docs/spec/parser-v2.md` I10; the order is
+`instructions/v3.2.0/workorder-du-keyed-write.md`.
+
+- **The arm is taken by rank and never by a count, and past a share of the
+  relation the index arm costs more than the walk it replaced.**
+  Measured at the close (`bench/v3.5.0/results-du-close-v3.4.17-155-g0babe36e6.md`,
+  `cores = 1`, server CPU a statement): the walk costs 33 ns a row of the
+  relation, once, and the index arm 0.30-0.34 µs more than the walk a row
+  written, so the arm stops paying where a statement writes about 1 row in
+  9 to 11 of its relation. At 1,000,000 rows the arm is ahead in every
+  cell measured - 481x at 10 rows, 2.7x at 10,000, 10.4 % at 50,000, 1 row
+  in 20. At 100,000 rows it is level at 10,000 rows, 1 in 10 (-3.6 %,
+  inside the 4.5 % floor), and **11.2 % slower at 50,000, 1 in 2: 113.7 ms
+  against the walk's 102.3 ms**. Computed, not measured: at the bound of
+  65,536 entries the arm costs about 16 ms more than the walk of a
+  100,000-row relation, and is still ahead of the walk of a 1,000,000-row
+  one. The same write under a plan pinning its shape to `SCAN` is level
+  with the walk before DU (+0.8 % and +1.9 %).
+  What bounds it: a first collection past `max_locks_per_txn` entries
+  (65,536) is not written from, and an administrator's plan pins a shape
+  to `SCAN`. Nothing prices the arm - the read ladder prices none of its
+  index arms either (`index.md` IX9).
+- **On a heap a keyed write is in key order and its walk was in page
+  order** (DU-Q7 (a), accepted; `tests/keyed_write_test.cpp`,
+  `OnAHeapAnOrderDependentWriteIsJudgedInKeyOrder`). A check made per row
+  against the rows as they stand - a unique key the statement shifts, an
+  assertion's bound - can answer one order and refuse the other, so a
+  statement that was answered before DU can be refused after it, and the
+  reverse. A btree's walk is in key order, so there nothing moved. CU-S3's
+  list and DR-S3a's unique key have written a heap in key order since they
+  landed; DU extends it to every bound and every indexed column. The walk's
+  order is the page chain's and cannot be had from the keys.
+- **A wait is forgone for a version put on the page after the collection
+  passed its entry** (`index.md` §9a, `txn.md` §5): a walk that reached
+  that row would wait on its writer, and under `READ COMMITTED` a
+  statement that had written nothing would then run again and write it.
+  The collecting statement neither waits nor writes it. Both are answers
+  the level allows; no cell drives the race - it needs a writer stopped
+  between its page write and its index append, which nothing in the suite
+  can place.
+- **A collection is held in memory whole**: 8 bytes a tuple key, up to
+  `max_locks_per_txn` keys and one more for a first collection - a vector
+  grown by doubling, so about 1 MiB at the default - and unbounded for a
+  resume's, which reads its range to the end.
+- **A held row's resume collects again.** A statement parked on a held row
+  reads its index range again when it is taken up, and its use of the
+  index is counted once; a statement run again whole - one refused having
+  written nothing - counts its use again. `ANALYZE` of a write resumed so
+  names the arm the resume took and that collection's `keys=`. **A pause's
+  resume collects nothing** (DT): the loop goes on from the collection it
+  paused with, and `ANALYZE` names that one.
+- **DU and DT were joined at a merge, and the joined tree was not
+  measured** (the merge of `worktree-dt-write-path-yield` onto `5f9b6546`;
+  reviewed, the suite run). DU's close measured the arms with no pause and
+  DT's close the pause with no arm. Unmeasured: what a pause every 64
+  descents costs an indexed write - each resume parses and compiles the
+  statement again and finds its place in the carried collection - and
+  whether the arm still stops paying at the same share of the relation.
+  The collection a paused loop carries stays on the session until the
+  statement ends: 8 bytes a key, to `max_locks_per_txn` keys for a first
+  collection and unbounded for one a held row's resume read whole. An arm
+  chosen at the first run is kept across a pause whatever `indexes` or a
+  plan became in between; across a held row's park it is chosen again
+  (the entry on a write's plan, below). **A row another writer moves onto
+  the key and commits during a pause is not in the carried collection**,
+  as it is in none an unpaused run makes; a held row's resume, collecting
+  again, names it. **A planned write's `plan_served` counts every run**:
+  a statement that pauses seven times is served eight (the review of the
+  merge; whether the statement statistics count a resume too was not
+  checked).
+- **A collection's read error is the statement's**: an index page that
+  cannot be read refuses the write, where its walk, which reads no index,
+  would have answered. DR-S3a's unique-key run has refused the same way
+  since it landed.
+- **A write whose `WHERE` holds a subquery takes no arm and no bound**
+  (DU-Q5 (a)), as before: its collection pass and its write walk visit the
+  whole relation (`docs/pending/keyed-write-beside-a-subquery.md`).
+- **`PURGE` takes no list and no index** (DU-Q6 (a)), and still requires a
+  window on the tuple key.
+- **A one-sided or strict range on an indexed column is no index range**,
+  read or write (`BoundsOnColumn` reads `>=` and `<=`): `owner > 5` walks.
+- **A write's plan is narrower than a read's**: no `AS SEARCHED`, no
+  `ADVISE PLAN`, no plan for a statement whose `WHERE` holds a subquery or
+  whose `SET` value is a subquery, none for a locking read, and no `CABIN`
+  pin. A plan altered or dropped between a write's park and its resume
+  changes the arm the resume takes: where that is another key arm the
+  statement goes on by key, where it is the walk a btree's statement is
+  taken up at its key and a heap's is refused `TxnConflict` and run
+  again.
+- **`ANALYZE` of a write names the arm that answered and nothing of its
+  cost**: no pages, no entries scanned, no DB-time line, and for a
+  statement that fell from an arm to the walk on a declined descent, the
+  walk alone. `ANALYZE` of an `INSERT` and of a locking read are refused.
+- **Bytes a refusal names under `ANALYZE` are counted from the statement's
+  first word**, for a write as for a `SELECT`.
+- **What DU's cells do not cover**: the index arm at `cores > 1` under
+  load (one cell drives two dispatchers by hand); a KWP cell for `ANALYZE`
+  of a write with a bound parameter (run by hand at DU-S3); a write's plan
+  across a restart (the row's reload is the `SELECT` plans' path, with no
+  write-specific cell); the simulator's oracle for a ranged write (it
+  draws writes by `v = <n>` over an index, and none by a range).
+
 ## Ordered walks (CV)
 
 Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
@@ -3212,12 +3478,13 @@ the order is `instructions/v3.2.0/workorder-dc-select-for-update.md`.
   parent can be refused RESTRICT. No strength that keeps a key share out
   is built: `X` under this spelling is DC-Q1 (b), and `FOR SHARE`, `FOR KEY
   SHARE` and the spelling `FOR NO KEY UPDATE` are refused by name.
-- **Only an equality or a list on the tuple key descends.** Every other
-  predicate - a range on the tuple key included, and every predicate on a
-  `HEAP` relation, whose key no statement names - walks the whole
-  relation, whatever index or Cabin the column has, without yielding its
-  core and without reading the cancel flag: the write walk's gaps ("Key
-  sets (CU)", "Statement scheduling"), inherited whole (DC-Q0 (a)). A
+- **A locking read finds its rows by the write's arms and no others**
+  (DC-Q0 (a); DU): the tuple key, a list on it, a unique key named whole,
+  a bound on the tuple key, an index its `WHERE` enters. Any other
+  predicate - a Cabin's column, a `WHERE` holding a subquery - walks the
+  whole relation, and every arm runs without yielding its core and
+  without reading the cancel flag: the write walk's gaps ("A write found
+  by a key (DU)", "Statement scheduling"), inherited whole. A
   cancel or a closed connection is seen at the session's next frame.
   DC-Q0 (b), the step chain with a claim at its driving step, is not
   built.

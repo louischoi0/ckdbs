@@ -168,6 +168,7 @@ add_executable(kds_tests
     where_bool_test.cpp
     where_value_list_test.cpp
     key_set_test.cpp
+    keyed_write_test.cpp
     where_bool_subquery_test.cpp
     query_layer_test.cpp
     dml_forms_test.cpp
@@ -298,6 +299,7 @@ add_executable(kds_tests
     bounded_pool_test.cpp
     de_page_read_test.cpp
     de_page_read_rig_test.cpp
+    dt_write_yield_test.cpp
     half_done_mutation_test.cpp
     wal_golden_log_test.cpp
     wal_shared_stream_test.cpp

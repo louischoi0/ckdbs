@@ -1,0 +1,33 @@
+{
+ "argv": [
+  "--bin",
+  "build-release/kds_server",
+  "--port",
+  "32761",
+  "--workdir",
+  "/home/ukjin/bench-runs/dt/work",
+  "--out",
+  "bench/v3.5.0/archive/dt-s0-premise-v3.4.17-150-g60dc593af",
+  "--runs",
+  "1",
+  "--run-base",
+  "1",
+  "--cold-rate",
+  "2000",
+  "--cells",
+  "iiir,ivr"
+ ],
+ "started": "2026-11-26T17:14:02Z",
+ "probe_o_direct_8k_qd1": {
+  "p0_us": 1.4,
+  "p25_us": 46.1,
+  "p50_us": 47.3,
+  "p95_us": 53.0,
+  "p99_us": 147.2,
+  "p99.9_us": 416.7,
+  "max_us": 482.2,
+  "n": 2000
+ },
+ "cold_rate": 2000.0,
+ "total_s": 62.5
+}

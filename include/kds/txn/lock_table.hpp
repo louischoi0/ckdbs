@@ -812,6 +812,9 @@ public:
     std::size_t EntryCount() const;
 
     std::size_t partition_count() const noexcept { return partitions_.size(); }
+    // The cap a transaction's holdings are refused past (AO-R10), fixed at
+    // construction.
+    std::size_t max_locks_per_txn() const noexcept { return max_locks_per_txn_; }
 
     // The partition `key` falls in. Public because the property AO-R2's
     // key exists for is asserted by the cells.

@@ -1,0 +1,274 @@
+{
+ "binary_sha256": "d9e683d9b312c7e2f3aa4ddf26d81a1b215afc10ce840ae7abe8ac65c22da9cc",
+ "binary_mtime": 1795719810.888522,
+ "rows": 1000000,
+ "reps": 3,
+ "groups": 12,
+ "cells": [
+  {
+   "m": 10,
+   "owners": 100000,
+   "analyze": "[[b'analyze rows=10 class=JoinSelect steps=1 examined=10 pages=11 opens=1 pattern_id=0x1a2bc64617e9fd8a fetch_id=0x1d0c87e6c70af6e'], [b'class=JoinSelect steps=1 hoisted=0'], [b'step 0 IndexProbe du_t'], [b'  filter 0:0.1 = 7'], [b'project id=0:0.0'], [b'step 0 IndexProbe du_t opens=1 examined=10 matched=10 sel=100% pages=11 index_scanned=10 index_resolved=10'], [b'DB time 0.57 ms = CPU 0.57']]",
+   "sum_v": "1110",
+   "arms": {
+    "W": {
+     "groups": 36,
+     "rows": 360,
+     "server_cpu_us_per_group": 33091.9,
+     "latency": {
+      "n": 36,
+      "p0_us": 32675.6,
+      "p25_us": 32969.4,
+      "p50_us": 33184.0,
+      "p75_us": 33281.7,
+      "p99_us": 33760.5,
+      "max_us": 33760.5
+     },
+     "host": [
+      {
+       "loadavg": "8.25 11.03 5.83 5/1118 380072",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      },
+      {
+       "loadavg": "8.25 11.03 5.83 4/1118 380078",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      },
+      {
+       "loadavg": "8.25 11.03 5.83 5/1118 380108",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      }
+     ]
+    },
+    "K": {
+     "groups": 36,
+     "rows": 360,
+     "server_cpu_us_per_group": 107.3,
+     "latency": {
+      "n": 36,
+      "p0_us": 77.1,
+      "p25_us": 83.7,
+      "p50_us": 91.6,
+      "p75_us": 108.7,
+      "p99_us": 609.9,
+      "max_us": 609.9
+     },
+     "host": [
+      {
+       "loadavg": "8.25 11.03 5.83 4/1118 380073",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      },
+      {
+       "loadavg": "8.25 11.03 5.83 4/1118 380076",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      },
+      {
+       "loadavg": "8.25 11.03 5.83 3/1117 380134",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      }
+     ]
+    },
+    "W2": {
+     "groups": 36,
+     "rows": 360,
+     "server_cpu_us_per_group": 33198.2,
+     "latency": {
+      "n": 36,
+      "p0_us": 32937.7,
+      "p25_us": 33153.1,
+      "p50_us": 33297.8,
+      "p75_us": 33616.2,
+      "p99_us": 33999.0,
+      "max_us": 33999.0
+     },
+     "host": [
+      {
+       "loadavg": "8.25 11.03 5.83 3/1118 380074",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      },
+      {
+       "loadavg": "8.25 11.03 5.83 4/1118 380077",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      },
+      {
+       "loadavg": "8.25 11.03 5.83 4/1118 380103",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24",
+        "380064 /usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/generated -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield -MD CMakeFiles/kds_tests.dir/key_set_test.cpp.d -MF CMakeFiles/kds_tests.dir/key_set_test.cpp.o.d -MT tests/CMakeFiles/kds_tests.dir/key_set_test.cpp.o -D_GNU_SOURCE -D GTEST_LINKED_AS_SHARED_LIBRARY=1 -D KDS_BINARY_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build\" -D KDS_CABIN_TRACES=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/cabin_optimizer_traces.txt\" -D KDS_KWP_GOLDEN=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/kwp_golden.txt\" -D KDS_PARSER_CORPUS=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/testdata/parser_corpus.txt\" -D KDS_SOURCE_DIR=\"/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield\" -D KDS_WITH_TLS=1 /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tests/key_set_test.cpp -quiet -dumpdir CMakeFiles/kds_tests.dir/ -dumpbase key_set_test.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -mtls-dialect=gnu2 -g -Wall -Wextra -std=c++20 -o /tmp/ccNSE7bS.s"
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "m": 1000,
+   "owners": 1000,
+   "analyze": "[[b'analyze rows=1000 class=JoinSelect steps=1 examined=1000 pages=1001 opens=1 pattern_id=0x1a2bc64617e9fd8a fetch_id=0x1d0c87e6c70af6e'], [b'class=JoinSelect steps=1 hoisted=0'], [b'step 0 IndexProbe du_t'], [b'  filter 0:0.1 = 7'], [b'project id=0:0.0'], [b'step 0 IndexProbe du_t opens=1 examined=1000 matched=1000 sel=100% pages=1001 index_scanned=1000 index_resolved=1000'], [b'DB time 1.20 ms = CPU 1.20']]",
+   "sum_v": "111000",
+   "arms": {
+    "W": {
+     "groups": 36,
+     "rows": 36000,
+     "server_cpu_us_per_group": 35212.3,
+     "latency": {
+      "n": 36,
+      "p0_us": 33661.2,
+      "p25_us": 33866.9,
+      "p50_us": 33995.1,
+      "p75_us": 34217.4,
+      "p99_us": 80714.8,
+      "max_us": 80714.8
+     },
+     "host": [
+      {
+       "loadavg": "7.83 10.90 5.81 4/1112 380154",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      },
+      {
+       "loadavg": "7.83 10.90 5.81 3/1112 380174",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      },
+      {
+       "loadavg": "7.83 10.90 5.81 3/1113 380227",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      }
+     ]
+    },
+    "K": {
+     "groups": 36,
+     "rows": 36000,
+     "server_cpu_us_per_group": 2737.5,
+     "latency": {
+      "n": 36,
+      "p0_us": 2346.5,
+      "p25_us": 2555.0,
+      "p50_us": 2735.9,
+      "p75_us": 3033.0,
+      "p99_us": 8290.7,
+      "max_us": 8290.7
+     },
+     "host": [
+      {
+       "loadavg": "7.83 10.90 5.81 3/1112 380155",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      },
+      {
+       "loadavg": "7.83 10.90 5.81 3/1112 380158",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      },
+      {
+       "loadavg": "7.83 10.90 5.81 4/1114 380230",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      }
+     ]
+    },
+    "W2": {
+     "groups": 36,
+     "rows": 36000,
+     "server_cpu_us_per_group": 33701.5,
+     "latency": {
+      "n": 36,
+      "p0_us": 33596.4,
+      "p25_us": 33727.2,
+      "p50_us": 33802.8,
+      "p75_us": 33947.0,
+      "p99_us": 64316.7,
+      "max_us": 64316.7
+     },
+     "host": [
+      {
+       "loadavg": "7.83 10.90 5.81 3/1112 380156",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      },
+      {
+       "loadavg": "7.83 10.90 5.81 2/1112 380159",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      },
+      {
+       "loadavg": "7.83 10.90 5.81 3/1113 380226",
+       "busy": [
+        "379994 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "379996 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795704924818-k0j2sv.sh 2>/dev/null || true && \\builtin shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'which'; \\builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'scripts/build.sh 2>&1 | grep -E '\"'\"'error|Built target kds_tests'\"'\"' | head -20; ctest --test-dir build -LE bs-nightly -j 12 2>&1 | grep -E '\"'\"'tests passed|tests failed|Total Test time|\\(Failed'\"'\"' | head -30' < /dev/null && pwd -P >| /tmp/claude-1150-cwd",
+        "380006 cmake --build /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build -j24"
+       ]
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
