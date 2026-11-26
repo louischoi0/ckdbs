@@ -1,0 +1,4 @@
+probe {'p0_us': 1.4, 'p25_us': 46.1, 'p50_us': 47.3, 'p95_us': 53.0, 'p99_us': 147.2, 'p99.9_us': 416.7, 'max_us': 482.2, 'n': 2000} cold_rate=2000.0/s
+dt-iiir-r1 load 0.39 cached=0.00 hot p50=201.0 p95=350.5 p99=464.9 max=3147.4 n=20005 cold p50=260.1 reads=30833 read_share=0.1735 dev_bytes/read=8257.0 errors=0
+dt-ivr-r1 load 0.52 cached=1.00 hot p50=277.0 p95=441.1 p99=510.7 max=2503.9 n=20005 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 62.5 s
