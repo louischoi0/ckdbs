@@ -99,6 +99,16 @@ StatusOr<btree::Location> LocateRow(storage::PageStore& store,
 
 // The rowids the Keystone index names for `tuple_key`, in index order:
 // what `LocateRow` resolves, for a caller that resolves them itself.
+// **The bounds of a heap's Keystone index for the tuple keys `[lo, hi)`**
+// (DU-S1): whole entries, `first` the low and `second` the high, for
+// `AppendIndexRangeTupleKeys`. `ix` is `KeystoneIndexOf(access)` and
+// `lo < hi <= kIdSpaceEnd`. The key is the Keystone column's own
+// order-preserving encoding, so the entries between the bounds are exactly
+// the Keystone ids in the window.
+StatusOr<std::pair<std::vector<std::byte>, std::vector<std::byte>>> KeystoneIndexBounds(
+    const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
+    std::uint64_t lo, std::uint64_t hi);
+
 StatusOr<std::vector<std::uint64_t>> KeystoneRowids(storage::PageStore& store,
                                                     const catalog::TableAccess& access,
                                                     std::uint64_t tuple_key);

@@ -127,6 +127,34 @@ StatusOr<btree::Location> FetchHeapRow(storage::PageStore& store,
     return btree::Location{at.page_id, at.slot, std::move(ref.value())};
 }
 
+namespace {
+
+// A Keystone id as the Keystone index's key: the leading `key_width` bytes
+// of `entry`, the rest left as the caller padded it.
+Status EncodeKeystoneKey(const catalog::TableAccess& access, const index::IndexLayout& layout,
+                         std::uint64_t tuple_key, std::span<std::byte> entry) {
+    parser::AstValue value;
+    value.type = parser::ValueType::kInt;
+    value.int_val = static_cast<std::int64_t>(tuple_key);
+    return EncodeIndexKeyColumn(access.schema.columns.front(), value,
+                                entry.first(layout.key_width));
+}
+
+}  // namespace
+
+StatusOr<std::pair<std::vector<std::byte>, std::vector<std::byte>>> KeystoneIndexBounds(
+    const catalog::TableAccess& access, const catalog::TableAccess::IndexRef& ix,
+    std::uint64_t lo, std::uint64_t hi) {
+    // The tail past the key - the Keystone word, the rowid - is padded as
+    // an `IndexProbe`'s bounds are: 0x00 below, 0xFF above.
+    const index::IndexLayout layout = IndexLayoutOf(ix);
+    std::vector<std::byte> low(layout.sort_key_width(), std::byte{0x00});
+    std::vector<std::byte> high(layout.sort_key_width(), std::byte{0xFF});
+    if (Status s = EncodeKeystoneKey(access, layout, lo, low); !s.ok()) return s;
+    if (Status s = EncodeKeystoneKey(access, layout, hi - 1, high); !s.ok()) return s;
+    return std::make_pair(std::move(low), std::move(high));
+}
+
 StatusOr<std::vector<std::uint64_t>> KeystoneRowids(storage::PageStore& store,
                                                     const catalog::TableAccess& access,
                                                     std::uint64_t tuple_key) {
@@ -137,14 +165,7 @@ StatusOr<std::vector<std::uint64_t>> KeystoneRowids(storage::PageStore& store,
     }
     const index::IndexLayout layout = IndexLayoutOf(*ix);
     std::vector<std::byte> low(layout.sort_key_width(), std::byte{0});
-    parser::AstValue value;
-    value.type = parser::ValueType::kInt;
-    value.int_val = static_cast<std::int64_t>(tuple_key);
-    if (Status s = EncodeIndexKeyColumn(access.schema.columns.front(), value,
-                                        std::span<std::byte>(low.data(), layout.key_width));
-        !s.ok()) {
-        return s;
-    }
+    if (Status s = EncodeKeystoneKey(access, layout, tuple_key, low); !s.ok()) return s;
     auto first = index::IndexSeekLeaf(store, ix->root_page_id, layout, low);
     if (!first.ok()) return first.status();
     std::vector<std::uint64_t> rowids;

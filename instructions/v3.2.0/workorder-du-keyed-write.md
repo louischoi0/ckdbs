@@ -114,7 +114,7 @@ at `:14041` and `:14231`); the read side's correlated index probe is
 |---|---|---|---|---|
 | DU-Q0 | Is DU opened, and with what scope? | (a) §2's bounded walk and index-driven write; (b) the bounded walk only; (c) both and a Cabin-driven write | (a): a Cabin set is authoritative only for values observed, and a write that observes nothing gains little | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q1 | Does DU-S0 gate? | (a) a premise with a bar: an `UPDATE` by a non-unique index key at 1 M rows measured against its walk; under a 5x saving DU stops at the bounded walk. (b) built regardless | (a) | (a), adopted on the standing go-ahead of 2026-11-26. **The bar is passed**: 12.9x and 308x (§7, DU-S0) |
-| DU-Q2 | The collection's size | (a) bounded by `max_locks_per_txn`, as a walked write's row units are; past it the statement is refused as today. (b) falls back to the walk | (a) | (a), adopted on the standing go-ahead of 2026-11-26, **its reading fixed at DU-S0 against DU-R4**: a first collection of more than `max_locks_per_txn` distinct tuple keys is not written from, and the statement is answered as today - by its walk, which the row units refuse where today's walk is refused. A collection is a superset of the rows written (IX1), so refusing on its size would refuse a statement the walk answers |
+| DU-Q2 | The collection's size | (a) bounded by `max_locks_per_txn`, as a walked write's row units are; past it the statement is refused as today. (b) falls back to the walk | (a) | (a), adopted on the standing go-ahead of 2026-11-26, **its reading fixed at DU-S0 against DU-R4**: a first collection of more than `max_locks_per_txn` index entries is not written from (entries, not distinct keys, since DU-S1: counting entries is what lets the read stop at the bound), and the statement is answered as today - by its walk, which the row units refuse where today's walk is refused. A collection is a superset of the rows written (IX1), so refusing on its size would refuse a statement the walk answers |
 | DU-Q3 | Where the walk declares the whole key space | (a) the index-driven write declares the same and saves reads only; (b) an index-key range lock is designed - a new unit kind | (a); (b) is a lock-model change for its own order | (a), adopted on the standing go-ahead of 2026-11-26, **its premise corrected at DU-S0**: only a write with no `WHERE` declares the whole key space, and it has no index arm; a write whose `WHERE` bounds no tuple key declares nothing and takes a row unit per row written, and the index-driven write takes the same (§7). No unit is designed |
 | DU-Q4 | Plans | (a) the ladder's rank, and an administrator's one-relation plan may pin a write's arm as it does a read's; (b) rank only | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q5 | A write whose `WHERE` holds a subquery | (a) stays outside DU until the pending entry is ruled on; (b) the operator rules now and DU carries it | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
@@ -309,3 +309,91 @@ does: W's mean is above its p75). Rejected: moving the two paragraphs on
 stage acts on, and the stage log is where a stage's facts are kept.
 
 Overhead not measured; measured at the milestone's close.
+
+### DU-S1 - the bounded walk (2026-11-26)
+
+On `du-keyed-write`, from `835764c7a`.
+
+**Built.** A write whose `WHERE` bounds its tuple key visits the window
+and not the relation.
+
+- **The bound** is read off the statement once (`WriteWalk::BoundBy`): the
+  window `FoldTupleKeyWindow` folds - the one `DeclaredWriteBorrow`
+  declares from, a one-sided bound included - met with the ids an embedded
+  primary key's conjuncts name (`exec::WriteEmbeddedWindowOf`, the read
+  ladder's `EmbeddedKeyWindowOnStep`). It bounds what is read and declares
+  nothing: the unit a write declares is unchanged, and a window too narrow
+  to declare (one key) or never declared (an embedded key's) still bounds.
+- **A btree** (`WalkBtreeLeaves`, a `WalkBound`): the walk descends to the
+  low key by the resume's own `BtreeSeekLeaf`, skips the keys below it,
+  and ends at the first key at or past the high one - at most the leaf
+  after the window's last is taken. A seek that fails on a first walk
+  starts from the leftmost leaf instead of refusing (DU-R4).
+- **A heap** has no key order to bound a walk by, so its window is a range
+  of its Keystone index: the tuple keys are collected first
+  (`CollectWriteKeys`, `exec::AppendIndexRangeTupleKeys`,
+  `exec::KeystoneIndexBounds`) and written by the point arm once a key,
+  ascending (`WriteKeys`), under the window the statement declared. Every
+  window shape, where a read of a heap ranges only for `>=` with `<=`.
+  `indexes = off` takes the range away and the heap walks.
+- **`UPDATE`, `DELETE` and the locking read** take it through one copy
+  (`WriteWalk::Visit`, `WriteByKeys`).
+- **DU-Q2 (a) as built**: a statement's first collection is read to one
+  entry past `max_locks_per_txn` and no further; past it nothing is
+  written from it and the walk answers. The bound is on entries, not on
+  distinct keys - an entry is at least a key, and counting entries is what
+  lets the read stop. A resume's collection is read whole.
+- **Not bounded**: a `WHERE` holding a subquery (DU-Q5 (a)), in its
+  collection pass and its write walk alike.
+
+**What changed for a statement that was answered before.** Nothing in its
+rows or its units (below). Three things a client can see: a write over a
+window whose rows are few no longer takes every leaf exclusive; a
+malformed-chain check made at a walk's first row (`CheckConjuncts`,
+BT-R5) is made at the first row the bounded walk visits, as a keyed read's
+is; and on a heap a Keystone descent that fails after a row of the window
+was offered is refused `TxnConflict` and run again (`DescentDeclined`),
+where the walk would have gone on - the rule CU-S3's list on a heap
+already has.
+
+**Cells** (`tests/keyed_write_test.cpp`, new; `tests/leaf_watching_store.hpp`
+moved out of `key_set_test.cpp`):
+
+- the leaves held: a btree's window, two-sided, one-sided, strict, of one
+  key, empty, past the relation, beside other conjuncts; an embedded key's
+  prefix and range; a heap's declared and hidden Keystone; `indexes = off`;
+  and what still walks every leaf (the bound where no arm reads it, a
+  bound beside a subquery);
+- DU-R1: 42 statements over a btree, a heap and an embedded-key relation,
+  each run bounded in one instance and walked in a twin, the replies and
+  every relation compared after each - deleted rows inside and at the edge
+  of a window, retired slots (`PURGE`) with keys placed back among them, a
+  `SET` that moves what the `WHERE` reads;
+- DU-R3: the declared window and its mode read off the transaction's
+  ledger, no row unit under it; an embedded key's bound declaring nothing
+  and taking row units; an insert inside the window waiting for the decide
+  and one outside not; a bounded walk parked on a held row resuming inside
+  its bound, every row once;
+- DU-Q2: a heap window past a cap of 6 answered by the walk, the Keystone
+  index counted as used by neither.
+
+Two cells of `key_set_test.cpp` changed with the behaviour: a bound on the
+tuple key holds its window's leaves, not every leaf, and a single key's
+declined descent falls to a walk bounded by that key.
+
+**Reviewed** (`critics-developer`, the working tree over `c2b138317`): no
+break found in DU-R1, DU-R3 or the `past` stop (retired slots carry no key
+and go to the row function; delete-marked slots are keyed and in order).
+Applied: the cap moved inside the range read, which before read a whole
+window - a 10 M-row heap's whole Keystone index for `id > 0` - before
+declining; a declined collection no longer counted as a use of the index;
+`UniqueKeyRun` made a call of the one collector; the Keystone key's
+encoding and the index lookup taken from `heap_store` instead of copied;
+the bounds sized by the index layout; three redundant guards cut; the cap
+cell and the retired-slot cells added. Not built: a cell for the heap
+arm's resume - a declared window is waited for before the first row, so a
+held row cannot park it mid-loop; the test file says so, and DU-S2's index
+arm exercises the same `WriteKeys` resume.
+
+The suite: 5,234 of 5,234 on the tree the stage commits. Overhead not measured;
+measured at the milestone's close.

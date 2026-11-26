@@ -9348,7 +9348,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
     PageId root, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor) {
+    WalkCursor* cursor, const WalkBound* bound) {
     const bool resuming = cursor != nullptr && cursor->active;
     const std::uint64_t resume_tuple_key = resuming ? cursor->tuple_key : 0;
 
@@ -9361,11 +9361,31 @@ Status CommandDispatcher::WalkBtreeLeaves(
     // key cannot: the tree is ordered by Keystone id, so a row this walk
     // finished sorts below `resume_tuple_key` wherever a split has since put it,
     // and the skip below is exact rather than positional.
-    auto start = resuming ? btree::BtreeSeekLeaf(page_store_, root, resume_tuple_key)
-                          : btree::BtreeLeftmostLeaf(page_store_, root);
+    //
+    // **A bounded walk starts at its low key by the same descent** (DU-S1):
+    // every key at or above it is in the leaf that would hold it or to its
+    // right. A seek that fails for a first walk is a reason to walk from
+    // the head, not to fail - the keys below the bound are skipped where
+    // they are met, so it is the same walk, and a refusal here would refuse
+    // a statement the unbounded walk answers (DU-R4).
+    const bool seeking = bound != nullptr && bound->lo > 0;
+    auto start = resuming
+                     ? btree::BtreeSeekLeaf(page_store_, root,
+                                            seeking ? std::max(resume_tuple_key, bound->lo)
+                                                    : resume_tuple_key)
+                     : seeking ? btree::BtreeSeekLeaf(page_store_, root, bound->lo)
+                               : btree::BtreeLeftmostLeaf(page_store_, root);
+    if (!start.ok() && seeking && !resuming) {
+        storage::ClearStructuralRefusal();
+        start = btree::BtreeLeftmostLeaf(page_store_, root);
+    }
     if (!start.ok()) return start.status();
 
     bool cut = false;
+    // The walk met a key at or past the bound's high one: every key after
+    // it, in this leaf and in every leaf to its right, is past it too
+    // (invariant 4: a leaf's keyed slots ascend, and so do the leaves).
+    bool past = false;
     std::uint64_t cut_tuple_key = 0;
     PageId leaf = start.value();
     storage::PageChainGuard guard("relation walk");
@@ -9375,10 +9395,10 @@ Status CommandDispatcher::WalkBtreeLeaves(
                                                             std::uint16_t)>
             guarded = [&](PageId page_id, heap::PageView& page,
                           std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            // The key is read for two reasons and only where each is
-            // needed: to skip what a resume has already written, and to
-            // record where a stop happened. A first walk that never stops
-            // reads none of them.
+            // The key is read for three reasons and only where each is
+            // needed: to skip what a resume has already written, to keep a
+            // bounded walk inside its bound, and to record where a stop
+            // happened. A first unbounded walk that never stops reads none.
             const auto key_at = [&](std::uint16_t at) -> std::optional<std::uint64_t> {
                 auto payload = page.PayloadAt(at, page.slot_count());
                 if (!payload.ok()) return std::nullopt;  // dead or retired slot
@@ -9386,12 +9406,23 @@ Status CommandDispatcher::WalkBtreeLeaves(
                 if (!key.ok()) return std::nullopt;
                 return key.value();
             };
-            if (resuming) {
+            if (resuming || bound != nullptr) {
                 const std::optional<std::uint64_t> key = key_at(slot);
                 // A slot with no readable key is left to `fn`, which is the
                 // one place that decides what a dead slot means. Skipping
                 // it here would hide a corrupt page behind a resume.
-                if (key.has_value() && *key < resume_tuple_key) return storage::VisitControl::kContinue;
+                if (resuming && key.has_value() && *key < resume_tuple_key) {
+                    return storage::VisitControl::kContinue;
+                }
+                // Outside the bound: a row `fn` would decline (`WalkBound`).
+                // Not a cut - the walk is over, with nothing to resume.
+                if (bound != nullptr && key.has_value()) {
+                    if (*key < bound->lo) return storage::VisitControl::kContinue;
+                    if (*key >= bound->hi) {
+                        past = true;
+                        return storage::VisitControl::kStop;
+                    }
+                }
             }
             auto outcome = fn(page_id, page, slot);
             if (!outcome.ok() || !outcome.has_value()) return outcome;
@@ -9423,7 +9454,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
         };
         auto next = btree::BtreeVisitLeafPage(page_store_, leaf, page_access, guarded);
         if (!next.ok()) return next.status();
-        if (cut) break;
+        if (cut || past) break;
         leaf = next.value();
     }
 
@@ -9444,7 +9475,7 @@ Status CommandDispatcher::VisitRelation(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor) {
+    WalkCursor* cursor, const WalkBound* bound) {
     // A user relation is a btree or a heap (DN); a catalog chain is walked
     // by the catalog, never here.
     if (access.heap()) {
@@ -9454,7 +9485,7 @@ Status CommandDispatcher::VisitRelation(
         return Status::Corruption("relation oid " + std::to_string(access.oid) +
                                   " is not a btree or a heap");
     }
-    return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
+    return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor, bound);
 }
 
 StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
@@ -11444,20 +11475,66 @@ stats::IndexUse* CommandDispatcher::IndexUseOf(catalog::Oid index_oid) {
     return slot.counts;
 }
 
-StatusOr<std::vector<std::uint64_t>> CommandDispatcher::UniqueKeyRun(
-    const exec::WriteIndexKey& by_key, bool count) {
-    std::uint64_t entries = 0;
-    auto keys = exec::IndexRunTupleKeys(page_store_, *by_key.index, by_key.key, &entries);
-    if (!keys.ok() || !count) return keys;
-    // A use of the index like a read's probe of it (DR-Q23,
-    // `stats/index_stats.hpp`): one walk, the entries it read and the tuple
-    // keys the write then descends for.
-    const StatisticsRecordScope recording("sys.indexes' usage");
-    if (stats::IndexUse* const use = IndexUseOf(by_key.index->index_oid); use != nullptr) {
-        use->Add(/*range=*/false, /*walks=*/1, entries, keys.value().size(),
-                 static_cast<std::uint64_t>(statement_head_ns_));
+StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::CollectWriteKeys(
+    const catalog::TableAccess::IndexRef& ix, std::span<const IndexRange> ranges, bool ranged,
+    bool first) {
+    // **Past the cap the statement's first collection is not written from**
+    // (DU-Q2 (a)), so its read stops one entry past it. A resume reads
+    // whole: it has rows written behind its cursor.
+    const std::size_t cap =
+        !first ? static_cast<std::size_t>(-1)
+               : locks_ != nullptr ? locks_->max_locks_per_txn() : txn::kMaxLocksPerTxnDefault;
+    std::vector<std::uint64_t> keys;
+    for (const IndexRange& range : ranges) {
+        if (Status s = exec::AppendIndexRangeTupleKeys(page_store_, ix, range.first, range.second,
+                                                       keys, cap);
+            !s.ok()) {
+            return s;
+        }
+        if (keys.size() > cap) return std::optional<std::vector<std::uint64_t>>{};
     }
-    return keys;
+    const std::uint64_t entries = keys.size();
+    // One row may be named by several entries - a key that left and came
+    // back, two values of a list - and is written once (DU-R1).
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    if (first) {
+        // A use of the index like a read's of it (DR-Q23,
+        // `stats/index_stats.hpp`): the walks, the entries they read and
+        // the tuple keys the write then descends for. A statement's first
+        // collection that it writes from, not a resume's and not one the
+        // walk answered for.
+        const StatisticsRecordScope recording("sys.indexes' usage");
+        if (stats::IndexUse* const use = IndexUseOf(ix.index_oid); use != nullptr) {
+            use->Add(ranged, /*walks=*/ranges.size(), entries, keys.size(),
+                     static_cast<std::uint64_t>(statement_head_ns_));
+        }
+    }
+    return std::optional{std::move(keys)};
+}
+
+StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::UniqueKeyRun(
+    const exec::WriteIndexKey& by_key, bool first) {
+    // The run is the entries between `(key, 0x00...)` and `(key, 0xFF...)`:
+    // the tuple key and everything after it are the sort key's tail (IX4b).
+    std::vector<std::byte> low(by_key.index->entry_width, std::byte{0x00});
+    std::vector<std::byte> high(by_key.index->entry_width, std::byte{0xFF});
+    std::copy(by_key.key.begin(), by_key.key.end(), low.begin());
+    std::copy(by_key.key.begin(), by_key.key.end(), high.begin());
+    const IndexRange range{low, high};
+    return CollectWriteKeys(*by_key.index, std::span<const IndexRange>(&range, 1),
+                            /*ranged=*/false, first);
+}
+
+StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::KeystoneWindowKeys(
+    const catalog::TableAccess& ta, const WalkBound& bound, bool first) {
+    const catalog::TableAccess::IndexRef* const keystone = exec::KeystoneIndexOf(ta);
+    if (!indexes_enabled_ || keystone == nullptr) return std::optional<std::vector<std::uint64_t>>{};
+    auto bounds = exec::KeystoneIndexBounds(ta, *keystone, bound.lo, bound.hi);
+    if (!bounds.ok()) return bounds.status();
+    const IndexRange range{bounds.value().first, bounds.value().second};
+    return CollectWriteKeys(*keystone, std::span<const IndexRange>(&range, 1), /*ranged=*/true,
+                            first);
 }
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
@@ -13206,14 +13283,67 @@ public:
                 exec::WriteIndexKeyOf(ta_, predicates_);
             by_key.has_value()) {
             // A resume collects the run again; the statement's use of the
-            // index is counted once, at its first collection (DR-Q23).
-            auto keys = d_.UniqueKeyRun(*by_key, /*count=*/!cursor.active);
+            // index is counted once, at its first collection (DR-Q23). A
+            // run past the collection's bound (DU-Q2) is the walk's.
+            auto keys = d_.UniqueKeyRun(*by_key, /*first=*/!cursor.active);
             if (!keys.ok()) return keys.status();
-            auto done = WriteKeys(keys.value(), cursor, write_at);
-            if (!done.ok()) return done.status();
-            return std::optional<bool>{done.value()};
+            if (keys.value().has_value()) {
+                auto done = WriteKeys(*keys.value(), cursor, write_at);
+                if (!done.ok()) return done.status();
+                return std::optional<bool>{done.value()};
+            }
+        }
+        // **A heap's bound is a range of its Keystone index** (DU-S1): a
+        // heap's pages are in no key order, so its walk cannot be bounded
+        // (`VisitRelation`), and the rows of a tuple key window are found
+        // as its Keystone index names them - collected first, then the
+        // point arm once per key, ascending, under the window the statement
+        // declared. `WriteKeys`' contract, a resume's included.
+        if (ta_.heap() && bound_.has_value() && bound_->lo < bound_->hi) {
+            auto keys = d_.KeystoneWindowKeys(ta_, *bound_, /*first=*/!cursor.active);
+            if (!keys.ok()) return keys.status();
+            if (keys.value().has_value()) {
+                auto done = WriteKeys(*keys.value(), cursor, write_at);
+                if (!done.ok()) return done.status();
+                return std::optional<bool>{done.value()};
+            }
         }
         return std::optional<bool>{};
+    }
+
+    // **The tuple keys the walk visits** (DU-S1; `WalkBound`), read off the
+    // statement once: `folded` is its WHERE's tuple key window
+    // (`FoldTupleKeyWindow`), met with the ids an embedded primary key's
+    // conjuncts name. **A WHERE holding a subquery is not bounded** (DU-Q5
+    // (a)): its collection pass and its write walk stay whole until
+    // `docs/pending/keyed-write-beside-a-subquery.md` is ruled on.
+    void BoundBy(const TupleKeyWindow& folded) {
+        if (!predicates_.sub_chains.empty()) return;
+        WalkBound bound;
+        bool bounded = folded.bounded;
+        if (folded.bounded) {
+            bound.lo = folded.lo;
+            bound.hi = folded.hi;  // at most `kIdSpaceEnd`, where the fold starts
+        }
+        if (const std::optional<exec::EmbeddedKeyWindow> embedded =
+                exec::WriteEmbeddedWindowOf(ta_, predicates_);
+            embedded.has_value()) {
+            bound.lo = std::max(bound.lo, embedded->lo);
+            bound.hi = std::min(bound.hi, embedded->hi + 1);  // inclusive; an id is 48 bits
+            bounded = true;
+        }
+        if (bounded) bound_ = bound;
+    }
+
+    // The statement's walk: `VisitRelation` under the bound. An empty bound
+    // names no row, and no page is fetched for it.
+    Status Visit(storage::PageAccess page_access,
+                 const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
+                                                                     std::uint16_t)>& fn,
+                 WalkCursor* cursor) {
+        if (bound_.has_value() && bound_->lo >= bound_->hi) return Status::OK();
+        return d_.VisitRelation(ta_, page_access, fn, cursor,
+                                bound_.has_value() ? &*bound_ : nullptr);
     }
 
     // **A key loop's descent declined at `key`** - a damaged descent or an
@@ -13333,6 +13463,9 @@ private:
     // The leaf of the WHERE's list whose value the descent in hand was made
     // for (`WriteKeySet`); null on a walk and on a single-key write.
     const exec::BoolLeafFirst* first_leaf_ = nullptr;
+    // The tuple keys the walk visits (`BoundBy`); empty for the whole
+    // relation.
+    std::optional<WalkBound> bound_;
 };
 
 DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteScope& scope,
@@ -13546,6 +13679,10 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // nothing.
     const std::optional<txn::LockKey> declared =
         arm_target.has_value() ? std::nullopt : DeclaredWriteBorrow(ta, stmt.where);
+    // What the walk visits, off the same conjuncts (DU-S1): the window
+    // above bounds the leaves read whether or not it was wide enough to
+    // declare. An arm's row is never walked for.
+    if (!arm_target.has_value()) walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where));
     if (declared.has_value()) {
         // `kFutile`: a declared unit is refused by whoever conflicts with
         // it, and the table reports who and not what they hold - so a
@@ -14045,8 +14182,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     walk_cursor.targets = walk.targets;
     Status scan;
     for (;;) {
-        scan = VisitRelation(
-            ta, storage::PageAccess::kWrite,
+        scan = walk.Visit(
+            storage::PageAccess::kWrite,
             [&](PageId page_id, heap::PageView& page,
                 std::uint16_t slot) -> StatusOr<storage::VisitControl> {
                 // UPDATE has no early exit *of its own*: it must consider every
@@ -14174,8 +14311,10 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     // are read as the relation's columns (DP-Q10): a view's column named as
     // the relation's tuple key, over another column, would declare a window
     // the rows claimed lie outside, and a row it covers takes no unit.
-    const std::optional<txn::LockKey> declared =
-        DeclaredWriteBorrow(ta, through != nullptr ? exec::WhereOnRelation(stmt) : stmt.where);
+    const std::vector<parser::Condition>& where_on_relation =
+        through != nullptr ? exec::WhereOnRelation(stmt) : stmt.where;
+    const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, where_on_relation);
+    walk.BoundBy(FoldTupleKeyWindow(ta, where_on_relation));  // DU-S1, as UPDATE's
     if (declared.has_value()) {
         // `kFutile` and `U`: `UpdateParsed`'s site states both arguments.
         if (std::optional<Status> held = BorrowOrWait(scope, *declared, RepeatableReadWait::kFutile,
@@ -14232,8 +14371,8 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
         if (!any.ok()) return ended(Refused(any.status()));
         if (any.value()) {
             cursor.targets = walk.targets;
-            const Status scan = VisitRelation(
-                ta, storage::PageAccess::kRead,
+            const Status scan = walk.Visit(
+                storage::PageAccess::kRead,
                 [&](PageId, heap::PageView& page,
                     std::uint16_t slot) -> StatusOr<storage::VisitControl> {
                     if (Status s = claim(page, slot); !s.ok()) return s;
@@ -17191,6 +17330,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // The unit this write declares, as UPDATE - `UpdateParsed`'s site
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
+    walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where));  // DU-S1, as UPDATE's
     if (declared.has_value()) {
         // `kFutile`, and `UpdateParsed`'s site states the argument.
         if (std::optional<Status> held =
@@ -17413,8 +17553,8 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     if (!any.value()) return {"DELETED " + std::to_string(deleted), false, deleted};
 
     walk_cursor.targets = walk.targets;
-    Status scan = VisitRelation(
-        ta, storage::PageAccess::kWrite,
+    Status scan = walk.Visit(
+        storage::PageAccess::kWrite,
         [&](PageId page_id, heap::PageView& page,
             std::uint16_t slot) -> StatusOr<storage::VisitControl> {
             if (Status s = mark(page_id, page, slot); !s.ok()) return s;

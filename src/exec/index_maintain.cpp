@@ -388,32 +388,54 @@ StatusOr<std::vector<std::uint64_t>> IndexRunTupleKeys(storage::PageStore& store
                                                        const catalog::TableAccess::IndexRef& ix,
                                                        std::span<const std::byte> encoded_key,
                                                        std::uint64_t* entries_read) {
+    // The run is the entries between `(key, 0x00...)` and `(key, 0xFF...)`:
+    // the tuple key and everything after it are the sort key's tail (IX4b).
     const index::IndexLayout layout = IndexLayoutOf(ix);
-    // The seek is `(key, 0)` - the tuple key is the sort key's tail (IX4b) -
-    // and the walk stops at the first larger key.
     std::vector<std::byte> low(layout.sort_key_width(), std::byte{0x00});
+    std::vector<std::byte> high(layout.sort_key_width(), std::byte{0xFF});
     std::memcpy(low.data(), encoded_key.data(), encoded_key.size());
+    std::memcpy(high.data(), encoded_key.data(), encoded_key.size());
+    std::vector<std::uint64_t> named;
+    if (Status walked = AppendIndexRangeTupleKeys(store, ix, low, high, named); !walked.ok()) {
+        return walked;
+    }
+    if (entries_read != nullptr) *entries_read = named.size();
+    std::sort(named.begin(), named.end());
+    named.erase(std::unique(named.begin(), named.end()), named.end());
+    return named;
+}
+
+Status AppendIndexRangeTupleKeys(storage::PageStore& store,
+                                 const catalog::TableAccess::IndexRef& ix,
+                                 std::span<const std::byte> low, std::span<const std::byte> high,
+                                 std::vector<std::uint64_t>& named, std::size_t limit) {
+    const index::IndexLayout layout = IndexLayoutOf(ix);
+    const std::size_t width = layout.sort_key_width();
+    if (low.size() != width || high.size() != width) {
+        return Status::InvalidArgument("an index range's bounds are not whole entries of index " +
+                                       ix.name);
+    }
+    // The descent lands on the first leaf that could hold `low`, so the
+    // entries before it are skipped, and the walk stops at the first entry
+    // past `high`: the leaves to its right are never fetched.
     auto first = index::IndexSeekLeaf(store, ix.root_page_id, layout, low);
     if (!first.ok()) return first.status();
-    std::vector<std::uint64_t> named;
-    Status walked = index::IndexVisitFrom(
+    return index::IndexVisitFrom(
         store, first.value(), layout, storage::PageAccess::kRead,
         [&](PageId, index::IndexLeafView& leaf,
             std::uint16_t at) -> StatusOr<storage::VisitControl> {
             auto entry = leaf.Entry(at);
             if (!entry.ok()) return entry.status();
-            const int order =
-                std::memcmp(entry.value().data(), encoded_key.data(), encoded_key.size());
-            if (order < 0) return storage::VisitControl::kContinue;
-            if (order > 0) return storage::VisitControl::kStop;
+            if (std::memcmp(entry.value().data(), low.data(), width) < 0) {
+                return storage::VisitControl::kContinue;
+            }
+            if (std::memcmp(entry.value().data(), high.data(), width) > 0) {
+                return storage::VisitControl::kStop;
+            }
             named.push_back(index::GetIndexTupleKey(entry.value().subspan(ix.key_width)));
-            return storage::VisitControl::kContinue;
+            return named.size() > limit ? storage::VisitControl::kStop
+                                        : storage::VisitControl::kContinue;
         });
-    if (!walked.ok()) return walked;
-    if (entries_read != nullptr) *entries_read = named.size();
-    std::sort(named.begin(), named.end());
-    named.erase(std::unique(named.begin(), named.end()), named.end());
-    return named;
 }
 
 StatusOr<UniqueVerdict> CheckUniqueKey(storage::PageStore& store,

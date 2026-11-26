@@ -8,6 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/embedded_key.hpp"
 #include "kds/exec/join_order.hpp"
 #include "kds/exec/set_expr.hpp"
 #include "kds/exec/step_chain.hpp"
@@ -172,6 +173,18 @@ StatusOr<Step> CompileWhere(catalog::Catalog& catalog, const catalog::TableAcces
 // values encode to (`exec/embedded_key.hpp`), found by the same descent.
 std::optional<std::uint64_t> WriteKeyOf(const catalog::TableAccess& access, const Step& where);
 std::optional<KeySet> WriteKeySetOf(const Step& where);
+
+// **The tuple keys an embedded primary key's conjuncts bound for a write's
+// walk** (DU-S1): the window the read ladder ranges over for the same
+// conjuncts (`EmbeddedKeyWindowOnStep`; DR-S3e) - the leading key columns
+// pinned by an equality, then an inclusive range on the next - inclusive at
+// both ends. A superset of the ids of every row the WHERE can pass, because
+// the ids ascend as the keys do and the conjuncts stay in the WHERE. nullopt
+// on a relation with no embedded key, where no leading column is pinned or
+// ranged, where a value does not encode, and where the WHERE holds a
+// subquery (`WriteKeyOf`'s reason).
+std::optional<EmbeddedKeyWindow> WriteEmbeddedWindowOf(const catalog::TableAccess& access,
+                                                       const Step& where);
 
 // **A write that names a unique key whole descends too** (DR-S3a): where
 // the WHERE pins every key column of a unique index by an equality with a

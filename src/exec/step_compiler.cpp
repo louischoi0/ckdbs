@@ -2648,6 +2648,12 @@ std::optional<KeySet> WriteKeySetOf(const Step& where) {
     return TupleKeySetOf(where, /*slot=*/0);
 }
 
+std::optional<EmbeddedKeyWindow> WriteEmbeddedWindowOf(const catalog::TableAccess& access,
+                                                       const Step& where) {
+    if (!where.sub_chains.empty()) return std::nullopt;
+    return EmbeddedKeyWindowOnStep(access, where, /*slot=*/0);
+}
+
 std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
                                              const Step& where) {
     if (!where.sub_chains.empty()) return std::nullopt;

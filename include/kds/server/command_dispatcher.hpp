@@ -1234,6 +1234,19 @@ private:
         bool bounded = false;
         const parser::Condition* unfolded = nullptr;
     };
+
+    // **The tuple keys a write's walk visits** (DU-S1): `[lo, hi)`, a
+    // superset of the keys of every row the statement's WHERE can pass, so
+    // a row outside it is one the walk would have visited and declined.
+    // Read off the statement, never off a row: the window its conjuncts
+    // fold to (`FoldTupleKeyWindow`, one-sided bounds included) and the ids
+    // an embedded primary key's conjuncts name (`exec::WriteEmbeddedWindowOf`).
+    // **It bounds what is read and declares nothing**: the unit a write
+    // declares is `DeclaredWriteBorrow`'s, unchanged.
+    struct WalkBound {
+        std::uint64_t lo = 0;
+        std::uint64_t hi = kIdSpaceEnd;
+    };
     TupleKeyWindow FoldTupleKeyWindow(const catalog::TableAccess& access,
                           const std::vector<parser::Condition>& where) const;
 
@@ -2489,12 +2502,36 @@ private:
     // This core's counts of `index_oid`, through `index_use_cache_`; null
     // where the core's part is full, which the store counts.
     stats::IndexUse* IndexUseOf(catalog::Oid index_oid);
-    // The tuple keys a write's whole unique key names (DR-S3a;
-    // `exec::IndexRunTupleKeys`), ascending. With `count`, one probe of the
-    // index (DR-Q23): a statement's first collection, not a resume's.
+    // **The tuple keys a write collects through an index before it writes
+    // a row** (DU; DR-S3a): the entries of `ix` between each pair of
+    // `ranges`' bounds (`exec::AppendIndexRangeTupleKeys`), ascending and
+    // distinct, a superset of the rows the statement can write. `first`
+    // says the statement's first collection, not a resume's. Then:
+    //
+    // - **A collection of more than `max_locks_per_txn` entries is not
+    //   written from** (DU-Q2 (a)): nullopt, its read stopped one entry past
+    //   the cap, and the caller's walk answers as it did before DU. The
+    //   bound is on the first collection alone because a resume has rows
+    //   written behind its cursor, which a heap's walk cannot take up by
+    //   key (`WriteWalk::DescentDeclined`).
+    // - It is one use of the index (DR-Q23), a range's with `ranged` and a
+    //   probe's otherwise, counted where the collection is written from.
+    //
     // Called holding no page.
-    StatusOr<std::vector<std::uint64_t>> UniqueKeyRun(const exec::WriteIndexKey& by_key,
-                                                      bool count);
+    using IndexRange = std::pair<std::span<const std::byte>, std::span<const std::byte>>;
+    StatusOr<std::optional<std::vector<std::uint64_t>>> CollectWriteKeys(
+        const catalog::TableAccess::IndexRef& ix, std::span<const IndexRange> ranges, bool ranged,
+        bool first);
+    // The tuple keys a write's whole unique key names (DR-S3a): the key's
+    // run, by `CollectWriteKeys`.
+    StatusOr<std::optional<std::vector<std::uint64_t>>> UniqueKeyRun(
+        const exec::WriteIndexKey& by_key, bool first);
+    // A heap's rows in the tuple key window `bound`, as its Keystone index
+    // names them (DU-S1): `CollectWriteKeys` over that index's one range.
+    // nullopt, for the walk to answer, where `indexes` is off or the
+    // collection is past its bound.
+    StatusOr<std::optional<std::vector<std::uint64_t>>> KeystoneWindowKeys(
+        const catalog::TableAccess& ta, const WalkBound& bound, bool first);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);
@@ -2730,11 +2767,18 @@ private:
     // park (every read walk), otherwise in **and** out - read to start
     // where a parked walk stopped, written when this walk stops. Not
     // defaulted: a caller that cannot park says so by passing null.
+    //
+    // `bound`, where given, is the tuple keys the walk visits (DU-S1,
+    // `WalkBound`): a btree's walk seeks to its low key and ends at the
+    // first key at or past its high one, and `fn` is asked of no row
+    // outside it. **A heap's walk ignores it** - its pages are in no key
+    // order (invariant 4) - and visits every row, which is the same answer
+    // because the bound is a superset of what `fn` can pass.
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor);
+        WalkCursor* cursor, const WalkBound* bound = nullptr);
 
     // The btree walk behind `VisitRelation`, and its resume shape: a resume
     // descends by key rather than returning to a remembered leaf, which is
@@ -2744,7 +2788,7 @@ private:
         PageId root, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor);
+        WalkCursor* cursor, const WalkBound* bound = nullptr);
     // A heap's walk (DN): its data pages from the head in page order, a
     // resume at the page and slot it stopped at.
     Status WalkHeapPages(
