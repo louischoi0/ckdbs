@@ -206,6 +206,37 @@ struct WriteIndexKey {
 std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
                                              const Step& where);
 
+// **The index a write finds its rows through** (DU-S2): the read ladder's
+// own literal index choice for the same conjuncts (`IndexProbeOf`, section
+// 4 of `Compile`) - the longest equality prefix, one value list standing as
+// a prefix column - so a write and the `SELECT` of its WHERE enter the same
+// index by the same bounds. The entries between the bounds name a superset
+// of the rows the WHERE can pass (IX1): the caller collects their tuple
+// keys before it writes a row and tests every row it finds against the
+// whole WHERE (DU-R1). `set`, where a list stands, holds one pair of bounds
+// a value (`KeySet::bounds`) and `probe` the index; otherwise `probe.low`
+// and `probe.high` are the one pair.
+//
+// nullopt where no index is entered, where the WHERE holds a subquery
+// (`WriteKeyOf`'s reason), and - a building index's entries being
+// incomplete (CI-R1) - never a building index.
+struct WriteIndexArm {
+    const catalog::TableAccess::IndexRef* index = nullptr;  // into `access.indexes`
+    IndexProbe probe;
+    std::optional<KeySet> set;
+};
+std::optional<WriteIndexArm> WriteIndexArmOf(const catalog::TableAccess& access,
+                                             const Step& where);
+
+// **Whether the WHERE's tuple key range outranks its index arm** (DU-S2),
+// by the read ladder's own rule (`Compile`, section 4): on a btree, a
+// tuple key range with both ends, neither strict, is taken before any
+// index. A strict end, a one-sided bound and every range on a heap are no
+// such range to a read, and an index entered beside one is taken first.
+// (An embedded primary key's window outranks an index too; its caller has
+// it from `WriteEmbeddedWindowOf`.)
+bool WriteRangeOutranksIndex(const catalog::TableAccess& access, const Step& where);
+
 // **The select list of a statement over one relation, as `Compile` resolves
 // a chain's**: each written column's reference, heading, type and type mod,
 // by the same code (`Compile`'s step 5), so a row rendered from it is the

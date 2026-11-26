@@ -2504,24 +2504,25 @@ private:
     stats::IndexUse* IndexUseOf(catalog::Oid index_oid);
     // **The tuple keys a write collects through an index before it writes
     // a row** (DU; DR-S3a): the entries of `ix` between each pair of
-    // `ranges`' bounds (`exec::AppendIndexRangeTupleKeys`), ascending and
-    // distinct, a superset of the rows the statement can write. `first`
-    // says the statement's first collection, not a resume's. Then:
+    // `ranges`' bounds (`exec::AppendIndexRangeTupleKeys`), less the keys
+    // outside `bound` where one is given, ascending and distinct - a
+    // superset of the rows the statement can write. `first` says the
+    // statement's first collection, not a resume's. Then:
     //
     // - **A collection of more than `max_locks_per_txn` entries is not
     //   written from** (DU-Q2 (a)): nullopt, its read stopped one entry past
     //   the cap, and the caller's walk answers as it did before DU. The
-    //   bound is on the first collection alone because a resume has rows
-    //   written behind its cursor, which a heap's walk cannot take up by
-    //   key (`WriteWalk::DescentDeclined`).
+    //   bound is on the first collection alone: a resume is of a key loop
+    //   that was inside it (`WalkCursor::walked`).
     // - It is one use of the index (DR-Q23), a range's with `ranged` and a
-    //   probe's otherwise, counted where the collection is written from.
+    //   probe's otherwise, counted where the collection is written from:
+    //   the entries read and the rows the write then descends for.
     //
     // Called holding no page.
     using IndexRange = std::pair<std::span<const std::byte>, std::span<const std::byte>>;
     StatusOr<std::optional<std::vector<std::uint64_t>>> CollectWriteKeys(
         const catalog::TableAccess::IndexRef& ix, std::span<const IndexRange> ranges, bool ranged,
-        bool first);
+        const WalkBound* bound, bool first);
     // The tuple keys a write's whole unique key names (DR-S3a): the key's
     // run, by `CollectWriteKeys`.
     StatusOr<std::optional<std::vector<std::uint64_t>>> UniqueKeyRun(
@@ -2532,6 +2533,11 @@ private:
     // collection is past its bound.
     StatusOr<std::optional<std::vector<std::uint64_t>>> KeystoneWindowKeys(
         const catalog::TableAccess& ta, const WalkBound& bound, bool first);
+    // The rows `arm`'s index names for a write's WHERE (DU-S2):
+    // `CollectWriteKeys` over the arm's bounds - one pair, or a list's pair a
+    // value - inside `bound`, where the statement has one.
+    StatusOr<std::optional<std::vector<std::uint64_t>>> IndexArmKeys(
+        const exec::WriteIndexArm& arm, const WalkBound* bound, bool first);
     void RecordExecution(const std::optional<StatementIdentity>& identity,
                          exec::TrailCollector* trail, const exec::StepChain& chain,
                          const exec::ExecStats& stats);

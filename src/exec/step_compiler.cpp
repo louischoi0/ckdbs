@@ -2687,6 +2687,31 @@ std::optional<WriteIndexKey> WriteIndexKeyOf(const catalog::TableAccess& access,
     return std::nullopt;
 }
 
+std::optional<WriteIndexArm> WriteIndexArmOf(const catalog::TableAccess& access,
+                                             const Step& where) {
+    if (!where.sub_chains.empty()) return std::nullopt;
+    std::optional<IndexChoice> choice = IndexProbeOf(access, where, /*slot=*/0, /*with_lists=*/true);
+    // A range after the prefix is DU-S3's.
+    if (!choice.has_value() || choice->probe.ranged) return std::nullopt;
+    const auto index =
+        std::find_if(access.indexes.begin(), access.indexes.end(),
+                     [&](const catalog::TableAccess::IndexRef& ix) {
+                         return ix.index_oid == choice->probe.index_oid;
+                     });
+    if (index == access.indexes.end()) return std::nullopt;  // the choice was made of them
+    WriteIndexArm arm;
+    arm.index = &*index;
+    arm.probe = std::move(choice->probe);
+    arm.set = std::move(choice->set);
+    return arm;
+}
+
+bool WriteRangeOutranksIndex(const catalog::TableAccess& access, const Step& where) {
+    if (access.heap()) return false;
+    const std::optional<TupleKeyRange> range = TupleKeyRangeOf(where, /*slot=*/0);
+    return range.has_value() && !range->strict;
+}
+
 StatusOr<SelectList> CompileSelectList(const catalog::TableAccess& access,
                                        std::string_view binding,
                                        const std::vector<parser::ColumnName>& list, bool star,

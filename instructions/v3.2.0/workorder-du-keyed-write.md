@@ -11,7 +11,8 @@ Status: **OPEN since 2026-11-26.** Written on worktree
 (a) in each, **on the operator's standing go-ahead of 2026-11-26
 (go-ahead-achieving-milestone)** - none is the operator's own per-item
 mark - DU-Q2 (a) with its reading fixed against DU-R4 and DU-Q3 (a) with
-its premise corrected (§4, §7). A `[source-read]` claim with a `path:line`
+its premise corrected (§4, §7), and DU-Q7 (a), an item CLA added at
+DU-S2, adopted the same way. A `[source-read]` claim with a `path:line`
 in §0-§2 was read at `8274c951`, and one in §7 at the commit its entry
 names; a claim taken from `known-gaps.md` carries that entry's own
 verification commit and is not re-verified here.
@@ -119,6 +120,7 @@ at `:14041` and `:14231`); the read side's correlated index probe is
 | DU-Q4 | Plans | (a) the ladder's rank, and an administrator's one-relation plan may pin a write's arm as it does a read's; (b) rank only | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q5 | A write whose `WHERE` holds a subquery | (a) stays outside DU until the pending entry is ruled on; (b) the operator rules now and DU carries it | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q6 | `PURGE` by list or range | (a) outside DU; (b) inside | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
+| DU-Q7 | **On a heap a keyed write meets its rows in key order and its walk met them in page order.** A check made per row against the rows as they stand - a unique key the statement shifts, an assertion's bound - can therefore answer one order and refuse the other (added by CLA at DU-S2, from its review; `tests/keyed_write_test.cpp`, `OnAHeapAnOrderDependentWriteIsJudgedInKeyOrder`) | (a) accepted and stated: both orders are executions the statement allows, a btree's walk is already in key order, and CU-S3's list and DR-S3a's unique key have written a heap in key order since they landed; (b) a heap's collected keys written in the walk's order - not computable from the keys, since the walk follows the page chain and a rowid does not say where its page is in it, so it costs a walk of the chain; (c) no keyed arm on a heap | (a): the alternative that keeps the walk's order is the walk | (a), adopted on the standing go-ahead of 2026-11-26 (go-ahead-achieving-milestone). **It narrows DU-R4 on a heap**: a statement whose rows are judged against each other may be refused where its walk was answered, and answered where it was refused |
 
 ## 5. Stages
 
@@ -397,3 +399,101 @@ arm exercises the same `WriteKeys` resume.
 
 The suite: 5,234 of 5,234 on the tree the stage commits. Overhead not measured;
 measured at the milestone's close.
+
+### DU-S2 - the index-driven write: an equality prefix and a list (2026-11-26)
+
+On `du-keyed-write`, from `b248c1cb1`.
+
+**Built.** An `UPDATE`, a `DELETE` or a locking read whose `WHERE` enters
+an index finds its rows through it.
+
+- **The arm is the read ladder's own choice** (`exec::WriteIndexArmOf`):
+  `IndexProbeOf` over the write's compiled `WHERE` - the longest equality
+  prefix, one value list standing as a prefix column, the lowest oid at a
+  tie, never a building index - so a write and the `SELECT` of its `WHERE`
+  enter the same index by the same bounds. A range after the prefix is
+  declined here and is DU-S3's.
+- **Collect, then write** (`CommandDispatcher::IndexArmKeys`,
+  `CollectWriteKeys`): the tuple keys of the entries between the bounds - a
+  list's, one pair a value - are read holding no page, made distinct and
+  sorted, and each is written by the point arm (`WriteKeys`), where
+  `Qualify` asks the whole `WHERE` of the row found and `Claim` takes the
+  walk's unit. A resume collects again and starts at the key it stopped
+  on.
+- **The rank** (`WriteWalk::BoundBy`, `exec::WriteRangeOutranksIndex`) is
+  the read ladder's: a list on the tuple key and a unique key named whole
+  first, as before; then a btree's tuple key range with both ends, neither
+  strict, and an embedded key's window, which are the bounded walk; then
+  the index; then what a read does not rank - a one-sided or strict bound,
+  and any bound on a heap - which bounds the walk, or reads a heap's
+  Keystone range, only where no index is entered. A bound beside the index
+  drops the collected keys outside it.
+- **`indexes = off`** takes the arm away, as it takes a read's.
+- **A resume of a walk is the walk's** (`WalkCursor::walked`): a statement
+  that reached its walk - no arm, a declined descent, a collection past
+  DU-Q2's bound - and parked there resumes there. Before, a btree's walk
+  parked at a key and a resume asked the key arms again; that was sound,
+  and with DU it would have read whole the collection the first run was
+  refused for its size.
+
+**DU-Q7 (a), adopted** (§4): on a heap the keyed arms write in key order
+and the walk wrote in page order, so a statement whose rows are judged
+against each other can change between an answer and a refusal. Found by
+the review, pinned by a cell, stated for `index.md`.
+
+**What changed for a statement that was answered before**, beyond DU-S1's
+list: on a heap, DU-Q7; a write by an indexed column is a use of that
+index in `sys.indexes` (`probes`, `entries_scanned`, `rows_resolved`,
+`last_used`), where a write was a use of none; and the wait DU-S0's census
+describes is forgone for a row whose matching version an undecided or
+later writer put there after the collection passed it.
+
+**Cells** (`tests/keyed_write_test.cpp`): the leaves held by an equality,
+a list, a composite prefix, a miss, a bound beside the index, on a btree
+and a heap, with `indexes = off`, and what still walks; the rank where it
+is the read ladder's and where a strict bound or a heap changes it; DU-R1,
+52 statements over a btree and a heap against a walked twin - entries left
+by a key that moved, came back and was deleted, a covering index, a
+truncated string key, a unique key's prefix, statements that move the key
+they are found by; DU-R3, the row units of the rows written and of no row
+the index named and the `WHERE` declined, off the ledger; a park on a held
+row and the resume, a `v = v + 100` and a moved key showing each row once;
+a newer committed version refused as the walk refuses it; DU-Q2 on an
+index, and a walk taken for the cap resuming as a walk; a locking read by
+an indexed column and through a view, each row claimed once in key order;
+two cores; a foreign key in both directions, a unique key, an assertion
+and a Transition asked of rows the index arm writes; DU-Q7's order.
+**The index contract suite's write family**
+(`tests/index_contract_test.cpp`, `EveryConfigurationIsLeftTheSameByEveryWrite`):
+25 writes, each run in five configurations - write-hook-filled,
+backfilled, `indexes = off`, no index, rebuilt - the reply and the whole
+relation compared after each.
+
+Three older cells changed with the behaviour: `primary_key_test.cpp` (half
+a primary key and a non-unique index are now arms, one probe each) and
+`index_usage_rig_test.cpp` (a write uses the index its `WHERE` enters and
+no other).
+
+**Reviewed** (`critics-developer`, the working tree over `b248c1cb1`): no
+quiet-wrong found in the rows written - `CompileWhere` derives no
+conjunct, a list's NULL and duplicate items and a refused value are the
+read ladder's cases, the list is evaluated whole on the row, an entry's
+tuple key is the Keystone on a heap, an `ON CONFLICT` arm and a subquery
+reach no arm. Applied: the rank made the read ladder's where it had
+ignored `strict` and a heap; `rows_resolved` counted after the bound drops
+its keys; the walk's park marked (`WalkCursor::walked`); the comments on
+the arms brought up to date; one helper for the three copies of a
+collection's offer; the unreachable width checks cut; cells for the
+locking read, the capped walk's resume, the rank on a heap, the checks and
+DU-Q7. DU-Q7 itself is recorded as an accepted difference, not removed
+(its options are in §4). Rejected: correcting the contract fixture's
+comment on its string column - it predates DU and DU's long tags are in
+`keyed_write_test.cpp`; the defensive `end()` test in `WriteIndexArmOf`
+stays, since the alternative is a null dereference.
+
+The suite: 5,249 of 5,250 on the tree the stage commits; the one failure
+is `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, a flake of
+this host measured at the base commit (5 of 30 alone at `60dc593af`),
+which passed 13 of 15 alone on this tree, as it did on the tree before the
+review's changes. Overhead not measured; measured at the milestone's
+close.

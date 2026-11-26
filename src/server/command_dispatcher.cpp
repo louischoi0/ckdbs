@@ -9462,6 +9462,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
         if (cut) {
             cursor->tuple_key = cut_tuple_key;
             cursor->active = true;
+            cursor->walked = true;
         } else {
             const std::uint32_t done = cursor->rows_done;
             *cursor = WalkCursor{};
@@ -9566,6 +9567,7 @@ Status CommandDispatcher::WalkHeapPages(
             cursor->page = cut_page;
             cursor->slot = cut_slot;
             cursor->active = true;
+            cursor->walked = true;
         } else {
             const std::uint32_t done = cursor->rows_done;
             *cursor = WalkCursor{};
@@ -11477,7 +11479,7 @@ stats::IndexUse* CommandDispatcher::IndexUseOf(catalog::Oid index_oid) {
 
 StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::CollectWriteKeys(
     const catalog::TableAccess::IndexRef& ix, std::span<const IndexRange> ranges, bool ranged,
-    bool first) {
+    const WalkBound* bound, bool first) {
     // **Past the cap the statement's first collection is not written from**
     // (DU-Q2 (a)), so its read stops one entry past it. A resume reads
     // whole: it has rows written behind its cursor.
@@ -11494,6 +11496,13 @@ StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::CollectWr
         if (keys.size() > cap) return std::optional<std::vector<std::uint64_t>>{};
     }
     const std::uint64_t entries = keys.size();
+    // A key outside the statement's tuple key window is a row its WHERE
+    // declines (`WalkBound`), so its descent is not made.
+    if (bound != nullptr) {
+        std::erase_if(keys, [bound](std::uint64_t key) {
+            return key < bound->lo || key >= bound->hi;
+        });
+    }
     // One row may be named by several entries - a key that left and came
     // back, two values of a list - and is written once (DU-R1).
     std::sort(keys.begin(), keys.end());
@@ -11523,7 +11532,7 @@ StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::UniqueKey
     std::copy(by_key.key.begin(), by_key.key.end(), high.begin());
     const IndexRange range{low, high};
     return CollectWriteKeys(*by_key.index, std::span<const IndexRange>(&range, 1),
-                            /*ranged=*/false, first);
+                            /*ranged=*/false, /*bound=*/nullptr, first);
 }
 
 StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::KeystoneWindowKeys(
@@ -11534,7 +11543,24 @@ StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::KeystoneW
     if (!bounds.ok()) return bounds.status();
     const IndexRange range{bounds.value().first, bounds.value().second};
     return CollectWriteKeys(*keystone, std::span<const IndexRange>(&range, 1), /*ranged=*/true,
-                            first);
+                            /*bound=*/nullptr, first);
+}
+
+StatusOr<std::optional<std::vector<std::uint64_t>>> CommandDispatcher::IndexArmKeys(
+    const exec::WriteIndexArm& arm, const WalkBound* bound, bool first) {
+    const std::size_t width = arm.index->entry_width;
+    std::vector<IndexRange> ranges;
+    if (arm.set.has_value()) {
+        // Whole entries of this index, a low and a high a value (`KeySet`).
+        const std::span<const std::byte> bounds(arm.set->bounds);
+        for (std::size_t i = 0; i < arm.set->items.size(); ++i) {
+            ranges.emplace_back(bounds.subspan(2 * i * width, width),
+                                bounds.subspan((2 * i + 1) * width, width));
+        }
+    } else {
+        ranges.emplace_back(arm.probe.low, arm.probe.high);
+    }
+    return CollectWriteKeys(*arm.index, ranges, arm.probe.ranged, bound, first);
 }
 
 void CommandDispatcher::RecordPlanStats(const exec::StepChain& chain,
@@ -13256,59 +13282,89 @@ public:
     }
 
     // **The key arms, in their order, in one copy** for UPDATE, DELETE and
-    // the locking read (CU-S3, DR-S3a): a list on the tuple key, else a
-    // unique key named whole. nullopt where the WHERE names neither. Else
-    // what the loop answered: true when every key was offered or is absent,
-    // false for the walk to answer - `parked_on_row` says a held row, with
-    // `cursor` at its key.
+    // the locking read (CU-S3, DR-S3a, DU): a list on the tuple key; a
+    // unique key named whole; a heap's tuple key window, through its
+    // Keystone index; an index the WHERE enters. nullopt where no arm
+    // answered - none fits, or a collection was past its bound - and the
+    // walk does, inside the statement's bound. Else what the loop answered:
+    // true when every key was offered or is absent, false for the walk to
+    // answer - `parked_on_row` says a held row, with `cursor` at its key.
     //
-    // **A resume that carries a place is the walk's** (`[quiet-wrong]`
-    // otherwise, DR-S3a's review). A heap's walk parks at a page and slot
-    // and leaves `tuple_key` 0. That cursor reaches here when a key loop's
-    // first descent declined, the walk took the statement from the head,
-    // wrote rows and parked: resumed through a key loop it would offer every
-    // key again from the lowest, and a row the walk had written would be
-    // written twice. A btree's walk and every key loop park at a key and
-    // set no page, so only that resume is handed on.
+    // **A resume of a walk is the walk's** (`WalkCursor::walked`;
+    // `[quiet-wrong]` otherwise on a heap, DR-S3a's review). A statement
+    // reaches its walk where no arm fits, where a descent declined and
+    // where a collection was past its bound; parked there with rows
+    // written, it is resumed there. A heap's walk parks at a page and slot
+    // and leaves `tuple_key` 0: resumed through a key loop it would offer
+    // every key again from the lowest, and a row the walk had written would
+    // be written twice. A btree's walk parks at a key, which a key loop
+    // could take up - by reading whole the collection its first run was
+    // refused for its size (DU-Q2).
     template <typename WriteAt>
     StatusOr<std::optional<bool>> WriteByKeys(WalkCursor& cursor, WriteAt&& write_at) {
-        if (cursor.active && cursor.page != kInvalidPageId) return std::optional<bool>{false};
+        if (cursor.active && cursor.walked) return std::optional<bool>{false};
         if (const std::optional<exec::KeySet> set = exec::WriteKeySetOf(predicates_);
             set.has_value()) {
             auto done = WriteKeySet(*set, cursor, write_at);
             if (!done.ok()) return done.status();
             return std::optional<bool>{done.value()};
         }
+        // A resume collects again, and the statement's use of an index is
+        // counted once, at its first collection (DR-Q23).
+        const bool first = !cursor.active;
         if (const std::optional<exec::WriteIndexKey> by_key =
                 exec::WriteIndexKeyOf(ta_, predicates_);
             by_key.has_value()) {
-            // A resume collects the run again; the statement's use of the
-            // index is counted once, at its first collection (DR-Q23). A
-            // run past the collection's bound (DU-Q2) is the walk's.
-            auto keys = d_.UniqueKeyRun(*by_key, /*first=*/!cursor.active);
-            if (!keys.ok()) return keys.status();
-            if (keys.value().has_value()) {
-                auto done = WriteKeys(*keys.value(), cursor, write_at);
-                if (!done.ok()) return done.status();
-                return std::optional<bool>{done.value()};
-            }
+            auto done = WriteCollected(d_.UniqueKeyRun(*by_key, first), cursor, write_at);
+            if (!done.ok() || done.value().has_value()) return done;
         }
+        // An empty window names no row: no arm, and the walk visits nothing.
+        if (bound_.has_value() && bound_->lo >= bound_->hi) return std::optional<bool>{};
+        const WalkBound* const bound = bound_.has_value() ? &*bound_ : nullptr;
         // **A heap's bound is a range of its Keystone index** (DU-S1): a
         // heap's pages are in no key order, so its walk cannot be bounded
         // (`VisitRelation`), and the rows of a tuple key window are found
-        // as its Keystone index names them - collected first, then the
-        // point arm once per key, ascending, under the window the statement
-        // declared. `WriteKeys`' contract, a resume's included.
-        if (ta_.heap() && bound_.has_value() && bound_->lo < bound_->hi) {
-            auto keys = d_.KeystoneWindowKeys(ta_, *bound_, /*first=*/!cursor.active);
-            if (!keys.ok()) return keys.status();
-            if (keys.value().has_value()) {
-                auto done = WriteKeys(*keys.value(), cursor, write_at);
-                if (!done.ok()) return done.status();
-                return std::optional<bool>{done.value()};
+        // as its Keystone index names them, under the window the statement
+        // declared.
+        const auto by_keystone = [&]() -> StatusOr<std::optional<bool>> {
+            if (!ta_.heap() || bound == nullptr) return std::optional<bool>{};
+            return WriteCollected(d_.KeystoneWindowKeys(ta_, *bound, first), cursor, write_at);
+        };
+        // **The read ladder's rank** (DU-S2; `BoundBy`): a btree's two-sided
+        // tuple key range and an embedded key's window are taken before an
+        // index - and a btree's window is its walk's (`Visit`).
+        if (window_outranks_index_) return std::optional<bool>{};
+        // **An index the WHERE enters** (DU-S2; `exec::WriteIndexArmOf`):
+        // the tuple keys its entries name are collected before a row is
+        // written - so a statement that moves the indexed column never
+        // meets an entry it appended - and each is written by the point
+        // arm, ascending, the whole WHERE asked of the row found (DU-R1).
+        // `indexes = off` takes the arm away, as it takes a read's
+        // (`index.md` section 12.3).
+        if (d_.indexes_enabled_) {
+            if (const std::optional<exec::WriteIndexArm> arm =
+                    exec::WriteIndexArmOf(ta_, predicates_);
+                arm.has_value()) {
+                auto done =
+                    WriteCollected(d_.IndexArmKeys(*arm, bound, first), cursor, write_at);
+                if (!done.ok() || done.value().has_value()) return done;
             }
         }
-        return std::optional<bool>{};
+        return by_keystone();
+    }
+
+    // One collection through the point arm (`WriteKeys`' contract, a
+    // resume's included); nullopt where the collection declined, for the
+    // next arm or the walk.
+    template <typename WriteAt>
+    StatusOr<std::optional<bool>> WriteCollected(
+        StatusOr<std::optional<std::vector<std::uint64_t>>> keys, WalkCursor& cursor,
+        WriteAt&& write_at) {
+        if (!keys.ok()) return keys.status();
+        if (!keys.value().has_value()) return std::optional<bool>{};
+        auto done = WriteKeys(*keys.value(), cursor, write_at);
+        if (!done.ok()) return done.status();
+        return std::optional<bool>{done.value()};
     }
 
     // **The tuple keys the walk visits** (DU-S1; `WalkBound`), read off the
@@ -13325,14 +13381,16 @@ public:
             bound.lo = folded.lo;
             bound.hi = folded.hi;  // at most `kIdSpaceEnd`, where the fold starts
         }
-        if (const std::optional<exec::EmbeddedKeyWindow> embedded =
-                exec::WriteEmbeddedWindowOf(ta_, predicates_);
-            embedded.has_value()) {
+        const std::optional<exec::EmbeddedKeyWindow> embedded =
+            exec::WriteEmbeddedWindowOf(ta_, predicates_);
+        if (embedded.has_value()) {
             bound.lo = std::max(bound.lo, embedded->lo);
             bound.hi = std::min(bound.hi, embedded->hi + 1);  // inclusive; an id is 48 bits
             bounded = true;
         }
         if (bounded) bound_ = bound;
+        window_outranks_index_ =
+            embedded.has_value() || exec::WriteRangeOutranksIndex(ta_, predicates_);
     }
 
     // The statement's walk: `VisitRelation` under the bound. An empty bound
@@ -13466,6 +13524,8 @@ private:
     // The tuple keys the walk visits (`BoundBy`); empty for the whole
     // relation.
     std::optional<WalkBound> bound_;
+    // Whether that window ranks above an index the WHERE enters (`BoundBy`).
+    bool window_outranks_index_ = false;
 };
 
 DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteScope& scope,
@@ -14156,14 +14216,15 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // "from the head"; a resumed statement is handed the one its park left.
     WalkCursor walk_cursor = resume_from;
 
-    // **A list on the tuple key, or a unique key named whole, is the point
-    // arm once per key** (CU-S3, DR-S3a; `WriteWalk::WriteByKeys`), under
-    // what the walk of the same WHERE takes: `DeclaredWriteBorrow` reads no
-    // bound off a list or off a unique key's columns, so each row written
-    // takes its row unit, unless a range conjunct on the tuple key beside
-    // either declared a window above. Asked after a single key's descent
-    // declined, too (CU-S3b): a list beside the key answers by its own
-    // descents, and the walk only where they decline as well.
+    // **A list on the tuple key, a unique key named whole, a heap's tuple
+    // key window and an index the WHERE enters are the point arm once per
+    // key** (CU-S3, DR-S3a, DU; `WriteWalk::WriteByKeys`), under what the
+    // walk of the same WHERE takes: `DeclaredWriteBorrow` reads no bound
+    // off a list or off an index's columns, so each row written takes its
+    // row unit, unless a bound on the tuple key beside it declared a window
+    // above. Asked after a single key's descent declined, too (CU-S3b): a
+    // list beside the key answers by its own descents, and the walk only
+    // where they decline as well.
     {
         auto done = walk.WriteByKeys(walk_cursor, write_at);
         if (!done.ok()) return Refused(done.status());
@@ -14301,9 +14362,11 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
     // ---- The claim pass ----------------------------------------------------
     //
     // `UPDATE`'s, minus the write (DC-R3): the window it declares, then its
-    // arms in its order - the tuple key, a list on it, the collection pass
-    // for a WHERE holding a subquery, the walk. No `CheckWriteAdmission`, no
-    // foreign key, assertion or transition check: nothing is written (DC-R6).
+    // arms in its order - the tuple key, the key arms (`WriteByKeys`: a list
+    // on it, a unique key, a heap's window, an index), the collection pass
+    // for a WHERE holding a subquery, the walk inside its bound. No
+    // `CheckWriteAdmission`, no foreign key, assertion or transition check:
+    // nothing is written (DC-R6).
     WriteWalk walk(*this, scope, ta, snap, predicates.value(), /*resumed_targets=*/nullptr);
     std::vector<std::uint64_t> claimed;  // ascending: every arm meets rows in key order
 
@@ -14358,8 +14421,7 @@ DispatchOutcome CommandDispatcher::RunLockingRead(const parser::SelectStmt& stmt
         if (at.value() == PointWrite::kParked) return ended(Refused(walk.blocked_verdict));
         answered = at.value() != PointWrite::kScan;
     }
-    // A list on the tuple key or a unique key named whole, as UPDATE's
-    // (CU-S3, DR-S3a).
+    // The key arms, as UPDATE's (CU-S3, DR-S3a, DU; `WriteByKeys`).
     if (!answered) {
         auto all = walk.WriteByKeys(cursor, claim_at);
         if (!all.ok()) return ended(Refused(all.status()));
@@ -17537,8 +17599,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // AO-S3b, and `UpdateParsed`'s site states the argument.
     WalkCursor walk_cursor = resume_from;
 
-    // A list on the tuple key or a unique key named whole, as UPDATE's
-    // (CU-S3, DR-S3a).
+    // The key arms, as UPDATE's (CU-S3, DR-S3a, DU; `WriteByKeys`).
     {
         auto done = walk.WriteByKeys(walk_cursor, mark_at);
         if (!done.ok()) return Refused(done.status());
