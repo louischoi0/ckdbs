@@ -195,10 +195,16 @@ Refusals, each with a byte: a missing or non-identifier name is
 with AL1's reason, and any verb but `RENAME`, `ADD` and `DROP` there is
 `InvalidArgument` ("expected RENAME, ADD or DROP"); `ADD` and `DROP` take
 `COLUMN` optionally, and `ADD`'s definition is `CREATE TABLE`'s column
-grammar (`Parser::ParseColumnDef`); `RENAME` to an existing name is
-`AlreadyExists`, to a name another transaction's uncommitted `DROP TABLE`
-holds is `TxnConflict`, and to one the renaming transaction's own open drop
-holds is `Unsupported` (commit the drop first); renaming a column to a sibling's name is
+grammar (`Parser::ParseColumnDef`); `RENAME` to a name the catalog's field
+cannot hold - 64 bytes and over - is `InvalidArgument` and to an
+existing name `AlreadyExists`, each at the new name's byte for a relation
+as for a column (DS-S4), to a name another transaction's uncommitted
+`DROP TABLE` holds is `TxnConflict`, and to one the renaming transaction's
+own open drop holds is `Unsupported` (commit the drop first), both at the
+new name's byte too; a relation rename's other refusals - a system
+relation, an assertion or a view that names the relation, a relation that
+changed while the rename waited - are the old name's or no token's and
+carry no byte; renaming a column to a sibling's name is
 `AlreadyExists`; a `sys.*` relation is refused outright (the catalog's
 names are load-bearing for bootstrap and are nobody's to change).
 

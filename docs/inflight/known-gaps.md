@@ -1806,15 +1806,17 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   BW-S6 (BW-Q11 (a), BW-R13), a column-listed `INSERT` names its columns,
   so no column change can shift it. Verified for BW-S6 on
   `worktree-bw-instant-add-drop-column` over `e3450498`.
-- **A value's type refusal at encode carries no byte** (predates BW): an
-  `INSERT` value of the wrong type - positional or column-listed - is
-  refused by `exec::EncodeRow` (`row_codec.cpp`, "column 'a' expects an
-  integer"), which `InsertOneRow` passes through as it is; a multi-row
-  statement adds only `(row k)`. Every other `INSERT` refusal names the
-  value's byte. Found by BW-S6's review on
-  `worktree-bw-instant-add-drop-column` at `e1e17abc`; not fixed there, as
-  the codec has no `AstValue` and threading the byte is outside BW.
-
+- **An `UPDATE`'s bare literal is refused by the encoder with no byte**
+  (BJ-Q3 (c); verified by running on `ds-known-gaps-contained` over
+  `e8597253`, DS-S3's review): `UPDATE t SET v = 'seven'` on an integer
+  column answers "column 'v' expects an integer" and names no position,
+  per row, since `CompileAssignments` types an expression at compile and
+  leaves a bare literal to the row's gate. `EncodeAssigned` appends nothing
+  because its cells also hold computed values, which are at no byte. An
+  `INSERT`'s `VALUES` name theirs since DS-S3; **an `INSERT ... SELECT`'s
+  rows name none by rule** - a selected literal would carry its offset in
+  whichever text it was parsed from, a view's included - and a refusal the
+  var-heap raises for anything but the value's size names none either.
 - **Rows are never resized after a `DROP COLUMN`** (CD-OI-1 (a), verified on
   `cd-column-slot-cleaning` at `0badb7d6`). `PURGE DROPPED COLUMNS` zeroes a
   dropped column's cells, releases their spills and frees a slot an `ADD`
@@ -3472,10 +3474,6 @@ the thirteen fixes leave, each `[source-read]` unless marked.
   `ResourceExhausted` and treats `NotFound` as permanent, and the store can
   answer `NotFound` for a page of a damaged chain; that candidate is parked
   until the controller is reset. Read by the step's reviewer.
-- **`RENAME TO` refuses a name too long with no byte.** The catalog's
-  refusal reaches the client as it is (`command_dispatcher.cpp`, the
-  rename's `Refused(renamed)`); CREATE TABLE's, CREATE INDEX's and a
-  column's carry theirs. It predates the fixes.
 - **A volume that already holds a truncated name is not repaired.** Two
   relations, or two indexes, created under one 64-byte-or-longer spelling
   before G27/G28 keep their two rows under one stored name; the 63-byte

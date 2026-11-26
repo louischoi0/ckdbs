@@ -195,6 +195,131 @@ TEST_F(InsertColumnListTest, ARowOfAnotherWidthThanTheListIsRefusedAtItsFirstVal
     EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n0");
 }
 
+// ---- DS-S3: a value's refusal names the value's byte -----------------------
+//
+// `exec::EncodeRow` refused a mistyped value as "column 'a' expects an
+// integer" with no position, the one `INSERT` refusal that named none
+// (`known-gaps.md`, "Column slots"). Each case below writes one bad value
+// into an otherwise good row; the byte asked for is where that value's
+// token starts in the statement.
+
+struct BadValue {
+    const char* column;  // named in the refusal
+    const char* good;    // a value the column takes
+    const char* bad;     // one it refuses; unique in the statement
+};
+
+// One per kind of cell the encoder writes. The key is `id`, first.
+const BadValue kBadValues[] = {
+    {"a", "7", "'seven'"},                   // an integer column, a string
+    {"s", "'text'", "77"},                   // a varchar column, an integer
+    {"c", "'abcd'", "'abcdefgh'"},           // a char(4), eight bytes
+    {"d", "'2000-01-01'", "'2000-13-45'"},   // a date that is none
+    {"ts", "'2000-01-01 00:00:00'", "'not a time'"},
+    {"m", "'1.50'", "'1.2.3'"},              // a decimal that is none
+    {"f", "1", "8"},                         // a bool takes 0 or 1
+    {"n", "3", "300"},                       // an int8, out of range
+};
+
+class InsertValueByteTest : public InsertColumnListTest {
+protected:
+    void SetUp() override {
+        InsertColumnListTest::SetUp();
+        Ok("CREATE TABLE t (id int64, a int64, s varchar(16), c char(4), d date, ts timestamp, "
+           "m decimal(9, 2), f bool, n int8)");
+    }
+
+    // `VALUES` tuple with `kBadValues[bad]`'s bad value in its place; `key`
+    // leads it where given.
+    static std::string Tuple(std::size_t bad, const std::string& key) {
+        std::string out = "(" + key;
+        for (std::size_t i = 0; i < std::size(kBadValues); ++i) {
+            if (!out.empty() && out.back() != '(') out += ", ";
+            out += i == bad ? kBadValues[i].bad : kBadValues[i].good;
+        }
+        return out + ")";
+    }
+
+    void RefusedAtItsValue(const std::string& sql, const BadValue& value,
+                           const std::string& more = "") {
+        const std::size_t byte = sql.find(value.bad);
+        ASSERT_NE(byte, std::string::npos) << sql;
+        Refused(sql, {std::string("'") + value.column + "'",
+                      "(byte " + std::to_string(byte) + ")", more});
+    }
+};
+
+TEST_F(InsertValueByteTest, APositionalRowsBadValueIsNamedAtItsByte) {
+    for (std::size_t i = 0; i < std::size(kBadValues); ++i) {
+        RefusedAtItsValue("INSERT INTO t VALUES " + Tuple(i, "1"), kBadValues[i]);
+        // The key left out: the engine issues it, and the values are one
+        // column over - the byte is still the value's own.
+        RefusedAtItsValue("INSERT INTO t VALUES " + Tuple(i, ""), kBadValues[i]);
+    }
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n0");
+}
+
+TEST_F(InsertValueByteTest, AListedRowsBadValueIsNamedAtItsByte) {
+    for (std::size_t i = 0; i < std::size(kBadValues); ++i) {
+        RefusedAtItsValue("INSERT INTO t (a, s, c, d, ts, m, f, n) VALUES " + Tuple(i, ""),
+                          kBadValues[i]);
+    }
+    // A list in another order than the columns': the byte follows the
+    // value, not the column's position.
+    const std::string shuffled =
+        "INSERT INTO t (n, a, f, m, ts, d, c, s) VALUES "
+        "(3, 'seven', 1, '1.50', '2000-01-01 00:00:00', '2000-01-01', 'abcd', 'text')";
+    Refused(shuffled, {"'a'", "(byte " + std::to_string(shuffled.find("'seven'")) + ")"});
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n0");
+}
+
+TEST_F(InsertValueByteTest, ALaterRowsBadValueCarriesItsByteAndItsRow) {
+    for (std::size_t i = 0; i < std::size(kBadValues); ++i) {
+        RefusedAtItsValue("INSERT INTO t VALUES " + Tuple(std::size(kBadValues), "1") + ", " +
+                              Tuple(i, "2"),
+                          kBadValues[i], "(row 2)");
+    }
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM t"), "count(*)\\n0");
+}
+
+// The NULL refusal named its byte before DS-S3, inside the encoder; it is
+// not given a second one.
+TEST_F(InsertValueByteTest, ANullIntoANotNullColumnNamesItsByteOnce) {
+    const std::string sql = "INSERT INTO t VALUES (1, NULL, 'text', 'abcd', '2000-01-01', "
+                            "'2000-01-01 00:00:00', '1.50', 1, 3)";
+    const std::string out = Run(sql);
+    EXPECT_TRUE(IsErr(out)) << out;
+    EXPECT_NE(out.find("(byte " + std::to_string(sql.find("NULL")) + ")"), std::string::npos)
+        << out;
+    EXPECT_EQ(out.find("(byte "), out.rfind("(byte ")) << out;
+}
+
+// An expression in `VALUES` is refused at the expression's first token.
+TEST_F(InsertValueByteTest, AnExpressionsRefusalIsAtTheExpression) {
+    const std::string sql = "INSERT INTO t VALUES (1, 7, 'text', 'ab' || 'cdefgh', '2000-01-01', "
+                            "'2000-01-01 00:00:00', '1.50', 1, 3)";
+    Refused(sql, {"'c'", "(byte " + std::to_string(sql.find("'ab'")) + ")"});
+}
+
+// A selected row is at no byte of the `INSERT`: a view's literal carries its
+// offset in the view's text, which was reported as this statement's. The
+// refusal stands; it names no byte, and neither does a selected NULL's.
+TEST_F(InsertValueByteTest, ASelectedValuesRefusalNamesNoByte) {
+    Ok("CREATE TABLE src (id int64, v int64)");
+    Ok("INSERT INTO src VALUES (1, 1)");
+    Ok("CREATE TABLE narrow (id int64, c char(4))");
+    Ok("CREATE VIEW wide AS SELECT id, 'abcdefgh' AS c FROM src");
+    for (const char* sql : {"INSERT INTO narrow SELECT id, c FROM wide",
+                            "INSERT INTO narrow SELECT id, 'abcdefgh' FROM src",
+                            "INSERT INTO narrow SELECT id, NULL FROM src"}) {
+        const std::string out = Run(sql);
+        EXPECT_TRUE(IsErr(out)) << sql << " -> " << out;
+        EXPECT_NE(out.find("'c'"), std::string::npos) << sql << " -> " << out;
+        EXPECT_EQ(out.find("(byte "), std::string::npos) << sql << " -> " << out;
+    }
+    EXPECT_EQ(Run("SELECT COUNT(*) FROM narrow"), "count(*)\\n0");
+}
+
 // ---- BW-Q11's scenario: no column change shifts a listed row ---------------
 
 TEST_F(InsertColumnListTest, AfterAnAddAListWithoutTheNewColumnWritesNullThere) {

@@ -215,3 +215,82 @@ states the cast.
 `known-gaps.md` ("Testing") names, 3 of 6 alone and untouched by this
 stage; **the run on the reviewed tree is 5,232 of 5,232** at `-j8`, less
 `bs-nightly`. Overhead not measured; measured at the milestone's close.
+
+### DS-S3 - an `INSERT` value's refusal names its byte (2026-11-26)
+
+On `ds-known-gaps-contained` over `e8597253`. `exec::EncodeRow` appends
+the value's byte to a refusal the value earned (`AtValue`,
+`src/exec/row_codec.cpp`), by code: `InvalidArgument`, `OutOfRange`,
+`Unsupported`, `NotImplemented`. Six cells in
+`tests/insert_column_list_test.cpp` (`InsertValueByteTest`): eight kinds
+of bad value, positional, key-omitted and column-listed, a later row of a
+multi-row statement, an expression, a NULL named once, a selected row.
+
+**Review** (`critics-developer`), by running a server as well as reading.
+Applied:
+- **an `INSERT ... SELECT` over a view reported a byte in the view's
+  text** (`(byte 11)` for a statement whose byte 11 is a space): a literal
+  keeps its `AstValue` through the query layer and a view's body is parsed
+  from its own text. `InsertSelectRows` now clears every selected value's
+  offset, so a selected row's refusals name no byte. **This also changes
+  two refusals older than DS** that read the same offset - the NULL
+  refusal and the unique check's byte - for a selected row: they named a
+  byte, right for the statement's own literal and wrong for a view's, and
+  name none now.
+- the NULL refusal prints no `(byte 0)` for a value no token wrote.
+- the guard against a second byte is the value's kind, not a search of
+  the message for `(byte `, which a quoted user string could satisfy.
+- `NotImplemented` joined the codes: an over-long spill is the value's.
+- `known-gaps.md` had said an `UPDATE`'s literals are refused at compile
+  with their byte. False: a bare literal is refused per row by the
+  encoder with none (BJ-Q3 (c)). The entry now states that as the gap.
+
+### DS-S4 - a relation rename's new name is refused at its byte (2026-11-26)
+
+On the same tree. The relation arm of the rename asks `NameFitsAt` before
+the catalog and maps the catalog's `AlreadyExists`, `TxnConflict` and
+`Unsupported` - `CheckNameFree`'s three - to the new name's byte. One cell,
+`AlterTableTest.ARelationRenamesNewNameIsRefusedAtItsByte`, asserting the
+code as well as the byte.
+
+**Review** (`critics-developer`): no defect; the order of refusals is
+unchanged, since the fit check was already the catalog door's first
+statement. Applied: `TxnConflict` and `Unsupported` carry the byte, which
+`alter.md` §7 had promised ("each with a byte") and the code did not give;
+§7 now also says which of a rename's refusals carry none; the cell asserts
+the status code. Rejected: one `AtByte` helper for the three sites that
+build ` (byte N)` - it would rewrite the column arm, outside this stage.
+
+**Suite, S3 and S4 together**: 5,237 of 5,237 before the reviews' changes.
+On the reviewed tree, 5,238 of 5,239: the one failure is
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the kick race
+of `known-gaps.md` ("Testing"), as at DS-S2. **A second run of the
+reviewed tree was still running when the session was handed off, and its
+result is not in this log**; the 70 cells of the touched suites are green.
+Overhead not measured; measured at the milestone's close.
+
+## 8. Handoff (2026-11-26 14:21 UTC)
+
+The session ended here on the operator's word ("handoff"). State:
+
+- **Landed on the work branch** `worktree-ds-known-gaps-contained`:
+  DS-S1 `5ae44e5f`, DS-S2 `e8597253`, DS-S3 and DS-S4 in the commit that
+  carries this section (one commit: both stages touch
+  `command_dispatcher.cpp`). Nothing is merged to `main` or pushed.
+- **Owed before DS-S5**: one green run of the full suite on this commit
+  (`ctest --test-dir build --output-on-failure -LE bs-nightly -j8`); the
+  log of the run in flight at the handoff is the session's scratchpad
+  file `ds-s34-ctest3.log`, which a reboot clears.
+- **DS-S5, not started**: DS-Q7's measurement - `ck-tester`, an
+  interleaved A/B in `build-release` of a one-row and a multi-row
+  `INSERT`, `8274c951` against the closing commit, to
+  `bench/<version>/`; then the index and register rows flipped to closed,
+  `CLAUDE.md`'s rows (WAL or Backup for the archive bound; the client's
+  authentication under Wire protocol or Backup), `git fetch origin && git
+  merge origin/main` on the work branch, and the report at the push gate.
+- **`git describe --tags` reads `v3.4.17-...` in this clone**: `CLAUDE.md`
+  names `v3.5.0` as a local, unpushed tag, and this clone does not have
+  it. A results file takes whatever `git describe` prints.
+- **Found and left**: `tools/kds_backup.py`'s `quote()` doubles a single
+  quote, which the lexer does not read as an escape, so a backup target
+  holding one cannot be spelled; no entry was written.
