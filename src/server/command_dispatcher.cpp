@@ -4938,10 +4938,33 @@ DispatchOutcome CommandDispatcher::HandleAlter(std::string_view line,
                           return r;
                   }
               }()
-            : catalog_.RenameTable(oid.value(), stmt.new_name,
-                                   session.in_explicit_txn() && session.transaction() != nullptr
-                                       ? session.transaction()->id()
-                                       : txn::kNoTrxId);
+            : [&] {
+                  // **The new name's faults carry its byte** (DS-S4), as
+                  // the column arm's do. The fit is asked here, not mapped
+                  // from the catalog's `InvalidArgument`, which is also the
+                  // system relation's refusal - the old name's.
+                  if (Status fits = NameFitsAt("table", stmt.new_name, stmt.new_name_byte_offset);
+                      !fits.ok()) {
+                      return fits;
+                  }
+                  const Status r = catalog_.RenameTable(
+                      oid.value(), stmt.new_name,
+                      session.in_explicit_txn() && session.transaction() != nullptr
+                          ? session.transaction()->id()
+                          : txn::kNoTrxId);
+                  switch (r.code()) {
+                      // `CheckNameFree`'s three, and the door's only
+                      // sources of them: the name is taken, another
+                      // transaction's open drop holds it, or this one's does.
+                      case StatusCode::kAlreadyExists:
+                      case StatusCode::kTxnConflict:
+                      case StatusCode::kUnsupported:
+                          return r.WithMessage(r.message() + " (byte " +
+                                               std::to_string(stmt.new_name_byte_offset) + ")");
+                      default:
+                          return r;
+                  }
+              }();
     if (!renamed.ok()) {
         return Refused(renamed);
     }
@@ -8061,6 +8084,15 @@ StatusOr<parser::InsertStmt> CommandDispatcher::InsertSelectRows(const catalog::
     out.columns = written.columns;
     out.columns_byte_offset = written.columns_byte_offset;
     out.rows = std::move(rs.value().rows);
+    // **A selected value is at no byte of this statement** (DS-S3). A
+    // literal evaluates to its own `AstValue`, offset and all, and a view's
+    // body is parsed from the view's stored text - so a row could carry a
+    // position in another text, which every refusal that names a value's
+    // byte would then report as this statement's. Cleared for a literal the
+    // statement itself wrote too: one rule, and the row is a result either way.
+    for (std::vector<parser::AstValue>& row : out.rows) {
+        for (parser::AstValue& value : row) value.byte_offset = 0;
+    }
     return out;
 }
 

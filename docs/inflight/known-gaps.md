@@ -159,7 +159,31 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   can be slow too. The entry below
   on its sibling reads the same expiry under load as slow, not stopped;
   one writer finished and the other 48 rows short after 60 s with no load
-  is not explained by that reading. **Owner: none.**
+  is not explained by that reading.
+  **A run that passes takes a multiple of the rig's idle block** (DS's
+  close, the same day, on `ds-known-gaps-contained` at `cc46c0d85`): the
+  cell failed in 3 of 3 `-j8` suites and passed 6 of 6 alone, every expiry
+  with core 0 (`relaxed`) at 200 of 200 rows and core 1 (`group`)
+  part-way, 103 to 178. Eight copies at once, two test binaries
+  alternating, four rounds: 8 of 32 failed at `cc46c0d85` and 8 of 32 at
+  `8274c951`, the commit DS opened from. The 54 runs that passed took
+  about 0.05 s or a multiple of 5 s - 5, 10, 15, 20, 25, 30, 35, 45, 50
+  and, past one round's bound and so across rounds of the cell, 70 s - on
+  both binaries; `TwoCoreRig`'s `max_idle_block_ms` is 5,000
+  (`tests/two_core_rig.hpp:158`). **A reactor waited out whole idle
+  blocks; which wake was missing was not observed.** The cell has two
+  candidates: its own start sets each script's `go` flag with no kick
+  (`tests/contention_counters_test.cpp:302`), so a reactor that parked on
+  it first waits one block, once a round, on either core; and the WAL
+  writer's kick of a `group` commit is skipped when it reads the
+  reactor's flag before the flag is raised (`sched/waker_table.hpp`,
+  priced at one idle block). Only the second fits an expiry - the `group`
+  core alone, many blocks in one round. Either is a stopped reactor and
+  not a slow one: the rig's files are under `/tmp`, tmpfs on this host,
+  and the load was under 1.1 before every round. `kicks_skipped()` would
+  not settle it, as it counts every kick to an awake core; each core's
+  idle-block time beside the run's, or the cell at a shorter
+  `max_idle_block_ms`, would. **Owner: none**; the bound is not widened.
 
 - **DH's close measured five cells and one recovery round; the controls
   were not measured.** On `dh-page-image-volume`, 2026-11-20
@@ -268,6 +292,9 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   goes through `AwaitWriteBlock`, which it did not touch. The wait prints
   no per-writer progress, so slow cannot be told from stopped. **Owner:
   none**.
+  **It also fails without timing out**, out of its retries in under a
+  second: that form is `bugs/two-core-increment-starves-one-core.md`,
+  with the entry at the head of this section.
 
 - **`IdAllocationAcrossCores.TwoCoresWritingOneRelationIssueOneSequence`
   times out under `-j8`.** It failed its `KickUntil(..., 20000ms)`
@@ -1863,13 +1890,30 @@ the procedures are `manual/server/backup-restore.md`.
   pre-DA build gave `sys.access_stats`' chain, which nothing reaches since DA.
 - **PITR targets an LSN, not a time**: the commit record carries no time
   (BR-Q5 (b)). An operator notes `SHOW META`'s `wal_durable_lsn`.
-- **`kds_backup` reaches the admin role only on an `auth = off` server**:
-  `tools/kwp.py` has no SCRAM or TLS.
+- **The reference client's SCRAM and TLS have no cell in the suite** (DS-S1,
+  DS-Q8): `tools/ds_auth_drill.py` starts an `auth = scram`, `tls = on`
+  server and drives `kwp.py`, `ckdbs_cli.py` and `kds_backup.py` at it, and
+  is run by hand - it needs the `openssl` command. The client has no
+  channel binding, as the server offers none, so SCRAM over an unverified
+  TLS channel (`--tls-insecure`) does not notice a relay. Verified on
+  `ds-known-gaps-contained` over `8274c951` (DS-S1).
+- **No cell sends a `BACKUP` label or target that holds a single quote.**
+  `tools/kds_backup.py`'s `quote()` (`tools/kds_backup.py:72`) doubles it,
+  and a `BACKUP` statement never reaches the SQL lexer: its words are read
+  by `SplitBackupWords` (`src/server/command_dispatcher.cpp:2212`), which
+  reads `''` inside a quoted word as one quote (since BR, `d861b46a`), so
+  the doubling is the matching escape. Read on `ds-known-gaps-contained`
+  at `4055d666a`; not run, so the round trip is unverified. **Owner:
+  none.**
 - **The LVM reference script is not run here**: the development VM grants no
   root (`br-s0-census.md` H9); path D's drills use the freeze script.
-- **An `archive_command` that hangs holds the archive**: it is not timed out,
-  only ended at shutdown; the archive's lag and `wal_archive_blocking` are
-  what an operator watches.
+- **A hung `archive_command` is bounded only where an operator set the
+  bound** (DS-S2, verified on `ds-known-gaps-contained` over `5ae44e5f`):
+  `archive_command_timeout_s` is `0` by default, and unset a command that
+  never exits still holds the archive until a restart. A bounded command's
+  exit is read by a 20 ms poll on the archiver's thread. A process the
+  command moved to another process group or session outlives the bound.
+  The value is cast to 32 bits unchecked, as every numeric key's is.
 - **A backup starts a thread after startup, which `sched.md` §9's invariant
   1 forbids and no document declares.** Read at `a4d2fb3b` while DE was
   reviewed: `BACKUP COPY` starts the copier's thread and `BACKUP STOP` the
@@ -1950,15 +1994,17 @@ Verified on `worktree-bw-instant-add-drop-column` over `bc42a011`
   BW-S6 (BW-Q11 (a), BW-R13), a column-listed `INSERT` names its columns,
   so no column change can shift it. Verified for BW-S6 on
   `worktree-bw-instant-add-drop-column` over `e3450498`.
-- **A value's type refusal at encode carries no byte** (predates BW): an
-  `INSERT` value of the wrong type - positional or column-listed - is
-  refused by `exec::EncodeRow` (`row_codec.cpp`, "column 'a' expects an
-  integer"), which `InsertOneRow` passes through as it is; a multi-row
-  statement adds only `(row k)`. Every other `INSERT` refusal names the
-  value's byte. Found by BW-S6's review on
-  `worktree-bw-instant-add-drop-column` at `e1e17abc`; not fixed there, as
-  the codec has no `AstValue` and threading the byte is outside BW.
-
+- **An `UPDATE`'s bare literal is refused by the encoder with no byte**
+  (BJ-Q3 (c); verified by running on `ds-known-gaps-contained` over
+  `e8597253`, DS-S3's review): `UPDATE t SET v = 'seven'` on an integer
+  column answers "column 'v' expects an integer" and names no position,
+  per row, since `CompileAssignments` types an expression at compile and
+  leaves a bare literal to the row's gate. `EncodeAssigned` appends nothing
+  because its cells also hold computed values, which are at no byte. An
+  `INSERT`'s `VALUES` name theirs since DS-S3; **an `INSERT ... SELECT`'s
+  rows name none by rule** - a selected literal would carry its offset in
+  whichever text it was parsed from, a view's included - and a refusal the
+  var-heap raises for anything but the value's size names none either.
 - **Rows are never resized after a `DROP COLUMN`** (CD-OI-1 (a), verified on
   `cd-column-slot-cleaning` at `0badb7d6`). `PURGE DROPPED COLUMNS` zeroes a
   dropped column's cells, releases their spills and frees a slot an `ADD`
@@ -3730,10 +3776,6 @@ the thirteen fixes leave, each `[source-read]` unless marked.
   `ResourceExhausted` and treats `NotFound` as permanent, and the store can
   answer `NotFound` for a page of a damaged chain; that candidate is parked
   until the controller is reset. Read by the step's reviewer.
-- **`RENAME TO` refuses a name too long with no byte.** The catalog's
-  refusal reaches the client as it is (`command_dispatcher.cpp`, the
-  rename's `Refused(renamed)`); CREATE TABLE's, CREATE INDEX's and a
-  column's carry theirs. It predates the fixes.
 - **A volume that already holds a truncated name is not repaired.** Two
   relations, or two indexes, created under one 64-byte-or-longer spelling
   before G27/G28 keep their two rows under one stored name; the 63-byte

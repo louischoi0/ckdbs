@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include <vector>
 
 #include <csignal>
@@ -26,6 +27,9 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr auto kIdleWait = std::chrono::seconds(1);
+// How often a bounded command's exit is asked for. The archiver's own
+// thread sleeps between asks; a command's exit is read at most this late.
+constexpr auto kChildPoll = std::chrono::milliseconds(20);
 constexpr auto kMaxBackoff = std::chrono::seconds(30);
 
 // Byte-for-byte: the archive's promise is "never a different body under one
@@ -99,6 +103,7 @@ void WalArchiver::Start() {
     std::lock_guard<std::mutex> lock(mu_);
     if (thread_.joinable()) return;
     stopping_ = false;
+    stop_requested_.store(false, std::memory_order_release);
     thread_ = std::thread([this] { Run(); });
 }
 
@@ -107,8 +112,12 @@ void WalArchiver::Stop() {
         std::lock_guard<std::mutex> lock(mu_);
         stopping_ = true;
     }
-    // A command still running is ended, so a stop never waits on it.
-    if (const pid_t pid = child_.load(std::memory_order_acquire); pid > 0) ::kill(pid, SIGTERM);
+    // Read by a bounded command's wait, which then gives the command the
+    // grace and no more: a stop is not held for the rest of the bound.
+    stop_requested_.store(true, std::memory_order_release);
+    // A command still running is ended, so a stop never waits on it. A
+    // bounded command's entry is its group, negated (`child_`).
+    if (const pid_t pid = child_.load(std::memory_order_acquire); pid != 0) ::kill(pid, SIGTERM);
     wake_.notify_all();
     if (thread_.joinable()) thread_.join();
 }
@@ -198,7 +207,18 @@ Status WalArchiver::ArchiveOne(std::uint64_t segment) {
     sigfillset(&all);
     posix_spawnattr_setsigmask(&attr, &none);
     posix_spawnattr_setsigdefault(&attr, &all);
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+    // **A bounded command leads its own process group** (DS-S2): the bound
+    // signals the group, since ending `/bin/sh` alone would leave whatever
+    // it started holding the segment's upload - and the next attempt would
+    // run beside it. An unbounded command is spawned as it always was.
+    const auto bound = std::chrono::seconds(wiring_.settings.command_timeout_s);
+    const bool bounded = bound.count() > 0;
+    short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+    if (bounded) {
+        posix_spawnattr_setpgroup(&attr, 0);
+        flags |= POSIX_SPAWN_SETPGROUP;
+    }
+    posix_spawnattr_setflags(&attr, flags);
     const char* argv[] = {"/bin/sh", "-c", command.c_str(), nullptr};
     pid_t pid = 0;
     const int spawned = ::posix_spawn(&pid, "/bin/sh", nullptr, &attr,
@@ -208,13 +228,81 @@ Status WalArchiver::ArchiveOne(std::uint64_t segment) {
         return Status::IoError("archive_command could not start: " +
                                std::string(std::strerror(spawned)));
     }
-    child_.store(pid, std::memory_order_release);
+    const pid_t target = bounded ? -pid : pid;
+    child_.store(target, std::memory_order_release);
     int rc = 0;
     pid_t reaped = 0;
-    while ((reaped = ::waitpid(pid, &rc, 0)) < 0 && errno == EINTR) {
+    int wait_errno = 0;
+    bool timed_out = false;  // the bound fell
+    bool ended = false;      // the command was signalled: by the bound, or by a stop
+    if (!bounded) {
+        while ((reaped = ::waitpid(pid, &rc, 0)) < 0 && errno == EINTR) {
+        }
+        wait_errno = errno;
+    } else {
+        // Asked without waiting, so the bound - and a stop - can be read
+        // between asks. `SIGTERM` when either falls, `SIGKILL` a grace
+        // later, and the loop ends only at the command's exit: a killed
+        // process always exits.
+        //
+        // **The exit is looked at before it is reaped** (`WNOWAIT`): while
+        // the shell is an unreaped zombie it still holds its group's id, so
+        // the signal that clears what it left behind cannot reach a group
+        // that took the id over. Reaped first, the id would be free.
+        const auto started = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point signalled{};
+        bool killed = false, exited = false;
+        for (;;) {
+            siginfo_t info {};
+            const int asked = ::waitid(P_PID, static_cast<id_t>(pid), &info,
+                                       WEXITED | WNOHANG | WNOWAIT);
+            if (asked == 0 && info.si_pid == pid) {
+                exited = true;
+                break;
+            }
+            if (asked < 0 && errno != EINTR) {
+                wait_errno = errno;  // ECHILD: the kernel reaped it (G42)
+                reaped = -1;
+                break;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (!ended) {
+                timed_out = now - started >= bound;
+                if (timed_out || stop_requested_.load(std::memory_order_acquire)) {
+                    ended = true;
+                    signalled = now;
+                    ::kill(target, SIGTERM);
+                }
+            } else if (!killed && now - signalled >= kCommandKillGrace) {
+                killed = true;
+                ::kill(target, SIGKILL);
+            }
+            std::this_thread::sleep_for(kChildPoll);
+        }
+        if (exited) {
+            // Whatever the shell left in its group goes with it, so a retry
+            // never runs beside a survivor of the attempt before.
+            if (ended) ::kill(target, SIGKILL);
+            while ((reaped = ::waitpid(pid, &rc, 0)) < 0 && errno == EINTR) {
+            }
+            wait_errno = errno;
+        }
     }
-    const int wait_errno = errno;
     child_.store(0, std::memory_order_release);
+    // **A command that was signalled archived nothing, whatever it exited
+    // with**: an exit 0 from a handler that cleaned up and left is not the
+    // command's word that the segment is durable. The one honest exit 0
+    // this refuses is a command that finished in the instant the bound
+    // fell; it costs a retry, which an idempotent command absorbs.
+    if (ended) {
+        if (!timed_out) {
+            return Status::IoError("archive_command was ended by the archiver's stop: " +
+                                   command);
+        }
+        return Status::IoError("archive_command ran past archive_command_timeout_s = " +
+                               std::to_string(wiring_.settings.command_timeout_s) +
+                               " and was ended: " + command);
+    }
     // **A wait that failed is not an exit 0** (the audit's G42): `rc` is
     // still the 0 it was initialised to, which reads as a clean exit, and
     // the segment would count as archived and be recycled on the word of a

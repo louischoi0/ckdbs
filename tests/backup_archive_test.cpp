@@ -312,6 +312,183 @@ TEST(WalArchiverTest, ACommandWhoseExitCannotBeReadIsNotCountedAsArchived) {
     }
 }
 
+// A process that has ended: gone, or a zombie nobody has reaped yet - a
+// command's orphaned child is reparented, and in a container whose pid 1
+// reaps nothing it stays a zombie for good.
+bool Ended(pid_t pid) {
+    if (::kill(pid, 0) != 0) return true;
+    std::ifstream stat("/proc/" + std::to_string(pid) + "/stat");
+    std::string line;
+    std::getline(stat, line);
+    const std::size_t paren = line.rfind(')');  // the state follows the name
+    return paren != std::string::npos && paren + 2 < line.size() && line[paren + 2] == 'Z';
+}
+
+// The pid a command wrote to `path`, once the whole line is there.
+pid_t PidIn(const fs::path& path) {
+    pid_t pid = 0;
+    WaitFor([&] {
+        std::ifstream in(path);
+        std::string line;
+        if (!std::getline(in, line) || in.eof()) return false;  // no newline yet
+        pid = static_cast<pid_t>(std::stol(line));
+        return pid > 0;
+    });
+    return pid;
+}
+
+// DS-S2. A command still running at `archive_command_timeout_s` is ended
+// with everything it started, the attempt is a failure that names the bound,
+// the segment stays owed - and the next attempt, which the cell lets
+// succeed, archives it. Before the key a command that never exited held the
+// archive, and with it the log's recycling, until a restart.
+TEST(WalArchiverTest, ACommandPastItsBoundIsEndedWithItsChildrenAndTheSegmentStaysOwed) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal", out = dir.path / "out";
+    const fs::path go = dir.path / "go", child = dir.path / "child";
+    fs::create_directories(out);
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    // Hangs in a child of the shell until `go` exists: ending the shell
+    // alone would leave the `sleep` running.
+    const std::string command = "if [ -e " + go.string() + " ]; then cp %p " + out.string() +
+                                "/%f; else sleep 600 & echo $! > " + child.string() +
+                                "; wait; fi";
+    WalArchiver archiver(WalArchiver::Wiring{{{}, command, 1}, wal.string(), 7, kSize, 0,
+                                             [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return !archiver.last_error().empty(); }));
+    EXPECT_NE(archiver.last_error().find("archive_command_timeout_s = 1"), std::string::npos)
+        << archiver.last_error();
+    EXPECT_EQ(archiver.next_segment(), 0u);
+    EXPECT_EQ(archiver.floor(), 0u);
+    EXPECT_FALSE(fs::exists(out / ArchiveName(7, 0)));
+
+    const pid_t sleeper = PidIn(child);
+    ASSERT_GT(sleeper, 0);
+    EXPECT_TRUE(WaitFor([&] { return Ended(sleeper); }))
+        << "the command's child outlived the bound";
+
+    std::ofstream(go) << "go";
+    archiver.Kick();
+    ASSERT_TRUE(WaitFor([&] { return archiver.next_segment() == 1; })) << archiver.last_error();
+    EXPECT_TRUE(fs::exists(out / ArchiveName(7, 0)));
+    EXPECT_TRUE(archiver.last_error().empty()) << archiver.last_error();
+}
+
+// DS-Q5: a command that ignores `SIGTERM` is killed `kCommandKillGrace`
+// later, so the bound holds for a command that will not take the hint.
+TEST(WalArchiverTest, ACommandThatIgnoresTheTermSignalIsKilledAfterTheGrace) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal";
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    WalArchiver archiver(
+        WalArchiver::Wiring{{{}, "trap '' TERM; sleep 600", 1}, wal.string(), 7, kSize, 0,
+                            [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    const auto started = std::chrono::steady_clock::now();
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return !archiver.last_error().empty(); }));
+    const auto took = std::chrono::steady_clock::now() - started;
+    EXPECT_NE(archiver.last_error().find("archive_command_timeout_s = 1"), std::string::npos)
+        << archiver.last_error();
+    EXPECT_GE(took, std::chrono::seconds(1) + WalArchiver::kCommandKillGrace);
+    EXPECT_EQ(archiver.next_segment(), 0u);
+}
+
+// A bound is no failure for a command inside it: the bounded path archives
+// as the unbounded one does.
+TEST(WalArchiverTest, ACommandInsideItsBoundIsArchived) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal", out = dir.path / "out";
+    fs::create_directories(out);
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 3, kSize);
+    WalArchiver archiver(
+        WalArchiver::Wiring{{{}, "sleep 0.1; cp %p " + out.string() + "/%f", 30}, wal.string(), 7,
+                            kSize, 0, [] { return wal::Lsn{2 * kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return archiver.next_segment() == 2; })) << archiver.last_error();
+    EXPECT_TRUE(fs::exists(out / ArchiveName(7, 0)));
+    EXPECT_TRUE(fs::exists(out / ArchiveName(7, 1)));
+    EXPECT_TRUE(archiver.last_error().empty()) << archiver.last_error();
+}
+
+// A stop does not wait a bounded command out: its group is signalled, as an
+// unbounded command's shell is.
+TEST(WalArchiverTest, AStopEndsABoundedCommandWithoutWaitingForTheBound) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal", child = dir.path / "child";
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    WalArchiver archiver(WalArchiver::Wiring{
+        {{}, "sleep 600 & echo $! > " + child.string() + "; wait", 300}, wal.string(), 7, kSize, 0,
+        [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    const pid_t sleeper = PidIn(child);
+    ASSERT_GT(sleeper, 0);
+    const auto started = std::chrono::steady_clock::now();
+    archiver.Stop();
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(10));
+    EXPECT_TRUE(WaitFor([&] { return Ended(sleeper); }));
+}
+
+// A stop gives a bounded command the grace and no more: one that ignores
+// `SIGTERM` is killed, where waiting out its bound would hold a shutdown
+// for five minutes here.
+TEST(WalArchiverTest, AStopKillsABoundedCommandThatIgnoresTheTermSignal) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal", ready = dir.path / "ready";
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    WalArchiver archiver(WalArchiver::Wiring{
+        {{}, "trap '' TERM; echo up > " + ready.string() + "; sleep 600", 300}, wal.string(), 7,
+        kSize, 0, [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return fs::exists(ready) && fs::file_size(ready) > 0; }));
+    const auto started = std::chrono::steady_clock::now();
+    archiver.Stop();
+    const auto took = std::chrono::steady_clock::now() - started;
+    EXPECT_GE(took, WalArchiver::kCommandKillGrace);
+    EXPECT_LT(took, std::chrono::seconds(60));
+    EXPECT_EQ(archiver.next_segment(), 0u);
+}
+
+// A signalled command archived nothing, whatever it exits with: a handler
+// that cleans up and exits 0 has not made the segment durable.
+TEST(WalArchiverTest, AnExitZeroFromACommandEndedAtItsBoundIsNotAnArchive) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal";
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    WalArchiver archiver(WalArchiver::Wiring{
+        {{}, "trap 'exit 0' TERM; sleep 600 & wait", 1}, wal.string(), 7, kSize, 0,
+        [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return !archiver.last_error().empty(); }));
+    EXPECT_NE(archiver.last_error().find("archive_command_timeout_s = 1"), std::string::npos)
+        << archiver.last_error();
+    EXPECT_EQ(archiver.next_segment(), 0u);
+    EXPECT_EQ(archiver.floor(), 0u);
+}
+
+// `0`, the default, is no bound: a command slower than any bound a cell
+// here sets is waited for and archived.
+TEST(WalArchiverTest, WithNoBoundASlowCommandIsWaitedFor) {
+    TempDir dir;
+    const fs::path wal = dir.path / "wal", out = dir.path / "out";
+    fs::create_directories(out);
+    constexpr std::uint64_t kSize = 4096;
+    FakeSegments(wal, 2, kSize);
+    WalArchiver archiver(
+        WalArchiver::Wiring{{{}, "sleep 2; cp %p " + out.string() + "/%f", 0}, wal.string(), 7,
+                            kSize, 0, [] { return wal::Lsn{kSize + 1}; }, {}, nullptr});
+    archiver.Start();
+    ASSERT_TRUE(WaitFor([&] { return archiver.next_segment() == 1; })) << archiver.last_error();
+    EXPECT_TRUE(fs::exists(out / ArchiveName(7, 0)));
+    EXPECT_TRUE(archiver.last_error().empty()) << archiver.last_error();
+}
+
 // BR-Q2 (a), fail-closed: an archive that keeps failing with less than
 // `kReserveSegments` segments free on the WAL filesystem blocks, and every
 // statement that writes the log is refused by name - through the dispatcher

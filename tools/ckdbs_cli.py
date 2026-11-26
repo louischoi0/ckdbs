@@ -175,8 +175,10 @@ class ServerConnection:
     the cut-over a comparison of one thing.
     """
 
-    def __init__(self, host, port, timeout=5.0):
-        self._conn = kwp.Connection(host, port, timeout=timeout)
+    def __init__(self, host, port, timeout=5.0, **options):
+        """`options` are `kwp.Connection`'s `user`, `password` and `tls`
+        (`kwp.connection_options`)."""
+        self._conn = kwp.Connection(host, port, timeout=timeout, **options)
 
     @property
     def session_id(self):
@@ -561,6 +563,7 @@ def main():
     parser.add_argument("command", nargs="*",
                          help="command to send (e.g. PING, DESCRIBE accounts); "
                               "omit for an interactive REPL")
+    kwp.add_connection_arguments(parser)
     args = parser.parse_args()
 
     if args.file and args.command:
@@ -568,9 +571,16 @@ def main():
     if args.echo and not args.file:
         parser.error("--echo only applies with -f/--file")
 
+    # Asked of the arguments, not of `connection_options`, which would prompt
+    # for a password before the refusal.
+    if args.text and (args.user is not None or args.tls or args.tls_ca is not None
+                      or args.tls_insecure):
+        parser.error("--text is the loopback debug port: it takes no --user and no --tls")
+    options = {} if args.text else kwp.connection_options(args)
     try:
-        conn = (TextConnection if args.text else ServerConnection)(args.host, args.port)
-    except OSError as e:
+        conn = (TextConnection(args.host, args.port) if args.text
+                else ServerConnection(args.host, args.port, **options))
+    except (OSError, kwp.KwpError) as e:
         print(f"could not connect to {args.host}:{args.port}: {e}", file=sys.stderr)
         sys.exit(1)
 

@@ -28,14 +28,37 @@ Two things, and the second is why it renders text at all.
 
 ---- What it does not do ----------------------------------------------------
 
-No TLS (connect to a plaintext port), no SCRAM (`auth = off`), no cancel
-connection, no compression - the last two because the server does not offer
+No cancel connection and no compression, because the server does not offer
 them by default either (KW-D5 deferred compression; the `CANCEL` capability
 is withheld unless the server has a real identity source).
+
+---- Authentication and TLS (protocol.md 1, 3) --------------------------------
+
+`Connection(..., user=, password=)` runs SCRAM-SHA-256 in `C_AUTH` frames
+before `S_HELLO`; `Connection(..., tls=<ssl.SSLContext>)` wraps the socket
+before its first byte, since the server's TLS is direct. Three rules, each
+a way a client can look authenticated and not be:
+
+- **The server's signature is verified.** SCRAM is mutual; a client that
+  sends its proof and skips the server's final message has proved itself to
+  whoever answered.
+- **No channel binding** (gs2 header `n,,`): the server offers none
+  (`scram.hpp`), so over an unverified TLS channel SCRAM does not notice a
+  relay. `tls_context` verifies the certificate and the name unless told
+  not to.
+- **A password is never an argument.** `connection_options` reads
+  `KDS_PASSWORD`, else prompts on a terminal, else refuses.
 """
 
+import base64
+import getpass
+import hashlib
+import hmac
+import os
 import socket
+import ssl
 import struct
+import sys
 
 MAGIC = 0x3150574B  # 'KWP1' little-endian
 VERSION = 1
@@ -67,6 +90,15 @@ CAT_NOT_IMPLEMENTED = 15
 CAT_FK_VIOLATION, CAT_ASSERTION_VIOLATION = 16, 17
 CAT_TRANSITION_VIOLATION = 18
 CAT_READ_ONLY_TRANSACTION = 19
+
+# `C_HELLO.auth_method` and the capability a client inside TLS demands
+# (wire/kwp_types.hpp, wire/kwp.hpp).
+AUTH_NONE, AUTH_SCRAM_SHA256 = 0, 1
+CAP_TLS_REQUIRED = 1 << 2
+
+# Both ends bound the server's `i=` (scram.hpp): below the RFC's floor is a
+# downgrade, above the ceiling is a server asking the client to burn CPU.
+SCRAM_MIN_ITERATIONS, SCRAM_MAX_ITERATIONS = 4096, 10_000_000
 
 
 class KwpError(Exception):
@@ -293,13 +325,73 @@ def render_value(field, raw):
     return "NULL" if raw is None else renderer_for(field)(raw)
 
 
+# ---- Connection options, one spelling for every tool -------------------------
+
+
+def tls_context(cafile=None, insecure=False):
+    """The client's TLS context: 1.3 only, as the server speaks nothing
+    older (protocol.md 1). The certificate and its name are verified against
+    `cafile`, or the system's CAs, unless `insecure`."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    if insecure:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    elif cafile is not None:
+        context.load_verify_locations(cafile=cafile)
+    else:
+        context.load_default_certs()
+    return context
+
+
+def add_connection_arguments(parser):
+    """`--user`, `--tls`, `--tls-ca`, `--tls-insecure`. No `--password`: an
+    argument is readable in the process table."""
+    parser.add_argument("--user", help="authenticate as this user (SCRAM-SHA-256); the password "
+                                       "is read from KDS_PASSWORD, else prompted for")
+    parser.add_argument("--tls", action="store_true",
+                        help="connect with TLS 1.3 (a `tls = on` port)")
+    parser.add_argument("--tls-ca", metavar="FILE",
+                        help="verify the server against this CA or self-signed certificate "
+                             "(implies --tls)")
+    parser.add_argument("--tls-insecure", action="store_true",
+                        help="do not verify the server's certificate or name (implies --tls)")
+
+
+def connection_options(args, environ=None, prompt=getpass.getpass):
+    """The `user` / `password` / `tls` keywords `Connection` takes, from the
+    arguments above."""
+    environ = os.environ if environ is None else environ
+    options = {}
+    if args.tls_ca is not None and args.tls_insecure:
+        raise SystemExit("--tls-ca and --tls-insecure contradict each other")
+    if args.user is not None:
+        password = environ.get("KDS_PASSWORD")
+        if password is None:
+            if not sys.stdin.isatty():
+                raise SystemExit("--user needs a password: set KDS_PASSWORD, or run on a terminal")
+            password = prompt("password for %s: " % args.user)
+        options["user"], options["password"] = args.user, password
+    if args.tls or args.tls_ca is not None or args.tls_insecure:
+        if args.tls_insecure:
+            print("warning: --tls-insecure: the server's certificate is not verified",
+                  file=sys.stderr)
+        options["tls"] = tls_context(args.tls_ca, args.tls_insecure)
+    return options
+
+
 # ---- The connection --------------------------------------------------------
 
 
 class Connection:
     """One KWP/1 session over one TCP connection."""
 
-    def __init__(self, host, port, timeout=5.0, client_name="ckdbs-cli"):
+    def __init__(self, host, port, timeout=5.0, client_name="ckdbs-cli",
+                 user=None, password=None, tls=None):
+        """`user`/`password` authenticate by SCRAM-SHA-256; `tls` is an
+        `ssl.SSLContext` (see `tls_context`) for a `tls = on` port."""
+        if (user is None) != (password is None):
+            raise ValueError("user and password are given together or not at all")
         self.sock = socket.create_connection((host, port), timeout=timeout)
         # **TCP_NODELAY, and it is not a micro-optimisation.** A statement is
         # several small frames followed by a read, and with Nagle on, the
@@ -317,7 +409,16 @@ class Connection:
         self.capabilities = 0
         self.server_info = ""
         self._next_portal = 0
-        self._handshake(client_name)
+        try:
+            if tls is not None:
+                # Direct TLS: the first byte on the wire is the ClientHello
+                # (protocol.md 1). Wrapped after TCP_NODELAY, which is the
+                # underlying socket's option either way.
+                self.sock = tls.wrap_socket(self.sock, server_hostname=host)
+            self._handshake(client_name, user, password, tls is not None)
+        except BaseException:
+            self.sock.close()
+            raise
 
     # -- framing ------------------------------------------------------------
 
@@ -356,9 +457,13 @@ class Connection:
 
     # -- handshake ----------------------------------------------------------
 
-    def _handshake(self, client_name):
-        w = _Writer().u32(MAGIC).u16(VERSION).u16(VERSION).u64(0).u8(0).s(client_name)
-        self._send(C_HELLO, w.take())
+    def _handshake(self, client_name, user=None, password=None, inside_tls=False):
+        capabilities = CAP_TLS_REQUIRED if inside_tls else 0
+        method = AUTH_NONE if user is None else AUTH_SCRAM_SHA256
+        w = _Writer().u32(MAGIC).u16(VERSION).u16(VERSION).u64(capabilities).u8(method)
+        self._send(C_HELLO, w.s(client_name).take())
+        if user is not None:
+            self._scram(user, password)
         ftype, _, payload = self._recv_frame()
         if ftype == S_ERROR:
             raise self._error(payload)
@@ -375,6 +480,80 @@ class Connection:
         ftype, _, _ = self._recv_frame()
         if ftype != S_READY:
             raise ConnectionError("expected S_READY, got frame type %d" % ftype)
+
+    def _auth_round(self, line):
+        """One SCRAM message out, one back: the gate's own lines, a frame
+        each (protocol.md 3). Answers the server's message, its `AUTH+ `
+        prefix removed."""
+        self._send(C_AUTH, _Writer().text(line).take())
+        ftype, _, payload = self._recv_frame()
+        if ftype == S_ERROR:
+            raise self._error(payload)
+        if ftype != S_AUTH:
+            raise ConnectionError("expected S_AUTH, got frame type %d" % ftype)
+        body = _Reader(payload).text()
+        if body is not None and body.startswith("ERR "):
+            # The gate's one refusal for every failure (auth.cpp `Refuse`):
+            # a wrong password, an unknown user and a malformed line alike.
+            raise ConnectionError("the server refused authentication: " + body[len("ERR "):])
+        if body is None or not body.startswith("AUTH+ "):
+            raise ConnectionError("the server's authentication message is not an AUTH+ line")
+        return body[len("AUTH+ "):]
+
+    def _scram(self, user, password):
+        """SCRAM-SHA-256 (RFC 5802, RFC 7677), the client's half. Returns
+        only once the server has proved it holds the verifier too."""
+        nonce = base64.b64encode(os.urandom(18)).decode("ascii")
+        # RFC 5802 5.1: `=` and `,` in a name are written `=3D` and `=2C`.
+        # The server provisions names from [A-Za-z0-9_.-] and has no
+        # SASLprep, so nothing else is prepared here either.
+        name = user.replace("=", "=3D").replace(",", "=2C")
+        first_bare = "n=%s,r=%s" % (name, nonce)
+        server_first = self._auth_round("AUTH SCRAM-SHA-256 n,," + first_bare)
+
+        # Positional, as RFC 5802 7's grammar and scram.cpp's Client read it:
+        # `r=`, `s=`, `i=` first, in that order, so a leading `m=` (a
+        # mandatory extension, which must fail) or a repeated attribute is
+        # malformed rather than silently resolved; anything after `i=` is
+        # an extension, ignored.
+        fields = server_first.split(",")
+        if (len(fields) < 3 or not fields[0].startswith("r=") or not fields[1].startswith("s=")
+                or not fields[2].startswith("i=")):
+            raise ConnectionError("malformed SCRAM server-first message")
+        combined, iterations = fields[0][2:], fields[2][2:]
+        if not (iterations.isascii() and iterations.isdigit()):
+            raise ConnectionError("malformed SCRAM server-first message")
+        rounds = int(iterations)
+        try:
+            salt = base64.b64decode(fields[1][2:], validate=True)
+        except ValueError as e:
+            raise ConnectionError("malformed SCRAM server-first message") from e
+        if not combined.startswith(nonce) or len(combined) == len(nonce):
+            raise ConnectionError("the server's SCRAM nonce does not extend the client's")
+        if not SCRAM_MIN_ITERATIONS <= rounds <= SCRAM_MAX_ITERATIONS:
+            raise ConnectionError("the server's SCRAM iteration count %d is outside %d..%d"
+                                  % (rounds, SCRAM_MIN_ITERATIONS, SCRAM_MAX_ITERATIONS))
+
+        def mac(key, text):
+            return hmac.new(key, text, hashlib.sha256).digest()
+
+        salted = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds)
+        client_key = mac(salted, b"Client Key")
+        # `biws` is base64("n,,"): the gs2 header again, no channel binding.
+        without_proof = "c=biws,r=" + combined
+        auth_message = (first_bare + "," + server_first + "," + without_proof).encode("utf-8")
+        signature = mac(hashlib.sha256(client_key).digest(), auth_message)
+        proof = bytes(a ^ b for a, b in zip(client_key, signature))
+        server_final = self._auth_round(
+            "AUTH " + without_proof + ",p=" + base64.b64encode(proof).decode("ascii"))
+
+        if server_final.startswith("e="):
+            raise ConnectionError("the server refused authentication: " + server_final[2:])
+        expected = "v=" + base64.b64encode(
+            mac(mac(salted, b"Server Key"), auth_message)).decode("ascii")
+        if not hmac.compare_digest(server_final.encode("utf-8"), expected.encode("ascii")):
+            raise ConnectionError("the server did not prove it holds this user's verifier; "
+                                  "the connection is not trusted")
 
     # -- statements ---------------------------------------------------------
 

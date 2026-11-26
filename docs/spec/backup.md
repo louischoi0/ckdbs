@@ -126,7 +126,18 @@ archived its segment only on an exit 0 that was read**: an exit that could
 not be read (`waitpid` failing - `ECHILD` while SIGCHLD is ignored) is a
 failed attempt, retried and counted like any other, and the archiver puts
 SIGCHLD's default disposition back at its start where the process inherited
-it ignored.
+it ignored. **A command may be bounded** (DS-S2): `archive_command_timeout_s`,
+a boot key, `0` - the default - no bound, refused at boot where
+`archive_command` is not set. A command still running at the bound is sent
+`SIGTERM`, and `SIGKILL` `kCommandKillGrace` (5 s) later, to the process
+group it is spawned to lead, so what its shell started and left in that
+group ends with it; the group is signalled once more at the shell's exit,
+before the exit is reaped. The attempt is a failure naming the bound,
+counted and retried under the backoff, and its segment stays owed
+**whatever the signalled command exited with**. A stop ends a bounded
+command the same way and waits the grace at most. An unbounded command is
+spawned and waited for as before the key. `archive_dir`'s copy is not
+bounded.
 
 **B12 - Every archived name carries the lineage**:
 `kds-<lineage>-<segment>.log`. A fresh lineage is drawn at creation and by
