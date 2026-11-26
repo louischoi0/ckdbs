@@ -80,7 +80,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | DV | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | pages no root reaches: counted, then reclaimed | v3.2.0/workorder-dv-unreachable-page-reclaim.md |
 | DT | closed-narrow | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | 6e43ec8c | - | a write that gives its core back: the write path's page miss off the reactor, a write walk that yields | v3.2.0/workorder-dt-write-path-yield.md |
 | DU | closed | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | `5f9b6546` | - | a write that finds its rows by a key: a bound on the tuple key, an index | v3.2.0/workorder-du-keyed-write.md |
-| DS | closed | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | - | - | four contained known gaps: the backup tool behind authentication, a hung archive command, two refusals with no byte | v3.2.0/workorder-ds-contained-known-gaps.md |
+| DS | closed | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | f42341d3 | - | four contained known gaps: the backup tool behind authentication, a hung archive command, two refusals with no byte | v3.2.0/workorder-ds-contained-known-gaps.md |
 | DR | closed | 2026-11-23 | 2026-11-23 | 2026-11-23 | 2026-11-23 | 71a148e1 | - | a primary key of any type and column count over an unchanged Keystone | v3.2.0/workorder-dr-primary-key-over-keystone.md |
 | BG | closed-narrow | 2026-11-23 | 2026-10-07 | 2026-10-07 | 2026-11-23 | b27916f3 | v3.1.0 | scan resistance: a scan's frames reclaimed before the hand laps | v3.0.0/workorder-bg-scan-queue.md |
 | BS | closed-narrow | 2026-11-23 | 2026-10-13 | 2026-10-13 | 2026-11-23 | b5928bf2 | v3.4.0 | test hardening: the verification methods of a production engine | v3.0.0/workorder-bs-test-hardening.md |

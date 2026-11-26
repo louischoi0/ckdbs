@@ -10,7 +10,8 @@ like rate on the commit DS opened from, read as the flaky cells they are on
 the operator's choice of CLA's option (a); §7's DS-S5 has the figures.
 On the tree merged with `origin/main` (`4055d666a`) the suite ran 5,298
 and then 5,299 of 5,299.
-**Not landed**: nothing is merged to `main` or pushed. Written and opened
+**Landed on `main` at `f42341d3`**, 2026-11-26, on the operator's word,
+pushed with the hook skipped (§7, "The landing"). Written and opened
 2026-11-26 on the operator's standing go-ahead (§2), on worktree
 `ds-known-gaps-contained` from `8274c951` (`v3.4.17-148-g8274c951e`).
 **DS-Q0..Q8 are adopted on that standing go-ahead** - CLA's proposals, not
@@ -382,6 +383,14 @@ each is now one entry - DS's figures folded into DT's entry for the first
 cell and into DU's bug file for the second. Rejected: citing §7 from the
 raft marks and the index row in place of the suite's figures - a mark
 carries what it rests on, as the day's other marks do.
+
+**The landing.** On the operator's word ("merge to main and push",
+`raft-marks-2026-11-26.md` §6): `worktree-ds-known-gaps-contained` at
+`96468568` merged `--no-ff` onto `main` at `6c98f7c32`, the merge
+`f42341d3`, its tree the work branch's, and pushed with `--no-verify`.
+**The hook was skipped**: the full suite had run 5,299 of 5,299 at
+`4055d666a`, whose build inputs are the pushed tree's - after a run of
+5,298 there, and none green at `cc46c0d85`. No tag, no version.
 
 ## 8. Handoff (2026-11-26 14:21 UTC)
 
