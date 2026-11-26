@@ -15,6 +15,13 @@
 #include "kds/stats/trail_recorder.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
 #include "kds/storage/page_header.hpp"
+#include "kds/sched/clock.hpp"
+#include "kds/txn/lock_table.hpp"
+#include "kds/txn/manager.hpp"
+#include "kds/txn/trx_id.hpp"
+#include "kds/txn/undo_log.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/memory_log_device.hpp"
 
 // CU-S1 and CU-S2: a value list on the tuple key, on a column of an index's
 // equality prefix or on a cabined column is a key set - one descent per
@@ -1313,6 +1320,102 @@ TEST_F(KeySetTxnTest, ARepeatableReadSnapshotKeepsTheVersionsItBeganWith) {
     EXPECT_EQ(Listed(1, reader), "id,v\\n2,20\\n3,30\\n5,50");
     ASSERT_EQ(Run(1, reader, "COMMIT").rfind("COMMIT", 0), 0u);
     EXPECT_EQ(Listed(1, reader), "id,v\\n2,21\\n3,30\\n7,70");
+}
+
+// ---- DT: a declined descent, then a walk that gives its core back -----------
+//
+// A walk pauses between two leaves and its statement is dispatched again
+// (`instructions/v3.2.0/workorder-dt-write-path-yield.md` §2.3). **The
+// resumed run is past its single-key arm** (DT-R3): the arm's descent
+// declined, the walk took the statement from the head and wrote the key's row
+// in its first slice, and a run that offered the key again would find the
+// row under the statement's own version, pass its `WHERE` and write it a
+// second time. A pause needs a transaction and a lock table, which
+// `KeySetWriteHoldTest`'s bare dispatcher has none of; the store that fails
+// one fetch is the same.
+class KeyedWritePauseTest : public ::testing::Test {
+protected:
+    // `txns_` gives its borrows back through the table at teardown, so the
+    // table is declared first and dies last (`lock_family_fixture.hpp`).
+    std::unique_ptr<txn::LockTable> locks_;
+
+    void SetUp() override {
+        auto device = wal::MemoryLogDevice::Create(1 << 20);
+        ASSERT_TRUE(device.ok()) << device.status().message();
+        log_device_ = std::move(device.value());
+        wal::WalManagerConfig config;
+        config.ring_capacity = wal::kMinRingCapacity;
+        auto wal = wal::WalManager::Open(log_device_.get(), clock_, /*core_id=*/0, config);
+        ASSERT_TRUE(wal.ok()) << wal.status().message();
+        wal_ = std::move(wal.value());
+        auto boot = bootstrap::BootstrapDatabase(store_, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(boot.ok()) << boot.status().message();
+        boot_.emplace(std::move(boot.value()));
+        ids_.emplace(boot_->superblock);
+        undo_.emplace(store_, wal_.get());
+        auto table = txn::LockTable::Create(/*core_count=*/1, txn::kMaxLocksPerTxnDefault);
+        ASSERT_TRUE(table.ok()) << table.status().message();
+        locks_ = std::move(table.value());
+        txns_.emplace(*ids_, *undo_, store_, wal_.get(), /*visibility=*/nullptr, /*core=*/0,
+                      locks_.get());
+        dispatcher_.emplace(boot_->superblock, boot_->catalog, store_, /*log=*/nullptr, &clock_,
+                            wal_.get(), wal::DurabilityClass::kRelaxed, exec::Budget(),
+                            /*recorder=*/nullptr, /*replay_enabled=*/false,
+                            /*access_statistics=*/false, /*cabins=*/nullptr, &*txns_);
+        dispatcher_->set_locks(locks_.get());
+    }
+
+    std::string Run(const std::string& sql, Session* s = nullptr) {
+        return dispatcher_->Dispatch(sql, s).response;
+    }
+
+    storage::InMemoryPageStore inner_{kFirstUserPageId};
+    LeafWatchingStore store_{inner_};
+    sched::ManualClock clock_;
+    std::unique_ptr<wal::MemoryLogDevice> log_device_;
+    std::unique_ptr<wal::WalManager> wal_;
+    std::optional<bootstrap::BootstrapResult> boot_;
+    std::optional<txn::TrxIdSequence> ids_;
+    std::optional<txn::UndoLog> undo_;
+    std::optional<txn::TransactionManager> txns_;
+    std::optional<CommandDispatcher> dispatcher_;
+};
+
+TEST_F(KeyedWritePauseTest, AResumedWalkDoesNotOfferItsSingleKeyAgain) {
+    for (const std::string form : {"HEAP", "BTREE"}) {
+        // About seven rows a page, so 300 rows are some forty leaves: two
+        // pauses at the `analytic` level's slice of sixteen.
+        const std::string t = form == "HEAP" ? "ph" : "pb";
+        ASSERT_EQ(Run("CREATE TABLE " + t + " (id int64 PRIMARY KEY, v int64, pad char(1000)) " +
+                      form)
+                      .rfind("CREATED", 0),
+                  0u);
+        for (int at = 1; at <= 300;) {
+            std::string values;
+            for (int n = 0; n < 50 && at <= 300; ++n, ++at) {
+                values += (values.empty() ? "(" : ", (") + std::to_string(at) + ", 0, 'p')";
+            }
+            ASSERT_EQ(Run("INSERT INTO " + t + " VALUES " + values).rfind("INSERTED", 0), 0u);
+        }
+        Session s;
+        ASSERT_EQ(Run("SET PRIORITY analytic", &s), "SET priority=analytic");
+
+        const int failed_before = store_.failed();
+        const std::uint64_t pauses_before = dispatcher_->write_walk_pauses();
+        // The key's descent declines; the walk from the head writes row 5 in
+        // its first slice and pauses after it.
+        store_.FailNextFetch();
+        EXPECT_EQ(Run("UPDATE " + t + " SET v = v + 1 WHERE id = 5", &s), "UPDATED 1") << form;
+        EXPECT_EQ(store_.failed(), failed_before + 1) << form << ": no descent declined";
+        EXPECT_GE(dispatcher_->write_walk_pauses() - pauses_before, 1u)
+            << form << ": the walk took no pause, so no run was a resume";
+        EXPECT_EQ(Run("SELECT id, v FROM " + t + " WHERE v > 0"), "id,v\\n5,1")
+            << form << ": the resumed run wrote the key's row again";
+
+        store_.FailNextFetch();
+        EXPECT_EQ(Run("DELETE FROM " + t + " WHERE id = 7", &s), "DELETED 1") << form;
+        EXPECT_EQ(Run("SELECT COUNT(*) FROM " + t), "count(*)\\n299") << form;
+    }
 }
 
 }  // namespace

@@ -676,6 +676,12 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
             co_await AwaitPageRead(line, session, out, statement_deadline_ns);
             continue;
         }
+        // DT: a write's walk paused between two leaves; the resume is the
+        // same statement and can meet any wait here.
+        if (out->walk_pause) {
+            co_await AwaitWalkPause(line, session, out);
+            continue;
+        }
         if (out->write_block.has_value()) {
             co_await AwaitWriteBlock(line, session, out, statement_deadline_ns);
             continue;
@@ -693,19 +699,7 @@ sched::Coro CommandDispatcher::AwaitStatementWaits(std::string_view line, Sessio
     // ended here, with the gate's refusal as the answer; otherwise an owned
     // transaction would never decide and the session's next UPDATE would
     // resume this statement's walk.
-    if (Session& waiting = session != nullptr ? *session : autocommit_session_;
-        waiting.parked_write().has_value()) {
-        Status refused = OutcomeStatus(*out);
-        // Never OK: `EndWrite` would commit an owned scope half written. No
-        // gate answers without an error today; `TxnConflict` as the fault
-        // net's refusal is, the statement being unwound and safe to retry.
-        if (refused.ok()) {
-            refused = Status::TxnConflict(
-                "a parked write's re-run was answered without reaching its handler; the "
-                "statement was refused and what it had written is undone");
-        }
-        RefuseParkedWrite(*out, waiting, refused);
-    }
+    EndStrandedPark(session != nullptr ? *session : autocommit_session_, out);
     // ---- BA-S15: a `SELECT`'s walk runs here, sliced --------------------
     //
     // After the waits, which re-run a statement whole and so may replace a
@@ -801,6 +795,78 @@ sched::Coro CommandDispatcher::AwaitPageRead(std::string_view line, Session* ses
     // (DE-R9): after a deadline or a cancel the run below reads it itself,
     // and that read is the event.
     const storage::ParkedReadScope parked(ticket.done() ? page : kInvalidPageId);
+    const MayParkScope parking(*this, /*allowed=*/true, statement);
+    *out = DispatchAndStage(line, session);
+    co_return Status::OK();
+}
+
+void CommandDispatcher::EndStrandedPark(Session& waiting, DispatchOutcome* out) {
+    if (!waiting.parked_write().has_value()) return;
+    Status refused = OutcomeStatus(*out);
+    // Never OK: `EndWrite` would commit an owned scope half written. No
+    // gate answers without an error today; `TxnConflict` as the fault
+    // net's refusal is, the statement being unwound and safe to retry.
+    if (refused.ok()) {
+        refused = Status::TxnConflict(
+            "a parked write's re-run was answered without reaching its handler; the "
+            "statement was refused and what it had written is undone");
+    }
+    RefuseParkedWrite(*out, waiting, refused);
+}
+
+CommandDispatcher::WalkSlice CommandDispatcher::WriteSliceFor(const WriteScope& scope) const {
+    WalkSlice slice;
+    if (scope.txn == nullptr || scope.session == nullptr || locks_ == nullptr ||
+        !(may_park_ || reruns_structural_)) {
+        return slice;
+    }
+    // The walking session's level sets the slice, as a `SELECT`'s (DT-Q2 (a)).
+    slice.leaves = PagesPerSlice(scope.session->priority());
+    return slice;
+}
+
+DispatchOutcome CommandDispatcher::PausedWalk(const WriteScope& scope, catalog::Oid oid,
+                                              WalkCursor cursor, std::uint32_t rows_done) {
+    if (std::optional<Status> held = BorrowOrWait(scope, txn::LockKey::Relation(oid),
+                                                  RepeatableReadWait::kCapable)) {
+        return Refused(*held);
+    }
+    // **A pause is the statement's only wait.** No wait an earlier ask
+    // recorded stands at a leaf boundary - a held row stops the walk inside
+    // its leaf, a refused relation ends the statement - but a note left on
+    // these members would travel beside the pause and be overwritten by the
+    // resume with its registration still in the table. `StageStatement`
+    // drops a wake no blocker carries.
+    blocking_writer_ = 0;
+    blocked_tuple_key_ = 0;
+    if (lock_wait_.has_value()) {
+        if (locks_ != nullptr) locks_->DropWake(lock_wait_->key, lock_wait_->slot);
+        lock_wait_.reset();
+    }
+    ++write_walk_pauses_;
+    DispatchOutcome parked;
+    parked.parked_mid_walk = true;
+    cursor.rows_done = rows_done;
+    parked.walk_cursor = std::move(cursor);
+    parked.walk_pause = true;
+    return parked;
+}
+
+sched::Coro CommandDispatcher::AwaitWalkPause(std::string_view line, Session* session,
+                                              DispatchOutcome* out) {
+    // ---- DT: a write gives its core back ---------------------------------
+    //
+    // The walk stopped between two leaves and its body returned: no latch,
+    // no pin and no no-refuse window is held (DT-R1; the suspend audit
+    // checks). What the statement keeps is on the session - its transaction
+    // and so its lock units and the relation's `IX` (DT-R7), its snapshot,
+    // its cursor (`Session::ParkedWrite`) - as a mid-walk park's is. Every
+    // other session of the core runs; then `line` is dispatched again and
+    // `RunWalkWrite`'s resume branch carries the walk on.
+    const std::uint64_t statement = out->statement;
+    // One turn of the run queue, booked there (`sched.run_queue`), as a
+    // `SELECT`'s slice boundary is.
+    co_await sched::Yield{};
     const MayParkScope parking(*this, /*allowed=*/true, statement);
     *out = DispatchAndStage(line, session);
     co_return Status::OK();
@@ -1276,8 +1342,11 @@ DispatchOutcome CommandDispatcher::DispatchAndStage(std::string_view line, Sessi
         return outcome;
     }
     // A run discarded for a page (DE) is not the statement's answer and is
-    // not logged as one; the run that answers is.
-    if (!outcome.page_wait.has_value()) LogStatement(line, outcome, started_ns);
+    // not logged as one; the run that answers is. Nor is a walk's pause
+    // (DT), which a long write takes once a slice.
+    if (!outcome.page_wait.has_value() && !outcome.walk_pause) {
+        LogStatement(line, outcome, started_ns);
+    }
     return outcome;
 }
 
@@ -1610,6 +1679,7 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
         waiting.set_miss_refusals(0);
         outcome = DispatchAndStage(line, session);
         sched::MonoTimeNs deadline_ns = 0;
+        bool paused = false;  // DT: this call resumed a walk's pause
         for (;;) {
             // `DispatchAsync`'s DE park, with nowhere to park: armed only
             // where the reader has no thread (`MissRefusalAdmitted`), so the
@@ -1629,10 +1699,22 @@ DispatchOutcome CommandDispatcher::DispatchInternal(std::string_view line, Sessi
                 outcome = DispatchAndStage(line, session);
                 continue;
             }
+            // `DispatchAsync`'s DT pause, with nowhere to give the core to:
+            // the walk is resumed at once, as a `SELECT`'s yield is under
+            // `RunInline`, so it crosses the boundaries a served walk does.
+            if (outcome.walk_pause) {
+                paused = true;
+                outcome = DispatchAndStage(line, session);
+                continue;
+            }
             if (!StructuralRerunDue(outcome, session, deadline_ns)) break;
             std::this_thread::yield();
             outcome = DispatchAndStage(line, session);
         }
+        // A pause whose resume a gate answered first (`AwaitStatementWaits`).
+        // Only a park this call left: the session may be the dispatcher's
+        // own, on which a served statement of another caller can be parked.
+        if (paused) EndStrandedPark(waiting, &outcome);
     }
     if (outcome.poison_withheld) (session != nullptr ? *session : autocommit_session_).Poison();
     if (outcome.pending_lsn == wal::kNoLsn) return outcome;
@@ -9348,9 +9430,10 @@ Status CommandDispatcher::WalkBtreeLeaves(
     PageId root, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor) {
+    WalkCursor* cursor, WalkSlice* slice) {
     const bool resuming = cursor != nullptr && cursor->active;
     const std::uint64_t resume_tuple_key = resuming ? cursor->tuple_key : 0;
+    assert((slice == nullptr || cursor != nullptr) && "a pause leaves its place in the cursor");
 
     // **A fresh descent, not a remembered leaf**, and that is the whole of
     // the btree arm's safety argument. While the statement was parked
@@ -9367,18 +9450,41 @@ Status CommandDispatcher::WalkBtreeLeaves(
 
     bool cut = false;
     std::uint64_t cut_tuple_key = 0;
+    // DT: the leaves the statement's run has finished - the slice's count,
+    // which outlives this call, since a walk is called again for every row
+    // it stopped at (a moved unique key's check) - and the highest key of
+    // the last leaf this call finished that held one, what a pause resumes
+    // above (`WalkSlice`).
+    std::uint32_t uncounted = 0;
+    std::uint32_t& leaves_done = slice != nullptr ? slice->walked : uncounted;
+    std::optional<std::uint64_t> high_key;
     PageId leaf = start.value();
     storage::PageChainGuard guard("relation walk");
     while (leaf != kInvalidPageId) {
         if (Status s = guard.Visit(leaf); !s.ok()) return s;
+        // ---- DT: the boundary between two leaves ---------------------------
+        //
+        // Nothing is held here: the last leaf's hold ended as its visit
+        // returned. **Only where the cursor can name the place** - a key
+        // above every row visited, and above the key this walk resumed at,
+        // so each pause moves the walk on and a resume skips exactly what
+        // was done (DT-R3).
+        if (slice != nullptr && leaves_done >= slice->leaves && high_key.has_value() &&
+            (!resuming || *high_key >= resume_tuple_key)) {
+            slice->paused = true;
+            cut = true;
+            cut_tuple_key = *high_key + 1;
+            break;
+        }
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>
             guarded = [&](PageId page_id, heap::PageView& page,
                           std::uint16_t slot) -> StatusOr<storage::VisitControl> {
-            // The key is read for two reasons and only where each is
-            // needed: to skip what a resume has already written, and to
-            // record where a stop happened. A first walk that never stops
-            // reads none of them.
+            // The key is read for three reasons and only where each is
+            // needed: to skip what a resume has already written, to record
+            // where a stop happened, and - once a leaf, at its last slot,
+            // for a walk that may pause - to know what the leaf held. A
+            // first walk that never stops and may not pause reads none.
             const auto key_at = [&](std::uint16_t at) -> std::optional<std::uint64_t> {
                 auto payload = page.PayloadAt(at, page.slot_count());
                 if (!payload.ok()) return std::nullopt;  // dead or retired slot
@@ -9386,6 +9492,22 @@ Status CommandDispatcher::WalkBtreeLeaves(
                 if (!key.ok()) return std::nullopt;
                 return key.value();
             };
+            // The leaf's highest key, before `fn` sees its last slot: its
+            // keyed slots ascend (invariant 4), so the last readable one
+            // holds it. A leaf with no keyed slot leaves the mark alone.
+            // **Read only where a pause can follow this leaf** - the slice's
+            // last and any after it - so the leaves before pay nothing
+            // (DT-R4); every leaf from there to the pause is read, and one
+            // with no key holds no row to skip.
+            if (slice != nullptr && leaves_done + 1 >= slice->leaves &&
+                slot + 1 == page.slot_count()) {
+                for (std::uint16_t at = page.slot_count(); at-- > 0;) {
+                    if (const std::optional<std::uint64_t> key = key_at(at); key.has_value()) {
+                        high_key = *key;
+                        break;
+                    }
+                }
+            }
             if (resuming) {
                 const std::optional<std::uint64_t> key = key_at(slot);
                 // A slot with no readable key is left to `fn`, which is the
@@ -9424,6 +9546,7 @@ Status CommandDispatcher::WalkBtreeLeaves(
         auto next = btree::BtreeVisitLeafPage(page_store_, leaf, page_access, guarded);
         if (!next.ok()) return next.status();
         if (cut) break;
+        ++leaves_done;
         leaf = next.value();
     }
 
@@ -9444,17 +9567,17 @@ Status CommandDispatcher::VisitRelation(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor) {
+    WalkCursor* cursor, WalkSlice* slice) {
     // A user relation is a btree or a heap (DN); a catalog chain is walked
     // by the catalog, never here.
     if (access.heap()) {
-        return WalkHeapPages(access, page_access, fn, cursor);
+        return WalkHeapPages(access, page_access, fn, cursor, slice);
     }
     if (access.clustered_type != catalog::ClusteredType::kBtree) {
         return Status::Corruption("relation oid " + std::to_string(access.oid) +
                                   " is not a btree or a heap");
     }
-    return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor);
+    return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor, slice);
 }
 
 StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
@@ -9495,7 +9618,7 @@ Status CommandDispatcher::WalkHeapPages(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor) {
+    WalkCursor* cursor, WalkSlice* slice) {
     // **A heap's rows never move** (DN, invariant 13; no page divides or is
     // compacted), so a resume returns to the page and slot the walk stopped
     // at: a row it finished is behind that place and one it did not is at
@@ -9503,14 +9626,31 @@ Status CommandDispatcher::WalkHeapPages(
     // walk passed, or on a slot a release freed behind it - is invisible to
     // a snapshot minted before the park, as on a btree.
     const bool resuming = cursor != nullptr && cursor->active;
+    assert((slice == nullptr || cursor != nullptr) && "a pause leaves its place in the cursor");
     PageId page = resuming ? cursor->page : access.desc_page_id;
     const std::uint16_t first_slot = resuming ? cursor->slot : 0;
     bool cut = false;
     PageId cut_page = kInvalidPageId;
     std::uint16_t cut_slot = 0;
+    // DT: the pages the statement's run has finished, as the btree walk's,
+    // and whether this call finished one - a call that resumed inside a page
+    // has no boundary behind it yet, and its place is that page's slot.
+    std::uint32_t uncounted = 0;
+    std::uint32_t& pages_done = slice != nullptr ? slice->walked : uncounted;
+    bool crossed = false;
     storage::PageChainGuard guard("heap walk");
     while (page != kInvalidPageId) {
         if (Status s = guard.Visit(page); !s.ok()) return s;
+        // DT: the boundary between two pages, `WalkBtreeLeaves`' with a
+        // place in hand already - this page's first slot, since a heap's
+        // rows never move.
+        if (slice != nullptr && crossed && pages_done >= slice->leaves) {
+            slice->paused = true;
+            cut = true;
+            cut_page = page;
+            cut_slot = 0;
+            break;
+        }
         const bool first = resuming && page == cursor->page;
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>
@@ -9528,6 +9668,8 @@ Status CommandDispatcher::WalkHeapPages(
         auto next = btree::BtreeVisitLeafPage(page_store_, page, page_access, guarded);
         if (!next.ok()) return next.status();
         if (cut) break;
+        ++pages_done;
+        crossed = true;
         page = next.value();
     }
     if (cursor != nullptr) {
@@ -13123,7 +13265,9 @@ public:
                                         return i.key < key;
                                     });
         }
+        std::uint32_t descents = 0;
         for (; item != set.items.end(); ++item) {
+            if (PauseBeforeKey(descents++, item->key, cursor)) return false;
             const exec::BoolLeafFirst first{set.conjunct, item->leaf};
             first_leaf_ = &first;
             StatusOr<PointWrite> wrote = write_at(item->key);
@@ -13162,7 +13306,9 @@ public:
         const bool resumed = cursor.active;
         auto key = keys.begin();
         if (resumed) key = std::lower_bound(keys.begin(), keys.end(), cursor.tuple_key);
+        std::uint32_t descents = 0;
         for (; key != keys.end(); ++key) {
+            if (PauseBeforeKey(descents++, *key, cursor)) return false;
             StatusOr<PointWrite> wrote = write_at(*key);
             if (!wrote.ok()) return wrote.status();
             if (wrote.value() == PointWrite::kOffered || wrote.value() == PointWrite::kAbsent) {
@@ -13243,6 +13389,27 @@ public:
                                    "the statement");
     }
 
+    // **A key loop gives its core back too** (DT §2.3): between two
+    // descents it holds nothing, and its place is the next key - a loop
+    // resumes at the first key at or above its cursor's, so every key below
+    // is done and none is offered twice (DT-R3). One descent counts as one
+    // leaf of `slice`. True when the loop is to stop here, `cursor` at `key`
+    // and `slice.paused` set; a descent whose page would wait is read where
+    // it stands (§2.5).
+    bool PauseBeforeKey(std::uint32_t descents_done, std::uint64_t key, WalkCursor& cursor) {
+        if (slice.leaves == 0 || descents_done < slice.leaves) return false;
+        cursor.tuple_key = key;
+        cursor.active = true;
+        slice.paused = true;
+        return true;
+    }
+
+    // `slice` handed to the walk, or null where this statement takes no
+    // pause (`CommandDispatcher::WriteSliceFor`).
+    WalkSlice* SliceOrNull() noexcept {
+        return slice.leaves != 0 ? &slice : nullptr;
+    }
+
     // **The walk stopped on a held row, so its count is not an answer**
     // (AO-S3b): it counts rows written *so far*, and returning it would be
     // a silent partial write.
@@ -13263,6 +13430,17 @@ public:
         return parked;
     }
 
+    // **What a stopped loop or walk answers**, in one place for every site
+    // that runs one: the park of a held row (AO-S3b), or the pause of a
+    // slice boundary (DT) - never both, a held row stopping the walk inside
+    // a leaf and a pause between two. Nothing where neither stopped it.
+    std::optional<DispatchOutcome> StopOutcome(const WalkCursor& cursor,
+                                               std::uint32_t rows_done) const {
+        if (parked_on_row) return ParkedOutcome(cursor, rows_done);
+        if (slice.paused) return d_.PausedWalk(scope_, ta_.oid, cursor, rows_done);
+        return std::nullopt;
+    }
+
     // The row in hand: its bytes, copied out of the page, and its columns
     // as far as the stage reached. Statement-lived scratch - refilled per
     // scanned row, allocating only on the first.
@@ -13281,6 +13459,10 @@ public:
     // out to have written nothing is answered with it after all.
     bool parked_on_row = false;
     Status blocked_verdict;
+    // DT: where this statement's walk and its key loops give the core back,
+    // and whether one did (`WalkSlice`). The statement's, set once after
+    // construction; an arm's and a locking read's stay empty.
+    WalkSlice slice;
 
 private:
     // A row is decoded only as far as the WHERE needs before it is tested.
@@ -13434,6 +13616,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // (`WriteWalk`). `payload_copy` is the row in hand: its bytes, copied
     // out of the page.
     WriteWalk walk(*this, scope, ta, snapshot, predicates.value(), resume_from.targets);
+    // DT: an arm writes one row by its key and has nothing to pause in.
+    if (!arm_target.has_value()) walk.slice = WriteSliceFor(scope);
     const std::vector<std::byte>& payload_copy = walk.payload_copy;
     // Per-row scratch, owned by the statement rather than by the row loop:
     // cleared and refilled per scanned row, so after the first row it does
@@ -13986,8 +14170,16 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
             return PointWrite::kOffered;
         }
     };
+    //
+    // **Not on a resume** (DT-R3, `[quiet-wrong]`): a statement resumed with
+    // a place is past this arm - its key's descent declined and the walk
+    // took over - and since a walk pauses between leaves it may have written
+    // the key's row before it stopped. Offered here again, the row would
+    // pass the `WHERE` on the statement's own version and be written twice.
     if (std::optional<std::uint64_t> tuple_key =
-            arm_target.has_value() ? arm_target : exec::WriteKeyOf(ta, predicates.value());
+            arm_target.has_value()   ? arm_target
+            : resume_from.active     ? std::nullopt
+                                     : exec::WriteKeyOf(ta, predicates.value());
         tuple_key.has_value()) {
         StatusOr<PointWrite> wrote = write_at(*tuple_key);
         if (!wrote.ok()) return Refused(wrote.status());
@@ -14030,7 +14222,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     {
         auto done = walk.WriteByKeys(walk_cursor, write_at);
         if (!done.ok()) return Refused(done.status());
-        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
+        if (auto stopped = walk.StopOutcome(walk_cursor, updated)) return std::move(*stopped);
         if (done.value().value_or(false)) {
             return WroteRows("UPDATED " + std::to_string(updated), updated, oid.value());
         }
@@ -14061,7 +14253,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                 }
                 return storage::VisitControl::kContinue;
             },
-            &walk_cursor);
+            &walk_cursor, walk.SliceOrNull());
         // The stop left the cursor at the row, so the next walk offers it
         // again, now cleared.
         if (!scan.ok() || !unique_pending.has_value()) break;
@@ -14081,7 +14273,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         return Refused(scan);
     }
 
-    if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, updated);
+    if (auto stopped = walk.StopOutcome(walk_cursor, updated)) return std::move(*stopped);
 
     if (updated > 0 && logging(LogLevel::kTrace)) {
         log_->Trace("heap", "overwrite rows=" + std::to_string(updated) + " across " +
@@ -17178,6 +17370,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // (`WriteWalk`). Stage 1 decodes only what the WHERE reads; `mark`
     // completes a row that qualified.
     WriteWalk walk(*this, scope, ta, snapshot, predicates.value(), resume_from.targets);
+    walk.slice = WriteSliceFor(scope);  // DT, as UPDATE
     exec::ChainFrame& frame = walk.frame;
     const std::vector<std::byte>& payload_copy = walk.payload_copy;
     const std::uint64_t filter_mask = predicates.value().filter_columns;
@@ -17376,7 +17569,9 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
         // leaves `mark` answering OK with nothing marked.
         return walk.parked_on_row ? PointWrite::kParked : PointWrite::kOffered;
     };
-    if (std::optional<std::uint64_t> tuple_key = exec::WriteKeyOf(ta, predicates.value());
+    // Not on a resume, and UPDATE's point arm states the argument (DT-R3).
+    if (std::optional<std::uint64_t> tuple_key =
+            resume_from.active ? std::nullopt : exec::WriteKeyOf(ta, predicates.value());
         tuple_key.has_value()) {
         StatusOr<PointWrite> marked = mark_at(*tuple_key);
         if (!marked.ok()) return Refused(marked.status());
@@ -17402,7 +17597,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     {
         auto done = walk.WriteByKeys(walk_cursor, mark_at);
         if (!done.ok()) return Refused(done.status());
-        if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
+        if (auto stopped = walk.StopOutcome(walk_cursor, deleted)) return std::move(*stopped);
         if (done.value().value_or(false)) {
             return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
         }
@@ -17422,10 +17617,10 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (walk.parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
-        &walk_cursor);
+        &walk_cursor, walk.SliceOrNull());
     if (!scan.ok()) return Refused(scan);
 
-    if (walk.parked_on_row) return walk.ParkedOutcome(walk_cursor, deleted);
+    if (auto stopped = walk.StopOutcome(walk_cursor, deleted)) return std::move(*stopped);
 
     return WroteRows("DELETED " + std::to_string(deleted), deleted, oid.value());
 }

@@ -305,6 +305,15 @@ struct DispatchOutcome {
     bool parked_mid_walk = false;
     WalkCursor walk_cursor = {};
 
+    // **A write's walk gave its core back at a slice boundary** (DT,
+    // `instructions/v3.2.0/workorder-dt-write-path-yield.md` §2.3): beside
+    // `parked_mid_walk`, and it says the park waits for nothing - the
+    // statement is resumed after one yield. Never beside `write_block`: a
+    // pause is taken between two leaves and a held row inside one. The
+    // statement may have written nothing; it is resumed all the same, under
+    // the view it has, because a pause is no conflict.
+    bool walk_pause = false;
+
     // The commit this statement staged, when the client may not be told
     // about it until the log is durable (`durability = group`, docs/spec/wal.md
     // D2). `kNoLsn` means there is nothing to wait for - every relaxed
@@ -1993,6 +2002,31 @@ private:
     // claim, the collection pass and the park (command_dispatcher.cpp).
     class WriteWalk;
 
+    // **Where a write's walk gives its core back** (DT,
+    // `instructions/v3.2.0/workorder-dt-write-path-yield.md` §2.3): between
+    // two leaves, the one place it holds no latch, no pin and no no-refuse
+    // window (DT-R1). `leaves` is the slice: a walk that has visited that
+    // many pauses before the next. A leaf whose read would wait is read
+    // where the walk stands (DT-Q1, the order's §7).
+    //
+    // **A pause is a stop the cursor can resume from, and is taken only
+    // where one exists.** A btree's walk resumes by key, above the highest
+    // key of the last leaf it finished, read under that leaf's hold (the
+    // keyed slots of a leaf ascend, invariant 4): so a row it visited sorts
+    // below the resume key wherever a split has since put it (DT-R3,
+    // `[quiet-wrong]`), and a walk that has met no key yet, or none above
+    // the key it resumed at, walks on. A heap's resumes at the next page's
+    // first slot (its rows never move).
+    //
+    // In: `leaves`. Out: `paused`. `walked` is the walk's own count of the
+    // leaves this run of the statement has finished, kept here because one
+    // run calls the walk again for each row it stopped at.
+    struct WalkSlice {
+        std::uint32_t leaves = 0;  // 0: no slice boundary
+        std::uint32_t walked = 0;
+        bool paused = false;
+    };
+
     // **The query layer's door** (BU-S4, BU-Q9): `line` as the query
     // grammar reads it, run by `exec::RunQuery` at `snap`, its reply emitted
     // through the session's sink. nullopt when the query grammar refuses
@@ -2288,6 +2322,10 @@ public:
     // distinction that matters: this counts declarations granted, not
     // reads performed.
     std::uint64_t read_borrows() const noexcept { return read_borrows_; }
+    // DT: the pauses this dispatcher's write walks and key loops took at a
+    // slice boundary, each one resume (no cold leaf parks: DT-S0's bar). A
+    // test reads it; the run queue books the time (`sched.run_queue`).
+    std::uint64_t write_walk_pauses() const noexcept { return write_walk_pauses_; }
     // Which table this dispatcher records its edges in, so an assembly cell
     // can name it (AO-S4b).
     const txn::LockTable* locks() const noexcept { return locks_; }
@@ -2730,11 +2768,15 @@ private:
     // park (every read walk), otherwise in **and** out - read to start
     // where a parked walk stopped, written when this walk stops. Not
     // defaulted: a caller that cannot park says so by passing null.
+    //
+    // `slice`, when set, is where the walk gives its core back (DT,
+    // `WalkSlice`): it then needs `cursor`, which is where a pause leaves
+    // the walk's place.
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor);
+        WalkCursor* cursor, WalkSlice* slice = nullptr);
 
     // The btree walk behind `VisitRelation`, and its resume shape: a resume
     // descends by key rather than returning to a remembered leaf, which is
@@ -2744,14 +2786,14 @@ private:
         PageId root, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor);
+        WalkCursor* cursor, WalkSlice* slice = nullptr);
     // A heap's walk (DN): its data pages from the head in page order, a
     // resume at the page and slot it stopped at.
     Status WalkHeapPages(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor);
+        WalkCursor* cursor, WalkSlice* slice = nullptr);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
     // `wal.md` §8-1), released here once the row's record is stamped - and
@@ -2958,6 +3000,28 @@ private:
     // counts the refused run. Returns the page, or `kInvalidPageId` where a
     // row had already left - `*out` is then the refusal, and nothing is run.
     PageId BeginMissRerun(Session& waiting, DispatchOutcome* out);
+    // **No wait is pending, so a park still on `waiting` is one nothing
+    // will resume**: a re-run enters through `DispatchInner`, whose gates
+    // answer before the handler whose resume branch takes the park back.
+    // Its scope is ended here with the gate's refusal as the answer, on
+    // either entry point - `Dispatch` parks too since DT, for a walk's pause.
+    void EndStrandedPark(Session& waiting, DispatchOutcome* out);
+    // **DT: a write's walk paused between two leaves, and here its
+    // statement gives the core back** - one yield - then runs `line` again,
+    // which resumes the walk from `Session::parked_write`. Takes
+    // `out->walk_pause`.
+    sched::Coro AwaitWalkPause(std::string_view line, Session* session, DispatchOutcome* out);
+    // The slice a write's walk runs under for `scope` (`WalkSlice`): none
+    // where there is no transaction to keep open across a pause, no lock
+    // table to hold the relation by (DT-R7) or no driver that resumes one.
+    WalkSlice WriteSliceFor(const WriteScope& scope) const;
+    // What a paused walk's statement answers: the mid-walk park's outcome,
+    // carrying the pause. **The relation's `IX` first** (DT-R7,
+    // `[quiet-wrong]`): a walk that has claimed no row holds nothing a DDL
+    // waits for, and it resumes by key. A refusal of that ask is the
+    // statement's, which then wrote nothing.
+    DispatchOutcome PausedWalk(const WriteScope& scope, catalog::Oid oid, WalkCursor cursor,
+                               std::uint32_t rows_done);
     // Whether a `SELECT` body about to run inline for `session` may be
     // refused a page (DE-Q10's conditions the dispatcher can see): a reader
     // to hand the page to, a statement the caller can run again here, fewer
@@ -3240,6 +3304,7 @@ private:
     std::uint32_t read_borrow_seq_ = 0;
     std::uint64_t NextReadHolder() noexcept;
     std::uint64_t read_borrows_ = 0;
+    std::uint64_t write_walk_pauses_ = 0;  // DT; see `write_walk_pauses`
 
     // **The refusal the borrow cap raised on this statement, and the wire
     // detail that goes with it.** Carried as a member for

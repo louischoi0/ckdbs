@@ -433,3 +433,99 @@ the results file claims.
   `known-gaps.md` at the close as unverified.
 
 **Rejected**: none.
+
+### DT-S2: a write's walk gives its core back (2026-11-26)
+
+§2.3 alone; §2.2 is not built (DT-S0). `[source-read]` at this stage's
+commit, `src/server/command_dispatcher.cpp` and
+`include/kds/server/command_dispatcher.hpp`.
+
+**Built.** A walked `UPDATE` or `DELETE` stops between two leaves every
+`PagesPerSlice` leaves of its session's level (64; 16 for `analytic`), and
+a key loop (a list on the tuple key, a unique key named whole) between two
+descents on the same count. The stop is the mid-walk park's: the walk
+leaves its place in the `WalkCursor`, the body returns, the statement's
+transaction, snapshot and cursor go to `Session::ParkedWrite`,
+`DispatchAsync` yields once (`AwaitWalkPause`) and dispatches the line
+again, and `RunWalkWrite`'s resume branch carries on. `Dispatch` resumes
+where it stands, so the suite and the simulator cross the same
+boundaries.
+
+- **The place** (`WalkSlice`, `WalkBtreeLeaves`, `WalkHeapPages`). A
+  btree's walk resumes by key above the highest key of the last leaf it
+  finished, read under that leaf's hold at its last slot, and pauses only
+  where it has one above the key it resumed at; a heap's at the next
+  page's first slot, after a page finished in the same call; a key loop at
+  its next key. The leaf count is the statement run's, not the call's: a
+  walk is called again for each row a moved unique key stopped it at.
+- **DT-R7** (`PausedWalk`). Before every pause the transaction asks the
+  relation's `IX` by `BorrowOrWait`, a re-entrant grant once a row was
+  claimed and the first intention - memo check included - where none was.
+- **DT-R3** (`UpdateParsed`, `DeleteInner`). A resumed run skips its
+  single-key arm. Without that, a statement whose key's descent declined,
+  whose walk wrote the key's row and then paused, wrote the row again on
+  the resume: the mutant answers `UPDATED 2`
+  (`KeyedWritePauseTest.AResumedWalkDoesNotOfferItsSingleKeyAgain`).
+- **DT-R1.** Nothing new holds a page: the body has returned before the
+  task yields, and the suspend audit (`exec::InstallSuspendAudit`,
+  `ExecSuspendAuditTest`) is what aborts a debug build that suspends under
+  a pin, a span or a window. No new cell plants one.
+- **DT-R5.** The yield is a bare `sched::Yield`, booked by the scheduler
+  under `sched.run_queue`, as a `SELECT`'s slice boundary is.
+- **A pause is not logged as a statement** (`DispatchAndStage`), and
+  `CommandDispatcher::write_walk_pauses()` counts them for a test.
+
+**Not built, and stated**: the collection pass of a write whose `WHERE`
+holds a subquery (no cursor; the write walk after it is sliced); an
+`INSERT` of many rows; a locking read's walk (DT-Q7 (a)); a sim seed class
+of its own - the corpus drives `Dispatch`, which pauses and resumes inline
+for every walk past one slice, and no knob shortens the slice for it.
+
+**Cells.** `tests/dt_write_yield_test.cpp`, twelve, each over a heap and a
+btree: a walked `UPDATE`'s pauses and its rows written once; the default
+slice; a second writer's inserts between two slices (DT-R3); the trail
+inside a transaction; `DELETE`; a key loop; the relation held by a paused
+walk that claimed nothing (DT-R7); `Dispatch`'s inline resume; a held row
+after pauses; `RETURNING`; a moved unique key; collected targets. And
+`KeyedWritePauseTest` in `tests/key_set_test.cpp`. Two cells of
+`tests/walk_slice_rig_test.cpp` were adapted: their writer walks, so it
+now yields and no longer ends inside the reader's first suspension; the
+reader runs at `analytic` so it is still walking when the writer ends,
+which is those cells' precondition. Their data assertions are unchanged.
+
+**Review** (`critics-developer`): no correctness defect found in the
+pause and the resume; seven mutations built and run. **Applied**: the
+test file's "heap" tables were btrees (a table that names no form is
+one), so the heap's pause had no cell - fixed by the reviewer; one stop
+check for the held-row park and the pause (`WriteWalk::StopOutcome`); the
+high key read only at the leaves a pause can follow; two dead stores; the
+null-cursor guards made asserts; `Dispatch` ends only a stranded park it
+left itself; a cell for the single-key arm's guard, the one mutation no
+cell caught; and four more cells (a held row after a pause, `RETURNING`,
+a moved unique key, collected targets). **Found by the added cell, not by
+the review**: a walk called again per row never reached a slice boundary,
+because its leaf count was the call's - a statement that moved a unique
+key on every row took no pause. **Rejected**: (1) a heap key loop whose
+descent declines after a pause is refused `TxnConflict` where a walk from
+the head would answer - kept, because the fix has to reset a cursor that
+holds a key and no page, the shape DR-S3a's review found answering a
+short count, and no cell can force a declined descent there; it is a
+refusal, never a wrong answer, and goes to `known-gaps.md`. (2) Asserts
+in place of `PausedWalk`'s clearing of a stale blocker and lock wait -
+kept as clears: `WriteWalk::Claim`'s own note says a forward foreign-key
+check may leave a holder on the member.
+
+**New refusals a pause can make**, stated: the first-intention memo check
+at a pause that claimed nothing (a catalog write between the statement's
+resolution and its first pause re-runs it, or under `Dispatch` answers
+`TxnConflict`); a transaction at `max_locks_per_txn` that claimed nothing
+is refused at its first pause; a subquery's relation dropped or renamed
+between two slices refuses the statement mid-walk, as it did at a held
+row's park.
+
+**Suite**: 5,236 of 5,237 (`ctest -LE bs-nightly -j 12`, Debug), twice.
+The one failure both times is
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, which is not
+this stage's: run twelve at a time, it fails 23 of 60 at `60dc593af`
+(built from `git archive` outside the tree) and 27 of 60 here. Overhead
+not measured; measured at the milestone's close.
