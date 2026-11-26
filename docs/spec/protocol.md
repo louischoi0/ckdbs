@@ -161,7 +161,7 @@ PG-shaped phases, KDS semantics:
 - `debug_text_port` is the newline protocol's loopback debug surface; 0, the default, opens no socket.
 - Frame parse/serialize buffers are preallocated per connection; steady-state no allocation per the reactor rules.
 - All socket I/O stays on the injected `IoBackend`/reactor path — the protocol state machine must run under deterministic simulation with scripted byte streams (that is how §15's tests exist).
-- `tools/ckdbs_cli.py` is the KWP reference client, over `tools/kwp.py`, with a `--text` escape hatch for the debug port. Its `ServerConnection.send_command(line) -> str` renders the answer client-side into **the newline protocol's reply shape**, matching `exec::FormatValue` byte for byte. Rendering client-side is §6 working as designed.
+- `tools/ckdbs_cli.py` is the KWP reference client, over `tools/kwp.py`, with a `--text` escape hatch for the debug port; it runs §3's SCRAM exchange and §1's direct TLS (`--user`, `--tls`, `--tls-ca`, `--tls-insecure`; `tools/ds_auth_drill.py` drives both against a server). Its `ServerConnection.send_command(line) -> str` renders the answer client-side into **the newline protocol's reply shape**, matching `exec::FormatValue` byte for byte. Rendering client-side is §6 working as designed.
 
 ## 13. Required Amendments & Follow-ups
 

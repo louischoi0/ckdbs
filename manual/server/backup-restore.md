@@ -222,5 +222,24 @@ parallel copy, concurrent backups, logical dump or standby. A torn page in a
 crash-consistent snapshot is refused, not healed: the backup's checks do not
 lean on the log's page images, which heal a power cut at mount
 (`docs/inflight/known-gaps.md`).
-`kds_backup` reaches the admin role only on an `auth = off` server (its KWP
-client has no SCRAM).
+
+## 10. A server that authenticates
+
+`BACKUP START`, `COPY`, `STOP` and `ABORT` are `admin` statements. On an
+`auth = scram` server name an `admin` user, and on a `tls = on` port ask for
+TLS; the options stand before the sub-command:
+
+```
+KDS_PASSWORD=... tools/kds_backup.py --user backup_admin \
+    --tls-ca /etc/kds/server.crt --host db.example base --target /backups/b1
+```
+
+| Option | Meaning |
+|---|---|
+| `--user <name>` | authenticate by SCRAM-SHA-256. The password is read from `KDS_PASSWORD`; without it, it is asked for on a terminal, and refused where there is none. No option takes a password |
+| `--tls` | TLS 1.3, the server's certificate and name verified against the system's CAs |
+| `--tls-ca <file>` | the same, verified against this CA or self-signed certificate |
+| `--tls-insecure` | TLS with nothing verified, said on stderr. SCRAM has no channel binding here, so this channel does not notice a relay |
+
+`tools/ckdbs_cli.py` takes the same four. `verify`, `restore`, `list` and
+`expire` open no session and need none of them.

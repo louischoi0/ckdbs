@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| DS | open | 2026-11-26 | 2026-11-26 | 2026-11-26 | - | - | - | four contained known gaps: the backup tool behind authentication, a hung archive command, two refusals with no byte | v3.2.0/workorder-ds-contained-known-gaps.md |
 | DR | closed | 2026-11-23 | 2026-11-23 | 2026-11-23 | 2026-11-23 | 71a148e1 | - | a primary key of any type and column count over an unchanged Keystone | v3.2.0/workorder-dr-primary-key-over-keystone.md |
 | BG | closed-narrow | 2026-11-23 | 2026-10-07 | 2026-10-07 | 2026-11-23 | b27916f3 | v3.1.0 | scan resistance: a scan's frames reclaimed before the hand laps | v3.0.0/workorder-bg-scan-queue.md |
 | BS | closed-narrow | 2026-11-23 | 2026-10-13 | 2026-10-13 | 2026-11-23 | b5928bf2 | v3.4.0 | test hardening: the verification methods of a production engine | v3.0.0/workorder-bs-test-hardening.md |

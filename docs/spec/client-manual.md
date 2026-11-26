@@ -501,9 +501,14 @@ statement, sync.
    it sees one, so a client that skips it loses its next statement to the
    discard; sending it unconditionally is one code path instead of two.
 
-`tools/kwp.py` is the reference implementation of exactly that, in about
-four hundred lines with the reasoning in comments, and `tools/ckdbs_cli.py`
-drives it.
+`tools/kwp.py` is the reference implementation of exactly that, with the
+reasoning in comments, and `tools/ckdbs_cli.py` drives it. It authenticates
+(`Connection(..., user=, password=)`: SCRAM-SHA-256 in `C_AUTH` frames, the
+server's signature verified before `S_HELLO` is read) and speaks TLS 1.3
+(`tls=kwp.tls_context(...)`, the certificate and name verified unless told
+not to); the tools spell these `--user`, `--tls`, `--tls-ca <file>` and
+`--tls-insecure`, with the password from `KDS_PASSWORD` or a terminal
+prompt and never an argument (`manual/server/backup-restore.md` §10).
 
 Things a robust client should handle that the CLI does not bother with,
 since it is a manual-use tool:

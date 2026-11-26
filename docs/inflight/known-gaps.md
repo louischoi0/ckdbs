@@ -1710,8 +1710,13 @@ the procedures are `manual/server/backup-restore.md`.
   pre-DA build gave `sys.access_stats`' chain, which nothing reaches since DA.
 - **PITR targets an LSN, not a time**: the commit record carries no time
   (BR-Q5 (b)). An operator notes `SHOW META`'s `wal_durable_lsn`.
-- **`kds_backup` reaches the admin role only on an `auth = off` server**:
-  `tools/kwp.py` has no SCRAM or TLS.
+- **The reference client's SCRAM and TLS have no cell in the suite** (DS-S1,
+  DS-Q8): `tools/ds_auth_drill.py` starts an `auth = scram`, `tls = on`
+  server and drives `kwp.py`, `ckdbs_cli.py` and `kds_backup.py` at it, and
+  is run by hand - it needs the `openssl` command. The client has no
+  channel binding, as the server offers none, so SCRAM over an unverified
+  TLS channel (`--tls-insecure`) does not notice a relay. Verified on
+  `ds-known-gaps-contained` over `8274c951` (DS-S1).
 - **The LVM reference script is not run here**: the development VM grants no
   root (`br-s0-census.md` H9); path D's drills use the freeze script.
 - **An `archive_command` that hangs holds the archive**: it is not timed out,
