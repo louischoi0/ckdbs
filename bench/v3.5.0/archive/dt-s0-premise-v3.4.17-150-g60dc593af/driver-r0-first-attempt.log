@@ -1,0 +1,157 @@
+load {'load_s': 9.1, 'data_bytes': 1056440320, 'data_pages': 128960}
+probe {'p0_us': 3.1, 'p25_us': 45.7, 'p50_us': 46.9, 'p95_us': 52.4, 'p99_us': 173.8, 'p99.9_us': 292.8, 'max_us': 2372.3, 'n': 2000} cold_rate=2000.0/s
+dt-i-r0 load 1.02 cached=1.00 hot p50=544.3 p95=660.2 p99=727.7 max=2566.6 n=20002 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-iiw-r0 load 0.70 cached=1.00 hot p50=311.4 p95=754.6 p99=8300.1 max=16503.3 n=20004 cold p50=173.1 reads=61387 read_share=0.0059 dev_bytes/read=0.0 errors=0
+dt-iiiw-r0 load 0.65 cached=0.00 hot p50=268.7 p95=105753.2 p99=431822.1 max=573907.4 n=20003 cold p50=292.8 reads=61360 read_share=0.2793 dev_bytes/read=18957.0 errors=0
+dt-iiir-r0 load 1.42 cached=0.00 hot p50=183.6 p95=336.6 p99=433.0 max=2793.1 n=20004 cold p50=268.7 reads=30812 read_share=0.1934 dev_bytes/read=8322.7 errors=0
+dt-ivw-r0 load 1.22 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-ivr-r0 load 1.15 cached=1.00 hot p50=257.3 p95=370.5 p99=430.3 max=2722.0 n=20004 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 631, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 631, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 579, in main
+    client(args)
+    ~~~~~~^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 631, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 579, in main
+    client(args)
+    ~~~~~~^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 295, in client
+    _r, kind, err = be.run(sql)
+                    ~~~~~~^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 631, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 295, in client
+    _r, kind, err = be.run(sql)
+                    ~~~~~~^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 579, in main
+    client(args)
+    ~~~~~~^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ba_census.py", line 129, in run
+    r = self.conn.send_command(sql)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ba_census.py", line 129, in run
+    r = self.conn.send_command(sql)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 579, in main
+    client(args)
+    ~~~~~~^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 313, in client
+    _r, kind, err = be.run(sql)
+                    ~~~~~~^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ckdbs_cli.py", line 208, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ckdbs_cli.py", line 208, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 295, in client
+    _r, kind, err = be.run(sql)
+                    ~~~~~~^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ba_census.py", line 129, in run
+    r = self.conn.send_command(sql)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 438, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ~~~~~~~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 438, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ~~~~~~~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ba_census.py", line 129, in run
+    r = self.conn.send_command(sql)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ckdbs_cli.py", line 208, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 329, in _recv_frame
+    self._fill()
+    ~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 438, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ~~~~~~~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 329, in _recv_frame
+    self._fill()
+    ~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ckdbs_cli.py", line 208, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 342, in _fill
+    raise ConnectionError("server closed the connection")
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 329, in _recv_frame
+    self._fill()
+    ~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 342, in _fill
+    raise ConnectionError("server closed the connection")
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 438, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ~~~~~~~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 342, in _fill
+    raise ConnectionError("server closed the connection")
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 329, in _recv_frame
+    self._fill()
+    ~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 342, in _fill
+    raise ConnectionError("server closed the connection")
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 631, in <module>
+    sys.exit(main())
+             ~~~~^^
+ConnectionError: server closed the connection
+ConnectionError: server closed the connection
+ConnectionError: server closed the connection
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 579, in main
+    client(args)
+    ~~~~~~^^^^^^
+ConnectionError: server closed the connection
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 295, in client
+    _r, kind, err = be.run(sql)
+                    ~~~~~~^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ba_census.py", line 129, in run
+    r = self.conn.send_command(sql)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ckdbs_cli.py", line 208, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 438, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ~~~~~~~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 329, in _recv_frame
+    self._fill()
+    ~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 342, in _fill
+    raise ConnectionError("server closed the connection")
+ConnectionError: server closed the connection
+Traceback (most recent call last):
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 631, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 615, in main
+    run_cell(args, cell, run, cold_rate, args.workdir)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 403, in run_cell
+    s0 = snapshot(ctl, pid)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 333, in snapshot
+    for r in query(ctl, "SELECT * FROM sys.wait_stats") if r["core"] == "NULL"}
+             ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/dt_s0_premise.py", line 84, in query
+    r, kind, err = be.run(sql)
+                   ~~~~~~^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ba_census.py", line 129, in run
+    r = self.conn.send_command(sql)
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/ckdbs_cli.py", line 208, in send_command
+    fields, rows, tag, _affected = self._conn.execute(stripped)
+                                   ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 438, in execute
+    ftype, _flags, payload = self._recv_frame()
+                             ~~~~~~~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 329, in _recv_frame
+    self._fill()
+    ~~~~~~~~~~^^
+  File "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/tools/kwp.py", line 342, in _fill
+    raise ConnectionError("server closed the connection")
+ConnectionError: server closed the connection

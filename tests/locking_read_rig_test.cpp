@@ -63,12 +63,16 @@ TEST_F(LockingReadRigTest, NoPageIsDirtiedAndNoRecordIsAppended) {
     }
     ASSERT_TRUE(StartsWith(Run(1, s, "ROLLBACK"), "ROLLBACK"));
 
-    // The cell is not vacuous: a write walk that matches nothing dirties
-    // the leaf it visits, which is what the read fetch avoids.
+    // **A write walk that writes no row dirties no leaf either** (DT): it
+    // looks at each leaf under a shared hold and takes for writing only one
+    // it writes a row in.
     const std::vector<PageId> before = rig_->store().DirtyPageIds();
     ASSERT_EQ(D(1).Dispatch("UPDATE t SET v = 1 WHERE v = 999").response, "UPDATED 0");
+    EXPECT_EQ(rig_->store().DirtyPageIds(), before) << "a walk that wrote no row dirtied a leaf";
+    // The cell is not vacuous: a row written does dirty its leaf.
+    ASSERT_EQ(D(1).Dispatch("UPDATE t SET v = v WHERE v > 10").response, "UPDATED 2");
     EXPECT_NE(rig_->store().DirtyPageIds(), before)
-        << "the write walk dirtied nothing either, so the loop above pinned nothing";
+        << "a write that wrote rows dirtied nothing, so the checks above pinned nothing";
 }
 
 TEST_F(LockingReadRigTest, ACabinOverThePredicateDoesNotAnswerIt) {

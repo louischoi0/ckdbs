@@ -742,8 +742,13 @@ correctness statement:
   two entries name is written once.
 - **The collection ends before the first write**, so a statement that
   moves the column it is found by never meets an entry it appended; a
-  parked statement collects again at its resume and starts at the key it
-  stopped on, every row it wrote sorting below that key.
+  statement parked on a held row collects again at its resume and starts
+  at the key it stopped on, every row it wrote sorting below that key.
+  **A statement that gave its core back at a slice boundary** (DT,
+  `sched.md` §3: every 64 descents, 16 for an `analytic` session) **takes
+  its collection with it** and goes on from the same key, reading no
+  index again and choosing no arm again: the collection is the one made
+  before its first write, under a view the pause keeps.
 - **A row the collection missed is a row the statement's view cannot see
   matching.** A version the view sees, or one this transaction wrote, had
   its entry appended under the leaf hold that wrote it, before the
@@ -767,8 +772,9 @@ read ranges a heap's Keystone only for `>=` with `<=`.
 read to one entry past `max_locks_per_txn` - 65,536 by default - and past
 it nothing is written from it and the next arm in rank answers: a heap's
 Keystone range, a btree's bounded walk, or the walk. The bound is on
-entries, which is what lets the read stop; a resume's collection is read
-whole, and a statement run again whole counts its use of the index again.
+entries, which is what lets the read stop; a held row's resume reads its
+collection whole, a pause's resume reads none, and a statement run again
+whole counts its use of the index again.
 
 **What it costs where it does not pay.** The arm is taken by rank, never
 by a count, as a read's is (IX9): a write of more than about 1 row in 9

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -118,6 +119,20 @@ struct WalkCursor {
     // statement's own writes. Carried so a resume writes exactly
     // these rows rather than re-evaluating over what it already wrote.
     std::shared_ptr<const std::unordered_set<std::uint64_t>> targets;
+    // **The tuple keys a write's key loop collected through an index**,
+    // ascending, with what `ANALYZE` names the arm by: set where the loop
+    // stopped at a slice boundary (DT), so the resume takes the loop up at
+    // `tuple_key` from this collection and reads no index again. Not set by
+    // a held row's park, whose resume collects again (DU-S2). A first
+    // collection holds at most `max_locks_per_txn` keys - past it, it is not
+    // written from - but a held row's resume collects again whole, uncapped
+    // (DU-Q2), and a pause after that resume carries what it read.
+    struct CollectedKeys {
+        std::vector<std::uint64_t> keys;
+        std::string arm;
+        std::string declined;
+    };
+    std::shared_ptr<const CollectedKeys> collected;
 };
 
 class Session {
@@ -279,8 +294,9 @@ public:
     // **§10's cancel flag** (docs/spec/protocol.md, BA-S15). Set from any
     // core - a cancel connection's, through `CancelRegistry`, or this
     // connection's own teardown - and taken by whoever observes it first:
-    // a `SELECT`'s walk at its slice boundary, or the KWP session at its
-    // next frame. Taken, so one cancel cancels one statement. Shared so a
+    // a `SELECT`'s walk or a build's at its slice boundary, a walked
+    // `UPDATE` or `DELETE` where it gives its core back (DT), or the KWP
+    // session at its next frame. Taken, so one cancel cancels one statement. Shared so a
     // cancel racing this session's close sets a flag that is still there.
     const std::shared_ptr<std::atomic<bool>>& cancel_flag() const noexcept { return cancel_; }
     void RequestCancel() noexcept { cancel_->store(true, std::memory_order_release); }

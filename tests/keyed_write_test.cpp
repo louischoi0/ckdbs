@@ -5,8 +5,10 @@
 // `DELETE` whose WHERE bounds its tuple key or names an index:
 //
 //   - **the leaves it holds** (`*HoldTest`): a write has no `ANALYZE` of its
-//     leaves, so the pages it pins exclusive tell a bounded walk and a
-//     descent from a walk of the whole relation (`leaf_watching_store.hpp`);
+//     leaves, so the leaves it pins tell a bounded walk and a descent from a
+//     walk of the whole relation (`leaf_watching_store.hpp`) - every leaf
+//     looked at for the walk, which takes exclusive only what it writes in
+//     (DT), and the pages taken exclusive for the other two;
 //   - **the rows it writes** (DU-R1): every statement leaves the relation
 //     its walk leaves, the walk being the same WHERE written so that no arm
 //     reads it (`Walked`);
@@ -23,6 +25,7 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "kds/bootstrap/bootstrap.hpp"
@@ -60,6 +63,7 @@ protected:
         boot_.reset();
         inner_.emplace(kFirstUserPageId);
         store_.emplace(*inner_);
+        whole_.clear();  // a baseline is the instance's it was counted in
         auto boot = bootstrap::BootstrapDatabase(*store_, 1000);
         ASSERT_TRUE(boot.ok()) << boot.status().message();
         boot_.emplace(std::move(boot.value()));
@@ -85,15 +89,37 @@ protected:
         return OidOf(inserted);
     }
 
-    // The pages of `oid` that `sql` took exclusive.
+    // The leaves of `oid` that `sql` pinned, in any mode: what a walk of the
+    // whole relation is told by. **Not the ones it took exclusive**: a write
+    // walk looks at a leaf under a shared hold and takes it for writing only
+    // where it writes a row in it (DT), so a walk that writes four rows
+    // holds four leaves exclusive, as four descents do.
+    std::size_t Leaves(std::uint64_t oid, const std::string& sql, const std::string& want) {
+        store_->Watch(oid);
+        EXPECT_EQ(Run(sql), want) << sql;
+        return store_->leaves();
+    }
+    // `Leaves` of a statement that walks the whole of `oid`, kept as what
+    // `Held` tells a walk by.
+    std::size_t Whole(std::uint64_t oid, const std::string& sql, const std::string& want) {
+        return whole_[oid] = Leaves(oid, sql, want);
+    }
+    // The pages of `oid` that `sql` took exclusive: a descent's, or a
+    // bounded walk's. **And it did not walk the relation**: it pinned fewer
+    // leaves than `Whole` counted, where one was counted.
     std::size_t Held(std::uint64_t oid, const std::string& sql, const std::string& want) {
         store_->Watch(oid);
         EXPECT_EQ(Run(sql), want) << sql;
+        if (const auto whole = whole_.find(oid); whole != whole_.end()) {
+            EXPECT_LT(store_->leaves(), whole->second)
+                << sql << ": looked at every leaf of the relation, so it walked";
+        }
         return store_->held();
     }
 
     std::optional<storage::InMemoryPageStore> inner_;
     std::optional<LeafWatchingStore> store_;
+    std::unordered_map<std::uint64_t, std::size_t> whole_;
     std::optional<bootstrap::BootstrapResult> boot_;
     std::optional<CommandDispatcher> dispatcher_;
 };
@@ -103,7 +129,7 @@ protected:
 // past the high one, so at most the leaf after the window's last is taken.
 TEST_F(BoundedWriteHoldTest, ABtreeWriteOverATupleKeyBoundHoldsTheLeavesOfItsWindow) {
     const std::uint64_t w = Load("w", "CREATE TABLE w (id int64, v int64) BTREE");
-    const std::size_t every_leaf = Held(w, "UPDATE w SET v = 0 WHERE v < 0", "UPDATED 0");
+    const std::size_t every_leaf = Whole(w, "UPDATE w SET v = 0 WHERE v < 0", "UPDATED 0");
     ASSERT_GE(every_leaf, 6u) << "the relation is too small to tell a bound from a walk";
 
     EXPECT_LE(Held(w, "UPDATE w SET v = v + 1 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), 2u);
@@ -126,6 +152,12 @@ TEST_F(BoundedWriteHoldTest, ABtreeWriteOverATupleKeyBoundHoldsTheLeavesOfItsWin
     // An empty window names no row, and no leaf is fetched for it.
     EXPECT_EQ(Held(w, "UPDATE w SET v = v + 1 WHERE id > 40 AND id < 35", "UPDATED 0"), 0u);
     EXPECT_LE(Held(w, "DELETE FROM w WHERE id BETWEEN 600 AND 601", "DELETED 2"), 2u);
+    // A window whose rows the rest of the WHERE refuses: its leaves are
+    // looked at and none is taken (DT), and the look ends the walk at the
+    // bound as the visit does - it does not look on to the relation's end.
+    EXPECT_EQ(Held(w, "UPDATE w SET v = v + 1 WHERE id BETWEEN 700 AND 701 AND v = 99", "UPDATED 0"),
+              0u);
+    EXPECT_LE(store_->leaves(), 2u) << "the look ran past the window's bound";
 
     EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 1"), "id,v\\n30,3\\n31,2");
     EXPECT_EQ(Run("SELECT COUNT(*) FROM w WHERE v = 1"), "count(*)\\n603");
@@ -134,10 +166,10 @@ TEST_F(BoundedWriteHoldTest, ABtreeWriteOverATupleKeyBoundHoldsTheLeavesOfItsWin
     // What still walks every leaf: the same bound where no arm reads it, and
     // a bound beside a subquery (DU-Q5 (a),
     // docs/pending/keyed-write-beside-a-subquery.md).
-    EXPECT_EQ(Held(w, "UPDATE w SET v = 9 WHERE " + Walked("id >= 40 AND id <= 41", "id = 40"),
+    EXPECT_EQ(Leaves(w, "UPDATE w SET v = 9 WHERE " + Walked("id >= 40 AND id <= 41", "id = 40"),
                    "UPDATED 2"),
               every_leaf);
-    EXPECT_EQ(Held(w,
+    EXPECT_EQ(Leaves(w,
                    "UPDATE w SET v = 9 WHERE id BETWEEN 50 AND 51 AND "
                    "EXISTS (SELECT id FROM w WHERE id = 1)",
                    "UPDATED 2"),
@@ -159,7 +191,7 @@ TEST_F(BoundedWriteHoldTest, AnEmbeddedKeysPrefixBoundsTheWalk) {
         }
     }
     const std::uint64_t e = OidOf(inserted);
-    const std::size_t every_leaf = Held(e, "UPDATE e SET v = 0 WHERE v < 0", "UPDATED 0");
+    const std::size_t every_leaf = Whole(e, "UPDATE e SET v = 0 WHERE v < 0", "UPDATED 0");
     ASSERT_GE(every_leaf, 6u);
 
     EXPECT_LE(Held(e, "UPDATE e SET v = v + 1 WHERE a = 7", "UPDATED 30"), 3u);
@@ -167,7 +199,7 @@ TEST_F(BoundedWriteHoldTest, AnEmbeddedKeysPrefixBoundsTheWalk) {
               2u);
     EXPECT_LE(Held(e, "DELETE FROM e WHERE a = 9 AND b BETWEEN 3 AND 5", "DELETED 3"), 2u);
     // A key column that is not the leading one names no window.
-    EXPECT_EQ(Held(e, "UPDATE e SET v = v + 1 WHERE b = 30", "UPDATED 40"), every_leaf);
+    EXPECT_EQ(Leaves(e, "UPDATE e SET v = v + 1 WHERE b = 30", "UPDATED 40"), every_leaf);
     EXPECT_EQ(Run("SELECT a, b, v FROM e WHERE v > 1"),
               "a,b,v\\n7,3,2\\n7,4,2\\n7,5,2\\n7,30,2");
     EXPECT_EQ(Run("SELECT COUNT(*) FROM e"), "count(*)\\n1197");
@@ -178,7 +210,7 @@ TEST_F(BoundedWriteHoldTest, AnEmbeddedKeysPrefixBoundsTheWalk) {
 // point arm, and only the pages they are on are taken.
 TEST_F(BoundedWriteHoldTest, AHeapWriteOverATupleKeyBoundHoldsThePagesItsRowsAreOn) {
     const std::uint64_t hp = Load("hp", "CREATE TABLE hp (id int64 PRIMARY KEY, v int64) HEAP");
-    const std::size_t every_page = Held(hp, "UPDATE hp SET v = 0 WHERE v < 0", "UPDATED 0");
+    const std::size_t every_page = Whole(hp, "UPDATE hp SET v = 0 WHERE v < 0", "UPDATED 0");
     ASSERT_GE(every_page, 6u);
 
     EXPECT_LE(Held(hp, "UPDATE hp SET v = v + 1 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), 2u);
@@ -192,7 +224,7 @@ TEST_F(BoundedWriteHoldTest, AHeapWriteOverATupleKeyBoundHoldsThePagesItsRowsAre
     // A deleted row's Keystone entry stays until a PURGE: the collection
     // names it, the point arm finds it delete-marked and writes nothing.
     EXPECT_LE(Held(hp, "UPDATE hp SET v = v + 1 WHERE id BETWEEN 599 AND 602", "UPDATED 2"), 2u);
-    EXPECT_EQ(Held(hp, "UPDATE hp SET v = 9 WHERE " + Walked("id >= 40 AND id <= 41", "id = 40"),
+    EXPECT_EQ(Leaves(hp, "UPDATE hp SET v = 9 WHERE " + Walked("id >= 40 AND id <= 41", "id = 40"),
                    "UPDATED 2"),
               every_page);
     EXPECT_EQ(Run("SELECT id, v FROM hp WHERE v > 0 ORDER BY id"),
@@ -200,7 +232,7 @@ TEST_F(BoundedWriteHoldTest, AHeapWriteOverATupleKeyBoundHoldsThePagesItsRowsAre
 
     // A hidden Keystone, bounded by `keyidentity`.
     const std::uint64_t hh = Load("hh", "CREATE TABLE hh (n int64, v int64) HEAP");
-    const std::size_t hh_every = Held(hh, "UPDATE hh SET v = 0 WHERE v < 0", "UPDATED 0");
+    const std::size_t hh_every = Whole(hh, "UPDATE hh SET v = 0 WHERE v < 0", "UPDATED 0");
     ASSERT_GE(hh_every, 6u);
     EXPECT_LE(Held(hh, "UPDATE hh SET v = v + 1 WHERE keyidentity BETWEEN 30 AND 31", "UPDATED 2"),
               2u);
@@ -212,14 +244,15 @@ TEST_F(BoundedWriteHoldTest, AHeapWriteOverATupleKeyBoundHoldsThePagesItsRowsAre
 TEST_F(BoundedWriteHoldTest, WithIndexesOffAHeapsBoundIsItsWalk) {
     Open(/*indexes=*/false);
     const std::uint64_t hp = Load("hp", "CREATE TABLE hp (id int64 PRIMARY KEY, v int64) HEAP");
-    const std::size_t every_page = Held(hp, "UPDATE hp SET v = 0 WHERE v < 0", "UPDATED 0");
+    const std::size_t every_page = Whole(hp, "UPDATE hp SET v = 0 WHERE v < 0", "UPDATED 0");
     ASSERT_GE(every_page, 6u);
-    EXPECT_EQ(Held(hp, "UPDATE hp SET v = v + 1 WHERE id BETWEEN 30 AND 31", "UPDATED 2"),
+    EXPECT_EQ(Leaves(hp, "UPDATE hp SET v = v + 1 WHERE id BETWEEN 30 AND 31", "UPDATED 2"),
               every_page);
-    EXPECT_EQ(Held(hp, "DELETE FROM hp WHERE id BETWEEN 600 AND 601", "DELETED 2"), every_page);
+    EXPECT_EQ(Leaves(hp, "DELETE FROM hp WHERE id BETWEEN 600 AND 601", "DELETED 2"), every_page);
     EXPECT_EQ(Run("SELECT id, v FROM hp WHERE v > 0 ORDER BY id"), "id,v\\n30,1\\n31,1");
     // A btree's bound reads no index, and the switch does not reach it.
     const std::uint64_t w = Load("w", "CREATE TABLE w (id int64, v int64) BTREE");
+    ASSERT_GE(Whole(w, "UPDATE w SET v = 0 WHERE v < 0", "UPDATED 0"), 6u);
     EXPECT_LE(Held(w, "UPDATE w SET v = v + 1 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), 2u);
 }
 
@@ -536,7 +569,7 @@ protected:
             ASSERT_EQ(inserted.rfind("INSERTED", 0), 0u) << inserted;
         }
         x_ = OidOf(inserted);
-        every_page_ = Held(x_, "UPDATE x SET v = 0 WHERE v < 0", "UPDATED 0");
+        every_page_ = Whole(x_, "UPDATE x SET v = 0 WHERE v < 0", "UPDATED 0");
         ASSERT_GE(every_page_, 10u) << "the relation is too small to tell an index from a walk";
     }
 
@@ -572,10 +605,10 @@ TEST_F(IndexWriteHoldTest, ABtreeWriteByAnIndexedColumnHoldsOnlyItsRowsLeaves) {
 
     // What still walks: the same equality where no arm reads it, a column
     // with no index, and a subquery beside the equality (DU-Q5 (a)).
-    EXPECT_EQ(Held(x_, "UPDATE x SET v = 9 WHERE " + Walked("owner = 13", "v < 0"), "UPDATED 4"),
+    EXPECT_EQ(Leaves(x_, "UPDATE x SET v = 9 WHERE " + Walked("owner = 13", "v < 0"), "UPDATED 4"),
               every_page_);
-    EXPECT_EQ(Held(x_, "UPDATE x SET v = v WHERE v = 9", "UPDATED 4"), every_page_);
-    EXPECT_EQ(Held(x_,
+    EXPECT_EQ(Leaves(x_, "UPDATE x SET v = v WHERE v = 9", "UPDATED 4"), every_page_);
+    EXPECT_EQ(Leaves(x_,
                    "UPDATE x SET v = 8 WHERE owner = 14 AND EXISTS (SELECT id FROM x WHERE id = 1)",
                    "UPDATED 4"),
               every_page_);
@@ -642,15 +675,15 @@ TEST_F(IndexWriteHoldTest, AHeapWriteByAnIndexedColumnHoldsOnlyItsRowsPages) {
     EXPECT_LE(Held(x_, "DELETE FROM x WHERE owner IN (8, 9) AND grp = 0", "DELETED 4"), 8u);
     EXPECT_LE(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 8 AND id > 600", "UPDATED 2"), 2u);
     EXPECT_EQ(Run("SELECT COUNT(*) FROM x WHERE v = 1"), "count(*)\\n6");
-    EXPECT_EQ(Held(x_, "UPDATE x SET v = 9 WHERE " + Walked("owner = 13", "v < 0"), "UPDATED 4"),
+    EXPECT_EQ(Leaves(x_, "UPDATE x SET v = 9 WHERE " + Walked("owner = 13", "v < 0"), "UPDATED 4"),
               every_page_);
 }
 
 TEST_F(IndexWriteHoldTest, WithIndexesOffAnIndexedWriteWalks) {
     Open(/*indexes=*/false);
     LoadIndexed("BTREE");
-    EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 7", "UPDATED 4"), every_page_);
-    EXPECT_EQ(Held(x_, "DELETE FROM x WHERE owner IN (8, 9) AND grp = 0", "DELETED 4"),
+    EXPECT_EQ(Leaves(x_, "UPDATE x SET v = v + 1 WHERE owner = 7", "UPDATED 4"), every_page_);
+    EXPECT_EQ(Leaves(x_, "DELETE FROM x WHERE owner IN (8, 9) AND grp = 0", "DELETED 4"),
               every_page_);
 }
 
@@ -667,7 +700,7 @@ TEST_F(IndexWriteHoldTest, ARangeOnAnIndexedColumnHoldsOnlyItsRowsLeaves) {
               8u);
     EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner BETWEEN 400 AND 500", "UPDATED 0"), 0u);
     // A one-sided range on the column is none to the ladder, read or write.
-    EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner > 298", "UPDATED 0"), every_page_);
+    EXPECT_EQ(Leaves(x_, "UPDATE x SET v = v + 1 WHERE owner > 298", "UPDATED 0"), every_page_);
     EXPECT_EQ(Run("SELECT name, probes, ranges FROM sys.indexes WHERE rel_name = 'x' "
                   "AND name != 'x_tag'"),
               "name,probes,ranges\\nx_owner,0,3\\nx_grp_owner,0,1");
@@ -769,7 +802,7 @@ TEST_F(WritePlanTest, AScanPinWalksAndItsVariantIsChosenByTheArguments) {
     Ok("CREATE PLAN w_owner FOR UPDATE x SET v = v + 1 WHERE owner = 7 "
        "VARIANT big WHEN ARG(2) = 7 ORDER (x) ACCESS x SCAN VARIANT rest ELSE ORDER (x)",
        "CREATED PLAN name=w_owner");
-    EXPECT_EQ(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 7", "UPDATED 4"), every_page_);
+    EXPECT_EQ(Leaves(x_, "UPDATE x SET v = v + 1 WHERE owner = 7", "UPDATED 4"), every_page_);
     EXPECT_LE(Held(x_, "UPDATE x SET v = v + 1 WHERE owner = 8", "UPDATED 4"), 4u);
     EXPECT_EQ(Run("ANALYZE UPDATE x SET v = v + 1 WHERE owner = 7"),
               "analyze rows=4 class=Update\\nwrite Scan x arm=plan\\nplanned plan=w_owner/big");
@@ -812,7 +845,7 @@ TEST_F(WritePlanTest, APinNamesAClassAnIndexOrWhatIsForbidden) {
     Ok("CREATE PLAN w_not FOR DELETE FROM x WHERE owner = 9 "
        "VARIANT n ELSE ORDER (x) ACCESS x NOT INDEX",
        "CREATED PLAN name=w_not");
-    EXPECT_EQ(Held(x_, "DELETE FROM x WHERE owner = 9", "DELETED 4"), every_page_);
+    EXPECT_EQ(Leaves(x_, "DELETE FROM x WHERE owner = 9", "DELETED 4"), every_page_);
     EXPECT_EQ(Run("SELECT id, v FROM x WHERE v > 0"),
               "id,v\\n7,1\\n307,1\\n607,1\\n608,1\\n907,1\\n908,1");
 

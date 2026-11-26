@@ -1,0 +1,11 @@
+18:24:47 invoke arm A run 0 load 1.00 2.85 3.30 3/1082 328689 competing: 0
+18:27:59 done arm A run 0 rc=0 load 0.96 1.93 2.84 1/1063 331834 competing: 0
+18:27:59 invoke arm B run 0 load 0.96 1.93 2.84 1/1063 331840 competing: 0
+18:32:11 done arm B run 0 rc=0 load 2.10 1.86 2.58 1/1080 335940 competing: 0
+18:32:11 invoke arm B run 1 load 2.10 1.86 2.58 1/1080 335946 competing: 0
+18:37:25 done arm B run 1 rc=0 load 1.87 1.69 2.28 2/1089 340941 competing: 0
+18:37:25 invoke arm A run 1 load 1.87 1.69 2.28 2/1089 340947 competing: 0
+18:41:13 done arm A run 1 rc=0 load 1.61 1.44 2.03 1/1082 344783 competing: 0
+18:41:13 cells 1-3 finished
+18:41:15 cell4 start load 1.61 1.44 2.03 1/1084 344832 competing: 0
+18:43:56 cell4 done rc=0 load 0.93 1.20 1.84 1/1078 348008

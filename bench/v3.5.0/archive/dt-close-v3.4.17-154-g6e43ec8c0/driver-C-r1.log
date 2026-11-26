@@ -1,0 +1,6 @@
+probe {'p0_us': 2.5, 'p25_us': 87.9, 'p50_us': 91.4, 'p95_us': 127.9, 'p99_us': 244.1, 'p99.9_us': 360.6, 'max_us': 611.4, 'n': 2000} cold_rate=2000.0/s
+dt-ivw-C-r1 load 1.21 cached=1.00 hot p50=312.1 p95=431.8 p99=520.9 max=5417.8 n=20005 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-ivu-C-r1 load 1.39 cached=1.00 hot p50=1530.6 p95=47249.3 p99=56130.9 max=84644.6 n=19991 cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-aw-C-r1 load 1.41 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+dt-au-C-r1 load 1.32 cached=1.00 hot p50=None p95=None p99=None max=None n=None cold p50=None reads=0 read_share=0.0 dev_bytes/read=None errors=0
+done in 136.1 s

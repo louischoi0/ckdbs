@@ -1021,6 +1021,18 @@ at the
 holder's decide, it is an edge in the wait-for graph, and it is refused
 rather than entered where it would close a cycle.
 
+**A walk and a key loop also stop where no row is held** (DT, `sched.md`
+§3): every slice of leaves or descents the statement gives its core back
+through the same park - its transaction, its snapshot and its place kept
+on the session - and is resumed after one yield, whether or not it has
+written. It waits for nobody there and is no edge in the wait-for graph.
+**Before each such pause the transaction asks the relation's `IX`**, by
+the ask a row's claim makes: a write that declared a unit or claimed a
+row holds it already, and one that has claimed nothing takes it there
+and holds it to its decide, so no relation-`X` DDL runs while the
+statement is away and the resume, which binds the relation again by
+name, binds the one it stopped in.
+
 **What `REPEATABLE READ` waits for** (AO-S6d, AO-0 item 17, the operator's
 ruling of 2026-09-09). The question is asked per wait rather than per
 level: **can the re-run answer differently once this holder decides?**
