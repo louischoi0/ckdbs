@@ -77,7 +77,7 @@
    size. Computed from the cells: at 100,000 rows the lead is 451 µs at
    10,000 rows and shrinks 0.297 µs a row, crossing at about 11,500 rows (1
    in 8.7); at 1,000,000 rows it is 27,962 µs at 10,000 and shrinks 0.34 µs a
-   row, crossing at about 93,000 rows (1 in 10.7). **Measured**, the
+   row, crossing at about 93,000 rows (1 in 10.8). **Measured**, the
    crossing lies between 1 in 10 (level, -3.6%, inside the floor) and 1 in
    2 (+11.2%) at 100,000 rows; the 1,000,000-row value is an extrapolation
    from two cells (marked computed) because no cell above 50,000 rows was
@@ -87,15 +87,15 @@
 
    **The largest loss measured** is idx-50000 at 100,000 rows: +11,426 µs, +11.2% in
    CPU (p50 115.1 ms against 102.2 ms, 0.889x in statements/s). **What
-   bounds it** is the 65,536-entry bound on the first collection (stated by
-   the coordinator for this run; not read in the code or re-measured here:
-   unverified): a write of more than 65,536 index entries does not take the
+   bounds it** is the 65,536-entry bound on the first collection
+   (`txn::kMaxLocksPerTxnDefault`, `include/kds/txn/lock_table.hpp:417`,
+   read by the session that ordered the run; not re-measured here): a write of more than 65,536 index entries does not take the
    arm as measured, so no larger cell exists to lose more. Computed, by
    extending the 10,000 to 50,000 per-row costs to 65,536 rows written
    (beyond a measured cell): at 100,000 rows base about 137.2 ms against
    close about 153.2 ms, a loss of about 16.0 ms (about +11.7%); at 1,000,000
    rows the same extension leaves the close arm ahead by about 9.2 ms (about
-   -6.6%, computed), i.e. no loss at the bound on a relation that large. The
+   -5.3%, computed), i.e. no loss at the bound on a relation that large. The
    worst case is thus about +12% CPU, on a relation the write covers about
    two thirds of; an unmeasured extrapolation.
 4. **A plan pinning the shape to SCAN gives the walk back, at both sizes**:
@@ -336,7 +336,7 @@ above.
   range or an index entering the WHERE removes that term (range-1k 0.64 ms,
   idx-10 0.07 ms).
 - Fixed-cost write paths DU does not serve are level with the base (point,
-  list3, walk-small, delete-miss within the 2.4% floor on CPU), so DU added
+  list3, walk-small, delete-miss within the 4.5% floor on CPU), so DU added
   nothing measurable to a statement that takes no new arm.
 - Both arms' marginal cost a written row rises with the count written; the
   index arm's is higher by 0.3 µs a row in both runs, against a walk that

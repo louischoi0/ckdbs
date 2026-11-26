@@ -3132,11 +3132,14 @@ measured numbers at the same commit (DU-S4). Owned by `docs/spec/index.md`
   between its page write and its index append, which nothing in the suite
   can place.
 - **A collection is held in memory whole**: 8 bytes a tuple key, up to
-  `max_locks_per_txn` keys for a first collection - 512 KiB at the default
-  - and unbounded for a resume's, which reads its range to the end.
+  `max_locks_per_txn` keys and one more for a first collection - a vector
+  grown by doubling, so about 1 MiB at the default - and unbounded for a
+  resume's, which reads its range to the end.
 - **A resume collects again.** A statement parked on a held row reads its
   index range again when it is taken up, and its use of the index is
-  counted once.
+  counted once; a statement run again whole - one refused having written
+  nothing - counts its use again. `ANALYZE` of a resumed write names the
+  arm the resume took and that collection's `keys=`.
 - **A collection's read error is the statement's**: an index page that
   cannot be read refuses the write, where its walk, which reads no index,
   would have answered. DR-S3a's unique-key run has refused the same way
@@ -3152,8 +3155,10 @@ measured numbers at the same commit (DU-S4). Owned by `docs/spec/index.md`
   `ADVISE PLAN`, no plan for a statement whose `WHERE` holds a subquery or
   whose `SET` value is a subquery, none for a locking read, and no `CABIN`
   pin. A plan altered or dropped between a write's park and its resume
-  changes the arm the resume takes; a heap's statement is then refused
-  `TxnConflict` and run again, a btree's is taken up by its walk.
+  changes the arm the resume takes: where that is another key arm the
+  statement goes on by key, where it is the walk a btree's statement is
+  taken up at its key and a heap's is refused `TxnConflict` and run
+  again.
 - **`ANALYZE` of a write names the arm that answered and nothing of its
   cost**: no pages, no entries scanned, no DB-time line, and for a
   statement that fell from an arm to the walk on a declined descent, the

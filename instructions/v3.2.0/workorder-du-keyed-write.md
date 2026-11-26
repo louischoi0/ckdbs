@@ -1,6 +1,6 @@
 # Work order DU - a write that finds its rows by a key: a bound on the tuple key, an index, and what a subquery leaves
 
-Status: **CLOSED 2026-11-26 on the work branch**, every stage landed there (DU-S0 `c2b138317`, DU-S1 `b248c1cb1`, DU-S2 `3abb5ea39`, DU-S3 `0babe36e6`, DU-S4 the close; §7), on the operator's standing go-ahead, and landed on `main` on the operator's word given in advance (`raft-marks-2026-11-26.md` §4). Opened 2026-11-26. Written on worktree
+Status: **CLOSED 2026-11-26 on the work branch**, every stage landed there (DU-S0 `c2b138317`, DU-S1 `b248c1cb1`, DU-S2 `3abb5ea39`, DU-S3 `0babe36e6`, DU-S4 the close; §7), on the operator's standing go-ahead, and authorized to land on `main` by the operator's word given in advance (`raft-marks-2026-11-26.md` §4). Opened 2026-11-26. Written on worktree
 `known-gaps-milestone-orders` (branch
 `worktree-known-gaps-milestone-orders`) from `8274c951`
 (`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
@@ -121,7 +121,7 @@ at `:14041` and `:14231`); the read side's correlated index probe is
 | DU-Q5 | A write whose `WHERE` holds a subquery | (a) stays outside DU until the pending entry is ruled on; (b) the operator rules now and DU carries it | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q6 | `PURGE` by list or range | (a) outside DU; (b) inside | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q7 | **On a heap a keyed write meets its rows in key order and its walk met them in page order.** A check made per row against the rows as they stand - a unique key the statement shifts, an assertion's bound - can therefore answer one order and refuse the other (added by CLA at DU-S2, from its review; `tests/keyed_write_test.cpp`, `OnAHeapAnOrderDependentWriteIsJudgedInKeyOrder`) | (a) accepted and stated: both orders are executions the statement allows, a btree's walk is already in key order, and CU-S3's list and DR-S3a's unique key have written a heap in key order since they landed; (b) a heap's collected keys written in the walk's order - not computable from the keys, since the walk follows the page chain and a rowid does not say where its page is in it, so it costs a walk of the chain; (c) no keyed arm on a heap | (a): the alternative that keeps the walk's order is the walk | (a), adopted on the standing go-ahead of 2026-11-26 (go-ahead-achieving-milestone). **It narrows DU-R4 on a heap**: a statement whose rows are judged against each other may be refused where its walk was answered, and answered where it was refused |
-| DU-Q8 | **Where the index arm costs more than the walk it replaced.** The arm is taken by rank; the close measured its crossing at about 1 row written in 9 to 11 of the relation and a loss of 11.2 % at 1 in 2 (added by CLA at DU-S4, from the close's measurement) | (a) stated and bounded: DU-Q2's bound of 65,536 entries caps the loss - about 16 ms a statement, computed - and a plan pinning the shape to `SCAN` gives the walk back, measured level with it; (b) the arm declined where the collection is more than a share of the relation's rows, read from the planner's statistics - an arm chosen by a count, which IX9 excludes for every index arm of a read and CX's `join_order = fixed` excludes for a plan; (c) a lower bound - the crossing is a share, so a constant moves the loss and does not remove it | (a): the remedy the engine's own rule admits is the administrator's pin, and it is built | (a), adopted on the standing go-ahead of 2026-11-26 (go-ahead-achieving-milestone) |
+| DU-Q8 | **Where the index arm costs more than the walk it replaced.** The arm is taken by rank; the close measured its crossing at about 1 row written in 9 to 11 of the relation and a loss of 11.2 % at 1 in 2 (added by CLA at DU-S4, from the close's measurement) | (a) stated and bounded: DU-Q2's bound of 65,536 entries caps the loss - 65,536 rows at 0.30-0.34 µs each, about 20 to 22 ms a statement less what the walk would have cost, so largest on a relation of about that many rows; about 16 ms on one of 100,000, computed - and a plan pinning the shape to `SCAN` gives the walk back, measured level with it; (b) the arm declined where the collection is more than a share of the relation's rows, read from the planner's statistics - an arm chosen by a count, which IX9 excludes for every index arm of a read and CX's `join_order = fixed` excludes for a plan; (c) a lower bound - the crossing is a share, so a constant moves the loss and does not remove it | (a): the remedy the engine's own rule admits is the administrator's pin, and it is built | (a), adopted on the standing go-ahead of 2026-11-26 (go-ahead-achieving-milestone) |
 
 ## 5. Stages
 
@@ -667,3 +667,30 @@ ledger are the walk's. DU-R4: held but for two stated narrowings - on a
 heap, DU-Q7's order, and a collection's read error. DU-R5: no keyword,
 format, record kind or fingerprint moved; `ANALYZE` and `CREATE PLAN ...
 FOR` read statements they refused before.
+
+**Reviewed** (`critics-developer`, at `f222c9700`, the documents against
+the code). Applied: past DU-Q2's bound the next arm in rank answers - a
+heap's Keystone range, a btree's bounded walk, or the walk - where five
+documents had said "the walk"; `indexes = off` takes the index arm and a
+heap's Keystone range and leaves a unique key's run and a btree's window;
+the manual's list ranks a range above an index only for a `BTREE` and
+both ends inclusive, and puts a heap's range of the key in the `INDEX`
+class; a pin can leave a window's arm out; `NOT CABIN` is admitted; a
+plan follows a column its text qualifies, not one it assigns; a
+collection's vector is about 1 MiB at the bound, not 512 KiB; a resume
+onto another key arm goes on by key; a resumed write's `ANALYZE` and a
+re-run's second count; `manual/client/client.md`'s note on locking by
+key; "landed" written as authorized until it is; three figures of the
+results file recomputed from its JSON (-5.3 %, 1 in 10.8, the 4.5 %
+floor) and this order's "about 16 ms" stated as what it is, the
+100,000-row case of a bound that is about 20 to 22 ms. Nothing rejected.
+
+**The suite at the close**: 5,262 of 5,262 on `f222c9700`'s build inputs
+(`ctest -LE bs-nightly -j 12`, Debug). Nothing after it changed a build
+input: the review's corrections are documents.
+
+**The sync**: `git fetch origin` found `origin/main` at `60dc593af`, the
+commit DU opened from; there was nothing to merge and nothing to resolve.
+`worktree-dt-write-path-yield` and `worktree-ds-known-gaps-contained` had
+not landed; whichever lands next merges DU's `WriteWalk`, `WalkCursor` and
+walk sites with its own.

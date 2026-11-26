@@ -1005,10 +1005,11 @@ nothing and takes a row unit per row it writes, in ascending tuple key
 order, the rows found by one descent per tuple key the index names. The
 units are the walk's - the same row function asks them, of a row that has
 qualified - and a row the index named and the `WHERE` declined takes none.
-**A window bounds what its statement reads as well as what it declares**:
-a btree's walk visits the window's leaves and no others, and a heap's rows
-in the window are read through its Keystone index, under the same
-declaration and with no row unit. **One wait differs**: a version whose
+**A window bounds what its statement reads as well as what it declares**,
+unless a plan's pin leaves its arm out (`parser-v2.md` I12): a btree's
+walk visits the window's leaves and no others, and a heap's rows in the
+window are read through its Keystone index, under the same declaration
+and with no row unit. **One wait differs**: a version whose
 writer the statement's view cannot see, put on the page after the
 statement's collection passed its entry, is not met, where a walk that
 reached it would wait on that writer or be refused - a wait forgone, and

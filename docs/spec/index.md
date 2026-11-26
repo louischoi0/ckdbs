@@ -728,7 +728,8 @@ walk, which returns the identical rows because the residual is untouched.
 > correlated form has no meaning for a write and no Cabin is read.
 
 **Collect, then write.** The statement reads the entries between the
-arm's bounds holding no page - one range, or a list's one range a value -
+arm's bounds holding no page of the relation - one range, or a list's one
+range a value -
 keeps their tuple keys, sorts them and makes them distinct, and writes
 each by the point arm (`CommandDispatcher::CollectWriteKeys`,
 `WriteWalk::WriteKeys`). Three properties follow, and each is a
@@ -764,9 +765,10 @@ read ranges a heap's Keystone only for `>=` with `<=`.
 
 **The collection is bounded** (DU-Q2): a statement's first collection is
 read to one entry past `max_locks_per_txn` - 65,536 by default - and past
-it nothing is written from it and the walk answers, as it did before DU.
-The bound is on entries, which is what lets the read stop; a resume's
-collection is read whole.
+it nothing is written from it and the next arm in rank answers: a heap's
+Keystone range, a btree's bounded walk, or the walk. The bound is on
+entries, which is what lets the read stop; a resume's collection is read
+whole, and a statement run again whole counts its use of the index again.
 
 **What it costs where it does not pay.** The arm is taken by rank, never
 by a count, as a read's is (IX9): a write of more than about 1 row in 9

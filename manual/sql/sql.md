@@ -1138,22 +1138,24 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   the rows written are the same whichever it is:
   - the key itself, `id = 42`, or a list of keys, `id IN (1, 7, 42)`;
   - a unique key named whole, `branch = 1 AND no = 100`;
-  - a range of the key with both ends, `id BETWEEN 10 AND 20`: only the
-    part of the table that range covers is read;
+  - on a `BTREE` table, a range of the key with both ends inclusive, `id
+    BETWEEN 10 AND 20`, or the leading columns of a primary key that is
+    the row's key (`branch = 1`): only the part of the table that range
+    covers is read;
   - an index, entered by equalities on its leading columns, by one `IN`
     list among them, or by a `BETWEEN` on the column after them
     (`owner = 7`, `owner IN (1, 9)`, `grp = 1 AND owner BETWEEN 2 AND 4`):
     the index is read for the rows, then each is written by its key;
-  - a one-sided or strict bound on the key, `id > 5000`, where no index
-    stands;
+  - any other bound on the key - one-sided or strict, `id > 5000`, and
+    every bound on a `HEAP` table - where no index stands;
   - otherwise the whole table is read.
 
   This is the order a `SELECT` with the same `WHERE` chooses in, and
   `ANALYZE UPDATE ...` shows which was taken (ANALYZE, below). Two things
   follow from "the index is read for the rows". **A very large update
   through an index can cost more than reading the whole table would**:
-  past 65,536 index entries (`max_locks_per_txn`) the statement reads the
-  table instead, and below that an administrator can pin the statement's
+  past 65,536 index entries (`max_locks_per_txn`) the statement goes on
+  to the next way in the list - a bound on the key, else the whole table - and below that an administrator can pin the statement's
   shape to the table read with `CREATE PLAN ... FOR UPDATE ... ACCESS
   <table> SCAN` (CREATE PLAN, under SELECT). And **on a `HEAP` table rows
   found by key or index are written in key order**, not in the order the
@@ -1551,12 +1553,13 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
     `ARG(k)` counts every literal of the statement in written order, the
     `SET` list's first: above, `ARG(1)` is `'closed'` and `ARG(2)` the
     batch. The pins are a `SELECT`'s: `TUPLE_KEY` (the key, a list of
-    keys, a range of the key), `INDEX [<name>]`, `SCAN` (the whole table)
-    and `NOT <one of them>`. A pin never forces an access the statement
+    keys, and on a `BTREE` table a range of the key), `INDEX [<name>]` (on
+    a `HEAP` table a range of the key is here too, read through
+    `$keystone_<oid>`), `SCAN` (the whole table) and `NOT <one of them>`. A pin never forces an access the statement
     cannot use - `CREATE PLAN` refuses one the example cannot run, and a
     statement whose values leave the pin nothing is run unpinned and
-    counted in `plan_declined`. `BUILD` and `CABIN` are refused: a write
-    has no join and reads through no Cabin. `AS SEARCHED`, `ADVISE PLAN`
+    counted in `plan_declined`. `BUILD` and a `CABIN` pin are refused: a
+    write has no join and reads through no Cabin. `AS SEARCHED`, `ADVISE PLAN`
     and a statement whose `WHERE` holds a subquery do not apply to a
     write. Everything else is as for a `SELECT`'s plan: one plan a
     statement shape, `ALTER PLAN`, `DROP PLAN`, and the plan keeps its
@@ -2044,9 +2047,10 @@ write IndexProbe orders index=orders_owner keys=12
   an index - `keys` is how many rows the index named and the statement
   then looked at, which can be more than it wrote; `key_set=<n>` for a
   list. On a `HEAP` table a range of the key reads `index=$keystone_<oid>`.
-- `write Scan <table>`: the whole table. `past_cap=<index>` after it says
-  an index named more than `max_locks_per_txn` entries and the table was
-  read instead.
+- `write Scan <table>`: the whole table.
+- `past_cap=<index>` at the end of the line says that index named more
+  than `max_locks_per_txn` entries and was not written from; the line
+  names what answered instead.
 - `arm=plan`, and a third line `planned plan=<name>/<variant>`, where an
   administrator's plan chose; `plan_declined=1` where the plan's pin did
   not fit this statement and it ran as if unpinned.

@@ -16,7 +16,7 @@ other, and no increment is lost or applied twice - the loser simply stops.
 (`tests/set_expr_two_core_rig_test.cpp`) failed 12 of 60 runs alone, the
 driver's 200 retries an increment (`kRetriesPerIncrement`) spent. The same
 12 of 60 on `worktree-du-keyed-write` at DU-S3's tree, so DU did not move
-it. It passed in seven full-suite runs of that day and failed in one.
+it. It passed in eight full-suite runs of that day and failed in one.
 
 **The smallest reproduction.**
 
