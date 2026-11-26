@@ -845,10 +845,12 @@ TEST_F(KeySetTest, AWriteOnAHeapsDeclaredFirstColumnWalks) {
 
 // ---- The descents, seen by their holds ------------------------------------------
 //
-// A write has no `ANALYZE`. What tells a descent from a walk is the hold: a
-// write walk takes every leaf of the relation exclusive, a descent the leaf
-// its key is in. The store below records the pages of one relation pinned
-// exclusive, and can fail one fetch.
+// A write has no `ANALYZE`. What tells a descent from a walk is the leaves it
+// pins: a write walk looks at every leaf of the relation - under a shared
+// hold, taking exclusive only the ones it writes a row in (DT) - and a
+// descent pins the leaf its key is in, exclusive. The store below records
+// the leaves of one relation pinned at all and the pages pinned exclusive,
+// and can fail one fetch.
 
 class LeafWatchingStore final : public storage::PageStore {
 public:
@@ -872,17 +874,26 @@ public:
         return inner_.RaiseAllocationFloor(first_allocatable_page_id);
     }
     void PinFrame(PageId page_id, storage::PinMode mode) noexcept override {
-        if (watched_oid_ == 0 || mode != storage::PinMode::kExclusive) return;
+        if (watched_oid_ == 0) return;
         auto bytes = inner_.GetForReadUnpinned(page_id);
-        if (bytes.ok() && storage::GetOwnerOid(bytes.value()) == watched_oid_) held_.insert(page_id);
+        if (!bytes.ok() || storage::GetOwnerOid(bytes.value()) != watched_oid_) return;
+        if (mode == storage::PinMode::kExclusive) held_.insert(page_id);
+        const std::uint8_t type = storage::RawPageType(bytes.value());
+        if (type == static_cast<std::uint8_t>(PageType::kBtreeLeaf) ||
+            type == static_cast<std::uint8_t>(PageType::kHeapData)) {
+            leaves_.insert(page_id);
+        }
     }
 
-    // From now on, the pages `oid` owns that are pinned exclusive.
+    // From now on, the pages `oid` owns that are pinned exclusive, and its
+    // leaves pinned in any mode.
     void Watch(std::uint64_t oid) {
         watched_oid_ = oid;
         held_.clear();
+        leaves_.clear();
     }
     std::size_t held() const noexcept { return held_.size(); }
+    std::size_t leaves() const noexcept { return leaves_.size(); }
     void FailNextFetch() noexcept { fail_next_ = true; }
     int failed() const noexcept { return failed_; }
 
@@ -896,6 +907,7 @@ private:
 
     storage::InMemoryPageStore& inner_;
     std::unordered_set<PageId> held_;
+    std::unordered_set<PageId> leaves_;
     std::uint64_t watched_oid_ = 0;
     bool fail_next_ = false;
     int failed_ = 0;
@@ -922,19 +934,33 @@ protected:
         ASSERT_NE(at, std::string::npos) << inserted;
         oid_ = std::strtoull(inserted.c_str() + at + 4, nullptr, 10);
 
-        // What a write walk holds: every leaf.
+        // What a write walk looks at: every leaf. One that writes no row
+        // takes none of them exclusive (DT: a leaf is looked at under a
+        // shared hold before it is taken for writing).
         store_.Watch(oid_);
         ASSERT_EQ(Run("UPDATE w SET v = 0 WHERE v < 0"), "UPDATED 0");
-        every_leaf_ = store_.held();
+        every_leaf_ = store_.leaves();
         ASSERT_GE(every_leaf_, 4u) << "the relation is too small to tell a descent from a walk";
+        ASSERT_EQ(store_.held(), 0u) << "a walk that wrote no row took a leaf for writing";
     }
 
     std::string Run(const std::string& sql) { return dispatcher_->Dispatch(sql).response; }
-    // The leaves `sql` took exclusive.
+    // The leaves `sql` took exclusive, for a statement that must not walk.
+    // **The count alone no longer tells a descent from a walk**: a walk takes
+    // exclusive only the leaves it writes a row in (DT), so a walk writing
+    // rows of one leaf holds one, as a descent to that leaf does. What a
+    // walk cannot avoid is looking at every leaf, so that is asked too.
     std::size_t Held(const std::string& sql, const std::string& want) {
         store_.Watch(oid_);
         EXPECT_EQ(Run(sql), want) << sql;
+        EXPECT_LT(store_.leaves(), every_leaf_) << sql << ": walked the relation";
         return store_.held();
+    }
+    // The leaves `sql` pinned at all: every one for a walk.
+    std::size_t Leaves(const std::string& sql, const std::string& want) {
+        store_.Watch(oid_);
+        EXPECT_EQ(Run(sql), want) << sql;
+        return store_.leaves();
     }
 
     storage::InMemoryPageStore inner_{kFirstUserPageId};
@@ -951,7 +977,7 @@ TEST_F(KeySetWriteHoldTest, AnUpdateByListHoldsOnlyTheLeavesItsKeysAreIn) {
     // A key past the relation is a descent too, to the last leaf, where the
     // tree answers that there is no such row.
     EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE id IN (5, 3, 4, 999999)", "UPDATED 3"), 2u);
-    EXPECT_EQ(Held("UPDATE w SET v = v + 1 WHERE " + Walked("id IN (5, 3, 4)", "id = 3"),
+    EXPECT_EQ(Leaves("UPDATE w SET v = v + 1 WHERE " + Walked("id IN (5, 3, 4)", "id = 3"),
                    "UPDATED 3"),
               every_leaf_);
     // The first and the last row: two leaves.
@@ -962,7 +988,7 @@ TEST_F(KeySetWriteHoldTest, AnUpdateByListHoldsOnlyTheLeavesItsKeysAreIn) {
 
 TEST_F(KeySetWriteHoldTest, ADeleteByListHoldsOnlyTheLeavesItsKeysAreIn) {
     EXPECT_EQ(Held("DELETE FROM w WHERE id IN (5, 3, 4, 3, -1, NULL)", "DELETED 3"), 1u);
-    EXPECT_EQ(Held("DELETE FROM w WHERE " + Walked("id IN (8, 9)", "id = 8"), "DELETED 2"),
+    EXPECT_EQ(Leaves("DELETE FROM w WHERE " + Walked("id IN (8, 9)", "id = 8"), "DELETED 2"),
               every_leaf_);
     EXPECT_EQ(Held("DELETE FROM w WHERE id = 1200 OR id = 1", "DELETED 2"), 2u);
     // A deleted key's descent finds its delete-marked row and writes nothing.
@@ -1001,18 +1027,20 @@ TEST_F(KeySetWriteHoldTest, AKeyOrAListBesideOtherConjunctsHoldsOnlyItsLeaves) {
 // which declares a lock window and names no descent. A list on another
 // column.
 TEST_F(KeySetWriteHoldTest, AWriteBesideASubqueryOverABoundOrByAnotherColumnsListWalks) {
-    EXPECT_EQ(Held("UPDATE w SET v = 4 WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 21)",
+    EXPECT_EQ(Leaves("UPDATE w SET v = 4 WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 21)",
                    "UPDATED 1"),
               every_leaf_);
-    EXPECT_EQ(Held("UPDATE w SET v = 5 WHERE id IN (22, 23) AND "
+    EXPECT_EQ(Leaves("UPDATE w SET v = 5 WHERE id IN (22, 23) AND "
                    "EXISTS (SELECT id FROM w WHERE id = 1)",
                    "UPDATED 2"),
               every_leaf_);
-    EXPECT_EQ(Held("DELETE FROM w WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 20)",
+    EXPECT_EQ(Leaves("DELETE FROM w WHERE id = 20 AND v IN (SELECT v FROM w WHERE id = 20)",
                    "DELETED 1"),
               every_leaf_);
-    EXPECT_EQ(Held("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), every_leaf_);
-    EXPECT_EQ(Held("UPDATE w SET v = 9 WHERE v IN (5, 6)", "UPDATED 4"), every_leaf_);
+    EXPECT_EQ(Leaves("UPDATE w SET v = 6 WHERE id BETWEEN 30 AND 31", "UPDATED 2"), every_leaf_);
+    // And of those it took exclusive only the leaf its two rows are in.
+    EXPECT_EQ(store_.held(), 1u);
+    EXPECT_EQ(Leaves("UPDATE w SET v = 9 WHERE v IN (5, 6)", "UPDATED 4"), every_leaf_);
     // The single key alone is the point write it was.
     EXPECT_EQ(Held("UPDATE w SET v = 2 WHERE id = 6", "UPDATED 1"), 1u);
 }
@@ -1026,7 +1054,7 @@ TEST_F(KeySetWriteHoldTest, ADescentThatDeclinesHandsTheRestToTheWalkFromItsKey)
         if (id == 5) store_.FailNextFetch();
     });
     const std::size_t held =
-        Held("UPDATE w SET v = v + 1 WHERE id IN (3, 5, 700, 1100, 1300)", "UPDATED 4");
+        Leaves("UPDATE w SET v = v + 1 WHERE id IN (3, 5, 700, 1100, 1300)", "UPDATED 4");
     dispatcher_->SetAfterUpdateRowAppliedForTest(nullptr);
     EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
     // The walk took over at 700: more leaves than the list's keys are in,
@@ -1044,13 +1072,14 @@ TEST_F(KeySetWriteHoldTest, ASingleKeysDescentThatDeclinesIsAnsweredByTheListOrT
     store_.FailNextFetch();
     EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 700 AND v = 0"), "UPDATED 1");
     EXPECT_EQ(store_.failed(), 1) << "the fetch was never failed, so no descent declined";
-    EXPECT_EQ(store_.held(), every_leaf_);
+    EXPECT_EQ(store_.leaves(), every_leaf_);
 
     store_.Watch(oid_);
     store_.FailNextFetch();
     EXPECT_EQ(Run("UPDATE w SET v = v + 1 WHERE id = 3 AND id IN (3, 4)"), "UPDATED 1");
     EXPECT_EQ(store_.failed(), 2);
-    EXPECT_EQ(store_.held(), 1u) << "the list's descents answered, not the walk";
+    EXPECT_EQ(store_.held(), 1u);
+    EXPECT_LT(store_.leaves(), every_leaf_) << "the list's descents answered, not the walk";
     EXPECT_EQ(Run("SELECT id, v FROM w WHERE v > 0"), "id,v\\n3,1\\n700,1");
 }
 

@@ -9450,11 +9450,62 @@ std::optional<Status> CommandDispatcher::InsertOneRow(
     return std::nullopt;
 }
 
+namespace {
+
+// The Keystone id of the row at `at`, or nothing for a dead or retired slot.
+std::optional<std::uint64_t> KeyAtSlot(heap::PageView& page, std::uint16_t at) {
+    auto payload = page.PayloadAt(at, page.slot_count());
+    if (!payload.ok()) return std::nullopt;
+    auto key = KeystoneIdOfPayload(payload.value());
+    if (!key.ok()) return std::nullopt;
+    return key.value();
+}
+
+// A btree leaf's highest key: its keyed slots ascend (invariant 4), so the
+// last readable one holds it. Nothing for a leaf with no keyed slot.
+std::optional<std::uint64_t> HighestKeyOf(heap::PageView& page) {
+    for (std::uint16_t at = page.slot_count(); at-- > 0;) {
+        if (const std::optional<std::uint64_t> key = KeyAtSlot(page, at); key.has_value()) {
+            return key;
+        }
+    }
+    return std::nullopt;
+}
+
+// One leaf looked at under a shared hold, before a write walk takes it
+// exclusive (`CommandDispatcher::LeafProbe`): whether `wanted` says yes of
+// any of its slots, its right sibling, and - where asked and no slot is
+// wanted - its highest key, all read under that one hold, which ends here.
+struct LeafLook {
+    bool wanted = false;
+    PageId next = kInvalidPageId;
+    std::optional<std::uint64_t> high_key;
+};
+StatusOr<LeafLook> LookAtLeaf(
+    storage::PageStore& store, PageId leaf,
+    FunctionRef<StatusOr<bool>(heap::PageView&, std::uint16_t)> wanted, bool want_high_key) {
+    auto held = btree::BtreeFetchLeaf(store, leaf, storage::PageAccess::kRead);
+    if (!held.ok()) return held.status();
+    heap::PageView page(held.value().bytes());
+    LeafLook look;
+    look.next = page.next_page_id();
+    const std::uint16_t slots = page.slot_count();
+    for (std::uint16_t slot = 0; slot < slots && !look.wanted; ++slot) {
+        auto answer = wanted(page, slot);
+        if (!answer.ok()) return answer.status();
+        look.wanted = answer.value();
+    }
+    if (!look.wanted && want_high_key) look.high_key = HighestKeyOf(page);
+    return look;
+}
+
+}  // namespace
+
 Status CommandDispatcher::WalkBtreeLeaves(
     PageId root, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor, WalkSlice* slice) {
+    WalkCursor* cursor, WalkSlice* slice, const LeafProbe* probe) {
     const bool resuming = cursor != nullptr && cursor->active;
     const std::uint64_t resume_tuple_key = resuming ? cursor->tuple_key : 0;
     assert((slice == nullptr || cursor != nullptr) && "a pause leaves its place in the cursor");
@@ -9482,6 +9533,16 @@ Status CommandDispatcher::WalkBtreeLeaves(
     std::uint32_t uncounted = 0;
     std::uint32_t& leaves_done = slice != nullptr ? slice->walked : uncounted;
     std::optional<std::uint64_t> high_key;
+    // **The rows a resumed walk is past**, in one rule for the look and the
+    // visit: a slot whose key sorts below the key it resumed at. A slot with
+    // no readable key is no such row - it is left to `fn`, the one place
+    // that decides what a dead slot means; passing it over here would hide a
+    // corrupt page behind a resume.
+    const auto finished = [&](heap::PageView& page, std::uint16_t slot) {
+        if (!resuming) return false;
+        const std::optional<std::uint64_t> key = KeyAtSlot(page, slot);
+        return key.has_value() && *key < resume_tuple_key;
+    };
     PageId leaf = start.value();
     storage::PageChainGuard guard("relation walk");
     while (leaf != kInvalidPageId) {
@@ -9500,6 +9561,30 @@ Status CommandDispatcher::WalkBtreeLeaves(
             cut_tuple_key = *high_key + 1;
             break;
         }
+        // Whether a pause can follow this leaf: the slice's last, and any
+        // after it. Only those leaves' highest keys are read (DT-R4).
+        const bool may_end_slice = slice != nullptr && leaves_done + 1 >= slice->leaves;
+        if (probe != nullptr) {
+            // The leaf is looked at before it is taken for writing
+            // (`LookAtLeaf`): one no row of which the visitor would write is
+            // passed over under the shared hold, never dirtied. A finished
+            // row is not asked about: it is the statement's own write, and a
+            // `WHERE` asked of it would be asked of a row the visit skips.
+            auto look = LookAtLeaf(
+                page_store_, leaf,
+                [&](heap::PageView& page, std::uint16_t slot) -> StatusOr<bool> {
+                    if (finished(page, slot)) return false;
+                    return (*probe)(page, slot);
+                },
+                may_end_slice);
+            if (!look.ok()) return look.status();
+            if (!look.value().wanted) {
+                if (look.value().high_key.has_value()) high_key = look.value().high_key;
+                ++leaves_done;
+                leaf = look.value().next;
+                continue;
+            }
+        }
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>
             guarded = [&](PageId page_id, heap::PageView& page,
@@ -9509,36 +9594,18 @@ Status CommandDispatcher::WalkBtreeLeaves(
             // where a stop happened, and - once a leaf, at its last slot,
             // for a walk that may pause - to know what the leaf held. A
             // first walk that never stops and may not pause reads none.
-            const auto key_at = [&](std::uint16_t at) -> std::optional<std::uint64_t> {
-                auto payload = page.PayloadAt(at, page.slot_count());
-                if (!payload.ok()) return std::nullopt;  // dead or retired slot
-                auto key = KeystoneIdOfPayload(payload.value());
-                if (!key.ok()) return std::nullopt;
-                return key.value();
-            };
-            // The leaf's highest key, before `fn` sees its last slot: its
-            // keyed slots ascend (invariant 4), so the last readable one
-            // holds it. A leaf with no keyed slot leaves the mark alone.
-            // **Read only where a pause can follow this leaf** - the slice's
-            // last and any after it - so the leaves before pay nothing
-            // (DT-R4); every leaf from there to the pause is read, and one
-            // with no key holds no row to skip.
-            if (slice != nullptr && leaves_done + 1 >= slice->leaves &&
-                slot + 1 == page.slot_count()) {
-                for (std::uint16_t at = page.slot_count(); at-- > 0;) {
-                    if (const std::optional<std::uint64_t> key = key_at(at); key.has_value()) {
-                        high_key = *key;
-                        break;
-                    }
+            const auto key_at = [&](std::uint16_t at) { return KeyAtSlot(page, at); };
+            // The leaf's highest key, before `fn` sees its last slot
+            // (`HighestKeyOf`). **Read only where a pause can follow this
+            // leaf**, so the leaves before pay nothing (DT-R4); every leaf
+            // from there to the pause is read, and one with no key holds no
+            // row to skip and leaves the mark alone.
+            if (may_end_slice && slot + 1 == page.slot_count()) {
+                if (const std::optional<std::uint64_t> key = HighestKeyOf(page); key.has_value()) {
+                    high_key = key;
                 }
             }
-            if (resuming) {
-                const std::optional<std::uint64_t> key = key_at(slot);
-                // A slot with no readable key is left to `fn`, which is the
-                // one place that decides what a dead slot means. Skipping
-                // it here would hide a corrupt page behind a resume.
-                if (key.has_value() && *key < resume_tuple_key) return storage::VisitControl::kContinue;
-            }
+            if (finished(page, slot)) return storage::VisitControl::kContinue;
             auto outcome = fn(page_id, page, slot);
             if (!outcome.ok() || !outcome.has_value()) return outcome;
             if (outcome.value() == storage::VisitControl::kStop) {
@@ -9591,17 +9658,17 @@ Status CommandDispatcher::VisitRelation(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor, WalkSlice* slice) {
+    WalkCursor* cursor, WalkSlice* slice, const LeafProbe* probe) {
     // A user relation is a btree or a heap (DN); a catalog chain is walked
     // by the catalog, never here.
     if (access.heap()) {
-        return WalkHeapPages(access, page_access, fn, cursor, slice);
+        return WalkHeapPages(access, page_access, fn, cursor, slice, probe);
     }
     if (access.clustered_type != catalog::ClusteredType::kBtree) {
         return Status::Corruption("relation oid " + std::to_string(access.oid) +
                                   " is not a btree or a heap");
     }
-    return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor, slice);
+    return WalkBtreeLeaves(access.desc_page_id, page_access, fn, cursor, slice, probe);
 }
 
 StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
@@ -9642,7 +9709,7 @@ Status CommandDispatcher::WalkHeapPages(
     const catalog::TableAccess& access, storage::PageAccess page_access,
     const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&, std::uint16_t)>&
         fn,
-    WalkCursor* cursor, WalkSlice* slice) {
+    WalkCursor* cursor, WalkSlice* slice, const LeafProbe* probe) {
     // **A heap's rows never move** (DN, invariant 13; no page divides or is
     // compacted), so a resume returns to the page and slot the walk stopped
     // at: a row it finished is behind that place and one it did not is at
@@ -9675,7 +9742,27 @@ Status CommandDispatcher::WalkHeapPages(
             cut_slot = 0;
             break;
         }
+        // The slots a resumed walk is past, for the look and the visit: those
+        // below the slot it resumed at, on the page it resumed in.
         const bool first = resuming && page == cursor->page;
+        if (probe != nullptr) {
+            // As the btree walk: a page no row of which would be written is
+            // passed over under a shared hold.
+            auto look = LookAtLeaf(
+                page_store_, page,
+                [&](heap::PageView& view, std::uint16_t slot) -> StatusOr<bool> {
+                    if (first && slot < first_slot) return false;
+                    return (*probe)(view, slot);
+                },
+                /*want_high_key=*/false);
+            if (!look.ok()) return look.status();
+            if (!look.value().wanted) {
+                ++pages_done;
+                crossed = true;
+                page = look.value().next;
+                continue;
+            }
+        }
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>
             guarded = [&](PageId page_id, heap::PageView& view,
@@ -13428,6 +13515,18 @@ public:
         return true;
     }
 
+    // **What the walk asks of a leaf before it takes it for writing**
+    // (`CommandDispatcher::LookAtLeaf`): whether stage 1 passes the row at
+    // `slot`, by the function the write itself judges it with. A row the
+    // look passes is judged again under the exclusive hold, so the look
+    // decides only which leaves are written through, never which rows.
+    const LeafProbe wants_row = [this](heap::PageView& page,
+                                       std::uint16_t slot) -> StatusOr<bool> {
+        auto qualified = Qualify(page, slot);
+        if (!qualified.ok()) return qualified.status();
+        return qualified.value().has_value();
+    };
+
     // `slice` handed to the walk, or null where this statement takes no
     // pause (`CommandDispatcher::WriteSliceFor`).
     WalkSlice* SliceOrNull() noexcept {
@@ -14277,7 +14376,7 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
                 }
                 return storage::VisitControl::kContinue;
             },
-            &walk_cursor, walk.SliceOrNull());
+            &walk_cursor, walk.SliceOrNull(), &walk.wants_row);
         // The stop left the cursor at the row, so the next walk offers it
         // again, now cleared.
         if (!scan.ok() || !unique_pending.has_value()) break;
@@ -17641,7 +17740,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
             if (walk.parked_on_row) return storage::VisitControl::kStop;
             return storage::VisitControl::kContinue;
         },
-        &walk_cursor, walk.SliceOrNull());
+        &walk_cursor, walk.SliceOrNull(), &walk.wants_row);
     if (!scan.ok()) return Refused(scan);
 
     if (auto stopped = walk.StopOutcome(walk_cursor, deleted)) return std::move(*stopped);

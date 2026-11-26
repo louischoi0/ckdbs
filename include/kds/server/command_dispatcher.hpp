@@ -2027,6 +2027,20 @@ private:
         bool paused = false;
     };
 
+    // **A write walk looks at a leaf before it takes it for writing** (DT's
+    // close, `workorder-dt-write-path-yield.md` §7): whether the visitor
+    // would write the row at a slot, asked slot by slot under a shared hold
+    // until one answers yes. A leaf no slot of which is wanted is passed
+    // over there - never fetched for write, so never marked dirty and never
+    // owed a page image for a write that did not happen (`wal.md` §10); one
+    // that is wanted is then fetched for write and visited as before, the
+    // visitor judging every row again under its exclusive hold. So the
+    // probe decides which leaves are dirtied, never which rows are written:
+    // a row that changes between the look and the visit is judged at the
+    // visit, and a row in a leaf passed over was judged at the look, which
+    // is when the walk reached it.
+    using LeafProbe = std::function<StatusOr<bool>(heap::PageView&, std::uint16_t)>;
+
     // **The query layer's door** (BU-S4, BU-Q9): `line` as the query
     // grammar reads it, run by `exec::RunQuery` at `snap`, its reply emitted
     // through the session's sink. nullopt when the query grammar refuses
@@ -2771,12 +2785,13 @@ private:
     //
     // `slice`, when set, is where the walk gives its core back (DT,
     // `WalkSlice`): it then needs `cursor`, which is where a pause leaves
-    // the walk's place.
+    // the walk's place. `probe`, when set, is asked of each leaf before it
+    // is fetched under `page_access` (`LeafProbe`).
     Status VisitRelation(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor, WalkSlice* slice = nullptr);
+        WalkCursor* cursor, WalkSlice* slice = nullptr, const LeafProbe* probe = nullptr);
 
     // The btree walk behind `VisitRelation`, and its resume shape: a resume
     // descends by key rather than returning to a remembered leaf, which is
@@ -2786,14 +2801,14 @@ private:
         PageId root, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor, WalkSlice* slice = nullptr);
+        WalkCursor* cursor, WalkSlice* slice = nullptr, const LeafProbe* probe = nullptr);
     // A heap's walk (DN): its data pages from the head in page order, a
     // resume at the page and slot it stopped at.
     Status WalkHeapPages(
         const catalog::TableAccess& access, storage::PageAccess page_access,
         const std::function<StatusOr<storage::VisitControl>(PageId, heap::PageView&,
                                                             std::uint16_t)>& fn,
-        WalkCursor* cursor, WalkSlice* slice = nullptr);
+        WalkCursor* cursor, WalkSlice* slice = nullptr, const LeafProbe* probe = nullptr);
 
     // Logs an insert **under the holds its placement handed out** (AT-S21,
     // `wal.md` §8-1), released here once the row's record is stamped - and
