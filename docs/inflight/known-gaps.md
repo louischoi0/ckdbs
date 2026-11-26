@@ -3089,8 +3089,8 @@ numbers at `70a307ea` (CU-S4, the close). Owned by `docs/spec/parser-v2.md` I10;
 
 ## A write found by a key (DU)
 
-Verified on `du-keyed-write` at `0babe36e6` (DU-S3, the closing code); the
-measured numbers at the same commit (DU-S4). Owned by `docs/spec/index.md`
+Verified on `du-keyed-write` at `0babe36e6` (DU-S3, the closing code; on
+`main` by `5f9b6546`); the measured numbers at the same commit (DU-S4). Owned by `docs/spec/index.md`
 §9a and `docs/spec/parser-v2.md` I10; the order is
 `instructions/v3.2.0/workorder-du-keyed-write.md`.
 
