@@ -1,0 +1,7 @@
+time: 2026-11-26T21:39:19Z
+loadavg: 0.62 0.99 1.86 1/1094 685680
+gate wait s: 0
+busy pct over 1 s at the gate: 1
+comm cc1plus|ctest|kds_tests|cmake|ninja|lto1 using 5 % or more of one CPU (gate v2):
+  none
+such processes present, idle or not: 1

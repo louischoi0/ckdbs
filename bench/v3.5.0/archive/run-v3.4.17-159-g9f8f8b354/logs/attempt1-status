@@ -1,0 +1,10 @@
+2026-11-26T21:02:43Z runner 618497 start
+2026-11-26T21:02:44Z cell s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:03:02Z cell s1-c1-g done rc=0
+2026-11-26T21:03:03Z cell s1-c8-g start (kds_server cores=8 group)
+2026-11-26T21:03:20Z cell s1-c8-g done rc=0
+2026-11-26T21:03:21Z cell s1-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:03:39Z cell s1-c1-s done rc=0
+2026-11-26T21:03:42Z gate s1s-n252-c1-g holding 3s busy=31%
+2026-11-26T21:03:45Z gate s1s-n252-c1-g holding 6s busy=14%
+2026-11-26T21:03:48Z gate s1s-n252-c1-g holding 9s busy=6%

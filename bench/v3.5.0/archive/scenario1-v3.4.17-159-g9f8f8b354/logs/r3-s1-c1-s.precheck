@@ -1,0 +1,6 @@
+time: 2026-11-26T21:08:50Z
+loadavg: 1.31 3.52 4.10 1/1082 628074
+gate wait s: 0
+busy pct over 1 s at the gate: 1
+comm cc1plus|ctest|kds_tests|cmake|ninja|lto1:
+  none

@@ -1,0 +1,45 @@
+2026-11-26T21:06:39Z runner=622568 alive=yes age=1s last: 2026-11-26T21:06:38Z gate s1-c1-s holding 12s busy=6% procs= 623467 cmake 
+2026-11-26T21:07:39Z runner=622568 alive=yes age=0s last: 2026-11-26T21:07:36Z cell r2-s1-c8-g start (kds_server cores=8 group)
+2026-11-26T21:08:39Z runner=622568 alive=yes age=0s last: 2026-11-26T21:08:32Z cell r3-s1-c8-g start (kds_server cores=8 group)
+2026-11-26T21:09:39Z runner=622568 alive=yes age=0s last: 2026-11-26T21:09:39Z cell s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:10:39Z runner=622568 alive=yes age=0s last: 2026-11-26T21:10:37Z cell x-b1-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:11:39Z runner=622568 alive=yes age=1s last: 2026-11-26T21:11:38Z cell r3-b1-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:12:39Z runner=622568 alive=yes age=0s last: 2026-11-26T21:12:39Z cell r2-s3-c1-n1000-none done rc=0
+2026-11-26T21:13:39Z runner=622568 alive=yes age=2s last: 2026-11-26T21:13:37Z gate r3-s3-c1-n200-none holding 6s busy=5% procs= 638079 cmake 638165 cc1plus 
+2026-11-26T21:14:39Z runner=622568 alive=yes age=3s last: 2026-11-26T21:14:35Z cell r3-s3-c8-n10000-none start (kds_server cores=8 group)
+2026-11-26T21:15:39Z runner=622568 alive=yes age=29s last: 2026-11-26T21:15:09Z cell s4 start (kds_server, three servers)
+2026-11-26T21:16:39Z runner=622568 alive=yes age=89s last: 2026-11-26T21:15:09Z cell s4 start (kds_server, three servers)
+2026-11-26T21:17:39Z runner=622568 alive=yes age=149s last: 2026-11-26T21:15:09Z cell s4 start (kds_server, three servers)
+2026-11-26T21:18:39Z runner=622568 alive=yes age=209s last: 2026-11-26T21:15:09Z cell s4 start (kds_server, three servers)
+2026-11-26T21:19:40Z runner=622568 alive=yes age=269s last: 2026-11-26T21:15:09Z cell s4 start (kds_server, three servers)
+2026-11-26T21:20:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:20:33Z cell ab-new1-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:21:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:21:39Z gate ab-new1-s2-c1-g holding 46s busy=5% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:22:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:22:39Z gate ab-new1-s2-c1-g holding 106s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:23:40Z runner=622568 alive=yes age=0s last: 2026-11-26T21:23:40Z gate ab-new1-s2-c1-g holding 167s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:24:40Z runner=622568 alive=yes age=3s last: 2026-11-26T21:24:37Z gate ab-new1-s2-c1-g holding 224s busy=5% procs= 651414 ctest 658829 kds_tests 
+2026-11-26T21:25:40Z runner=622568 alive=yes age=2s last: 2026-11-26T21:25:38Z gate ab-new1-s2-c1-g holding 285s busy=5% procs= 651414 ctest 
+2026-11-26T21:26:40Z runner=622568 alive=yes age=2s last: 2026-11-26T21:26:38Z gate ab-new1-s2-c1-g holding 345s busy=5% procs= 651414 ctest 664318 kds_tests 
+2026-11-26T21:27:40Z runner=622568 alive=yes age=2s last: 2026-11-26T21:27:38Z gate ab-new1-s2-c1-g holding 405s busy=5% procs= 651414 ctest 665830 kds_tests 
+2026-11-26T21:28:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:28:39Z gate ab-new1-s2-c1-g holding 466s busy=5% procs= 651414 ctest 667989 kds_tests 
+2026-11-26T21:29:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:29:39Z gate ab-new1-s2-c1-g holding 526s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:30:40Z runner=622568 alive=yes age=0s last: 2026-11-26T21:30:40Z gate ab-new1-s2-c1-g holding 587s busy=5% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:31:40Z runner=622568 alive=yes age=3s last: 2026-11-26T21:31:37Z gate ab-new1-s2-c1-g holding 644s busy=5% procs= 651414 ctest 673766 kds_tests 
+2026-11-26T21:32:40Z runner=622568 alive=yes age=3s last: 2026-11-26T21:32:37Z gate ab-new1-s2-c1-g holding 704s busy=5% procs= 651414 ctest 675264 kds_tests 
+2026-11-26T21:33:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:33:39Z gate ab-old2-s1-c1-g holding 18s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:40Z runner=622568 alive=yes age=1s last: 2026-11-26T21:34:39Z gate ab-old2-s1-c1-g holding 78s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:40Z runner=622568 alive=yes age=3s last: 2026-11-26T21:35:37Z gate ab-old2-s1-c1-g holding 136s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:40Z runner=622568 alive=yes age=2s last: 2026-11-26T21:36:38Z gate ab-old2-s1-c1-g holding 197s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:40Z runner=622568 alive=yes age=2s last: 2026-11-26T21:37:38Z gate ab-old2-s1-c1-g holding 257s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:40:00Z runner=684971 alive=yes age=5s last: 2026-11-26T21:39:48Z cell ab-new2-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:41:00Z runner=684971 alive=yes age=4s last: 2026-11-26T21:40:56Z cell ab-old3-s3-c1-n10000-none start (kds_server_old cores=1 group)
+2026-11-26T21:42:00Z runner=684971 alive=yes age=0s last: 2026-11-26T21:42:00Z phase ab end
+2026-11-26T21:43:00Z runner=684971 alive=yes age=59s last: 2026-11-26T21:42:01Z cell ab-old1-s4 start (kds_server_old, three servers)
+2026-11-26T21:44:00Z runner=684971 alive=yes age=119s last: 2026-11-26T21:42:01Z cell ab-old1-s4 start (kds_server_old, three servers)
+2026-11-26T21:45:00Z runner=684971 alive=yes age=179s last: 2026-11-26T21:42:01Z cell ab-old1-s4 start (kds_server_old, three servers)
+2026-11-26T21:46:00Z runner=684971 alive=yes age=239s last: 2026-11-26T21:42:01Z cell ab-old1-s4 start (kds_server_old, three servers)
+2026-11-26T21:47:00Z runner=684971 alive=yes age=5s last: 2026-11-26T21:46:55Z cell cd2-s4 start (kds_server, three servers)
+2026-11-26T21:48:00Z runner=684971 alive=yes age=65s last: 2026-11-26T21:46:55Z cell cd2-s4 start (kds_server, three servers)
+2026-11-26T21:49:00Z runner=684971 alive=yes age=125s last: 2026-11-26T21:46:55Z cell cd2-s4 start (kds_server, three servers)
+2026-11-26T21:50:00Z runner=684971 alive=yes age=185s last: 2026-11-26T21:46:55Z cell cd2-s4 start (kds_server, three servers)
+2026-11-26T21:51:00Z runner=684971 alive=yes age=245s last: 2026-11-26T21:46:55Z cell cd2-s4 start (kds_server, three servers)
+2026-11-26T21:52:00Z DONE seen, watchdog exits

@@ -1,0 +1,5 @@
+2026-11-26T22:08:49Z runner3=726022 alive=yes age=63s last: 2026-11-26T22:07:46Z cell r2-s4 start (kds_server, three servers)
+2026-11-26T22:09:49Z runner3=726022 alive=yes age=123s last: 2026-11-26T22:07:46Z cell r2-s4 start (kds_server, three servers)
+2026-11-26T22:10:49Z runner3=726022 alive=yes age=183s last: 2026-11-26T22:07:46Z cell r2-s4 start (kds_server, three servers)
+2026-11-26T22:11:49Z runner3=726022 alive=yes age=243s last: 2026-11-26T22:07:46Z cell r2-s4 start (kds_server, three servers)
+2026-11-26T22:12:49Z DONE3 seen, watchdog3 exits

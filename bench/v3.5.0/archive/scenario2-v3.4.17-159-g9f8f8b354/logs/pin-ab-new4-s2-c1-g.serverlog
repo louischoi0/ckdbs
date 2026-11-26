@@ -1,0 +1,8 @@
+1795730750 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 703000, revenue = 5784185 WHERE id = 582" -> ERR TXN_CONFLICT retryable=1 row id=582 was written by transaction 9777 in 4us
+1795730750 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 500000, revenue = 2983207 WHERE id = 592" -> ERR TXN_CONFLICT retryable=1 row id=592 was written by transaction 11176 in 4us
+1795730750 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 8813265 WHERE id = 389" -> ERR TXN_CONFLICT retryable=1 row id=389 was written by transaction 11224 in 4us
+1795730750 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 7052787 WHERE id = 327" -> ERR TXN_CONFLICT retryable=1 row id=327 was written by transaction 11345 in 3us
+1795730750 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 12218396 WHERE id = 480" -> ERR TXN_CONFLICT retryable=1 row id=480 was written by transaction 11447 in 4us
+1795730751 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 10212643 WHERE id = 420" -> ERR TXN_CONFLICT retryable=1 row id=420 was written by transaction 12176 in 4us
+1795730751 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 2208000, revenue = 15042115 WHERE id = 484" -> ERR TXN_CONFLICT retryable=1 row id=484 was written by transaction 12596 in 4us
+1795730751 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 2339000, revenue = 20334983 WHERE id = 344" -> ERR TXN_CONFLICT retryable=1 row id=344 was written by transaction 12734 in 4us

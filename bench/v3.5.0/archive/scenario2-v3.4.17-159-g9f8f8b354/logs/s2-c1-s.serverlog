@@ -1,0 +1,10 @@
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 347000, revenue = 3893649 WHERE id = 478" -> ERR TXN_CONFLICT retryable=1 row id=478 was written by transaction 9592 in 6us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 387000, revenue = 2170539 WHERE id = 555" -> ERR TXN_CONFLICT retryable=1 row id=555 was written by transaction 9641 in 6us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1055000, revenue = 7910973 WHERE id = 582" -> ERR TXN_CONFLICT retryable=1 row id=582 was written by transaction 9923 in 6us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 696000, revenue = 5816658 WHERE id = 577" -> ERR TXN_CONFLICT retryable=1 row id=577 was written by transaction 10248 in 4us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1088000, revenue = 8201021 WHERE id = 396" -> ERR TXN_CONFLICT retryable=1 row id=396 was written by transaction 10757 in 5us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 754000, revenue = 5525563 WHERE id = 538" -> ERR TXN_CONFLICT retryable=1 row id=538 was written by transaction 10837 in 6us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 495000, revenue = 4720108 WHERE id = 407" -> ERR TXN_CONFLICT retryable=1 row id=407 was written by transaction 10967 in 6us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 2041000, revenue = 14332223 WHERE id = 496" -> ERR TXN_CONFLICT retryable=1 row id=496 was written by transaction 11588 in 5us
+1795727385 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1418000, revenue = 10605150 WHERE id = 483" -> ERR TXN_CONFLICT retryable=1 row id=483 was written by transaction 12005 in 6us
+1795727386 WARN [query] "UPDATE operations_s2c1s SET booked_cbm = 1012000, revenue = 7628182 WHERE id = 553" -> ERR TXN_CONFLICT retryable=1 row id=553 was written by transaction 12333 in 5us

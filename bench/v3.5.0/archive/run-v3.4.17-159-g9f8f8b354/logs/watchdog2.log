@@ -1,0 +1,16 @@
+2026-11-26T21:52:31Z runner2=684990 alive=yes age=1s last: 2026-11-26T21:52:29Z cell pin-ab-old1-s2-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T21:53:31Z runner2=684990 alive=yes age=2s last: 2026-11-26T21:53:29Z gate pin-ab-new1-b1-s2-c1-s holding 9s busy=5% procs= 708836 exited-in-sample 
+2026-11-26T21:54:31Z runner2=684990 alive=yes age=2s last: 2026-11-26T21:54:29Z gate pin-ab-new1-s3-c1-n10000-none holding 9s busy=5% procs= 701445 ctest 7% 712010 exited-in-sample 
+2026-11-26T21:55:31Z runner2=684990 alive=yes age=1s last: 2026-11-26T21:55:30Z gate pin-ab-new1-s3-c1-n10000-none holding 70s busy=5% procs= 714835 kds_tests 101% 
+2026-11-26T21:56:31Z runner2=684990 alive=yes age=0s last: 2026-11-26T21:56:31Z gate pin-ab-new1-s3-c1-n10000-none holding 131s busy=5% procs= 716121 exited-in-sample 
+2026-11-26T21:57:31Z runner2=684990 alive=yes age=0s last: 2026-11-26T21:57:31Z gate pin-ab-new1-s3-c1-n10000-none holding 191s busy=5% procs= 718793 kds_tests 101% 
+2026-11-26T21:58:31Z runner2=684990 alive=yes age=2s last: 2026-11-26T21:58:29Z gate pin-ab-new1-s3-c1-n10000-none holding 249s busy=5% procs= 701445 ctest 5% 
+2026-11-26T21:59:31Z runner2=684990 alive=yes age=2s last: 2026-11-26T21:59:29Z gate pin-ab-new1-s3-c1-n10000-none holding 309s busy=6% procs= 723172 exited-in-sample 
+2026-11-26T22:00:49Z runner2=723918 alive=yes age=2s last: 2026-11-26T22:00:47Z gate pin-ab-new1-s3-c1-n10000-none holding 58s busy=8% procs= 725200 exited-in-sample 
+2026-11-26T22:01:49Z runner2=723918 alive=yes age=2s last: 2026-11-26T22:01:47Z cell pin-ab-new1-s3-c1-n10000-all start (pin_new.sh cores=1 group)
+2026-11-26T22:02:49Z runner2=723918 alive=yes age=2s last: 2026-11-26T22:02:37Z cell pin-ab-new2-s1-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:03:49Z runner2=723918 alive=yes age=0s last: 2026-11-26T22:03:49Z cell pin-ab-old3-s2-c8-g done rc=0
+2026-11-26T22:04:49Z runner2=723918 alive=yes age=0s last: 2026-11-26T22:04:49Z pinned A/B pair 3 end
+2026-11-26T22:05:49Z runner2=723918 alive=yes age=1s last: 2026-11-26T22:05:48Z cell pin-ab-new4-s2-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:06:49Z runner2=723918 alive=yes age=2s last: 2026-11-26T22:06:47Z cell pin-ab-old5-s3-c1-n10000-none start (pin_old.sh cores=1 group)
+2026-11-26T22:07:49Z DONE2 seen, watchdog2 exits

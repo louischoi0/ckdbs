@@ -1,0 +1,12 @@
+created 8 relations with suffix _abs2c8g:
+  organizations_abs2c8g
+  ships_abs2c8g
+  operations_abs2c8g
+  cargos_abs2c8g
+  fees_abs2c8g
+  recipes_abs2c8g
+  freights_abs2c8g
+  charges_abs2c8g
+
+--schema-only: stopping before the load. Drive this data file with
+  /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/src/tools/scenario2_freight.py --suffix abs2c8g [--load-only]

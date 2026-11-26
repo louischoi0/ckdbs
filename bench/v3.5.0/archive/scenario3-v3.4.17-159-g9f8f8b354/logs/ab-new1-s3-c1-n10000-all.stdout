@@ -1,0 +1,61 @@
+
+ckdbs benchmark - 34 columns, 10000 rows resident, 1 connection
+server 127.0.0.1:15720  table users_ab_new1_s3_c1_n10000_all, books_ab_new1_s3_c1_n10000_all, reservations_ab_new1_s3_c1_n10000_all, loans_ab_new1_s3_c1_n10000_all
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0     488.9    165.6    165.6    178.9   1324.4   1324.4    1324.4     0
+load                     19000         0     350.1    124.5    139.6    154.7    362.6  10777.9   55066.7     0
+create-index                 8         0   11224.3   1794.1   2083.8   8777.1  20006.4  20006.4   20006.4     0
+pk-user                    200         0      43.9     41.5     42.1     42.4     44.6     52.6     254.9     0
+loans-by-user              200         0      55.7     46.8     52.3     55.2     62.6     64.3     179.0     0
+loans-by-book              200         0      51.7     41.5     49.1     51.6     57.8     60.4      61.9     0
+resv-by-user               200         0      48.2     39.5     46.6     48.0     53.0     56.0      67.1     0
+books-by-author            200         0      50.6     40.9     48.6     50.2     57.8     60.6      68.2     0
+books-by-genre             200         0     197.0    180.3    190.4    196.5    209.0    213.6     214.6     0
+loans-by-daterange         200         0     621.6    211.9    609.1    631.9    673.0    690.3     743.5     0
+overdue                    200         0     398.5     47.2    395.0    412.7    457.0    464.4     472.3     0
+join-loan-user             200         0      61.5     54.6     58.8     61.2     66.8     72.3      96.0     0
+join-no-literal            200         0     145.0    142.1    143.5    144.0    147.3    165.3     191.5     0
+exists-correlated          200         0      86.1     84.6     85.3     85.6     88.0     94.0     122.3     0
+count-by-user              200         0      43.3     40.5     42.2     43.0     45.5     46.9      57.8     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - Lookup, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), cabin off, server indexes on
+  sizes: users=2000, books=2000, reservations=5000, loans=10000
+  ANALYZE (the access kind each shape compiled to):
+      loans-by-user: IndexProbe
+      loans-by-book: IndexProbe
+      resv-by-user: IndexProbe
+      books-by-author: IndexProbe
+      books-by-genre: IndexProbe
+      loans-by-daterange: Scan
+      overdue: IndexRange
+      join-no-literal: Range, IndexProbe
+      exists-correlated: Range, IndexProbe
+  SHOW INDEXES:
+      index_oid,name,rel_oid,namespace,rel_name,keys,covering,root_page,key_width,entry_width,height,entries,unique,probes,ranges,entries_scanned,rows_resolved,last_used,leaf_divisions
+      1,loans_user_ab_new1_s3_c1_n10000_all,4029,public,loans_ab_new1_s3_c1_n10000_all,user_id,NULL,383,9,17,2,10000,0,7898,0,38687,23133,2026-11-26 21:33:21.062173,31
+      2,loans_book_ab_new1_s3_c1_n10000_all,4029,public,loans_ab_new1_s3_c1_n10000_all,book_id,NULL,416,9,17,2,10000,0,201,0,1036,1036,2026-11-26 21:33:21.042836,31
+      3,resv_user_ab_new1_s3_c1_n10000_all,4021,public,reservations_ab_new1_s3_c1_n10000_all,user_id,NULL,449,9,17,2,5000,0,201,0,503,503,2026-11-26 21:33:21.042902,15
+      4,books_author_ab_new1_s3_c1_n10000_all,4010,public,books_ab_new1_s3_c1_n10000_all,author_id,NULL,466,9,17,2,2000,0,201,0,884,884,2026-11-26 21:33:21.042963,7
+      5,books_genre_ab_new1_s3_c1_n10000_all,4010,public,books_ab_new1_s3_c1_n10000_all,genre,NULL,475,5,13,2,2000,0,201,0,25025,25025,2026-11-26 21:33:21.043020,3
+      6,loans_status_due_ab_new1_s3_c1_n10000_all,4029,public,loans_ab_new1_s3_c1_n10000_all,status,due_day,NULL,480,10,18,2,10000,0,0,201,55808,55808,2026-11-26 21:33:21.043441,31
+      7,books_branch_genre_ab_new1_s3_c1_n10000_all,4010,public,books_ab_new1_s3_c1_n10000_all,branch_id,genre,NULL,513,10,18,2,2000,0,0,0,0,0,NULL,7
+      8,loans_user_cov_ab_new1_s3_c1_n10000_all,4029,public,loans_ab_new1_s3_c1_n10000_all,user_id,book_id,due_day,status,522,9,33,2,10000,0,0,0,0,0,NULL,63
+  wrote /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/out/json/ab-new1-s3-c1-n10000-all.json

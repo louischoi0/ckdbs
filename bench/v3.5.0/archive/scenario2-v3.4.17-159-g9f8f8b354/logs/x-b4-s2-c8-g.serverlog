@@ -1,0 +1,1 @@
+1795727459 WARN [query] "UPDATE operations_xb4c8g SET booked_cbm = 1229000, revenue = 7247613 WHERE id = 575" -> ERR TXN_CONFLICT retryable=1 row id=575 was written by transaction 78287 in 7us

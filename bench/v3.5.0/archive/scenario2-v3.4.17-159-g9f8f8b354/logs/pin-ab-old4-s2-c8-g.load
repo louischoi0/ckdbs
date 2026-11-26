@@ -1,0 +1,33 @@
+created 8 relations with suffix _pabs2c8g:
+  organizations_pabs2c8g
+  ships_pabs2c8g
+  operations_pabs2c8g
+  cargos_pabs2c8g
+  fees_pabs2c8g
+  recipes_pabs2c8g
+  freights_pabs2c8g
+  charges_pabs2c8g
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/src/tools/scenario2_freight.py --suffix pabs2c8g
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15705  table scenario2_pabs2c8g
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     679.7    391.6    395.7    680.4    951.8    951.8     951.8     0
+load-organizations         300         0     169.0    142.0    144.9    147.2    237.4    578.3     742.3     0
+load-ships                  30         0     146.2    138.3    142.8    143.7    159.0    182.1     182.1     0
+load-operations            300         0     150.0    138.1    141.2    143.4    172.1    262.0     479.2     0
+load-fees                   12         0     150.6    144.0    144.5    145.9    174.6    174.6     174.6     0
+load-recipes                93         0     156.4    144.7    147.1    147.8    225.6    305.1     305.1     0
+load-cargos               4000         0     155.1    136.5    144.9    147.8    179.0    228.9    1045.8     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

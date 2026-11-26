@@ -1,0 +1,11 @@
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 132000, revenue = 785024 WHERE id = 497" -> ERR TXN_CONFLICT retryable=1 row id=497 was written by transaction 9595 in 4us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 270000, revenue = 1468266 WHERE id = 529" -> ERR TXN_CONFLICT retryable=1 row id=529 was written by transaction 9755 in 4us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 519000, revenue = 5294488 WHERE id = 369" -> ERR TXN_CONFLICT retryable=1 row id=369 was written by transaction 10106 in 4us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 1501000, revenue = 8472355 WHERE id = 559" -> ERR TXN_CONFLICT retryable=1 row id=559 was written by transaction 10609 in 4us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 1372000, revenue = 9262446 WHERE id = 566" -> ERR TXN_CONFLICT retryable=1 row id=566 was written by transaction 10614 in 3us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 1537000, revenue = 11020677 WHERE id = 369" -> ERR TXN_CONFLICT retryable=1 row id=369 was written by transaction 10826 in 4us
+1795730710 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 14007394 WHERE id = 390" -> ERR TXN_CONFLICT retryable=1 row id=390 was written by transaction 10880 in 4us
+1795730710 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 4857325 WHERE id = 461" -> ERR TXN_CONFLICT retryable=1 row id=461 was written by transaction 11114 in 3us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 1938000, revenue = 13287882 WHERE id = 473" -> ERR TXN_CONFLICT retryable=1 row id=473 was written by transaction 11665 in 4us
+1795730710 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 2458000, revenue = 15973551 WHERE id = 435" -> ERR TXN_CONFLICT retryable=1 row id=435 was written by transaction 11987 in 4us
+1795730710 WARN [query] "SELECT booked_cbm, revenue FROM operations_pabs2c1g WHERE id = 304" -> ERR undo chain revisits the record at 8847416; the links are cyclic in 4us

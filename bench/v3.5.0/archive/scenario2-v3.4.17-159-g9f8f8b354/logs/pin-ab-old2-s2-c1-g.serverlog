@@ -1,0 +1,11 @@
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 10000, revenue = 56610 WHERE id = 497" -> ERR TXN_CONFLICT retryable=1 row id=497 was written by transaction 9587 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 65000, revenue = 909972 WHERE id = 314" -> ERR TXN_CONFLICT retryable=1 row id=314 was written by transaction 9641 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 378000, revenue = 2079008 WHERE id = 511" -> ERR TXN_CONFLICT retryable=1 row id=511 was written by transaction 9898 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 659000, revenue = 3783283 WHERE id = 434" -> ERR TXN_CONFLICT retryable=1 row id=434 was written by transaction 10097 in 4us
+1795730537 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 1928515 WHERE id = 398" -> ERR TXN_CONFLICT retryable=1 row id=398 was written by transaction 10131 in 3us
+1795730537 WARN [query] "UPDATE organizations_pabs2c1g SET outstanding = 5705580 WHERE id = 391" -> ERR TXN_CONFLICT retryable=1 row id=391 was written by transaction 10640 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 1176000, revenue = 10485247 WHERE id = 482" -> ERR TXN_CONFLICT retryable=1 row id=482 was written by transaction 10724 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 889000, revenue = 5298615 WHERE id = 332" -> ERR TXN_CONFLICT retryable=1 row id=332 was written by transaction 10797 in 3us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 1424000, revenue = 12386660 WHERE id = 532" -> ERR TXN_CONFLICT retryable=1 row id=532 was written by transaction 11577 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 2830000, revenue = 18607477 WHERE id = 545" -> ERR TXN_CONFLICT retryable=1 row id=545 was written by transaction 12063 in 4us
+1795730537 WARN [query] "UPDATE operations_pabs2c1g SET booked_cbm = 3223000, revenue = 23343875 WHERE id = 433" -> ERR TXN_CONFLICT retryable=1 row id=433 was written by transaction 12558 in 4us

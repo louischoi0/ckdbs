@@ -1,0 +1,11 @@
+1795727389 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 387000, revenue = 2170539 WHERE id = 555" -> ERR TXN_CONFLICT retryable=1 row id=555 was written by transaction 9657 in 6us
+1795727389 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 1978326 WHERE id = 356" -> ERR TXN_CONFLICT retryable=1 row id=356 was written by transaction 9679 in 5us
+1795727389 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 573000, revenue = 3987041 WHERE id = 476" -> ERR TXN_CONFLICT retryable=1 row id=476 was written by transaction 10218 in 4us
+1795727390 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 822000, revenue = 5271165 WHERE id = 424" -> ERR TXN_CONFLICT retryable=1 row id=424 was written by transaction 10616 in 5us
+1795727390 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 6970901 WHERE id = 310" -> ERR TXN_CONFLICT retryable=1 row id=310 was written by transaction 10681 in 6us
+1795727390 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 2369000, revenue = 17352157 WHERE id = 491" -> ERR TXN_CONFLICT retryable=1 row id=491 was written by transaction 10910 in 6us
+1795727390 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 651000, revenue = 5290875 WHERE id = 578" -> ERR TXN_CONFLICT retryable=1 row id=578 was written by transaction 11316 in 5us
+1795727390 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 869000, revenue = 5920941 WHERE id = 578" -> ERR TXN_CONFLICT retryable=1 row id=578 was written by transaction 11325 in 4us
+1795727390 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 939000, revenue = 8960607 WHERE id = 358" -> ERR TXN_CONFLICT retryable=1 row id=358 was written by transaction 11691 in 6us
+1795727390 WARN [query] "UPDATE operations_s2c1g SET booked_cbm = 1621000, revenue = 11718135 WHERE id = 507" -> ERR TXN_CONFLICT retryable=1 row id=507 was written by transaction 12055 in 6us
+1795727390 WARN [query] "UPDATE organizations_s2c1g SET outstanding = 16106146 WHERE id = 381" -> ERR TXN_CONFLICT retryable=1 row id=381 was written by transaction 12293 in 5us

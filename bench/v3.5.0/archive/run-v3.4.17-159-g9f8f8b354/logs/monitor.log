@@ -1,0 +1,1784 @@
+2026-11-26T21:05:38Z load=1.20 foreign=622467:99.1:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:05:40Z load=1.26 foreign=622554:99.4:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:05:42Z load=1.26 foreign=622554:99.7:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:05:44Z load=1.26 foreign=none
+2026-11-26T21:05:46Z load=1.40 foreign=4091:10.9:claude | 
+2026-11-26T21:05:49Z load=1.40 foreign=none
+2026-11-26T21:05:51Z load=1.29 foreign=none
+2026-11-26T21:05:53Z load=1.29 foreign=none
+2026-11-26T21:05:55Z load=1.35 foreign=none
+2026-11-26T21:05:58Z load=1.35 foreign=none
+2026-11-26T21:06:00Z load=1.32 foreign=none
+2026-11-26T21:06:02Z load=1.32 foreign=none
+2026-11-26T21:06:04Z load=1.29 foreign=none
+2026-11-26T21:06:07Z load=1.29 foreign=4091:19.7:claude | 
+2026-11-26T21:06:09Z load=1.29 foreign=14769:12.8:claude | 
+2026-11-26T21:06:11Z load=1.35 foreign=623504:42.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:13Z load=1.35 foreign=623504:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:16Z load=1.48 foreign=623504:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:18Z load=1.48 foreign=623504:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:20Z load=1.60 foreign=none
+2026-11-26T21:06:22Z load=1.60 foreign=623731:28.8:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 623741:27.8:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 623744:26.8:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:06:24Z load=1.64 foreign=623748:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:27Z load=1.64 foreign=623874:85.4:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:06:29Z load=1.64 foreign=623874:98.9:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:06:31Z load=1.66 foreign=623874:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:06:33Z load=1.66 foreign=624012:99.3:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:06:36Z load=1.61 foreign=none
+2026-11-26T21:06:38Z load=1.61 foreign=624203:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:40Z load=1.56 foreign=624203:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:42Z load=1.56 foreign=624203:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:45Z load=1.60 foreign=624203:98.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:06:47Z load=1.60 foreign=none
+2026-11-26T21:06:49Z load=1.60 foreign=624512:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:06:51Z load=1.71 foreign=624512:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:06:53Z load=1.71 foreign=624628:74.2:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:06:56Z load=1.65 foreign=624628:99.1:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:06:58Z load=1.65 foreign=624681:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 624682:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 624707:50.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 624708:47.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 624709:46.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 624786:15.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:07:00Z load=1.60 foreign=4091:11.9:claude | 
+2026-11-26T21:07:02Z load=1.60 foreign=none
+2026-11-26T21:07:05Z load=1.63 foreign=none
+2026-11-26T21:07:07Z load=1.63 foreign=none
+2026-11-26T21:07:09Z load=1.63 foreign=none
+2026-11-26T21:07:11Z load=1.50 foreign=none
+2026-11-26T21:07:14Z load=1.50 foreign=none
+2026-11-26T21:07:16Z load=1.46 foreign=none
+2026-11-26T21:07:18Z load=1.46 foreign=4091:19.9:claude | 
+2026-11-26T21:07:20Z load=1.42 foreign=none
+2026-11-26T21:07:22Z load=1.42 foreign=none
+2026-11-26T21:07:25Z load=1.31 foreign=14769:20.9:claude | 
+2026-11-26T21:07:27Z load=1.31 foreign=none
+2026-11-26T21:07:29Z load=1.31 foreign=none
+2026-11-26T21:07:31Z load=1.28 foreign=none
+2026-11-26T21:07:34Z load=1.28 foreign=none
+2026-11-26T21:07:36Z load=1.34 foreign=none
+2026-11-26T21:07:38Z load=1.34 foreign=none
+2026-11-26T21:07:40Z load=1.39 foreign=none
+2026-11-26T21:07:43Z load=1.39 foreign=14769:23.8:claude | 
+2026-11-26T21:07:45Z load=1.44 foreign=none
+2026-11-26T21:07:47Z load=1.44 foreign=4091:16.7:claude | 
+2026-11-26T21:07:49Z load=1.44 foreign=4091:10.8:claude | 
+2026-11-26T21:07:51Z load=1.49 foreign=none
+2026-11-26T21:07:54Z load=1.49 foreign=14769:11.9:claude | 
+2026-11-26T21:07:56Z load=1.45 foreign=none
+2026-11-26T21:07:58Z load=1.45 foreign=none
+2026-11-26T21:08:00Z load=1.41 foreign=4091:13.9:claude | 
+2026-11-26T21:08:03Z load=1.41 foreign=4091:23.8:claude | 
+2026-11-26T21:08:05Z load=1.46 foreign=none
+2026-11-26T21:08:07Z load=1.46 foreign=none
+2026-11-26T21:08:09Z load=1.50 foreign=none
+2026-11-26T21:08:12Z load=1.50 foreign=none
+2026-11-26T21:08:14Z load=1.50 foreign=none
+2026-11-26T21:08:16Z load=1.46 foreign=none
+2026-11-26T21:08:18Z load=1.46 foreign=none
+2026-11-26T21:08:21Z load=1.43 foreign=none
+2026-11-26T21:08:23Z load=1.43 foreign=none
+2026-11-26T21:08:25Z load=1.39 foreign=4091:15.9:claude | 
+2026-11-26T21:08:27Z load=1.39 foreign=none
+2026-11-26T21:08:29Z load=1.44 foreign=none
+2026-11-26T21:08:32Z load=1.44 foreign=14239:24.7:claude | 
+2026-11-26T21:08:34Z load=1.44 foreign=14769:12.9:claude | 
+2026-11-26T21:08:36Z load=1.41 foreign=none
+2026-11-26T21:08:38Z load=1.41 foreign=none
+2026-11-26T21:08:41Z load=1.37 foreign=none
+2026-11-26T21:08:43Z load=1.37 foreign=none
+2026-11-26T21:08:45Z load=1.42 foreign=none
+2026-11-26T21:08:47Z load=1.42 foreign=4091:15.7:claude | 
+2026-11-26T21:08:50Z load=1.31 foreign=none
+2026-11-26T21:08:52Z load=1.31 foreign=none
+2026-11-26T21:08:54Z load=1.31 foreign=none
+2026-11-26T21:08:56Z load=1.20 foreign=none
+2026-11-26T21:08:58Z load=1.20 foreign=none
+2026-11-26T21:09:01Z load=1.19 foreign=none
+2026-11-26T21:09:03Z load=1.19 foreign=none
+2026-11-26T21:09:05Z load=1.25 foreign=none
+2026-11-26T21:09:07Z load=1.25 foreign=none
+2026-11-26T21:09:10Z load=1.15 foreign=none
+2026-11-26T21:09:12Z load=1.15 foreign=none
+2026-11-26T21:09:14Z load=1.15 foreign=none
+2026-11-26T21:09:16Z load=1.22 foreign=none
+2026-11-26T21:09:19Z load=1.22 foreign=none
+2026-11-26T21:09:21Z load=1.12 foreign=none
+2026-11-26T21:09:23Z load=1.12 foreign=none
+2026-11-26T21:09:25Z load=1.11 foreign=none
+2026-11-26T21:09:28Z load=1.11 foreign=none
+2026-11-26T21:09:30Z load=1.10 foreign=none
+2026-11-26T21:09:32Z load=1.10 foreign=none
+2026-11-26T21:09:34Z load=1.10 foreign=none
+2026-11-26T21:09:37Z load=1.09 foreign=none
+2026-11-26T21:09:39Z load=1.09 foreign=none
+2026-11-26T21:09:41Z load=1.17 foreign=none
+2026-11-26T21:09:43Z load=1.17 foreign=14769:11.9:claude | 
+2026-11-26T21:09:45Z load=1.15 foreign=none
+2026-11-26T21:09:48Z load=1.15 foreign=none
+2026-11-26T21:09:50Z load=1.30 foreign=629971:10.9:/usr/bin/python3 -c import | 629973:10.9:/usr/bin/python3 -c import | 629974:10.9:/usr/bin/python3 -c import | 629975:10.9:/usr/bin/python3 -c import | 629976:10.9:/usr/bin/python3 -c import | 629977:10.9:/usr/bin/python3 -c import | 
+2026-11-26T21:09:52Z load=1.30 foreign=4091:24.8:claude | 
+2026-11-26T21:09:54Z load=1.28 foreign=none
+2026-11-26T21:09:57Z load=1.28 foreign=none
+2026-11-26T21:09:59Z load=1.28 foreign=none
+2026-11-26T21:10:01Z load=1.25 foreign=none
+2026-11-26T21:10:03Z load=1.25 foreign=none
+2026-11-26T21:10:06Z load=1.23 foreign=none
+2026-11-26T21:10:08Z load=1.23 foreign=none
+2026-11-26T21:10:10Z load=1.21 foreign=none
+2026-11-26T21:10:12Z load=1.21 foreign=none
+2026-11-26T21:10:15Z load=1.12 foreign=none
+2026-11-26T21:10:17Z load=1.12 foreign=none
+2026-11-26T21:10:19Z load=1.12 foreign=none
+2026-11-26T21:10:21Z load=1.27 foreign=none
+2026-11-26T21:10:23Z load=1.27 foreign=14769:14.9:claude | 
+2026-11-26T21:10:26Z load=1.25 foreign=631105:10.9:/usr/bin/python3 -c import | 631116:10.9:/usr/bin/python3 -c import | 
+2026-11-26T21:10:28Z load=1.25 foreign=none
+2026-11-26T21:10:30Z load=1.23 foreign=none
+2026-11-26T21:10:32Z load=1.23 foreign=none
+2026-11-26T21:10:35Z load=1.21 foreign=none
+2026-11-26T21:10:37Z load=1.21 foreign=none
+2026-11-26T21:10:39Z load=1.21 foreign=631638:12.9:/usr/bin/python3 -c import | 
+2026-11-26T21:10:41Z load=1.27 foreign=none
+2026-11-26T21:10:44Z load=1.27 foreign=none
+2026-11-26T21:10:46Z load=1.17 foreign=631781:36.6:/usr/bin/python3 -c import | 
+2026-11-26T21:10:48Z load=1.17 foreign=none
+2026-11-26T21:10:50Z load=1.16 foreign=631989:22.8:/usr/bin/python3 -c import | 631990:22.8:/usr/bin/python3 -c import | 
+2026-11-26T21:10:53Z load=1.16 foreign=none
+2026-11-26T21:10:55Z load=1.06 foreign=632082:21.8:/usr/bin/python3 -c import | 632081:20.8:/usr/bin/python3 -c import | 
+2026-11-26T21:10:57Z load=1.06 foreign=none
+2026-11-26T21:10:59Z load=1.06 foreign=none
+2026-11-26T21:11:02Z load=1.06 foreign=none
+2026-11-26T21:11:04Z load=1.06 foreign=none
+2026-11-26T21:11:06Z load=1.05 foreign=none
+2026-11-26T21:11:08Z load=1.05 foreign=none
+2026-11-26T21:11:10Z load=1.05 foreign=none
+2026-11-26T21:11:13Z load=1.05 foreign=none
+2026-11-26T21:11:15Z load=1.12 foreign=632928:31.8:/usr/bin/python3 -c import | 
+2026-11-26T21:11:17Z load=1.12 foreign=none
+2026-11-26T21:11:19Z load=1.11 foreign=633100:10.9:/usr/bin/python3 -c import | 
+2026-11-26T21:11:22Z load=1.11 foreign=none
+2026-11-26T21:11:24Z load=1.11 foreign=none
+2026-11-26T21:11:26Z load=1.11 foreign=none
+2026-11-26T21:11:28Z load=1.11 foreign=633301:32.8:/usr/bin/python3 -c import | 
+2026-11-26T21:11:31Z load=1.10 foreign=none
+2026-11-26T21:11:33Z load=1.10 foreign=none
+2026-11-26T21:11:35Z load=1.09 foreign=633543:18.8:/usr/bin/python3 -c import | 
+2026-11-26T21:11:37Z load=1.09 foreign=none
+2026-11-26T21:11:40Z load=1.08 foreign=none
+2026-11-26T21:11:42Z load=1.08 foreign=633696:40.7:/usr/bin/python3 -c import | 
+2026-11-26T21:11:44Z load=1.08 foreign=none
+2026-11-26T21:11:46Z load=1.07 foreign=633857:26.8:/usr/bin/python3 -c import | 
+2026-11-26T21:11:48Z load=1.07 foreign=none
+2026-11-26T21:11:51Z load=0.99 foreign=none
+2026-11-26T21:11:53Z load=0.99 foreign=none
+2026-11-26T21:11:55Z load=0.99 foreign=none
+2026-11-26T21:11:57Z load=0.99 foreign=14769:18.8:claude | 
+2026-11-26T21:12:00Z load=0.99 foreign=none
+2026-11-26T21:12:02Z load=0.99 foreign=634509:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 634511:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 634507:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 634607:80.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 634609:60.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 634610:51.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:14.9:claude | 
+2026-11-26T21:12:04Z load=0.99 foreign=none
+2026-11-26T21:12:06Z load=0.91 foreign=none
+2026-11-26T21:12:09Z load=0.91 foreign=none
+2026-11-26T21:12:11Z load=0.84 foreign=none
+2026-11-26T21:12:13Z load=0.84 foreign=none
+2026-11-26T21:12:15Z load=0.93 foreign=none
+2026-11-26T21:12:18Z load=0.93 foreign=none
+2026-11-26T21:12:20Z load=0.94 foreign=none
+2026-11-26T21:12:22Z load=0.94 foreign=none
+2026-11-26T21:12:24Z load=0.94 foreign=none
+2026-11-26T21:12:26Z load=0.94 foreign=none
+2026-11-26T21:12:29Z load=0.94 foreign=none
+2026-11-26T21:12:31Z load=0.95 foreign=none
+2026-11-26T21:12:33Z load=0.95 foreign=none
+2026-11-26T21:12:35Z load=0.87 foreign=none
+2026-11-26T21:12:38Z load=0.87 foreign=none
+2026-11-26T21:12:40Z load=0.80 foreign=none
+2026-11-26T21:12:42Z load=0.80 foreign=636424:79.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:12:44Z load=0.90 foreign=636424:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:12:47Z load=0.90 foreign=636424:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:12:49Z load=0.90 foreign=636424:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:12:51Z load=0.91 foreign=636758:61.5:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 14769:26.8:claude | 
+2026-11-26T21:12:53Z load=0.91 foreign=636806:43.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:12:56Z load=0.91 foreign=636806:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:12:58Z load=0.91 foreign=none
+2026-11-26T21:13:00Z load=0.92 foreign=636923:99.7:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:13:02Z load=0.92 foreign=636923:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:13:05Z load=0.93 foreign=637112:99.2:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:13:07Z load=0.93 foreign=637112:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:13:09Z load=0.93 foreign=none
+2026-11-26T21:13:11Z load=0.93 foreign=none
+2026-11-26T21:13:13Z load=0.93 foreign=none
+2026-11-26T21:13:16Z load=0.94 foreign=none
+2026-11-26T21:13:18Z load=0.94 foreign=none
+2026-11-26T21:13:20Z load=0.86 foreign=14769:21.8:claude | 
+2026-11-26T21:13:22Z load=0.86 foreign=4091:11.8:claude | 
+2026-11-26T21:13:25Z load=0.95 foreign=none
+2026-11-26T21:13:27Z load=0.95 foreign=none
+2026-11-26T21:13:29Z load=0.95 foreign=638165:56.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:13:31Z load=1.04 foreign=638165:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:13:34Z load=1.04 foreign=638165:99.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:13:36Z load=1.04 foreign=638165:99.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:13:38Z load=1.04 foreign=638365:30.6:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:13:40Z load=1.03 foreign=638459:49.7:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:13:43Z load=1.03 foreign=638459:99.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:13:45Z load=1.03 foreign=638459:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:13:47Z load=1.03 foreign=638603:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:13:49Z load=1.03 foreign=638603:99.8:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:13:51Z load=1.03 foreign=638663:99.0:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:13:54Z load=1.03 foreign=638663:99.9:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:13:56Z load=1.18 foreign=638663:98.8:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:13:58Z load=1.18 foreign=638663:99.9:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:14:00Z load=1.33 foreign=638663:100.0:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:14:03Z load=1.33 foreign=638663:100.0:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:14:05Z load=1.46 foreign=638663:100.0:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:14:07Z load=1.46 foreign=638663:100.0:./build/tests/kds_tests --gtest_filter=KeyedWritePauseTest.*:BoundedWriteHoldTest.*:IndexW | 
+2026-11-26T21:14:09Z load=1.43 foreign=none
+2026-11-26T21:14:12Z load=1.43 foreign=none
+2026-11-26T21:14:14Z load=1.43 foreign=none
+2026-11-26T21:14:16Z load=1.39 foreign=none
+2026-11-26T21:14:18Z load=1.39 foreign=none
+2026-11-26T21:14:21Z load=1.36 foreign=none
+2026-11-26T21:14:23Z load=1.36 foreign=none
+2026-11-26T21:14:25Z load=1.33 foreign=none
+2026-11-26T21:14:27Z load=1.33 foreign=none
+2026-11-26T21:14:30Z load=1.30 foreign=none
+2026-11-26T21:14:32Z load=1.30 foreign=none
+2026-11-26T21:14:34Z load=1.30 foreign=none
+2026-11-26T21:14:36Z load=1.20 foreign=640257:61.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:14:38Z load=1.20 foreign=640257:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:14:41Z load=1.26 foreign=640257:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:14:43Z load=1.26 foreign=640257:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:14:45Z load=1.24 foreign=none
+2026-11-26T21:14:47Z load=1.24 foreign=none
+2026-11-26T21:14:50Z load=1.22 foreign=640569:55.3:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:14:52Z load=1.22 foreign=640569:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:14:54Z load=1.22 foreign=640569:99.2:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:14:56Z load=1.21 foreign=640723:99.3:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:14:59Z load=1.21 foreign=640723:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:15:01Z load=1.75 foreign=640836:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 640834:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 640858:65.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 640862:26.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 640863:15.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:15:03Z load=1.75 foreign=none
+2026-11-26T21:15:05Z load=1.61 foreign=none
+2026-11-26T21:15:08Z load=1.61 foreign=none
+2026-11-26T21:15:10Z load=1.48 foreign=none
+2026-11-26T21:15:12Z load=1.48 foreign=none
+2026-11-26T21:15:14Z load=1.48 foreign=none
+2026-11-26T21:15:16Z load=1.36 foreign=none
+2026-11-26T21:15:19Z load=1.36 foreign=none
+2026-11-26T21:15:21Z load=1.25 foreign=641771:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:15:23Z load=1.25 foreign=641771:99.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 14769:12.9:claude | 
+2026-11-26T21:15:25Z load=1.23 foreign=641903:58.4:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:15:28Z load=1.23 foreign=641903:99.7:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:15:30Z load=1.21 foreign=641903:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:15:32Z load=1.21 foreign=642005:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:15:34Z load=1.21 foreign=642005:99.9:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:15:37Z load=1.20 foreign=none
+2026-11-26T21:15:39Z load=1.20 foreign=none
+2026-11-26T21:15:41Z load=1.10 foreign=4091:10.9:claude | 
+2026-11-26T21:15:43Z load=1.10 foreign=none
+2026-11-26T21:15:46Z load=1.01 foreign=none
+2026-11-26T21:15:48Z load=1.01 foreign=none
+2026-11-26T21:15:50Z load=0.93 foreign=none
+2026-11-26T21:15:52Z load=0.93 foreign=none
+2026-11-26T21:15:55Z load=0.86 foreign=none
+2026-11-26T21:15:57Z load=0.86 foreign=none
+2026-11-26T21:15:59Z load=0.86 foreign=none
+2026-11-26T21:16:01Z load=0.79 foreign=none
+2026-11-26T21:16:04Z load=0.79 foreign=none
+2026-11-26T21:16:06Z load=0.72 foreign=none
+2026-11-26T21:16:08Z load=0.72 foreign=none
+2026-11-26T21:16:10Z load=0.66 foreign=none
+2026-11-26T21:16:13Z load=0.66 foreign=4091:10.8:claude | 
+2026-11-26T21:16:15Z load=0.69 foreign=none
+2026-11-26T21:16:17Z load=0.69 foreign=none
+2026-11-26T21:16:19Z load=0.69 foreign=none
+2026-11-26T21:16:21Z load=0.64 foreign=none
+2026-11-26T21:16:24Z load=0.64 foreign=none
+2026-11-26T21:16:26Z load=0.58 foreign=none
+2026-11-26T21:16:28Z load=0.58 foreign=none
+2026-11-26T21:16:30Z load=0.62 foreign=none
+2026-11-26T21:16:33Z load=0.62 foreign=none
+2026-11-26T21:16:35Z load=0.65 foreign=none
+2026-11-26T21:16:37Z load=0.65 foreign=none
+2026-11-26T21:16:39Z load=0.60 foreign=none
+2026-11-26T21:16:42Z load=0.60 foreign=none
+2026-11-26T21:16:44Z load=0.60 foreign=none
+2026-11-26T21:16:46Z load=0.55 foreign=none
+2026-11-26T21:16:48Z load=0.55 foreign=none
+2026-11-26T21:16:51Z load=0.50 foreign=none
+2026-11-26T21:16:53Z load=0.50 foreign=none
+2026-11-26T21:16:55Z load=0.46 foreign=none
+2026-11-26T21:16:57Z load=0.46 foreign=none
+2026-11-26T21:17:00Z load=0.43 foreign=4091:12.8:claude | 
+2026-11-26T21:17:02Z load=0.43 foreign=none
+2026-11-26T21:17:04Z load=0.43 foreign=none
+2026-11-26T21:17:06Z load=0.39 foreign=none
+2026-11-26T21:17:09Z load=0.39 foreign=none
+2026-11-26T21:17:11Z load=0.36 foreign=none
+2026-11-26T21:17:13Z load=0.36 foreign=none
+2026-11-26T21:17:15Z load=0.33 foreign=none
+2026-11-26T21:17:18Z load=0.33 foreign=none
+2026-11-26T21:17:20Z load=0.30 foreign=none
+2026-11-26T21:17:22Z load=0.30 foreign=644567:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644575:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644578:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644566:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644572:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644573:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644576:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:24Z load=0.68 foreign=644567:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644573:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:27Z load=0.68 foreign=644567:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:29Z load=0.68 foreign=644567:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:31Z load=0.71 foreign=644816:22.8:/usr/bin/ranlib libkds.a | 
+2026-11-26T21:17:33Z load=0.71 foreign=644837:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644834:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644836:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644839:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:36Z load=0.97 foreign=644921:12.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield | 
+2026-11-26T21:17:38Z load=0.97 foreign=645000:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645004:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645013:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645015:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645017:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645035:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644993:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644996:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644998:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645006:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645011:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645012:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645016:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645019:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645020:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645026:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645027:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645028:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645033:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645036:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644995:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645007:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645025:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645034:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:40Z load=3.22 foreign=644993:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645000:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644996:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645007:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645016:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645025:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645026:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645027:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645028:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644995:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644998:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645004:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645006:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645011:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645012:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645015:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645019:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645033:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645034:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645013:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645020:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645035:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645036:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645083:51.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 197:20.8:[kswapd0] | 
+2026-11-26T21:17:42Z load=3.22 foreign=645150:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645153:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645159:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645168:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645170:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645181:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645199:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645202:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 644996:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645083:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645147:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645167:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645174:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645177:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645205:96.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645208:80.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645212:77.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645215:74.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645218:69.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645221:65.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645223:46.6:[as] | 645226:38.7:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645227:31.7:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:17:44Z load=5.12 foreign=645167:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645199:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645202:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645215:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645221:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645241:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645147:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645150:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645159:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645168:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645170:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645174:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645177:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645205:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645208:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645212:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645218:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645226:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645231:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645153:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645181:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645237:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645257:92.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645259:19.8:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:17:47Z load=5.12 foreign=645208:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645212:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645215:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645237:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645257:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645266:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645281:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645199:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645275:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645302:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645306:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645310:92.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645313:88.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645318:81.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645321:79.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645326:50.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645330:45.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645333:25.7:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645403:18.8:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645407:14.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645410:12.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645412:11.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:49Z load=5.12 foreign=645266:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645302:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645321:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645407:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645412:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645442:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645445:99.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645275:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645281:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645306:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645310:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645313:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645318:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645326:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645330:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645416:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645423:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645427:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645431:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645436:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645448:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645451:98.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645463:90.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645470:21.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:51Z load=6.79 foreign=645313:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645412:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645431:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645442:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645445:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645488:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645416:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645423:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645436:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645463:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645470:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645407:98.1:[cc1plus] | 645448:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645451:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645506:80.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645510:69.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645513:64.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645516:60.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645519:52.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645523:25.8:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645524:18.8:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:17:53Z load=6.79 foreign=645470:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645513:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645560:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645488:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645510:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645516:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645519:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645531:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645535:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645564:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645569:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645575:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645576:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645543:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645549:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645552:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645555:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645566:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645506:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645593:93.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645641:68.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645644:50.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645648:44.6:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:17:56Z load=8.33 foreign=645535:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645543:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645555:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645566:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645648:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645670:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645506:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645552:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645560:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645564:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645569:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645575:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645576:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645593:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645644:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645655:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645549:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645683:82.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645688:61.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645697:33.7:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645700:26.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645703:12.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645704:12.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:17:58Z load=8.33 foreign=645648:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645560:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645644:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645700:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645703:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645707:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645723:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645735:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645759:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645762:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645655:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645670:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645683:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645688:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645713:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645743:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645756:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645746:97.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645730:96.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645767:93.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645774:57.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645777:46.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645846:28.7:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645849:23.8:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:18:00Z load=9.67 foreign=645688:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645713:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645730:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645756:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645774:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645777:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645735:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645743:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645759:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645762:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645767:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645859:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645862:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645866:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645872:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645873:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645746:98.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645895:80.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645896:53.5:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645898:27.8:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645899:13.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 645900:11.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:18:02Z load=9.67 foreign=645872:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645904:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645931:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645859:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645866:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645873:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645895:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645911:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645915:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645920:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645923:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645927:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645933:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645862:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645961:65.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645962:65.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645964:65.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645973:20.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645976:18.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645979:15.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645982:14.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645985:10.9:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:18:05Z load=10.81 foreign=645933:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645982:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645985:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645995:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646003:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646012:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645915:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645927:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645931:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645961:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645962:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645964:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645973:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645976:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645979:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645998:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646025:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646070:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645920:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646073:83.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646076:65.3:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646081:11.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:18:07Z load=10.81 foreign=645998:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646090:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645961:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645973:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645982:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645985:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645995:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646012:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646070:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646073:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646076:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646093:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646103:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646115:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646119:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645962:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 645979:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646003:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646025:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646089:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646122:92.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646127:61.4:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646128:46.5:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:18:09Z load=10.81 foreign=646122:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646150:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646181:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646089:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646103:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646119:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646127:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646133:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646155:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646159:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646174:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646177:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646183:99.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646090:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646093:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646140:98.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646188:91.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646191:87.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646194:84.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646270:26.7:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:18:11Z load=11.55 foreign=646155:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646174:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646181:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646271:100.0:-quiet -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 646133:99.2:[cc1plus] | 646150:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646159:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646177:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646183:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646188:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646191:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646194:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 646302:14.9:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:18:14Z load=11.55 foreign=none
+2026-11-26T21:18:16Z load=10.62 foreign=none
+2026-11-26T21:18:18Z load=10.62 foreign=none
+2026-11-26T21:18:20Z load=9.85 foreign=none
+2026-11-26T21:18:23Z load=9.85 foreign=none
+2026-11-26T21:18:25Z load=9.06 foreign=none
+2026-11-26T21:18:27Z load=9.06 foreign=646648:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:18:29Z load=9.06 foreign=646734:76.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:18:31Z load=8.50 foreign=646734:99.8:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:18:34Z load=8.50 foreign=646734:99.7:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:18:36Z load=7.98 foreign=646860:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:18:38Z load=7.98 foreign=646860:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:18:40Z load=7.34 foreign=none
+2026-11-26T21:18:43Z load=7.34 foreign=none
+2026-11-26T21:18:45Z load=6.75 foreign=none
+2026-11-26T21:18:47Z load=6.75 foreign=none
+2026-11-26T21:18:49Z load=6.75 foreign=none
+2026-11-26T21:18:52Z load=6.45 foreign=none
+2026-11-26T21:18:54Z load=6.45 foreign=4091:11.9:claude | 
+2026-11-26T21:18:56Z load=5.93 foreign=none
+2026-11-26T21:18:58Z load=5.93 foreign=none
+2026-11-26T21:19:01Z load=5.46 foreign=none
+2026-11-26T21:19:03Z load=5.46 foreign=none
+2026-11-26T21:19:05Z load=5.02 foreign=none
+2026-11-26T21:19:07Z load=5.02 foreign=none
+2026-11-26T21:19:10Z load=4.70 foreign=647663:99.1:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 4091:14.9:claude | 
+2026-11-26T21:19:12Z load=4.70 foreign=647663:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:19:14Z load=4.70 foreign=647663:99.8:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:19:16Z load=4.40 foreign=647663:98.7:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:19:19Z load=4.40 foreign=none
+2026-11-26T21:19:21Z load=4.13 foreign=647897:99.7:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:19:23Z load=4.13 foreign=647897:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:19:25Z load=3.88 foreign=648020:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:19:27Z load=3.88 foreign=648020:99.7:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:19:30Z load=4.13 foreign=648140:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 648137:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 648141:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 648164:86.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 648165:73.4:[kds_tests] | 648170:39.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 648171:15.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:19:32Z load=4.13 foreign=none
+2026-11-26T21:19:34Z load=4.13 foreign=none
+2026-11-26T21:19:36Z load=3.80 foreign=none
+2026-11-26T21:19:39Z load=3.80 foreign=none
+2026-11-26T21:19:41Z load=3.49 foreign=none
+2026-11-26T21:19:43Z load=3.49 foreign=none
+2026-11-26T21:19:45Z load=3.21 foreign=none
+2026-11-26T21:19:48Z load=3.21 foreign=none
+2026-11-26T21:19:50Z load=3.12 foreign=none
+2026-11-26T21:19:52Z load=3.12 foreign=none
+2026-11-26T21:19:54Z load=3.12 foreign=none
+2026-11-26T21:19:57Z load=3.19 foreign=none
+2026-11-26T21:19:59Z load=3.19 foreign=none
+2026-11-26T21:20:01Z load=3.09 foreign=none
+2026-11-26T21:20:03Z load=3.09 foreign=none
+2026-11-26T21:20:05Z load=2.92 foreign=none
+2026-11-26T21:20:08Z load=2.92 foreign=649518:11.9:/usr/bin/python3 -c import | 649520:11.9:/usr/bin/python3 -c import | 649525:10.9:/usr/bin/python3 -c import | 
+2026-11-26T21:20:10Z load=2.77 foreign=none
+2026-11-26T21:20:12Z load=2.77 foreign=none
+2026-11-26T21:20:14Z load=2.71 foreign=649715:30.7:/usr/bin/python3 -c import | 
+2026-11-26T21:20:17Z load=2.71 foreign=none
+2026-11-26T21:20:19Z load=2.71 foreign=none
+2026-11-26T21:20:21Z load=2.57 foreign=none
+2026-11-26T21:20:23Z load=2.57 foreign=none
+2026-11-26T21:20:26Z load=2.44 foreign=none
+2026-11-26T21:20:28Z load=2.44 foreign=none
+2026-11-26T21:20:30Z load=2.33 foreign=none
+2026-11-26T21:20:32Z load=2.33 foreign=none
+2026-11-26T21:20:35Z load=2.22 foreign=none
+2026-11-26T21:20:37Z load=2.22 foreign=none
+2026-11-26T21:20:39Z load=2.22 foreign=4091:14.8:claude | 
+2026-11-26T21:20:41Z load=2.12 foreign=none
+2026-11-26T21:20:44Z load=2.12 foreign=none
+2026-11-26T21:20:46Z load=2.03 foreign=none
+2026-11-26T21:20:48Z load=2.03 foreign=none
+2026-11-26T21:20:50Z load=2.03 foreign=650782:76.5:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 4091:10.9:claude | 
+2026-11-26T21:20:52Z load=2.03 foreign=650782:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:20:55Z load=1.95 foreign=650782:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:20:57Z load=1.95 foreign=650782:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 
+2026-11-26T21:20:59Z load=1.95 foreign=650995:77.4:as -I /home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/include | 
+2026-11-26T21:21:01Z load=1.87 foreign=651113:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 651131:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 651132:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 651128:99.2:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 651141:92.2:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:21:04Z load=1.87 foreign=651131:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 651132:100.0:/usr/libexec/gcc/x86_64-redhat-linux/16/cc1plus -quiet -I | 651141:100.0:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 651182:75.2:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 651193:20.8:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:21:06Z load=2.04 foreign=651141:99.7:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 651305:35.5:/usr/bin/ld -plugin /usr/libexec/gcc/x86_64-redhat-linux/16/liblto_plugin.so | 
+2026-11-26T21:21:08Z load=2.04 foreign=651316:99.3:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:21:10Z load=1.96 foreign=651316:100.0:/usr/bin/cmake -D TEST_TARGET=kds_tests | 
+2026-11-26T21:21:13Z load=1.96 foreign=651488:44.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:15Z load=1.80 foreign=none
+2026-11-26T21:21:17Z load=1.80 foreign=none
+2026-11-26T21:21:19Z load=1.80 foreign=none
+2026-11-26T21:21:21Z load=1.74 foreign=652114:104.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:24Z load=1.74 foreign=652114:102.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:26Z load=1.68 foreign=652114:103.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:28Z load=1.68 foreign=652114:102.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:30Z load=1.62 foreign=652114:104.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:33Z load=1.62 foreign=652114:103.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:35Z load=1.57 foreign=652114:104.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:37Z load=1.57 foreign=none
+2026-11-26T21:21:39Z load=1.57 foreign=652831:46.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:42Z load=1.69 foreign=none
+2026-11-26T21:21:44Z load=1.69 foreign=none
+2026-11-26T21:21:46Z load=1.63 foreign=653334:18.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:48Z load=1.63 foreign=653388:26.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:50Z load=1.58 foreign=653495:15.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:21:53Z load=1.58 foreign=none
+2026-11-26T21:21:55Z load=1.53 foreign=none
+2026-11-26T21:21:57Z load=1.53 foreign=none
+2026-11-26T21:21:59Z load=1.53 foreign=654166:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:02Z load=1.49 foreign=654166:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:04Z load=1.49 foreign=654166:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:06Z load=1.61 foreign=654166:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:08Z load=1.61 foreign=654166:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:11Z load=1.72 foreign=654442:74.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:13Z load=1.72 foreign=654442:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:15Z load=1.83 foreign=654442:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:17Z load=1.83 foreign=654442:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:20Z load=1.84 foreign=654442:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:22Z load=1.84 foreign=654700:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:24Z load=1.84 foreign=654700:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:26Z load=1.77 foreign=654700:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:28Z load=1.77 foreign=654700:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:31Z load=1.79 foreign=654700:99.1:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:33Z load=1.79 foreign=654700:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:35Z load=1.73 foreign=654700:99.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:37Z load=1.73 foreign=654700:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:40Z load=1.67 foreign=655146:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:42Z load=1.67 foreign=655330:49.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:44Z load=1.67 foreign=655330:103.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:46Z load=1.70 foreign=655330:101.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:49Z load=1.70 foreign=655330:102.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:51Z load=1.72 foreign=655330:103.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:53Z load=1.72 foreign=655330:103.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:55Z load=1.74 foreign=655330:102.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:22:58Z load=1.74 foreign=655330:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:23:00Z load=1.68 foreign=none
+2026-11-26T21:23:02Z load=1.68 foreign=none
+2026-11-26T21:23:04Z load=1.68 foreign=none
+2026-11-26T21:23:06Z load=1.55 foreign=none
+2026-11-26T21:23:09Z load=1.55 foreign=none
+2026-11-26T21:23:11Z load=1.42 foreign=none
+2026-11-26T21:23:13Z load=1.42 foreign=none
+2026-11-26T21:23:15Z load=1.39 foreign=none
+2026-11-26T21:23:18Z load=1.39 foreign=none
+2026-11-26T21:23:20Z load=1.28 foreign=none
+2026-11-26T21:23:22Z load=1.28 foreign=none
+2026-11-26T21:23:24Z load=1.28 foreign=none
+2026-11-26T21:23:27Z load=1.26 foreign=14769:19.8:claude | 
+2026-11-26T21:23:29Z load=1.26 foreign=none
+2026-11-26T21:23:31Z load=1.24 foreign=none
+2026-11-26T21:23:33Z load=1.24 foreign=none
+2026-11-26T21:23:36Z load=1.22 foreign=none
+2026-11-26T21:23:38Z load=1.22 foreign=none
+2026-11-26T21:23:40Z load=1.20 foreign=none
+2026-11-26T21:23:42Z load=1.20 foreign=none
+2026-11-26T21:23:45Z load=1.10 foreign=none
+2026-11-26T21:23:47Z load=1.10 foreign=none
+2026-11-26T21:23:49Z load=1.10 foreign=none
+2026-11-26T21:23:51Z load=1.09 foreign=none
+2026-11-26T21:23:54Z load=1.09 foreign=none
+2026-11-26T21:23:56Z load=1.09 foreign=none
+2026-11-26T21:23:58Z load=1.09 foreign=none
+2026-11-26T21:24:00Z load=1.16 foreign=none
+2026-11-26T21:24:03Z load=1.16 foreign=none
+2026-11-26T21:24:05Z load=1.07 foreign=none
+2026-11-26T21:24:07Z load=1.07 foreign=none
+2026-11-26T21:24:09Z load=1.07 foreign=none
+2026-11-26T21:24:12Z load=1.06 foreign=none
+2026-11-26T21:24:14Z load=1.06 foreign=none
+2026-11-26T21:24:16Z load=1.14 foreign=none
+2026-11-26T21:24:18Z load=1.14 foreign=658154:53.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:21Z load=1.04 foreign=none
+2026-11-26T21:24:23Z load=1.04 foreign=none
+2026-11-26T21:24:25Z load=1.12 foreign=658332:52.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:27Z load=1.12 foreign=none
+2026-11-26T21:24:29Z load=1.27 foreign=658625:40.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:32Z load=1.27 foreign=658694:10.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:34Z load=1.27 foreign=658829:15.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:36Z load=1.25 foreign=none
+2026-11-26T21:24:38Z load=1.25 foreign=659029:11.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:41Z load=1.47 foreign=none
+2026-11-26T21:24:43Z load=1.47 foreign=none
+2026-11-26T21:24:45Z load=1.59 foreign=659183:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:47Z load=1.59 foreign=none
+2026-11-26T21:24:50Z load=1.55 foreign=659574:18.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:24:52Z load=1.55 foreign=none
+2026-11-26T21:24:54Z load=1.55 foreign=none
+2026-11-26T21:24:56Z load=1.50 foreign=none
+2026-11-26T21:24:59Z load=1.50 foreign=none
+2026-11-26T21:25:01Z load=1.38 foreign=none
+2026-11-26T21:25:03Z load=1.38 foreign=none
+2026-11-26T21:25:05Z load=1.27 foreign=none
+2026-11-26T21:25:08Z load=1.27 foreign=none
+2026-11-26T21:25:10Z load=1.33 foreign=none
+2026-11-26T21:25:12Z load=1.33 foreign=none
+2026-11-26T21:25:14Z load=1.33 foreign=none
+2026-11-26T21:25:17Z load=1.30 foreign=none
+2026-11-26T21:25:19Z load=1.30 foreign=none
+2026-11-26T21:25:21Z load=1.44 foreign=none
+2026-11-26T21:25:23Z load=1.44 foreign=none
+2026-11-26T21:25:25Z load=1.48 foreign=none
+2026-11-26T21:25:28Z load=1.48 foreign=none
+2026-11-26T21:25:30Z load=1.44 foreign=none
+2026-11-26T21:25:32Z load=1.44 foreign=none
+2026-11-26T21:25:34Z load=1.44 foreign=none
+2026-11-26T21:25:37Z load=1.41 foreign=none
+2026-11-26T21:25:39Z load=1.41 foreign=none
+2026-11-26T21:25:41Z load=1.46 foreign=none
+2026-11-26T21:25:43Z load=1.46 foreign=none
+2026-11-26T21:25:46Z load=1.42 foreign=none
+2026-11-26T21:25:48Z load=1.42 foreign=none
+2026-11-26T21:25:50Z load=1.55 foreign=none
+2026-11-26T21:25:52Z load=1.55 foreign=663370:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:25:55Z load=1.58 foreign=663419:12.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:25:57Z load=1.58 foreign=663419:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:25:59Z load=1.58 foreign=663419:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:01Z load=1.62 foreign=663419:100.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:03Z load=1.62 foreign=663660:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:06Z load=1.57 foreign=663660:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:08Z load=1.57 foreign=663660:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:10Z load=1.68 foreign=663660:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:12Z load=1.68 foreign=663660:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:15Z load=1.71 foreign=663660:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:17Z load=1.71 foreign=663660:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:19Z load=1.71 foreign=663660:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:21Z load=2.05 foreign=664046:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:24Z load=2.05 foreign=664046:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:26Z load=2.05 foreign=664046:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:28Z load=2.05 foreign=664046:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:30Z load=1.96 foreign=664318:38.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:32Z load=1.96 foreign=664318:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:35Z load=1.97 foreign=664318:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:37Z load=1.97 foreign=664318:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:39Z load=1.97 foreign=664318:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:41Z load=1.97 foreign=664565:41.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:44Z load=1.97 foreign=664565:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:46Z load=1.97 foreign=664565:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:48Z load=1.97 foreign=664565:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:50Z load=1.97 foreign=664565:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:53Z load=1.97 foreign=664841:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:55Z load=2.06 foreign=664841:99.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:57Z load=2.06 foreign=664841:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:26:59Z load=2.06 foreign=664841:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:01Z load=1.97 foreign=664841:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:04Z load=1.97 foreign=none
+2026-11-26T21:27:06Z load=2.05 foreign=665121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:08Z load=2.05 foreign=665121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:10Z load=2.13 foreign=665121:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:13Z load=2.13 foreign=665121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:15Z load=2.04 foreign=665121:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:17Z load=2.04 foreign=665121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:19Z load=2.04 foreign=665492:90.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:22Z load=2.12 foreign=665492:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:24Z load=2.12 foreign=665492:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:26Z load=2.11 foreign=665492:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:28Z load=2.11 foreign=665492:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:30Z load=2.18 foreign=665492:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:33Z load=2.18 foreign=none
+2026-11-26T21:27:35Z load=2.16 foreign=665830:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:37Z load=2.16 foreign=665830:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:39Z load=2.16 foreign=665830:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:42Z load=2.07 foreign=665830:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:44Z load=2.07 foreign=666101:78.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:46Z load=2.15 foreign=666101:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:48Z load=2.15 foreign=666101:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:51Z load=2.13 foreign=666101:99.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:53Z load=2.13 foreign=666101:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:55Z load=2.20 foreign=666101:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:27:57Z load=2.20 foreign=none
+2026-11-26T21:28:00Z load=2.11 foreign=666415:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:02Z load=2.11 foreign=666415:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:04Z load=2.11 foreign=666415:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:06Z load=2.18 foreign=666415:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:08Z load=2.18 foreign=666415:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:11Z load=2.16 foreign=666762:162.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:13Z load=2.16 foreign=none
+2026-11-26T21:28:15Z load=2.07 foreign=none
+2026-11-26T21:28:17Z load=2.07 foreign=none
+2026-11-26T21:28:20Z load=1.98 foreign=667478:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:22Z load=1.98 foreign=667592:42.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:24Z load=1.98 foreign=667592:100.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:26Z load=2.07 foreign=667592:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:29Z load=2.07 foreign=667898:16.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:31Z load=2.06 foreign=667922:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:33Z load=2.06 foreign=667922:100.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:35Z load=2.06 foreign=667989:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:37Z load=2.06 foreign=668105:66.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:40Z load=2.05 foreign=668215:10.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:42Z load=2.05 foreign=668250:342.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:44Z load=2.05 foreign=668250:341.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:46Z load=2.21 foreign=668250:342.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:49Z load=2.21 foreign=668250:342.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:51Z load=2.35 foreign=668250:345.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:53Z load=2.35 foreign=668570:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:28:55Z load=2.24 foreign=none
+2026-11-26T21:28:58Z load=2.24 foreign=none
+2026-11-26T21:29:00Z load=2.14 foreign=none
+2026-11-26T21:29:02Z load=2.14 foreign=none
+2026-11-26T21:29:04Z load=2.14 foreign=none
+2026-11-26T21:29:06Z load=2.21 foreign=669682:11.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:09Z load=2.21 foreign=669689:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:11Z load=2.11 foreign=none
+2026-11-26T21:29:13Z load=2.11 foreign=none
+2026-11-26T21:29:15Z load=2.03 foreign=none
+2026-11-26T21:29:18Z load=2.03 foreign=670052:48.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:20Z load=2.26 foreign=670172:18.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:22Z load=2.26 foreign=670205:46.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:24Z load=2.26 foreign=670267:77.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:27Z load=2.24 foreign=none
+2026-11-26T21:29:29Z load=2.24 foreign=670559:15.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:31Z load=2.14 foreign=670619:60.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:33Z load=2.14 foreign=none
+2026-11-26T21:29:36Z load=2.21 foreign=none
+2026-11-26T21:29:38Z load=2.21 foreign=670896:98.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:40Z load=2.19 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:42Z load=2.19 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:44Z load=2.19 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:47Z load=2.10 foreign=670896:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:49Z load=2.10 foreign=670896:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:51Z load=2.33 foreign=670896:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:53Z load=2.33 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:56Z load=2.30 foreign=670896:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:29:58Z load=2.30 foreign=670896:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:00Z load=2.28 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:02Z load=2.28 foreign=670896:98.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:05Z load=2.34 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:07Z load=2.34 foreign=670896:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:09Z load=2.34 foreign=671696:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:11Z load=2.23 foreign=671696:99.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:18.7:claude | 
+2026-11-26T21:30:13Z load=2.23 foreign=671797:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:16Z load=2.21 foreign=671797:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:18Z load=2.21 foreign=671797:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:20Z load=2.36 foreign=671797:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:22Z load=2.36 foreign=671797:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:25Z load=2.33 foreign=671797:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:27Z load=2.33 foreign=672177:28.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:29Z load=2.33 foreign=672177:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:31Z load=2.30 foreign=672177:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:34Z load=2.30 foreign=672305:75.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:36Z load=2.44 foreign=672305:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:38Z load=2.44 foreign=672305:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:40Z load=2.32 foreign=672305:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:43Z load=2.32 foreign=672305:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:45Z load=2.46 foreign=672305:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:47Z load=2.46 foreign=672305:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:49Z load=2.46 foreign=672305:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:51Z load=2.50 foreign=672305:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:54Z load=2.50 foreign=none
+2026-11-26T21:30:56Z load=2.78 foreign=672855:13.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:30:58Z load=2.78 foreign=672855:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:00Z load=2.88 foreign=672855:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:03Z load=2.88 foreign=672855:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:05Z load=2.73 foreign=672855:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:07Z load=2.73 foreign=672855:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:09Z load=2.73 foreign=672855:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:12Z load=2.67 foreign=672855:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:14Z load=2.67 foreign=672855:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:16Z load=2.62 foreign=673291:16.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:18Z load=2.62 foreign=673291:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:20Z load=2.65 foreign=673388:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:23Z load=2.65 foreign=673388:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:25Z load=2.51 foreign=none
+2026-11-26T21:31:27Z load=2.51 foreign=673581:99.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:29Z load=2.51 foreign=673674:38.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:32Z load=2.63 foreign=673710:56.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:34Z load=2.63 foreign=673766:19.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:36Z load=2.58 foreign=673837:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:38Z load=2.58 foreign=673837:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:41Z load=2.62 foreign=673886:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:43Z load=2.62 foreign=673886:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:45Z load=2.65 foreign=673886:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:47Z load=2.65 foreign=673886:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:50Z load=2.65 foreign=673886:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:52Z load=2.59 foreign=674183:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:54Z load=2.59 foreign=674183:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:56Z load=2.63 foreign=674183:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:31:58Z load=2.63 foreign=674343:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:01Z load=2.58 foreign=674343:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:03Z load=2.58 foreign=674343:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:05Z load=2.53 foreign=674471:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:07Z load=2.53 foreign=674471:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:10Z load=2.81 foreign=674471:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:12Z load=2.81 foreign=674619:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:14Z load=2.81 foreign=674714:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:16Z load=2.74 foreign=674714:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:19Z load=2.74 foreign=674837:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:21Z load=2.84 foreign=674837:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:23Z load=2.84 foreign=none
+2026-11-26T21:32:25Z load=2.62 foreign=none
+2026-11-26T21:32:28Z load=2.62 foreign=none
+2026-11-26T21:32:30Z load=2.65 foreign=675169:59.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:32Z load=2.65 foreign=675179:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:34Z load=2.65 foreign=675264:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:36Z load=2.76 foreign=675303:41.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:39Z load=2.76 foreign=none
+2026-11-26T21:32:41Z load=2.78 foreign=675462:22.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:43Z load=2.78 foreign=675490:18.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:45Z load=2.63 foreign=none
+2026-11-26T21:32:48Z load=2.63 foreign=675606:95.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:32:50Z load=2.50 foreign=none
+2026-11-26T21:32:52Z load=2.50 foreign=none
+2026-11-26T21:32:54Z load=2.50 foreign=4091:23.6:claude | 
+2026-11-26T21:32:57Z load=2.38 foreign=none
+2026-11-26T21:32:59Z load=2.38 foreign=none
+2026-11-26T21:33:01Z load=2.27 foreign=676116:41.7:/usr/bin/python3 -c import | 4091:16.9:claude | 
+2026-11-26T21:33:03Z load=2.27 foreign=none
+2026-11-26T21:33:06Z load=2.17 foreign=none
+2026-11-26T21:33:08Z load=2.17 foreign=none
+2026-11-26T21:33:10Z load=2.24 foreign=none
+2026-11-26T21:33:12Z load=2.24 foreign=none
+2026-11-26T21:33:14Z load=2.24 foreign=none
+2026-11-26T21:33:17Z load=2.14 foreign=none
+2026-11-26T21:33:19Z load=2.14 foreign=none
+2026-11-26T21:33:21Z load=2.05 foreign=none
+2026-11-26T21:33:23Z load=2.05 foreign=4091:22.8:claude | 
+2026-11-26T21:33:26Z load=1.96 foreign=none
+2026-11-26T21:33:28Z load=1.96 foreign=none
+2026-11-26T21:33:30Z load=1.80 foreign=none
+2026-11-26T21:33:32Z load=1.80 foreign=none
+2026-11-26T21:33:35Z load=1.74 foreign=none
+2026-11-26T21:33:37Z load=1.74 foreign=none
+2026-11-26T21:33:39Z load=1.74 foreign=none
+2026-11-26T21:33:41Z load=1.60 foreign=none
+2026-11-26T21:33:44Z load=1.60 foreign=none
+2026-11-26T21:33:46Z load=1.47 foreign=none
+2026-11-26T21:33:48Z load=1.47 foreign=none
+2026-11-26T21:33:50Z load=1.35 foreign=none
+2026-11-26T21:33:53Z load=1.35 foreign=none
+2026-11-26T21:33:55Z load=1.49 foreign=none
+2026-11-26T21:33:57Z load=1.49 foreign=none
+2026-11-26T21:33:59Z load=1.49 foreign=none
+2026-11-26T21:34:02Z load=1.45 foreign=none
+2026-11-26T21:34:04Z load=1.45 foreign=none
+2026-11-26T21:34:06Z load=1.33 foreign=none
+2026-11-26T21:34:08Z load=1.33 foreign=none
+2026-11-26T21:34:11Z load=1.30 foreign=none
+2026-11-26T21:34:13Z load=1.30 foreign=none
+2026-11-26T21:34:15Z load=1.20 foreign=none
+2026-11-26T21:34:17Z load=1.20 foreign=none
+2026-11-26T21:34:20Z load=1.20 foreign=none
+2026-11-26T21:34:22Z load=1.18 foreign=none
+2026-11-26T21:34:24Z load=1.18 foreign=none
+2026-11-26T21:34:26Z load=1.17 foreign=none
+2026-11-26T21:34:29Z load=1.17 foreign=none
+2026-11-26T21:34:31Z load=1.07 foreign=none
+2026-11-26T21:34:33Z load=1.07 foreign=none
+2026-11-26T21:34:35Z load=0.99 foreign=none
+2026-11-26T21:34:38Z load=0.99 foreign=none
+2026-11-26T21:34:40Z load=0.91 foreign=none
+2026-11-26T21:34:42Z load=0.91 foreign=none
+2026-11-26T21:34:44Z load=0.91 foreign=none
+2026-11-26T21:34:47Z load=0.84 foreign=none
+2026-11-26T21:34:49Z load=0.84 foreign=none
+2026-11-26T21:34:51Z load=0.93 foreign=none
+2026-11-26T21:34:53Z load=0.93 foreign=none
+2026-11-26T21:34:55Z load=0.85 foreign=none
+2026-11-26T21:34:58Z load=0.85 foreign=none
+2026-11-26T21:35:00Z load=0.87 foreign=none
+2026-11-26T21:35:02Z load=0.87 foreign=none
+2026-11-26T21:35:04Z load=0.87 foreign=none
+2026-11-26T21:35:07Z load=0.80 foreign=none
+2026-11-26T21:35:09Z load=0.80 foreign=none
+2026-11-26T21:35:11Z load=0.81 foreign=none
+2026-11-26T21:35:13Z load=0.81 foreign=4091:28.7:claude | 
+2026-11-26T21:35:16Z load=0.75 foreign=none
+2026-11-26T21:35:18Z load=0.75 foreign=none
+2026-11-26T21:35:20Z load=0.69 foreign=none
+2026-11-26T21:35:22Z load=0.69 foreign=none
+2026-11-26T21:35:25Z load=0.63 foreign=none
+2026-11-26T21:35:27Z load=0.63 foreign=none
+2026-11-26T21:35:29Z load=0.63 foreign=none
+2026-11-26T21:35:31Z load=0.58 foreign=none
+2026-11-26T21:35:34Z load=0.58 foreign=none
+2026-11-26T21:35:36Z load=0.53 foreign=none
+2026-11-26T21:35:38Z load=0.53 foreign=none
+2026-11-26T21:35:40Z load=0.49 foreign=none
+2026-11-26T21:35:43Z load=0.49 foreign=none
+2026-11-26T21:35:45Z load=0.45 foreign=none
+2026-11-26T21:35:47Z load=0.45 foreign=none
+2026-11-26T21:35:49Z load=0.45 foreign=none
+2026-11-26T21:35:52Z load=0.42 foreign=none
+2026-11-26T21:35:54Z load=0.42 foreign=none
+2026-11-26T21:35:56Z load=0.38 foreign=none
+2026-11-26T21:35:58Z load=0.38 foreign=none
+2026-11-26T21:36:01Z load=0.43 foreign=none
+2026-11-26T21:36:03Z load=0.43 foreign=none
+2026-11-26T21:36:05Z load=0.40 foreign=none
+2026-11-26T21:36:07Z load=0.40 foreign=none
+2026-11-26T21:36:10Z load=0.40 foreign=none
+2026-11-26T21:36:12Z load=0.45 foreign=none
+2026-11-26T21:36:14Z load=0.45 foreign=none
+2026-11-26T21:36:16Z load=0.41 foreign=none
+2026-11-26T21:36:19Z load=0.41 foreign=4091:25.8:claude | 
+2026-11-26T21:36:21Z load=0.38 foreign=none
+2026-11-26T21:36:23Z load=0.38 foreign=none
+2026-11-26T21:36:25Z load=0.35 foreign=none
+2026-11-26T21:36:28Z load=0.35 foreign=none
+2026-11-26T21:36:30Z load=0.32 foreign=none
+2026-11-26T21:36:32Z load=0.32 foreign=none
+2026-11-26T21:36:34Z load=0.32 foreign=none
+2026-11-26T21:36:37Z load=0.29 foreign=none
+2026-11-26T21:36:39Z load=0.29 foreign=none
+2026-11-26T21:36:41Z load=0.35 foreign=none
+2026-11-26T21:36:43Z load=0.35 foreign=none
+2026-11-26T21:36:45Z load=0.32 foreign=none
+2026-11-26T21:36:48Z load=0.32 foreign=none
+2026-11-26T21:36:50Z load=0.29 foreign=none
+2026-11-26T21:36:52Z load=0.29 foreign=none
+2026-11-26T21:36:54Z load=0.29 foreign=none
+2026-11-26T21:36:57Z load=0.27 foreign=none
+2026-11-26T21:36:59Z load=0.27 foreign=none
+2026-11-26T21:37:01Z load=0.25 foreign=none
+2026-11-26T21:37:03Z load=0.25 foreign=none
+2026-11-26T21:37:06Z load=0.23 foreign=none
+2026-11-26T21:37:08Z load=0.23 foreign=none
+2026-11-26T21:37:10Z load=0.21 foreign=none
+2026-11-26T21:37:12Z load=0.21 foreign=none
+2026-11-26T21:37:15Z load=0.27 foreign=none
+2026-11-26T21:37:17Z load=0.27 foreign=none
+2026-11-26T21:37:19Z load=0.27 foreign=none
+2026-11-26T21:37:21Z load=0.33 foreign=none
+2026-11-26T21:37:24Z load=0.33 foreign=none
+2026-11-26T21:37:26Z load=0.47 foreign=none
+2026-11-26T21:37:28Z load=0.47 foreign=none
+2026-11-26T21:37:30Z load=0.51 foreign=none
+2026-11-26T21:37:33Z load=0.51 foreign=none
+2026-11-26T21:37:35Z load=0.47 foreign=none
+2026-11-26T21:37:37Z load=0.47 foreign=none
+2026-11-26T21:37:39Z load=0.47 foreign=none
+2026-11-26T21:37:42Z load=0.43 foreign=none
+2026-11-26T21:37:44Z load=0.43 foreign=none
+2026-11-26T21:37:46Z load=0.40 foreign=none
+2026-11-26T21:37:48Z load=0.40 foreign=none
+2026-11-26T21:37:51Z load=0.44 foreign=none
+2026-11-26T21:37:53Z load=0.44 foreign=none
+2026-11-26T21:37:55Z load=0.41 foreign=none
+2026-11-26T21:37:57Z load=0.41 foreign=none
+2026-11-26T21:38:00Z load=0.38 foreign=none
+2026-11-26T21:38:02Z load=0.38 foreign=none
+2026-11-26T21:38:04Z load=0.38 foreign=none
+2026-11-26T21:38:06Z load=0.43 foreign=none
+2026-11-26T21:38:09Z load=0.43 foreign=none
+2026-11-26T21:38:11Z load=0.39 foreign=none
+2026-11-26T21:38:13Z load=0.39 foreign=none
+2026-11-26T21:38:15Z load=0.36 foreign=none
+2026-11-26T21:38:18Z load=0.36 foreign=14769:17.8:claude | 
+2026-11-26T21:38:20Z load=0.33 foreign=none
+2026-11-26T21:38:22Z load=0.33 foreign=none
+2026-11-26T21:38:24Z load=0.33 foreign=none
+2026-11-26T21:38:27Z load=0.30 foreign=none
+2026-11-26T21:38:29Z load=0.30 foreign=none
+2026-11-26T21:38:31Z load=0.36 foreign=none
+2026-11-26T21:38:33Z load=0.36 foreign=none
+2026-11-26T21:38:36Z load=0.41 foreign=none
+2026-11-26T21:38:38Z load=0.41 foreign=14769:13.8:claude | 
+2026-11-26T21:38:40Z load=0.38 foreign=none
+2026-11-26T21:38:42Z load=0.38 foreign=none
+2026-11-26T21:38:45Z load=0.38 foreign=none
+2026-11-26T21:38:47Z load=0.35 foreign=none
+2026-11-26T21:38:49Z load=0.35 foreign=none
+2026-11-26T21:38:51Z load=0.40 foreign=none
+2026-11-26T21:38:54Z load=0.40 foreign=14769:27.7:claude | 
+2026-11-26T21:38:56Z load=0.37 foreign=none
+2026-11-26T21:38:58Z load=0.37 foreign=none
+2026-11-26T21:39:00Z load=0.42 foreign=14769:12.8:claude | 
+2026-11-26T21:39:03Z load=0.42 foreign=none
+2026-11-26T21:39:05Z load=0.47 foreign=none
+2026-11-26T21:39:07Z load=0.47 foreign=none
+2026-11-26T21:39:09Z load=0.47 foreign=none
+2026-11-26T21:39:11Z load=0.59 foreign=none
+2026-11-26T21:39:14Z load=0.59 foreign=14769:10.9:claude | 
+2026-11-26T21:39:16Z load=0.62 foreign=none
+2026-11-26T21:39:18Z load=0.62 foreign=none
+2026-11-26T21:39:20Z load=0.65 foreign=none
+2026-11-26T21:39:23Z load=0.65 foreign=14769:14.8:claude | 
+2026-11-26T21:39:25Z load=0.76 foreign=none
+2026-11-26T21:39:27Z load=0.76 foreign=686013:28.8:/usr/bin/python3 -c import | 
+2026-11-26T21:39:29Z load=0.76 foreign=none
+2026-11-26T21:39:32Z load=0.86 foreign=none
+2026-11-26T21:39:34Z load=0.86 foreign=none
+2026-11-26T21:39:36Z load=0.87 foreign=none
+2026-11-26T21:39:38Z load=0.87 foreign=14769:10.9:claude | 
+2026-11-26T21:39:40Z load=1.04 foreign=none
+2026-11-26T21:39:43Z load=1.04 foreign=none
+2026-11-26T21:39:45Z load=1.04 foreign=none
+2026-11-26T21:39:47Z load=1.04 foreign=none
+2026-11-26T21:39:49Z load=1.04 foreign=none
+2026-11-26T21:39:52Z load=1.04 foreign=14769:10.9:claude | 
+2026-11-26T21:39:54Z load=1.04 foreign=none
+2026-11-26T21:39:56Z load=1.03 foreign=none
+2026-11-26T21:39:58Z load=1.03 foreign=none
+2026-11-26T21:40:01Z load=1.03 foreign=none
+2026-11-26T21:40:03Z load=1.03 foreign=none
+2026-11-26T21:40:05Z load=0.95 foreign=none
+2026-11-26T21:40:07Z load=0.95 foreign=none
+2026-11-26T21:40:10Z load=0.95 foreign=none
+2026-11-26T21:40:12Z load=0.95 foreign=687350:21.9:/usr/bin/python3 -c import | 
+2026-11-26T21:40:14Z load=0.95 foreign=none
+2026-11-26T21:40:16Z load=0.87 foreign=none
+2026-11-26T21:40:18Z load=0.87 foreign=none
+2026-11-26T21:40:21Z load=0.80 foreign=none
+2026-11-26T21:40:23Z load=0.80 foreign=none
+2026-11-26T21:40:25Z load=0.82 foreign=none
+2026-11-26T21:40:27Z load=0.82 foreign=none
+2026-11-26T21:40:30Z load=0.82 foreign=none
+2026-11-26T21:40:32Z load=1.00 foreign=none
+2026-11-26T21:40:34Z load=1.00 foreign=none
+2026-11-26T21:40:36Z load=1.00 foreign=none
+2026-11-26T21:40:39Z load=1.00 foreign=none
+2026-11-26T21:40:41Z load=1.00 foreign=none
+2026-11-26T21:40:43Z load=1.00 foreign=none
+2026-11-26T21:40:45Z load=1.08 foreign=none
+2026-11-26T21:40:47Z load=1.08 foreign=none
+2026-11-26T21:40:50Z load=1.15 foreign=688374:13.9:/usr/bin/python3 -c import | 
+2026-11-26T21:40:52Z load=1.15 foreign=none
+2026-11-26T21:40:54Z load=1.15 foreign=688546:40.7:/usr/bin/python3 -c import | 
+2026-11-26T21:40:56Z load=1.14 foreign=none
+2026-11-26T21:40:59Z load=1.14 foreign=none
+2026-11-26T21:41:01Z load=1.13 foreign=none
+2026-11-26T21:41:03Z load=1.13 foreign=none
+2026-11-26T21:41:05Z load=1.12 foreign=none
+2026-11-26T21:41:08Z load=1.12 foreign=none
+2026-11-26T21:41:10Z load=1.19 foreign=none
+2026-11-26T21:41:12Z load=1.19 foreign=none
+2026-11-26T21:41:14Z load=1.19 foreign=none
+2026-11-26T21:41:17Z load=1.09 foreign=none
+2026-11-26T21:41:19Z load=1.09 foreign=none
+2026-11-26T21:41:21Z load=1.09 foreign=none
+2026-11-26T21:41:23Z load=1.09 foreign=none
+2026-11-26T21:41:25Z load=1.08 foreign=none
+2026-11-26T21:41:28Z load=1.08 foreign=none
+2026-11-26T21:41:30Z load=1.15 foreign=none
+2026-11-26T21:41:32Z load=1.15 foreign=none
+2026-11-26T21:41:34Z load=1.15 foreign=none
+2026-11-26T21:41:37Z load=1.14 foreign=none
+2026-11-26T21:41:39Z load=1.14 foreign=none
+2026-11-26T21:41:41Z load=1.13 foreign=689824:41.7:/usr/bin/python3 -c import | 
+2026-11-26T21:41:43Z load=1.13 foreign=none
+2026-11-26T21:41:46Z load=1.12 foreign=none
+2026-11-26T21:41:48Z load=1.12 foreign=none
+2026-11-26T21:41:50Z load=1.27 foreign=none
+2026-11-26T21:41:52Z load=1.27 foreign=none
+2026-11-26T21:41:55Z load=1.27 foreign=none
+2026-11-26T21:41:57Z load=1.41 foreign=none
+2026-11-26T21:41:59Z load=1.41 foreign=none
+2026-11-26T21:42:01Z load=1.29 foreign=none
+2026-11-26T21:42:03Z load=1.29 foreign=none
+2026-11-26T21:42:06Z load=1.19 foreign=14769:36.5:claude | 
+2026-11-26T21:42:08Z load=1.19 foreign=none
+2026-11-26T21:42:10Z load=1.10 foreign=none
+2026-11-26T21:42:12Z load=1.10 foreign=none
+2026-11-26T21:42:15Z load=1.01 foreign=none
+2026-11-26T21:42:17Z load=1.01 foreign=none
+2026-11-26T21:42:19Z load=1.01 foreign=none
+2026-11-26T21:42:21Z load=0.93 foreign=none
+2026-11-26T21:42:24Z load=0.93 foreign=none
+2026-11-26T21:42:26Z load=0.85 foreign=none
+2026-11-26T21:42:28Z load=0.85 foreign=none
+2026-11-26T21:42:30Z load=0.78 foreign=none
+2026-11-26T21:42:33Z load=0.78 foreign=none
+2026-11-26T21:42:35Z load=0.72 foreign=none
+2026-11-26T21:42:37Z load=0.72 foreign=none
+2026-11-26T21:42:39Z load=0.72 foreign=none
+2026-11-26T21:42:42Z load=0.66 foreign=none
+2026-11-26T21:42:44Z load=0.66 foreign=none
+2026-11-26T21:42:46Z load=0.69 foreign=none
+2026-11-26T21:42:48Z load=0.69 foreign=none
+2026-11-26T21:42:51Z load=0.71 foreign=none
+2026-11-26T21:42:53Z load=0.71 foreign=none
+2026-11-26T21:42:55Z load=0.66 foreign=none
+2026-11-26T21:42:57Z load=0.66 foreign=none
+2026-11-26T21:43:00Z load=0.66 foreign=none
+2026-11-26T21:43:02Z load=0.60 foreign=none
+2026-11-26T21:43:04Z load=0.60 foreign=none
+2026-11-26T21:43:06Z load=0.56 foreign=none
+2026-11-26T21:43:09Z load=0.56 foreign=none
+2026-11-26T21:43:11Z load=0.51 foreign=none
+2026-11-26T21:43:13Z load=0.51 foreign=4091:21.7:claude | 
+2026-11-26T21:43:15Z load=0.47 foreign=none
+2026-11-26T21:43:18Z load=0.47 foreign=none
+2026-11-26T21:43:20Z load=0.51 foreign=none
+2026-11-26T21:43:22Z load=0.51 foreign=none
+2026-11-26T21:43:24Z load=0.51 foreign=none
+2026-11-26T21:43:27Z load=0.47 foreign=none
+2026-11-26T21:43:29Z load=0.47 foreign=none
+2026-11-26T21:43:31Z load=0.43 foreign=none
+2026-11-26T21:43:33Z load=0.43 foreign=none
+2026-11-26T21:43:36Z load=0.40 foreign=none
+2026-11-26T21:43:38Z load=0.40 foreign=none
+2026-11-26T21:43:40Z load=0.37 foreign=none
+2026-11-26T21:43:42Z load=0.37 foreign=none
+2026-11-26T21:43:45Z load=0.37 foreign=none
+2026-11-26T21:43:47Z load=0.34 foreign=none
+2026-11-26T21:43:49Z load=0.34 foreign=none
+2026-11-26T21:43:51Z load=0.31 foreign=none
+2026-11-26T21:43:54Z load=0.31 foreign=none
+2026-11-26T21:43:56Z load=0.36 foreign=none
+2026-11-26T21:43:58Z load=0.36 foreign=none
+2026-11-26T21:44:00Z load=0.42 foreign=none
+2026-11-26T21:44:03Z load=0.42 foreign=none
+2026-11-26T21:44:05Z load=0.38 foreign=none
+2026-11-26T21:44:07Z load=0.38 foreign=none
+2026-11-26T21:44:09Z load=0.38 foreign=none
+2026-11-26T21:44:12Z load=0.35 foreign=none
+2026-11-26T21:44:14Z load=0.35 foreign=14239:38.6:claude | 
+2026-11-26T21:44:16Z load=0.32 foreign=14239:14.8:claude | 
+2026-11-26T21:44:18Z load=0.32 foreign=none
+2026-11-26T21:44:21Z load=0.30 foreign=14239:12.8:claude | 
+2026-11-26T21:44:23Z load=0.30 foreign=none
+2026-11-26T21:44:25Z load=0.27 foreign=none
+2026-11-26T21:44:27Z load=0.27 foreign=none
+2026-11-26T21:44:30Z load=0.27 foreign=none
+2026-11-26T21:44:32Z load=0.25 foreign=14239:18.8:claude | 
+2026-11-26T21:44:34Z load=0.25 foreign=14239:11.8:claude | 
+2026-11-26T21:44:36Z load=0.23 foreign=none
+2026-11-26T21:44:39Z load=0.23 foreign=none
+2026-11-26T21:44:41Z load=0.29 foreign=none
+2026-11-26T21:44:43Z load=0.29 foreign=none
+2026-11-26T21:44:45Z load=0.35 foreign=none
+2026-11-26T21:44:48Z load=0.35 foreign=none
+2026-11-26T21:44:50Z load=0.32 foreign=none
+2026-11-26T21:44:52Z load=0.32 foreign=none
+2026-11-26T21:44:54Z load=0.32 foreign=none
+2026-11-26T21:44:57Z load=0.30 foreign=none
+2026-11-26T21:44:59Z load=0.30 foreign=none
+2026-11-26T21:45:01Z load=0.35 foreign=none
+2026-11-26T21:45:03Z load=0.35 foreign=none
+2026-11-26T21:45:05Z load=0.32 foreign=none
+2026-11-26T21:45:08Z load=0.32 foreign=none
+2026-11-26T21:45:10Z load=0.30 foreign=none
+2026-11-26T21:45:12Z load=0.30 foreign=none
+2026-11-26T21:45:14Z load=0.30 foreign=none
+2026-11-26T21:45:17Z load=0.35 foreign=none
+2026-11-26T21:45:19Z load=0.35 foreign=none
+2026-11-26T21:45:21Z load=0.33 foreign=none
+2026-11-26T21:45:23Z load=0.33 foreign=none
+2026-11-26T21:45:26Z load=0.30 foreign=none
+2026-11-26T21:45:28Z load=0.30 foreign=none
+2026-11-26T21:45:30Z load=0.52 foreign=none
+2026-11-26T21:45:32Z load=0.52 foreign=none
+2026-11-26T21:45:35Z load=0.52 foreign=none
+2026-11-26T21:45:37Z load=0.47 foreign=none
+2026-11-26T21:45:39Z load=0.47 foreign=none
+2026-11-26T21:45:41Z load=0.44 foreign=none
+2026-11-26T21:45:44Z load=0.44 foreign=none
+2026-11-26T21:45:46Z load=0.48 foreign=none
+2026-11-26T21:45:48Z load=0.48 foreign=none
+2026-11-26T21:45:50Z load=0.44 foreign=none
+2026-11-26T21:45:53Z load=0.44 foreign=none
+2026-11-26T21:45:55Z load=0.41 foreign=none
+2026-11-26T21:45:57Z load=0.41 foreign=none
+2026-11-26T21:45:59Z load=0.41 foreign=none
+2026-11-26T21:46:02Z load=0.45 foreign=none
+2026-11-26T21:46:04Z load=0.45 foreign=none
+2026-11-26T21:46:06Z load=0.50 foreign=none
+2026-11-26T21:46:08Z load=0.50 foreign=none
+2026-11-26T21:46:11Z load=0.46 foreign=none
+2026-11-26T21:46:13Z load=0.46 foreign=none
+2026-11-26T21:46:15Z load=0.50 foreign=none
+2026-11-26T21:46:17Z load=0.50 foreign=none
+2026-11-26T21:46:20Z load=0.50 foreign=none
+2026-11-26T21:46:22Z load=0.46 foreign=none
+2026-11-26T21:46:24Z load=0.46 foreign=none
+2026-11-26T21:46:26Z load=0.42 foreign=none
+2026-11-26T21:46:29Z load=0.42 foreign=none
+2026-11-26T21:46:31Z load=0.39 foreign=none
+2026-11-26T21:46:33Z load=0.39 foreign=none
+2026-11-26T21:46:35Z load=0.44 foreign=none
+2026-11-26T21:46:38Z load=0.44 foreign=696346:13.9:/usr/bin/python3 -c import | 696349:13.9:/usr/bin/python3 -c import | 696350:13.9:/usr/bin/python3 -c import | 
+2026-11-26T21:46:40Z load=0.56 foreign=none
+2026-11-26T21:46:42Z load=0.56 foreign=none
+2026-11-26T21:46:44Z load=0.56 foreign=none
+2026-11-26T21:46:47Z load=0.60 foreign=none
+2026-11-26T21:46:49Z load=0.60 foreign=none
+2026-11-26T21:46:51Z load=0.63 foreign=none
+2026-11-26T21:46:53Z load=0.63 foreign=none
+2026-11-26T21:46:55Z load=0.58 foreign=none
+2026-11-26T21:46:58Z load=0.58 foreign=none
+2026-11-26T21:47:00Z load=0.53 foreign=none
+2026-11-26T21:47:02Z load=0.53 foreign=none
+2026-11-26T21:47:04Z load=0.53 foreign=none
+2026-11-26T21:47:07Z load=0.49 foreign=none
+2026-11-26T21:47:09Z load=0.49 foreign=none
+2026-11-26T21:47:11Z load=0.45 foreign=none
+2026-11-26T21:47:13Z load=0.45 foreign=none
+2026-11-26T21:47:16Z load=0.50 foreign=none
+2026-11-26T21:47:18Z load=0.50 foreign=none
+2026-11-26T21:47:20Z load=0.46 foreign=none
+2026-11-26T21:47:22Z load=0.46 foreign=none
+2026-11-26T21:47:25Z load=0.46 foreign=none
+2026-11-26T21:47:27Z load=0.42 foreign=none
+2026-11-26T21:47:29Z load=0.42 foreign=none
+2026-11-26T21:47:31Z load=0.47 foreign=none
+2026-11-26T21:47:34Z load=0.47 foreign=none
+2026-11-26T21:47:36Z load=0.43 foreign=none
+2026-11-26T21:47:38Z load=0.43 foreign=none
+2026-11-26T21:47:40Z load=0.39 foreign=none
+2026-11-26T21:47:43Z load=0.39 foreign=none
+2026-11-26T21:47:45Z load=0.44 foreign=none
+2026-11-26T21:47:47Z load=0.44 foreign=none
+2026-11-26T21:47:49Z load=0.44 foreign=none
+2026-11-26T21:47:52Z load=0.41 foreign=none
+2026-11-26T21:47:54Z load=0.41 foreign=none
+2026-11-26T21:47:56Z load=0.45 foreign=none
+2026-11-26T21:47:58Z load=0.45 foreign=none
+2026-11-26T21:48:01Z load=0.50 foreign=none
+2026-11-26T21:48:03Z load=0.50 foreign=none
+2026-11-26T21:48:05Z load=0.46 foreign=none
+2026-11-26T21:48:07Z load=0.46 foreign=none
+2026-11-26T21:48:10Z load=0.46 foreign=none
+2026-11-26T21:48:12Z load=0.50 foreign=none
+2026-11-26T21:48:14Z load=0.50 foreign=none
+2026-11-26T21:48:16Z load=0.46 foreign=none
+2026-11-26T21:48:19Z load=0.46 foreign=none
+2026-11-26T21:48:21Z load=0.50 foreign=none
+2026-11-26T21:48:23Z load=0.50 foreign=none
+2026-11-26T21:48:25Z load=0.46 foreign=none
+2026-11-26T21:48:28Z load=0.46 foreign=none
+2026-11-26T21:48:30Z load=0.43 foreign=none
+2026-11-26T21:48:32Z load=0.43 foreign=none
+2026-11-26T21:48:34Z load=0.43 foreign=none
+2026-11-26T21:48:37Z load=0.39 foreign=none
+2026-11-26T21:48:39Z load=0.39 foreign=none
+2026-11-26T21:48:41Z load=0.44 foreign=none
+2026-11-26T21:48:43Z load=0.44 foreign=none
+2026-11-26T21:48:45Z load=0.49 foreign=none
+2026-11-26T21:48:48Z load=0.49 foreign=none
+2026-11-26T21:48:50Z load=0.53 foreign=none
+2026-11-26T21:48:52Z load=0.53 foreign=none
+2026-11-26T21:48:54Z load=0.53 foreign=none
+2026-11-26T21:48:57Z load=0.49 foreign=none
+2026-11-26T21:48:59Z load=0.49 foreign=none
+2026-11-26T21:49:01Z load=0.45 foreign=none
+2026-11-26T21:49:03Z load=0.45 foreign=none
+2026-11-26T21:49:06Z load=0.49 foreign=none
+2026-11-26T21:49:08Z load=0.49 foreign=none
+2026-11-26T21:49:10Z load=0.45 foreign=none
+2026-11-26T21:49:12Z load=0.45 foreign=none
+2026-11-26T21:49:15Z load=0.45 foreign=none
+2026-11-26T21:49:17Z load=0.41 foreign=none
+2026-11-26T21:49:19Z load=0.41 foreign=none
+2026-11-26T21:49:21Z load=0.38 foreign=none
+2026-11-26T21:49:24Z load=0.38 foreign=none
+2026-11-26T21:49:26Z load=0.35 foreign=none
+2026-11-26T21:49:28Z load=0.35 foreign=none
+2026-11-26T21:49:30Z load=0.32 foreign=none
+2026-11-26T21:49:33Z load=0.32 foreign=none
+2026-11-26T21:49:35Z load=0.38 foreign=none
+2026-11-26T21:49:37Z load=0.38 foreign=none
+2026-11-26T21:49:39Z load=0.38 foreign=none
+2026-11-26T21:49:42Z load=0.35 foreign=14769:18.8:claude | 
+2026-11-26T21:49:44Z load=0.35 foreign=none
+2026-11-26T21:49:46Z load=0.32 foreign=none
+2026-11-26T21:49:48Z load=0.32 foreign=none
+2026-11-26T21:49:51Z load=0.37 foreign=none
+2026-11-26T21:49:53Z load=0.37 foreign=none
+2026-11-26T21:49:55Z load=0.34 foreign=none
+2026-11-26T21:49:57Z load=0.34 foreign=none
+2026-11-26T21:50:00Z load=0.34 foreign=none
+2026-11-26T21:50:02Z load=0.32 foreign=4091:12.9:claude | 
+2026-11-26T21:50:04Z load=0.32 foreign=none
+2026-11-26T21:50:06Z load=0.29 foreign=none
+2026-11-26T21:50:09Z load=0.29 foreign=none
+2026-11-26T21:50:11Z load=0.35 foreign=none
+2026-11-26T21:50:13Z load=0.35 foreign=4091:13.8:claude | 
+2026-11-26T21:50:15Z load=0.32 foreign=none
+2026-11-26T21:50:18Z load=0.32 foreign=4091:18.8:claude | 
+2026-11-26T21:50:20Z load=0.32 foreign=701507:63.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:22Z load=0.45 foreign=none
+2026-11-26T21:50:24Z load=0.45 foreign=none
+2026-11-26T21:50:26Z load=0.42 foreign=none
+2026-11-26T21:50:29Z load=0.42 foreign=702200:103.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:31Z load=0.46 foreign=702200:104.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:33Z load=0.46 foreign=702200:104.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:35Z load=0.51 foreign=702200:103.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:38Z load=0.51 foreign=702200:102.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:40Z load=0.55 foreign=702200:103.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:42Z load=0.55 foreign=702200:105.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:44Z load=0.55 foreign=none
+2026-11-26T21:50:47Z load=0.82 foreign=702826:61.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:49Z load=0.82 foreign=none
+2026-11-26T21:50:51Z load=0.92 foreign=703270:11.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:53Z load=0.92 foreign=703368:35.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:55Z load=1.00 foreign=703419:32.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:50:58Z load=1.00 foreign=703530:10.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:00Z load=1.08 foreign=none
+2026-11-26T21:51:02Z load=1.08 foreign=none
+2026-11-26T21:51:04Z load=1.08 foreign=none
+2026-11-26T21:51:07Z load=1.16 foreign=704175:98.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:09Z load=1.16 foreign=704175:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:11Z load=1.31 foreign=704175:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:13Z load=1.31 foreign=704175:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:16Z load=1.36 foreign=704175:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:18Z load=1.36 foreign=704416:53.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:20Z load=1.33 foreign=704416:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:22Z load=1.33 foreign=704416:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:25Z load=1.33 foreign=704416:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:27Z load=1.39 foreign=704416:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:29Z load=1.39 foreign=704642:85.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:32Z load=1.35 foreign=704642:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:34Z load=1.35 foreign=704642:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:36Z load=1.57 foreign=704642:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:38Z load=1.57 foreign=704642:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:41Z load=1.60 foreign=704642:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:43Z load=1.60 foreign=704642:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:45Z load=1.87 foreign=704642:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:47Z load=1.87 foreign=705273:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:50Z load=1.87 foreign=none
+2026-11-26T21:51:52Z load=1.80 foreign=705448:101.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:54Z load=1.80 foreign=705448:103.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:18.9:claude | 
+2026-11-26T21:51:56Z load=1.74 foreign=705448:102.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:51:58Z load=1.74 foreign=705448:103.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:52:01Z load=1.84 foreign=705448:101.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:52:03Z load=1.84 foreign=705448:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:52:05Z load=1.85 foreign=705448:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:52:07Z load=1.85 foreign=none
+2026-11-26T21:52:10Z load=1.85 foreign=none
+2026-11-26T21:52:12Z load=1.70 foreign=none
+2026-11-26T21:52:14Z load=1.70 foreign=none
+2026-11-26T21:52:16Z load=1.65 foreign=none
+2026-11-26T21:52:19Z load=1.65 foreign=none
+2026-11-26T21:52:21Z load=1.60 foreign=none
+2026-11-26T21:52:23Z load=1.60 foreign=none
+2026-11-26T21:52:25Z load=1.55 foreign=none
+2026-11-26T21:52:27Z load=1.55 foreign=none
+2026-11-26T21:52:30Z load=1.55 foreign=none
+2026-11-26T21:52:32Z load=1.50 foreign=none
+2026-11-26T21:52:34Z load=1.50 foreign=none
+2026-11-26T21:52:36Z load=1.62 foreign=707023:45.7:/usr/bin/python3 -c import | 
+2026-11-26T21:52:39Z load=1.62 foreign=none
+2026-11-26T21:52:41Z load=1.65 foreign=none
+2026-11-26T21:52:43Z load=1.65 foreign=none
+2026-11-26T21:52:45Z load=1.60 foreign=none
+2026-11-26T21:52:48Z load=1.60 foreign=none
+2026-11-26T21:52:50Z load=1.79 foreign=none
+2026-11-26T21:52:52Z load=1.79 foreign=none
+2026-11-26T21:52:54Z load=1.79 foreign=none
+2026-11-26T21:52:57Z load=1.73 foreign=none
+2026-11-26T21:52:59Z load=1.73 foreign=none
+2026-11-26T21:53:01Z load=1.67 foreign=none
+2026-11-26T21:53:03Z load=1.67 foreign=none
+2026-11-26T21:53:05Z load=1.62 foreign=707870:23.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:08Z load=1.62 foreign=707999:32.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:10Z load=1.65 foreign=none
+2026-11-26T21:53:12Z load=1.65 foreign=none
+2026-11-26T21:53:14Z load=1.65 foreign=708281:33.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:17Z load=1.52 foreign=none
+2026-11-26T21:53:19Z load=1.52 foreign=none
+2026-11-26T21:53:21Z load=1.47 foreign=708497:33.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:23Z load=1.47 foreign=none
+2026-11-26T21:53:26Z load=1.44 foreign=708823:27.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:28Z load=1.44 foreign=708891:38.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:30Z load=1.40 foreign=708968:17.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:32Z load=1.40 foreign=none
+2026-11-26T21:53:34Z load=1.40 foreign=none
+2026-11-26T21:53:37Z load=1.37 foreign=none
+2026-11-26T21:53:39Z load=1.37 foreign=709413:10.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:41Z load=1.42 foreign=709413:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:53:43Z load=1.42 foreign=none
+2026-11-26T21:53:46Z load=1.47 foreign=none
+2026-11-26T21:53:48Z load=1.47 foreign=none
+2026-11-26T21:53:50Z load=1.43 foreign=none
+2026-11-26T21:53:52Z load=1.43 foreign=none
+2026-11-26T21:53:55Z load=1.43 foreign=none
+2026-11-26T21:53:57Z load=1.31 foreign=none
+2026-11-26T21:53:59Z load=1.31 foreign=none
+2026-11-26T21:54:01Z load=1.29 foreign=none
+2026-11-26T21:54:04Z load=1.29 foreign=none
+2026-11-26T21:54:06Z load=1.19 foreign=none
+2026-11-26T21:54:08Z load=1.19 foreign=none
+2026-11-26T21:54:10Z load=1.17 foreign=none
+2026-11-26T21:54:12Z load=1.17 foreign=none
+2026-11-26T21:54:15Z load=1.17 foreign=none
+2026-11-26T21:54:17Z load=1.08 foreign=none
+2026-11-26T21:54:19Z load=1.08 foreign=none
+2026-11-26T21:54:21Z load=1.23 foreign=none
+2026-11-26T21:54:24Z load=1.23 foreign=none
+2026-11-26T21:54:26Z load=1.21 foreign=711971:13.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:28Z load=1.21 foreign=none
+2026-11-26T21:54:30Z load=1.28 foreign=none
+2026-11-26T21:54:33Z load=1.28 foreign=712556:42.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:35Z load=1.28 foreign=none
+2026-11-26T21:54:37Z load=1.25 foreign=none
+2026-11-26T21:54:39Z load=1.25 foreign=none
+2026-11-26T21:54:41Z load=1.15 foreign=14769:14.9:claude | 
+2026-11-26T21:54:44Z load=1.15 foreign=713458:10.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:46Z load=1.14 foreign=none
+2026-11-26T21:54:48Z load=1.14 foreign=713758:91.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:50Z load=1.29 foreign=713758:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:53Z load=1.29 foreign=713821:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:55Z load=1.43 foreign=713821:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:57Z load=1.43 foreign=713821:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:54:59Z load=1.43 foreign=714070:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:02Z load=1.47 foreign=714070:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:04Z load=1.47 foreign=714070:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:06Z load=2.00 foreign=714070:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:08Z load=2.00 foreign=714070:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:11Z load=1.92 foreign=714070:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:13Z load=1.92 foreign=714070:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:15Z load=1.92 foreign=714070:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:17Z load=1.92 foreign=714550:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:19Z load=1.92 foreign=714550:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:22Z load=1.85 foreign=714550:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:24Z load=1.85 foreign=714550:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:26Z load=1.78 foreign=714550:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:28Z load=1.78 foreign=714835:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:31Z load=1.80 foreign=714835:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:33Z load=1.80 foreign=714835:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:35Z load=1.73 foreign=714835:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:37Z load=1.73 foreign=none
+2026-11-26T21:55:40Z load=1.73 foreign=715158:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:42Z load=1.84 foreign=715158:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:44Z load=1.84 foreign=715158:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:46Z load=1.93 foreign=715158:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 4091:12.9:claude | 
+2026-11-26T21:55:48Z load=1.93 foreign=715440:91.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:51Z load=2.02 foreign=715440:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:53Z load=2.02 foreign=715440:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:55Z load=2.01 foreign=715440:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:55:57Z load=2.01 foreign=715440:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:00Z load=2.01 foreign=715440:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:02Z load=1.93 foreign=715747:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14239:13.9:claude | 
+2026-11-26T21:56:04Z load=1.93 foreign=715747:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:06Z load=1.94 foreign=715747:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:09Z load=1.94 foreign=715747:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:11Z load=1.86 foreign=715747:99.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:13Z load=1.86 foreign=715747:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:15Z load=1.87 foreign=716121:88.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:17Z load=1.87 foreign=716121:99.1:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:20Z load=1.87 foreign=716121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:22Z load=1.88 foreign=716121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:24Z load=1.88 foreign=716121:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:26Z load=1.81 foreign=716121:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:29Z load=1.81 foreign=716507:18.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:31Z load=1.91 foreign=716507:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:33Z load=1.91 foreign=716507:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:35Z load=1.84 foreign=716507:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:38Z load=1.84 foreign=716507:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:40Z load=1.84 foreign=716751:99.1:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:42Z load=1.85 foreign=716751:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:44Z load=1.85 foreign=716751:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:46Z load=1.86 foreign=716751:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:49Z load=1.86 foreign=716751:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:51Z load=1.79 foreign=716751:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:53Z load=1.79 foreign=717174:19.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:55Z load=1.73 foreign=717174:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:56:58Z load=1.73 foreign=717174:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:00Z load=1.67 foreign=717174:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:02Z load=1.67 foreign=717174:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:04Z load=1.67 foreign=717174:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:07Z load=1.70 foreign=none
+2026-11-26T21:57:09Z load=1.70 foreign=none
+2026-11-26T21:57:11Z load=1.64 foreign=none
+2026-11-26T21:57:13Z load=1.64 foreign=718197:81.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:15Z load=1.59 foreign=718343:21.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:18Z load=1.59 foreign=718397:100.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:20Z load=1.54 foreign=718397:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:22Z load=1.54 foreign=718397:100.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:24Z load=1.54 foreign=718659:56.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:27Z load=1.50 foreign=718666:98.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:29Z load=1.50 foreign=718793:84.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:31Z load=1.46 foreign=718793:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:33Z load=1.46 foreign=718951:21.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:36Z load=1.66 foreign=719013:268.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:38Z load=1.66 foreign=719013:341.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:40Z load=1.85 foreign=719013:342.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:42Z load=1.85 foreign=719013:341.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:45Z load=1.85 foreign=719013:341.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:47Z load=2.02 foreign=none
+2026-11-26T21:57:49Z load=2.02 foreign=719490:14.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:57:51Z load=1.94 foreign=none
+2026-11-26T21:57:53Z load=1.94 foreign=none
+2026-11-26T21:57:56Z load=1.86 foreign=none
+2026-11-26T21:57:58Z load=1.86 foreign=none
+2026-11-26T21:58:00Z load=1.79 foreign=none
+2026-11-26T21:58:02Z load=1.79 foreign=720607:84.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:05Z load=1.79 foreign=720607:99.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:07Z load=1.81 foreign=none
+2026-11-26T21:58:09Z load=1.81 foreign=none
+2026-11-26T21:58:11Z load=1.75 foreign=none
+2026-11-26T21:58:14Z load=1.75 foreign=none
+2026-11-26T21:58:16Z load=1.77 foreign=721101:14.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:18Z load=1.77 foreign=none
+2026-11-26T21:58:20Z load=1.79 foreign=none
+2026-11-26T21:58:23Z load=1.79 foreign=none
+2026-11-26T21:58:25Z load=1.79 foreign=721560:14.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:27Z load=1.72 foreign=none
+2026-11-26T21:58:29Z load=1.72 foreign=721790:97.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:31Z load=1.74 foreign=721825:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:34Z load=1.74 foreign=721825:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:36Z load=1.68 foreign=721825:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:38Z load=1.68 foreign=721825:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:40Z load=1.63 foreign=721825:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:43Z load=1.63 foreign=721825:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:45Z load=1.63 foreign=721825:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:47Z load=1.58 foreign=721825:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:49Z load=1.58 foreign=721825:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:52Z load=1.61 foreign=721825:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:54Z load=1.61 foreign=721825:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:56Z load=1.56 foreign=721825:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:58:58Z load=1.56 foreign=721825:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:01Z load=1.52 foreign=721825:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:03Z load=1.52 foreign=722697:22.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:05Z load=1.48 foreign=722697:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:07Z load=1.48 foreign=722790:47.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:09Z load=1.48 foreign=722790:99.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:12Z load=1.44 foreign=722790:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:14Z load=1.44 foreign=722790:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:16Z load=1.48 foreign=722790:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:18Z load=1.48 foreign=722790:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:21Z load=1.44 foreign=722790:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:23Z load=1.44 foreign=723172:99.1:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:25Z load=1.41 foreign=723172:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:27Z load=1.41 foreign=723343:45.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:30Z load=1.41 foreign=723343:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:32Z load=1.38 foreign=723343:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:10.9:claude | 
+2026-11-26T21:59:34Z load=1.38 foreign=723343:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:36Z load=1.43 foreign=723343:98.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:38Z load=1.43 foreign=723343:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:51Z load=1.33 foreign=723995:79.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:53Z load=1.33 foreign=723995:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:15.9:claude | 
+2026-11-26T21:59:55Z load=1.30 foreign=723995:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:57Z load=1.30 foreign=723995:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T21:59:59Z load=1.30 foreign=723995:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:02Z load=1.36 foreign=723995:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:94.8:db_j000_FREE | 
+2026-11-26T22:00:04Z load=1.36 foreign=723995:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:98.4:db_j000_FREE | 
+2026-11-26T22:00:06Z load=1.41 foreign=723995:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:96.3:db_j000_FREE | 
+2026-11-26T22:00:08Z load=1.41 foreign=723995:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:82.4:db_j000_FREE | 
+2026-11-26T22:00:11Z load=1.54 foreign=724539:98.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:92.4:db_j000_FREE | 
+2026-11-26T22:00:13Z load=1.54 foreign=641305:98.3:db_j000_FREE | 724656:41.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:15Z load=1.58 foreign=724656:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:95.4:db_j000_FREE | 14769:10.9:claude | 
+2026-11-26T22:00:17Z load=1.58 foreign=641305:97.8:db_j000_FREE | 
+2026-11-26T22:00:20Z load=1.58 foreign=724852:94.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 2306:92.2:db_m004_FREE | 641305:80.3:db_j000_FREE | 2298:25.8:db_m001_FREE | 
+2026-11-26T22:00:22Z load=1.93 foreign=641305:98.9:db_j000_FREE | 724852:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:24Z load=1.93 foreign=641305:99.2:db_j000_FREE | 724969:99.2:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:26Z load=2.02 foreign=725015:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:90.5:db_j000_FREE | 
+2026-11-26T22:00:28Z load=2.02 foreign=641305:99.4:db_j000_FREE | 
+2026-11-26T22:00:31Z load=2.10 foreign=725127:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:99.0:db_j000_FREE | 
+2026-11-26T22:00:33Z load=2.10 foreign=641305:88.4:db_j000_FREE | 725200:83.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:35Z load=2.25 foreign=725200:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:99.2:db_j000_FREE | 
+2026-11-26T22:00:37Z load=2.25 foreign=725200:99.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:97.7:db_j000_FREE | 
+2026-11-26T22:00:40Z load=2.25 foreign=641305:100.0:db_j000_FREE | 725200:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:37.6:claude | 
+2026-11-26T22:00:42Z load=2.23 foreign=725200:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:67.6:db_j000_FREE | 
+2026-11-26T22:00:44Z load=2.23 foreign=725200:99.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 641305:35.6:db_j000_FREE | 
+2026-11-26T22:00:46Z load=2.13 foreign=725642:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 4091:15.9:claude | 
+2026-11-26T22:00:49Z load=2.13 foreign=725642:99.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:51Z load=2.04 foreign=725642:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:53Z load=2.04 foreign=725799:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:17.9:claude | 
+2026-11-26T22:00:55Z load=2.12 foreign=725799:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:00:57Z load=2.12 foreign=725977:27.7:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:00Z load=2.12 foreign=725977:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 14769:10.9:claude | 
+2026-11-26T22:01:02Z load=2.03 foreign=725977:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:04Z load=2.03 foreign=726199:41.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:06Z load=2.02 foreign=726199:98.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:09Z load=2.02 foreign=726322:99.3:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:11Z load=1.94 foreign=726426:62.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:13Z load=1.94 foreign=726426:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:15Z load=1.95 foreign=726426:99.4:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:18Z load=1.95 foreign=726658:11.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:20Z load=1.95 foreign=none
+2026-11-26T22:01:22Z load=1.87 foreign=none
+2026-11-26T22:01:24Z load=1.87 foreign=726877:11.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:27Z load=1.80 foreign=726877:100.0:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:29Z load=1.80 foreign=727027:10.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:31Z load=1.98 foreign=727052:46.6:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:33Z load=1.98 foreign=14769:19.8:claude | 727146:11.9:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:35Z load=1.90 foreign=727226:64.5:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:38Z load=1.90 foreign=727264:25.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:40Z load=1.83 foreign=14769:15.9:claude | 
+2026-11-26T22:01:42Z load=1.83 foreign=727460:23.8:/home/ukjin/workspaces/ckdbs/.claude/worktrees/dt-write-path-yield/build/tests/kds_tests - | 
+2026-11-26T22:01:44Z load=1.83 foreign=4091:28.8:claude | 
+2026-11-26T22:01:47Z load=1.76 foreign=4091:31.6:claude | 
+2026-11-26T22:01:49Z load=1.76 foreign=none
+2026-11-26T22:01:51Z load=1.70 foreign=none
+2026-11-26T22:01:53Z load=1.70 foreign=none
+2026-11-26T22:01:56Z load=1.64 foreign=none
+2026-11-26T22:01:58Z load=1.64 foreign=none
+2026-11-26T22:02:00Z load=1.67 foreign=none
+2026-11-26T22:02:02Z load=1.67 foreign=none
+2026-11-26T22:02:04Z load=1.67 foreign=14769:27.8:claude | 
+2026-11-26T22:02:07Z load=1.62 foreign=4091:15.9:claude | 
+2026-11-26T22:02:09Z load=1.62 foreign=none
+2026-11-26T22:02:11Z load=1.57 foreign=none
+2026-11-26T22:02:13Z load=1.57 foreign=none
+2026-11-26T22:02:16Z load=1.44 foreign=none
+2026-11-26T22:02:18Z load=1.44 foreign=4091:25.8:claude | 
+2026-11-26T22:02:20Z load=1.41 foreign=none
+2026-11-26T22:02:22Z load=1.41 foreign=728788:48.7:/usr/bin/python3 -c import | 4091:13.9:claude | 
+2026-11-26T22:02:25Z load=1.41 foreign=none
+2026-11-26T22:02:27Z load=1.45 foreign=none
+2026-11-26T22:02:29Z load=1.45 foreign=none
+2026-11-26T22:02:31Z load=1.42 foreign=4091:15.9:claude | 14769:10.9:claude | 
+2026-11-26T22:02:34Z load=1.42 foreign=none
+2026-11-26T22:02:36Z load=1.38 foreign=none
+2026-11-26T22:02:38Z load=1.38 foreign=4091:16.8:claude | 
+2026-11-26T22:02:40Z load=1.43 foreign=none
+2026-11-26T22:02:42Z load=1.43 foreign=none
+2026-11-26T22:02:45Z load=1.43 foreign=4091:10.9:claude | 
+2026-11-26T22:02:47Z load=1.40 foreign=none
+2026-11-26T22:02:49Z load=1.40 foreign=none
+2026-11-26T22:02:51Z load=1.29 foreign=none
+2026-11-26T22:02:54Z load=1.29 foreign=none
+2026-11-26T22:02:56Z load=1.26 foreign=none
+2026-11-26T22:02:58Z load=1.26 foreign=none
+2026-11-26T22:03:00Z load=1.32 foreign=none
+2026-11-26T22:03:02Z load=1.32 foreign=none
+2026-11-26T22:03:05Z load=1.32 foreign=730557:47.6:/usr/bin/python3 -c import | 
+2026-11-26T22:03:07Z load=1.38 foreign=none
+2026-11-26T22:03:09Z load=1.38 foreign=14769:32.7:claude | 
+2026-11-26T22:03:11Z load=1.43 foreign=none
+2026-11-26T22:03:14Z load=1.43 foreign=none
+2026-11-26T22:03:16Z load=1.39 foreign=none
+2026-11-26T22:03:18Z load=1.39 foreign=none
+2026-11-26T22:03:20Z load=1.36 foreign=none
+2026-11-26T22:03:23Z load=1.36 foreign=none
+2026-11-26T22:03:25Z load=1.36 foreign=none
+2026-11-26T22:03:27Z load=1.33 foreign=none
+2026-11-26T22:03:29Z load=1.33 foreign=none
+2026-11-26T22:03:31Z load=1.30 foreign=none
+2026-11-26T22:03:34Z load=1.30 foreign=none
+2026-11-26T22:03:36Z load=1.28 foreign=none
+2026-11-26T22:03:38Z load=1.28 foreign=none
+2026-11-26T22:03:40Z load=1.42 foreign=none
+2026-11-26T22:03:43Z load=1.42 foreign=none
+2026-11-26T22:03:45Z load=1.42 foreign=731786:48.7:/usr/bin/python3 -c import | 
+2026-11-26T22:03:47Z load=1.38 foreign=none
+2026-11-26T22:03:49Z load=1.38 foreign=none
+2026-11-26T22:03:52Z load=1.27 foreign=none
+2026-11-26T22:03:54Z load=1.27 foreign=none
+2026-11-26T22:03:56Z load=1.33 foreign=none
+2026-11-26T22:03:58Z load=1.33 foreign=none
+2026-11-26T22:04:01Z load=1.31 foreign=none
+2026-11-26T22:04:03Z load=1.31 foreign=none
+2026-11-26T22:04:05Z load=1.36 foreign=none
+2026-11-26T22:04:07Z load=1.36 foreign=none
+2026-11-26T22:04:09Z load=1.36 foreign=none
+2026-11-26T22:04:12Z load=1.33 foreign=none
+2026-11-26T22:04:14Z load=1.33 foreign=none
+2026-11-26T22:04:16Z load=1.30 foreign=none
+2026-11-26T22:04:18Z load=1.30 foreign=none
+2026-11-26T22:04:21Z load=1.28 foreign=none
+2026-11-26T22:04:23Z load=1.28 foreign=none
+2026-11-26T22:04:25Z load=1.26 foreign=none
+2026-11-26T22:04:27Z load=1.26 foreign=none
+2026-11-26T22:04:30Z load=1.26 foreign=none
+2026-11-26T22:04:32Z load=1.24 foreign=none
+2026-11-26T22:04:34Z load=1.24 foreign=733124:26.8:/usr/bin/python3 -c import | 
+2026-11-26T22:04:36Z load=1.22 foreign=none
+2026-11-26T22:04:38Z load=1.22 foreign=none
+2026-11-26T22:04:41Z load=1.12 foreign=none
+2026-11-26T22:04:43Z load=1.12 foreign=none
+2026-11-26T22:04:45Z load=1.11 foreign=none
+2026-11-26T22:04:47Z load=1.11 foreign=none
+2026-11-26T22:04:50Z load=1.11 foreign=none
+2026-11-26T22:04:52Z load=1.10 foreign=none
+2026-11-26T22:04:54Z load=1.10 foreign=none
+2026-11-26T22:04:56Z load=1.09 foreign=none
+2026-11-26T22:04:58Z load=1.09 foreign=none
+2026-11-26T22:05:01Z load=1.08 foreign=none
+2026-11-26T22:05:03Z load=1.08 foreign=none
+2026-11-26T22:05:05Z load=1.08 foreign=none
+2026-11-26T22:05:07Z load=1.08 foreign=none
+2026-11-26T22:05:10Z load=1.08 foreign=none
+2026-11-26T22:05:12Z load=1.07 foreign=none
+2026-11-26T22:05:14Z load=1.07 foreign=734247:22.8:/usr/bin/python3 -c import | 
+2026-11-26T22:05:16Z load=1.15 foreign=none
+2026-11-26T22:05:19Z load=1.15 foreign=none
+2026-11-26T22:05:21Z load=1.05 foreign=none
+2026-11-26T22:05:23Z load=1.05 foreign=none
+2026-11-26T22:05:25Z load=0.97 foreign=none
+2026-11-26T22:05:27Z load=0.97 foreign=none
+2026-11-26T22:05:30Z load=0.97 foreign=none
+2026-11-26T22:05:32Z load=0.97 foreign=none
+2026-11-26T22:05:34Z load=0.97 foreign=none
+2026-11-26T22:05:36Z load=0.97 foreign=none
+2026-11-26T22:05:39Z load=0.97 foreign=none
+2026-11-26T22:05:41Z load=0.98 foreign=none
+2026-11-26T22:05:43Z load=0.98 foreign=none
+2026-11-26T22:05:45Z load=0.90 foreign=none
+2026-11-26T22:05:48Z load=0.90 foreign=none
+2026-11-26T22:05:50Z load=0.90 foreign=none
+2026-11-26T22:05:52Z load=1.47 foreign=none
+2026-11-26T22:05:54Z load=1.47 foreign=735388:13.9:/usr/bin/python3 -c import | 
+2026-11-26T22:05:56Z load=1.43 foreign=none
+2026-11-26T22:05:59Z load=1.43 foreign=none
+2026-11-26T22:06:01Z load=1.31 foreign=none
+2026-11-26T22:06:03Z load=1.31 foreign=none
+2026-11-26T22:06:05Z load=1.21 foreign=none
+2026-11-26T22:06:08Z load=1.21 foreign=none
+2026-11-26T22:06:10Z load=1.21 foreign=none
+2026-11-26T22:06:12Z load=1.11 foreign=none
+2026-11-26T22:06:14Z load=1.11 foreign=none
+2026-11-26T22:06:17Z load=1.10 foreign=none
+2026-11-26T22:06:19Z load=1.10 foreign=none
+2026-11-26T22:06:21Z load=1.09 foreign=none
+2026-11-26T22:06:23Z load=1.09 foreign=none
+2026-11-26T22:06:25Z load=1.09 foreign=none
+2026-11-26T22:06:28Z load=1.09 foreign=none
+2026-11-26T22:06:30Z load=1.09 foreign=none
+2026-11-26T22:06:32Z load=1.08 foreign=none
+2026-11-26T22:06:34Z load=1.08 foreign=none
+2026-11-26T22:06:37Z load=1.15 foreign=none
+2026-11-26T22:06:39Z load=1.15 foreign=none
+2026-11-26T22:06:41Z load=1.14 foreign=736601:46.7:/usr/bin/python3 -c import | 
+2026-11-26T22:06:43Z load=1.14 foreign=none
+2026-11-26T22:06:46Z load=1.61 foreign=none
+2026-11-26T22:06:48Z load=1.61 foreign=none
+2026-11-26T22:06:50Z load=1.56 foreign=none
+2026-11-26T22:06:52Z load=1.56 foreign=none
+2026-11-26T22:06:55Z load=1.56 foreign=none
+2026-11-26T22:06:57Z load=1.52 foreign=none
+2026-11-26T22:06:59Z load=1.52 foreign=none
+2026-11-26T22:07:01Z load=1.55 foreign=none
+2026-11-26T22:07:03Z load=1.55 foreign=none
+2026-11-26T22:07:06Z load=1.59 foreign=none
+2026-11-26T22:07:08Z load=1.59 foreign=none
+2026-11-26T22:07:10Z load=1.62 foreign=none
+2026-11-26T22:07:12Z load=1.62 foreign=none
+2026-11-26T22:07:15Z load=1.62 foreign=none
+2026-11-26T22:07:17Z load=1.57 foreign=none
+2026-11-26T22:07:19Z load=1.57 foreign=none
+2026-11-26T22:07:21Z load=1.69 foreign=none
+2026-11-26T22:07:23Z load=1.69 foreign=none
+2026-11-26T22:07:26Z load=1.63 foreign=none
+2026-11-26T22:07:28Z load=1.63 foreign=none
+2026-11-26T22:07:30Z load=1.58 foreign=none
+2026-11-26T22:07:32Z load=1.58 foreign=none
+2026-11-26T22:07:35Z load=1.58 foreign=none
+2026-11-26T22:07:37Z load=1.54 foreign=none
+2026-11-26T22:07:39Z load=1.54 foreign=none
+2026-11-26T22:07:41Z load=1.41 foreign=none
+2026-11-26T22:07:44Z load=1.41 foreign=none
+2026-11-26T22:07:46Z load=1.30 foreign=none
+2026-11-26T22:07:48Z load=1.30 foreign=none
+2026-11-26T22:07:51Z load=1.35 foreign=none
+2026-11-26T22:07:53Z load=1.35 foreign=none
+2026-11-26T22:07:55Z load=1.25 foreign=14769:15.8:claude | 
+2026-11-26T22:07:57Z load=1.25 foreign=none
+2026-11-26T22:08:00Z load=1.25 foreign=none
+2026-11-26T22:08:02Z load=1.15 foreign=none
+2026-11-26T22:08:04Z load=1.15 foreign=none
+2026-11-26T22:08:06Z load=1.05 foreign=none
+2026-11-26T22:08:09Z load=1.05 foreign=none
+2026-11-26T22:08:11Z load=0.97 foreign=none
+2026-11-26T22:08:13Z load=0.97 foreign=none
+2026-11-26T22:08:15Z load=0.97 foreign=14769:16.8:claude | 
+2026-11-26T22:08:18Z load=0.97 foreign=none
+2026-11-26T22:08:20Z load=0.97 foreign=none
+2026-11-26T22:08:22Z load=0.89 foreign=none
+2026-11-26T22:08:24Z load=0.89 foreign=none
+2026-11-26T22:08:27Z load=0.82 foreign=none
+2026-11-26T22:08:29Z load=0.82 foreign=none
+2026-11-26T22:08:31Z load=0.76 foreign=none
+2026-11-26T22:08:33Z load=0.76 foreign=none
+2026-11-26T22:08:36Z load=0.78 foreign=none
+2026-11-26T22:08:38Z load=0.78 foreign=none
+2026-11-26T22:08:40Z load=0.79 foreign=none
+2026-11-26T22:08:42Z load=0.79 foreign=none
+2026-11-26T22:08:45Z load=0.79 foreign=none
+2026-11-26T22:08:47Z load=0.73 foreign=none
+2026-11-26T22:08:49Z load=0.73 foreign=none
+2026-11-26T22:08:51Z load=0.67 foreign=none
+2026-11-26T22:08:53Z load=0.67 foreign=none
+2026-11-26T22:08:56Z load=0.62 foreign=none
+2026-11-26T22:08:58Z load=0.62 foreign=none
+2026-11-26T22:09:00Z load=0.57 foreign=none
+2026-11-26T22:09:02Z load=0.57 foreign=none
+2026-11-26T22:09:05Z load=0.57 foreign=none
+2026-11-26T22:09:07Z load=0.52 foreign=none
+2026-11-26T22:09:09Z load=0.52 foreign=none
+2026-11-26T22:09:11Z load=0.48 foreign=none
+2026-11-26T22:09:14Z load=0.48 foreign=none
+2026-11-26T22:09:16Z load=0.44 foreign=none
+2026-11-26T22:09:18Z load=0.44 foreign=14769:22.8:claude | 
+2026-11-26T22:09:20Z load=0.41 foreign=14769:14.9:claude | 
+2026-11-26T22:09:23Z load=0.41 foreign=none
+2026-11-26T22:09:25Z load=0.41 foreign=none
+2026-11-26T22:09:27Z load=0.37 foreign=none
+2026-11-26T22:09:29Z load=0.37 foreign=none
+2026-11-26T22:09:32Z load=0.42 foreign=none
+2026-11-26T22:09:34Z load=0.42 foreign=none
+2026-11-26T22:09:36Z load=0.47 foreign=none
+2026-11-26T22:09:38Z load=0.47 foreign=none
+2026-11-26T22:09:41Z load=0.59 foreign=none
+2026-11-26T22:09:43Z load=0.59 foreign=none
+2026-11-26T22:09:45Z load=0.54 foreign=none
+2026-11-26T22:09:47Z load=0.54 foreign=none
+2026-11-26T22:09:50Z load=0.54 foreign=none
+2026-11-26T22:09:52Z load=0.50 foreign=none
+2026-11-26T22:09:54Z load=0.50 foreign=none
+2026-11-26T22:09:56Z load=0.46 foreign=none
+2026-11-26T22:09:59Z load=0.46 foreign=none
+2026-11-26T22:10:01Z load=0.50 foreign=none
+2026-11-26T22:10:03Z load=0.50 foreign=none
+2026-11-26T22:10:05Z load=0.46 foreign=none
+2026-11-26T22:10:08Z load=0.46 foreign=none
+2026-11-26T22:10:10Z load=0.46 foreign=none
+2026-11-26T22:10:12Z load=0.43 foreign=none
+2026-11-26T22:10:14Z load=0.43 foreign=none
+2026-11-26T22:10:17Z load=0.39 foreign=none
+2026-11-26T22:10:19Z load=0.39 foreign=none
+2026-11-26T22:10:21Z load=0.36 foreign=none
+2026-11-26T22:10:23Z load=0.36 foreign=none
+2026-11-26T22:10:26Z load=0.33 foreign=none
+2026-11-26T22:10:28Z load=0.33 foreign=none
+2026-11-26T22:10:30Z load=0.30 foreign=none
+2026-11-26T22:10:32Z load=0.30 foreign=none
+2026-11-26T22:10:35Z load=0.30 foreign=none
+2026-11-26T22:10:37Z load=0.28 foreign=none
+2026-11-26T22:10:39Z load=0.28 foreign=none
+2026-11-26T22:10:41Z load=0.26 foreign=none
+2026-11-26T22:10:44Z load=0.26 foreign=none
+2026-11-26T22:10:46Z load=0.24 foreign=none
+2026-11-26T22:10:48Z load=0.24 foreign=none
+2026-11-26T22:10:50Z load=0.22 foreign=none
+2026-11-26T22:10:53Z load=0.22 foreign=none
+2026-11-26T22:10:55Z load=0.22 foreign=none
+2026-11-26T22:10:57Z load=0.28 foreign=none
+2026-11-26T22:10:59Z load=0.28 foreign=14769:12.8:claude | 
+2026-11-26T22:11:01Z load=0.26 foreign=none
+2026-11-26T22:11:04Z load=0.26 foreign=none
+2026-11-26T22:11:06Z load=0.24 foreign=none
+2026-11-26T22:11:08Z load=0.24 foreign=none
+2026-11-26T22:11:10Z load=0.22 foreign=none
+2026-11-26T22:11:13Z load=0.22 foreign=none
+2026-11-26T22:11:15Z load=0.22 foreign=none
+2026-11-26T22:11:17Z load=0.20 foreign=none
+2026-11-26T22:11:19Z load=0.20 foreign=none
+2026-11-26T22:11:22Z load=0.18 foreign=none
+2026-11-26T22:11:24Z load=0.18 foreign=none
+2026-11-26T22:11:26Z load=0.17 foreign=none
+2026-11-26T22:11:28Z load=0.17 foreign=none
+2026-11-26T22:11:31Z load=0.15 foreign=none
+2026-11-26T22:11:33Z load=0.15 foreign=none
+2026-11-26T22:11:35Z load=0.14 foreign=none
+2026-11-26T22:11:37Z load=0.14 foreign=none
+2026-11-26T22:11:40Z load=0.14 foreign=none
+2026-11-26T22:11:42Z load=0.13 foreign=none
+2026-11-26T22:11:44Z load=0.13 foreign=none
+2026-11-26T22:11:46Z load=0.12 foreign=none
+2026-11-26T22:11:49Z load=0.12 foreign=none
+2026-11-26T22:11:51Z load=0.11 foreign=none
+2026-11-26T22:11:53Z load=0.11 foreign=none
+2026-11-26T22:11:55Z load=0.10 foreign=none
+2026-11-26T22:11:58Z load=0.10 foreign=none
+2026-11-26T22:12:00Z load=0.10 foreign=none
+2026-11-26T22:12:02Z load=0.09 foreign=none
+2026-11-26T22:12:04Z load=0.09 foreign=none
+2026-11-26T22:12:07Z load=0.08 foreign=none
+2026-11-26T22:12:09Z load=0.08 foreign=none
+2026-11-26T22:12:11Z load=0.08 foreign=none
+2026-11-26T22:12:13Z load=0.08 foreign=none
+2026-11-26T22:12:16Z load=0.07 foreign=none
+2026-11-26T22:12:18Z load=0.07 foreign=none

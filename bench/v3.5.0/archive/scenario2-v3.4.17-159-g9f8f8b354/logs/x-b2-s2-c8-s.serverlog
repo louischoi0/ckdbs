@@ -1,0 +1,16 @@
+1795727454 WARN [btree] insert into the relation rooted at page 149 failed: btree descent for key 107 from page 149 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level
+1795727454 WARN [query] "INSERT INTO freights_xb2c8s VALUES (415, 56, 6607, 51000, 2507, 20454, 0)" -> ERR TXN_CONFLICT retryable=1 btree descent for key 107 from page 149 gave up after 5 attempts: each leaf it reached had already given the key away. Either the chain is being split faster than a descent can cross it, or this core is descending from a root that has since grown a level in 33us
+1795727454 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 317000, revenue = 2409438 WHERE id = 397" -> ERR TXN_CONFLICT retryable=1 row id=397 was written by transaction 53519 in 5us
+1795727454 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 171000, revenue = 1824391 WHERE id = 600" -> ERR TXN_CONFLICT retryable=1 row id=600 was written by transaction 49452 in 7us
+1795727454 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 6209199 WHERE id = 437" -> ERR TXN_CONFLICT retryable=1 row id=437 was written by transaction 53610 in 7us
+1795727454 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 4172155 WHERE id = 379" -> ERR TXN_CONFLICT retryable=1 row id=379 was written by transaction 53611 in 5us
+1795727454 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 747000, revenue = 5667874 WHERE id = 390" -> ERR TXN_CONFLICT retryable=1 row id=390 was written by transaction 49571 in 8us
+1795727454 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 243000, revenue = 1432995 WHERE id = 579" -> ERR TXN_CONFLICT retryable=1 row id=579 was written by transaction 49614 in 7us
+1795727455 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 8046715 WHERE id = 556" -> ERR TXN_CONFLICT retryable=1 row id=556 was written by transaction 53886 in 5us
+1795727455 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 1387000, revenue = 11653388 WHERE id = 586" -> ERR TXN_CONFLICT retryable=1 row id=586 was written by transaction 53909 in 7us
+1795727455 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 411000, revenue = 2179769 WHERE id = 528" -> ERR TXN_CONFLICT retryable=1 row id=528 was written by transaction 49942 in 8us
+1795727455 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 19009031 WHERE id = 366" -> ERR TXN_CONFLICT retryable=1 row id=366 was written by transaction 54159 in 5us
+1795727455 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 16680036 WHERE id = 592" -> ERR TXN_CONFLICT retryable=1 row id=592 was written by transaction 50107 in 5us
+1795727455 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 12702050 WHERE id = 490" -> ERR TXN_CONFLICT retryable=1 row id=490 was written by transaction 50208 in 5us
+1795727455 WARN [query] "UPDATE organizations_xb2c8s SET outstanding = 4910331 WHERE id = 315" -> ERR TXN_CONFLICT retryable=1 row id=315 was written by transaction 54470 in 5us
+1795727455 WARN [query] "UPDATE operations_xb2c8s SET booked_cbm = 2418000, revenue = 18218322 WHERE id = 322" -> ERR TXN_CONFLICT retryable=1 row id=322 was written by transaction 54816 in 7us

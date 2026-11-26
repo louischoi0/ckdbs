@@ -1,0 +1,4 @@
+ckdbs on /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/data/pin-ab-old4-b1-s2-c1-s/kds.db: 19 pages, superblock version 38
+logging to /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/data/pin-ab-old4-b1-s2-c1-s/kds.log at level WARN
+listening on 127.0.0.1:15706
+stopped; 308 pages persisted

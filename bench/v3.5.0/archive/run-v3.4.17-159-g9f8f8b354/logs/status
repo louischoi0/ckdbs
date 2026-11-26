@@ -1,0 +1,956 @@
+2026-11-26T21:05:39Z runner 622568 start
+2026-11-26T21:05:42Z gate s1-c1-g holding 3s busy=5% procs= 622171 cmake 622554 cmake 
+2026-11-26T21:05:45Z gate s1-c1-g holding 6s busy=5% procs= 622683 ctest 622688 kds_tests 
+2026-11-26T21:05:48Z gate s1-c1-g holding 9s busy=4% procs= 622683 ctest 622758 kds_tests 
+2026-11-26T21:05:49Z cell s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:06:07Z cell s1-c1-g done rc=0
+2026-11-26T21:06:08Z cell s1-c8-g start (kds_server cores=8 group)
+2026-11-26T21:06:26Z cell s1-c8-g done rc=0
+2026-11-26T21:06:29Z gate s1-c1-s holding 3s busy=5% procs= 623467 cmake 623871 cmake 
+2026-11-26T21:06:32Z gate s1-c1-s holding 6s busy=5% procs= 623467 cmake 623871 cmake 
+2026-11-26T21:06:35Z gate s1-c1-s holding 9s busy=5% procs= 623467 cmake 624012 cmake 
+2026-11-26T21:06:38Z gate s1-c1-s holding 12s busy=6% procs= 623467 cmake 
+2026-11-26T21:06:42Z gate s1-c1-s holding 16s busy=5% procs= 624167 cmake 624203 cc1plus 
+2026-11-26T21:06:45Z gate s1-c1-s holding 19s busy=5% procs= 624167 cmake 624203 cc1plus 
+2026-11-26T21:06:48Z gate s1-c1-s holding 22s busy=5% procs= 624167 cmake 624203 cc1plus 
+2026-11-26T21:06:51Z gate s1-c1-s holding 25s busy=12% procs= 624167 cmake 624482 cmake 624496 cmake 624497 cmake 624509 cmake 
+2026-11-26T21:06:54Z gate s1-c1-s holding 28s busy=5% procs= 624167 cmake 624509 cmake 
+2026-11-26T21:06:57Z gate s1-c1-s holding 31s busy=5% procs= 624167 cmake 624628 cmake 
+2026-11-26T21:07:00Z gate s1-c1-s holding 34s busy=35% procs= 624677 ctest 624679 kds_tests 624680 kds_tests 624681 kds_tests 624682 kds_tests 624683 kds_tests 624684 kds_tests 624685 kds_tests 624686 kds_tests 
+2026-11-26T21:07:01Z cell s1-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:07:18Z cell s1-c1-s done rc=0
+2026-11-26T21:07:19Z cell r2-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:07:35Z cell r2-s1-c1-g done rc=0
+2026-11-26T21:07:36Z cell r2-s1-c8-g start (kds_server cores=8 group)
+2026-11-26T21:07:53Z cell r2-s1-c8-g done rc=0
+2026-11-26T21:07:54Z cell r2-s1-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:08:12Z cell r2-s1-c1-s done rc=0
+2026-11-26T21:08:13Z cell r3-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:08:31Z cell r3-s1-c1-g done rc=0
+2026-11-26T21:08:32Z cell r3-s1-c8-g start (kds_server cores=8 group)
+2026-11-26T21:08:49Z cell r3-s1-c8-g done rc=0
+2026-11-26T21:08:50Z cell r3-s1-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:09:07Z cell r3-s1-c1-s done rc=0
+2026-11-26T21:09:08Z cell s1s-n252-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:09Z cell s1s-n252-c1-g done rc=0
+2026-11-26T21:09:10Z cell s1s-n1008-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:11Z cell s1s-n1008-c1-g done rc=0
+2026-11-26T21:09:12Z cell s1s-n10080-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:16Z cell s1s-n10080-c1-g done rc=0
+2026-11-26T21:09:17Z cell r2-s1s-n252-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:19Z cell r2-s1s-n252-c1-g done rc=0
+2026-11-26T21:09:20Z cell r2-s1s-n1008-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:22Z cell r2-s1s-n1008-c1-g done rc=0
+2026-11-26T21:09:23Z cell r2-s1s-n10080-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:28Z cell r2-s1s-n10080-c1-g done rc=0
+2026-11-26T21:09:29Z cell r3-s1s-n252-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:31Z cell r3-s1s-n252-c1-g done rc=0
+2026-11-26T21:09:32Z cell r3-s1s-n1008-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:33Z cell r3-s1s-n1008-c1-g done rc=0
+2026-11-26T21:09:34Z cell r3-s1s-n10080-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:38Z cell r3-s1s-n10080-c1-g done rc=0
+2026-11-26T21:09:38Z phase s1 end
+2026-11-26T21:09:39Z cell s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:09:42Z cell s2-c8-s done rc=0
+2026-11-26T21:09:43Z cell s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:09:46Z cell s2-c1-s done rc=0
+2026-11-26T21:09:47Z cell s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:09:51Z cell s2-c1-g done rc=0
+2026-11-26T21:09:52Z cell s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:09:55Z cell s2-c8-g done rc=0
+2026-11-26T21:09:56Z cell r2-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:10:02Z cell r2-s2-c8-s done rc=0
+2026-11-26T21:10:03Z cell r2-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:10:07Z cell r2-s2-c1-s done rc=0
+2026-11-26T21:10:09Z cell r2-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:10:12Z cell r2-s2-c1-g done rc=0
+2026-11-26T21:10:13Z cell r2-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:10:16Z cell r2-s2-c8-g done rc=0
+2026-11-26T21:10:17Z cell r3-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:10:19Z cell r3-s2-c8-s done rc=0
+2026-11-26T21:10:20Z cell r3-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:10:27Z cell r3-s2-c1-s done rc=0
+2026-11-26T21:10:28Z cell r3-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:10:32Z cell r3-s2-c1-g done rc=0
+2026-11-26T21:10:33Z cell r3-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:10:36Z cell r3-s2-c8-g done rc=0
+2026-11-26T21:10:37Z cell x-b1-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:10:42Z cell x-b1-s2-c8-g done rc=0
+2026-11-26T21:10:43Z cell x-b1-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:10:47Z cell x-b1-s2-c8-s done rc=0
+2026-11-26T21:10:48Z cell x-b2-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:10:51Z cell x-b2-s2-c8-g done rc=0
+2026-11-26T21:10:52Z cell x-b2-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:10:56Z cell x-b2-s2-c8-s done rc=0
+2026-11-26T21:10:57Z cell x-b4-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:11:00Z cell x-b4-s2-c8-g done rc=0
+2026-11-26T21:11:01Z cell x-b4-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:11:04Z cell x-b4-s2-c8-s done rc=0
+2026-11-26T21:11:05Z cell x-b16-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:11:08Z cell x-b16-s2-c8-g done rc=0
+2026-11-26T21:11:09Z cell x-b16-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:11:11Z cell x-b16-s2-c8-s done rc=0
+2026-11-26T21:11:12Z cell b1-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:11:16Z cell b1-s2-c1-g done rc=0
+2026-11-26T21:11:17Z cell b1-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:11:22Z cell b1-s2-c1-s done rc=0
+2026-11-26T21:11:23Z cell r2-b1-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:11:30Z cell r2-b1-s2-c1-g done rc=0
+2026-11-26T21:11:31Z cell r2-b1-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:11:37Z cell r2-b1-s2-c1-s done rc=0
+2026-11-26T21:11:38Z cell r3-b1-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:11:43Z cell r3-b1-s2-c1-g done rc=0
+2026-11-26T21:11:44Z cell r3-b1-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:11:48Z cell r3-b1-s2-c1-s done rc=0
+2026-11-26T21:11:49Z cell sat-b32-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:11:52Z cell sat-b32-s2-c8-g done rc=0
+2026-11-26T21:11:53Z cell sat-b32-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:11:56Z cell sat-b32-s2-c8-s done rc=0
+2026-11-26T21:11:56Z phase s2 end
+2026-11-26T21:11:57Z cell s3-c1-n200-none start (kds_server cores=1 group)
+2026-11-26T21:11:57Z cell s3-c1-n200-none done rc=0
+2026-11-26T21:11:58Z cell s3-c1-n200-all start (kds_server cores=1 group)
+2026-11-26T21:11:59Z cell s3-c1-n200-all done rc=0
+2026-11-26T21:12:00Z cell s3-c1-n1000-none start (kds_server cores=1 group)
+2026-11-26T21:12:01Z cell s3-c1-n1000-none done rc=0
+2026-11-26T21:12:04Z gate s3-c1-n1000-all holding 3s busy=30% procs= 634504 ctest 634506 kds_tests 634507 kds_tests 634508 kds_tests 634509 kds_tests 634510 kds_tests 634511 kds_tests 634512 kds_tests 634513 kds_tests 
+2026-11-26T21:12:07Z gate s3-c1-n1000-all holding 6s busy=9% procs= 634504 ctest 634775 kds_tests 634776 kds_tests 634777 kds_tests 634778 kds_tests 634779 kds_tests 634780 kds_tests 634781 kds_tests 634782 kds_tests 
+2026-11-26T21:12:08Z cell s3-c1-n1000-all start (kds_server cores=1 group)
+2026-11-26T21:12:08Z cell s3-c1-n1000-all done rc=0
+2026-11-26T21:12:09Z cell s3-c1-n10000-none start (kds_server cores=1 group)
+2026-11-26T21:12:13Z cell s3-c1-n10000-none done rc=0
+2026-11-26T21:12:14Z cell s3-c1-n10000-all start (kds_server cores=1 group)
+2026-11-26T21:12:18Z cell s3-c1-n10000-all done rc=0
+2026-11-26T21:12:19Z cell s3-c8-n200-none start (kds_server cores=8 group)
+2026-11-26T21:12:20Z cell s3-c8-n200-none done rc=0
+2026-11-26T21:12:21Z cell s3-c8-n200-all start (kds_server cores=8 group)
+2026-11-26T21:12:21Z cell s3-c8-n200-all done rc=0
+2026-11-26T21:12:22Z cell s3-c8-n1000-none start (kds_server cores=8 group)
+2026-11-26T21:12:23Z cell s3-c8-n1000-none done rc=0
+2026-11-26T21:12:24Z cell s3-c8-n1000-all start (kds_server cores=8 group)
+2026-11-26T21:12:25Z cell s3-c8-n1000-all done rc=0
+2026-11-26T21:12:26Z cell s3-c8-n10000-none start (kds_server cores=8 group)
+2026-11-26T21:12:29Z cell s3-c8-n10000-none done rc=0
+2026-11-26T21:12:30Z cell s3-c8-n10000-all start (kds_server cores=8 group)
+2026-11-26T21:12:34Z cell s3-c8-n10000-all done rc=0
+2026-11-26T21:12:35Z cell r2-s3-c1-n200-none start (kds_server cores=1 group)
+2026-11-26T21:12:36Z cell r2-s3-c1-n200-none done rc=0
+2026-11-26T21:12:37Z cell r2-s3-c1-n200-all start (kds_server cores=1 group)
+2026-11-26T21:12:37Z cell r2-s3-c1-n200-all done rc=0
+2026-11-26T21:12:38Z cell r2-s3-c1-n1000-none start (kds_server cores=1 group)
+2026-11-26T21:12:39Z cell r2-s3-c1-n1000-none done rc=0
+2026-11-26T21:12:40Z cell r2-s3-c1-n1000-all start (kds_server cores=1 group)
+2026-11-26T21:12:41Z cell r2-s3-c1-n1000-all done rc=0
+2026-11-26T21:12:42Z cell r2-s3-c1-n10000-none start (kds_server cores=1 group)
+2026-11-26T21:12:45Z cell r2-s3-c1-n10000-none done rc=0
+2026-11-26T21:12:48Z gate r2-s3-c1-n10000-all holding 3s busy=5% procs= 636386 cmake 636424 cc1plus 
+2026-11-26T21:12:51Z gate r2-s3-c1-n10000-all holding 6s busy=5% procs= 636386 cmake 636424 cc1plus 
+2026-11-26T21:12:54Z gate r2-s3-c1-n10000-all holding 9s busy=3% procs= 636386 cmake 636769 cmake 
+2026-11-26T21:12:58Z gate r2-s3-c1-n10000-all holding 12s busy=5% procs= 636386 cmake 636806 cc1plus 
+2026-11-26T21:13:01Z gate r2-s3-c1-n10000-all holding 16s busy=5% procs= 636386 cmake 
+2026-11-26T21:13:04Z gate r2-s3-c1-n10000-all holding 19s busy=6% procs= 636386 cmake 636920 cmake 
+2026-11-26T21:13:07Z gate r2-s3-c1-n10000-all holding 22s busy=5% procs= 636386 cmake 637112 cmake 
+2026-11-26T21:13:10Z gate r2-s3-c1-n10000-all holding 25s busy=5% procs= 636386 cmake 637112 cmake 
+2026-11-26T21:13:11Z cell r2-s3-c1-n10000-all start (kds_server cores=1 group)
+2026-11-26T21:13:14Z cell r2-s3-c1-n10000-all done rc=0
+2026-11-26T21:13:16Z cell r2-s3-c8-n200-none start (kds_server cores=8 group)
+2026-11-26T21:13:16Z cell r2-s3-c8-n200-none done rc=0
+2026-11-26T21:13:17Z cell r2-s3-c8-n200-all start (kds_server cores=8 group)
+2026-11-26T21:13:17Z cell r2-s3-c8-n200-all done rc=0
+2026-11-26T21:13:19Z cell r2-s3-c8-n1000-none start (kds_server cores=8 group)
+2026-11-26T21:13:19Z cell r2-s3-c8-n1000-none done rc=0
+2026-11-26T21:13:20Z cell r2-s3-c8-n1000-all start (kds_server cores=8 group)
+2026-11-26T21:13:21Z cell r2-s3-c8-n1000-all done rc=0
+2026-11-26T21:13:22Z cell r2-s3-c8-n10000-none start (kds_server cores=8 group)
+2026-11-26T21:13:26Z cell r2-s3-c8-n10000-none done rc=0
+2026-11-26T21:13:27Z cell r2-s3-c8-n10000-all start (kds_server cores=8 group)
+2026-11-26T21:13:31Z cell r2-s3-c8-n10000-all done rc=0
+2026-11-26T21:13:34Z gate r3-s3-c1-n200-none holding 3s busy=5% procs= 638079 cmake 638165 cc1plus 
+2026-11-26T21:13:37Z gate r3-s3-c1-n200-none holding 6s busy=5% procs= 638079 cmake 638165 cc1plus 
+2026-11-26T21:13:40Z gate r3-s3-c1-n200-none holding 9s busy=5% procs= 638079 cmake 638165 cc1plus 
+2026-11-26T21:13:43Z gate r3-s3-c1-n200-none holding 12s busy=5% procs= 638079 cmake 638456 cmake 
+2026-11-26T21:13:46Z gate r3-s3-c1-n200-none holding 15s busy=5% procs= 638079 cmake 638456 cmake 
+2026-11-26T21:13:49Z gate r3-s3-c1-n200-none holding 18s busy=5% procs= 638079 cmake 638603 cmake 
+2026-11-26T21:13:52Z gate r3-s3-c1-n200-none holding 21s busy=5% procs= 638079 cmake 638603 cmake 
+2026-11-26T21:13:55Z gate r3-s3-c1-n200-none holding 24s busy=5% procs= 638663 kds_tests 
+2026-11-26T21:13:58Z gate r3-s3-c1-n200-none holding 27s busy=6% procs= 638663 kds_tests 
+2026-11-26T21:14:01Z gate r3-s3-c1-n200-none holding 30s busy=5% procs= 638663 kds_tests 
+2026-11-26T21:14:04Z gate r3-s3-c1-n200-none holding 33s busy=6% procs= 638663 kds_tests 
+2026-11-26T21:14:07Z gate r3-s3-c1-n200-none holding 36s busy=5% procs= 638663 kds_tests 
+2026-11-26T21:14:10Z gate r3-s3-c1-n200-none holding 39s busy=4% procs= 638663 kds_tests 
+2026-11-26T21:14:11Z cell r3-s3-c1-n200-none start (kds_server cores=1 group)
+2026-11-26T21:14:12Z cell r3-s3-c1-n200-none done rc=0
+2026-11-26T21:14:13Z cell r3-s3-c1-n200-all start (kds_server cores=1 group)
+2026-11-26T21:14:13Z cell r3-s3-c1-n200-all done rc=0
+2026-11-26T21:14:14Z cell r3-s3-c1-n1000-none start (kds_server cores=1 group)
+2026-11-26T21:14:15Z cell r3-s3-c1-n1000-none done rc=0
+2026-11-26T21:14:16Z cell r3-s3-c1-n1000-all start (kds_server cores=1 group)
+2026-11-26T21:14:17Z cell r3-s3-c1-n1000-all done rc=0
+2026-11-26T21:14:18Z cell r3-s3-c1-n10000-none start (kds_server cores=1 group)
+2026-11-26T21:14:22Z cell r3-s3-c1-n10000-none done rc=0
+2026-11-26T21:14:23Z cell r3-s3-c1-n10000-all start (kds_server cores=1 group)
+2026-11-26T21:14:27Z cell r3-s3-c1-n10000-all done rc=0
+2026-11-26T21:14:28Z cell r3-s3-c8-n200-none start (kds_server cores=8 group)
+2026-11-26T21:14:28Z cell r3-s3-c8-n200-none done rc=0
+2026-11-26T21:14:29Z cell r3-s3-c8-n200-all start (kds_server cores=8 group)
+2026-11-26T21:14:30Z cell r3-s3-c8-n200-all done rc=0
+2026-11-26T21:14:31Z cell r3-s3-c8-n1000-none start (kds_server cores=8 group)
+2026-11-26T21:14:31Z cell r3-s3-c8-n1000-none done rc=0
+2026-11-26T21:14:32Z cell r3-s3-c8-n1000-all start (kds_server cores=8 group)
+2026-11-26T21:14:34Z cell r3-s3-c8-n1000-all done rc=0
+2026-11-26T21:14:35Z cell r3-s3-c8-n10000-none start (kds_server cores=8 group)
+2026-11-26T21:14:43Z cell r3-s3-c8-n10000-none done rc=0
+2026-11-26T21:14:46Z gate r3-s3-c8-n10000-all holding 3s busy=5% procs= 640208 cmake 640257 cc1plus 
+2026-11-26T21:14:49Z gate r3-s3-c8-n10000-all holding 6s busy=4% procs= 640208 cmake 
+2026-11-26T21:14:52Z gate r3-s3-c8-n10000-all holding 9s busy=5% procs= 640208 cmake 640514 cmake 
+2026-11-26T21:14:55Z gate r3-s3-c8-n10000-all holding 12s busy=5% procs= 640208 cmake 640566 cmake 
+2026-11-26T21:14:58Z gate r3-s3-c8-n10000-all holding 15s busy=5% procs= 640208 cmake 640566 cmake 
+2026-11-26T21:15:01Z gate r3-s3-c8-n10000-all holding 18s busy=5% procs= 640208 cmake 640723 cmake 
+2026-11-26T21:15:04Z gate r3-s3-c8-n10000-all holding 21s busy=31% procs= 640828 ctest 640834 kds_tests 640835 kds_tests 640836 kds_tests 640858 kds_tests 640862 kds_tests 640863 kds_tests 640865 kds_tests 640866 kds_tests 
+2026-11-26T21:15:05Z cell r3-s3-c8-n10000-all start (kds_server cores=8 group)
+2026-11-26T21:15:08Z cell r3-s3-c8-n10000-all done rc=0
+2026-11-26T21:15:08Z phase s3 end
+2026-11-26T21:15:09Z cell s4 start (kds_server, three servers)
+2026-11-26T21:19:43Z cell s4 done rc=0
+2026-11-26T21:19:43Z phase s4 run A end
+2026-11-26T21:19:44Z cell ab-old1-s1-c1-g start (kds_server_old cores=1 group)
+2026-11-26T21:20:04Z cell ab-old1-s1-c1-g done rc=0
+2026-11-26T21:20:05Z cell ab-old1-s2-c1-g start (kds_server_old cores=1 group)
+2026-11-26T21:20:08Z cell ab-old1-s2-c1-g done rc=0
+2026-11-26T21:20:09Z cell ab-old1-b1-s2-c1-s start (kds_server_old cores=1 strict)
+2026-11-26T21:20:17Z cell ab-old1-b1-s2-c1-s done rc=0
+2026-11-26T21:20:18Z cell ab-old1-s3-c1-n10000-none start (kds_server_old cores=1 group)
+2026-11-26T21:20:23Z cell ab-old1-s3-c1-n10000-none done rc=0
+2026-11-26T21:20:24Z cell ab-old1-s2-c8-g start (kds_server_old cores=8 group)
+2026-11-26T21:20:27Z cell ab-old1-s2-c8-g done rc=0
+2026-11-26T21:20:28Z cell ab-old1-s3-c1-n10000-all start (kds_server_old cores=1 group)
+2026-11-26T21:20:32Z cell ab-old1-s3-c1-n10000-all done rc=0
+2026-11-26T21:20:33Z cell ab-new1-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:20:53Z cell ab-new1-s1-c1-g done rc=0
+2026-11-26T21:20:56Z gate ab-new1-s2-c1-g holding 3s busy=6% procs= 650746 cmake 650782 cc1plus 
+2026-11-26T21:20:59Z gate ab-new1-s2-c1-g holding 6s busy=5% procs= 650746 cmake 650782 cc1plus 
+2026-11-26T21:21:02Z gate ab-new1-s2-c1-g holding 9s busy=10% procs= 650746 cmake 651011 cmake 
+2026-11-26T21:21:05Z gate ab-new1-s2-c1-g holding 12s busy=22% procs= 650746 cmake 651113 cc1plus 651128 cc1plus 651131 cc1plus 651132 cc1plus 651138 cmake 
+2026-11-26T21:21:08Z gate ab-new1-s2-c1-g holding 15s busy=9% procs= 650746 cmake 651138 cmake 
+2026-11-26T21:21:11Z gate ab-new1-s2-c1-g holding 18s busy=5% procs= 650746 cmake 651316 cmake 
+2026-11-26T21:21:14Z gate ab-new1-s2-c1-g holding 21s busy=5% procs= 651414 ctest 651458 kds_tests 651459 kds_tests 
+2026-11-26T21:21:18Z gate ab-new1-s2-c1-g holding 24s busy=2% procs= 651414 ctest 651544 kds_tests 
+2026-11-26T21:21:21Z gate ab-new1-s2-c1-g holding 28s busy=2% procs= 651414 ctest 651787 kds_tests 
+2026-11-26T21:21:24Z gate ab-new1-s2-c1-g holding 31s busy=6% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:21:27Z gate ab-new1-s2-c1-g holding 34s busy=5% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:21:30Z gate ab-new1-s2-c1-g holding 37s busy=5% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:21:33Z gate ab-new1-s2-c1-g holding 40s busy=5% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:21:36Z gate ab-new1-s2-c1-g holding 43s busy=5% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:21:39Z gate ab-new1-s2-c1-g holding 46s busy=5% procs= 651414 ctest 652114 kds_tests 
+2026-11-26T21:21:42Z gate ab-new1-s2-c1-g holding 49s busy=5% procs= 651414 ctest 
+2026-11-26T21:21:45Z gate ab-new1-s2-c1-g holding 52s busy=5% procs= 651414 ctest 
+2026-11-26T21:21:48Z gate ab-new1-s2-c1-g holding 55s busy=5% procs= 651414 ctest 653286 kds_tests 
+2026-11-26T21:21:51Z gate ab-new1-s2-c1-g holding 58s busy=6% procs= 651414 ctest 653376 kds_tests 
+2026-11-26T21:21:54Z gate ab-new1-s2-c1-g holding 61s busy=5% procs= 651414 ctest 653495 kds_tests 
+2026-11-26T21:21:57Z gate ab-new1-s2-c1-g holding 64s busy=5% procs= 651414 ctest 653658 kds_tests 
+2026-11-26T21:22:00Z gate ab-new1-s2-c1-g holding 67s busy=5% procs= 651414 ctest 
+2026-11-26T21:22:03Z gate ab-new1-s2-c1-g holding 70s busy=5% procs= 651414 ctest 654166 kds_tests 
+2026-11-26T21:22:06Z gate ab-new1-s2-c1-g holding 73s busy=5% procs= 651414 ctest 654166 kds_tests 
+2026-11-26T21:22:09Z gate ab-new1-s2-c1-g holding 76s busy=5% procs= 651414 ctest 654166 kds_tests 
+2026-11-26T21:22:12Z gate ab-new1-s2-c1-g holding 79s busy=5% procs= 651414 ctest 654166 kds_tests 
+2026-11-26T21:22:15Z gate ab-new1-s2-c1-g holding 82s busy=5% procs= 651414 ctest 654442 kds_tests 
+2026-11-26T21:22:18Z gate ab-new1-s2-c1-g holding 85s busy=5% procs= 651414 ctest 654442 kds_tests 
+2026-11-26T21:22:21Z gate ab-new1-s2-c1-g holding 88s busy=5% procs= 651414 ctest 654442 kds_tests 
+2026-11-26T21:22:24Z gate ab-new1-s2-c1-g holding 91s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:22:27Z gate ab-new1-s2-c1-g holding 94s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:22:30Z gate ab-new1-s2-c1-g holding 97s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:22:33Z gate ab-new1-s2-c1-g holding 100s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:22:36Z gate ab-new1-s2-c1-g holding 103s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:22:39Z gate ab-new1-s2-c1-g holding 106s busy=5% procs= 651414 ctest 654700 kds_tests 
+2026-11-26T21:22:42Z gate ab-new1-s2-c1-g holding 109s busy=5% procs= 651414 ctest 655146 kds_tests 
+2026-11-26T21:22:45Z gate ab-new1-s2-c1-g holding 112s busy=6% procs= 651414 ctest 655330 kds_tests 
+2026-11-26T21:22:48Z gate ab-new1-s2-c1-g holding 115s busy=5% procs= 651414 ctest 655330 kds_tests 
+2026-11-26T21:22:51Z gate ab-new1-s2-c1-g holding 118s busy=5% procs= 651414 ctest 655330 kds_tests 
+2026-11-26T21:22:54Z gate ab-new1-s2-c1-g holding 121s busy=5% procs= 651414 ctest 655330 kds_tests 
+2026-11-26T21:22:57Z gate ab-new1-s2-c1-g holding 124s busy=6% procs= 651414 ctest 655330 kds_tests 
+2026-11-26T21:23:00Z gate ab-new1-s2-c1-g holding 127s busy=5% procs= 651414 ctest 655330 kds_tests 
+2026-11-26T21:23:03Z gate ab-new1-s2-c1-g holding 130s busy=5% procs= 651414 ctest 655832 kds_tests 
+2026-11-26T21:23:06Z gate ab-new1-s2-c1-g holding 133s busy=1% procs= 651414 ctest 656025 kds_tests 
+2026-11-26T21:23:09Z gate ab-new1-s2-c1-g holding 136s busy=2% procs= 651414 ctest 656158 kds_tests 
+2026-11-26T21:23:12Z gate ab-new1-s2-c1-g holding 139s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:15Z gate ab-new1-s2-c1-g holding 142s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:18Z gate ab-new1-s2-c1-g holding 145s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:21Z gate ab-new1-s2-c1-g holding 148s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:24Z gate ab-new1-s2-c1-g holding 151s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:27Z gate ab-new1-s2-c1-g holding 154s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:30Z gate ab-new1-s2-c1-g holding 157s busy=2% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:34Z gate ab-new1-s2-c1-g holding 161s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:37Z gate ab-new1-s2-c1-g holding 164s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:40Z gate ab-new1-s2-c1-g holding 167s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:43Z gate ab-new1-s2-c1-g holding 170s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:46Z gate ab-new1-s2-c1-g holding 173s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:49Z gate ab-new1-s2-c1-g holding 176s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:52Z gate ab-new1-s2-c1-g holding 179s busy=2% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:55Z gate ab-new1-s2-c1-g holding 182s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:23:58Z gate ab-new1-s2-c1-g holding 185s busy=2% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:24:01Z gate ab-new1-s2-c1-g holding 188s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:24:04Z gate ab-new1-s2-c1-g holding 191s busy=2% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:24:07Z gate ab-new1-s2-c1-g holding 194s busy=1% procs= 651414 ctest 656185 kds_tests 
+2026-11-26T21:24:10Z gate ab-new1-s2-c1-g holding 197s busy=2% procs= 651414 ctest 657608 kds_tests 
+2026-11-26T21:24:13Z gate ab-new1-s2-c1-g holding 200s busy=5% procs= 651414 ctest 657746 kds_tests 
+2026-11-26T21:24:16Z gate ab-new1-s2-c1-g holding 203s busy=5% procs= 651414 ctest 657946 kds_tests 
+2026-11-26T21:24:19Z gate ab-new1-s2-c1-g holding 206s busy=4% procs= 651414 ctest 
+2026-11-26T21:24:22Z gate ab-new1-s2-c1-g holding 209s busy=2% procs= 651414 ctest 658165 kds_tests 
+2026-11-26T21:24:25Z gate ab-new1-s2-c1-g holding 212s busy=2% procs= 651414 ctest 658207 kds_tests 
+2026-11-26T21:24:28Z gate ab-new1-s2-c1-g holding 215s busy=5% procs= 651414 ctest 658332 kds_tests 
+2026-11-26T21:24:31Z gate ab-new1-s2-c1-g holding 218s busy=5% procs= 651414 ctest 658551 kds_tests 
+2026-11-26T21:24:34Z gate ab-new1-s2-c1-g holding 221s busy=6% procs= 651414 ctest 658669 kds_tests 
+2026-11-26T21:24:37Z gate ab-new1-s2-c1-g holding 224s busy=5% procs= 651414 ctest 658829 kds_tests 
+2026-11-26T21:24:40Z gate ab-new1-s2-c1-g holding 227s busy=4% procs= 651414 ctest 658981 kds_tests 
+2026-11-26T21:24:43Z gate ab-new1-s2-c1-g holding 230s busy=5% procs= 651414 ctest 659121 kds_tests 
+2026-11-26T21:24:46Z gate ab-new1-s2-c1-g holding 233s busy=5% procs= 651414 ctest 659183 kds_tests 
+2026-11-26T21:24:49Z gate ab-new1-s2-c1-g holding 236s busy=5% procs= 651414 ctest 659338 kds_tests 
+2026-11-26T21:24:52Z gate ab-new1-s2-c1-g holding 239s busy=5% procs= 651414 ctest 
+2026-11-26T21:24:55Z gate ab-new1-s2-c1-g holding 242s busy=5% procs= 651414 ctest 659721 kds_tests 
+2026-11-26T21:24:58Z gate ab-new1-s2-c1-g holding 245s busy=6% procs= 651414 ctest 659926 kds_tests 
+2026-11-26T21:25:01Z gate ab-new1-s2-c1-g holding 248s busy=1% procs= 651414 ctest 660295 kds_tests 
+2026-11-26T21:25:04Z gate ab-new1-s2-c1-g holding 251s busy=2% procs= 651414 ctest 660336 kds_tests 
+2026-11-26T21:25:07Z gate ab-new1-s2-c1-g holding 254s busy=1% procs= 651414 ctest 660435 kds_tests 
+2026-11-26T21:25:10Z gate ab-new1-s2-c1-g holding 257s busy=2% procs= 651414 ctest 660510 kds_tests 
+2026-11-26T21:25:13Z gate ab-new1-s2-c1-g holding 260s busy=2% procs= 651414 ctest 660585 kds_tests 
+2026-11-26T21:25:16Z gate ab-new1-s2-c1-g holding 263s busy=1% procs= 651414 ctest 660631 kds_tests 
+2026-11-26T21:25:19Z gate ab-new1-s2-c1-g holding 266s busy=1% procs= 651414 ctest 660737 kds_tests 
+2026-11-26T21:25:22Z gate ab-new1-s2-c1-g holding 269s busy=2% procs= 651414 ctest 660856 kds_tests 
+2026-11-26T21:25:25Z gate ab-new1-s2-c1-g holding 272s busy=2% procs= 651414 ctest 660856 kds_tests 
+2026-11-26T21:25:29Z gate ab-new1-s2-c1-g holding 276s busy=5% procs= 651414 ctest 
+2026-11-26T21:25:32Z gate ab-new1-s2-c1-g holding 279s busy=5% procs= 651414 ctest 
+2026-11-26T21:25:35Z gate ab-new1-s2-c1-g holding 282s busy=5% procs= 651414 ctest 661878 kds_tests 
+2026-11-26T21:25:38Z gate ab-new1-s2-c1-g holding 285s busy=5% procs= 651414 ctest 
+2026-11-26T21:25:41Z gate ab-new1-s2-c1-g holding 288s busy=5% procs= 651414 ctest 662179 kds_tests 
+2026-11-26T21:25:44Z gate ab-new1-s2-c1-g holding 291s busy=5% procs= 651414 ctest 
+2026-11-26T21:25:47Z gate ab-new1-s2-c1-g holding 294s busy=7% procs= 651414 ctest 662829 kds_tests 
+2026-11-26T21:25:50Z gate ab-new1-s2-c1-g holding 297s busy=5% procs= 651414 ctest 663021 kds_tests 
+2026-11-26T21:25:53Z gate ab-new1-s2-c1-g holding 300s busy=5% procs= 651414 ctest 
+2026-11-26T21:25:56Z gate ab-new1-s2-c1-g holding 303s busy=5% procs= 651414 ctest 663370 kds_tests 
+2026-11-26T21:25:59Z gate ab-new1-s2-c1-g holding 306s busy=5% procs= 651414 ctest 663419 kds_tests 
+2026-11-26T21:26:02Z gate ab-new1-s2-c1-g holding 309s busy=5% procs= 651414 ctest 663419 kds_tests 
+2026-11-26T21:26:05Z gate ab-new1-s2-c1-g holding 312s busy=5% procs= 651414 ctest 663646 kds_tests 
+2026-11-26T21:26:08Z gate ab-new1-s2-c1-g holding 315s busy=5% procs= 651414 ctest 663660 kds_tests 
+2026-11-26T21:26:11Z gate ab-new1-s2-c1-g holding 318s busy=5% procs= 651414 ctest 663660 kds_tests 
+2026-11-26T21:26:14Z gate ab-new1-s2-c1-g holding 321s busy=5% procs= 651414 ctest 663660 kds_tests 
+2026-11-26T21:26:17Z gate ab-new1-s2-c1-g holding 324s busy=5% procs= 651414 ctest 663660 kds_tests 
+2026-11-26T21:26:20Z gate ab-new1-s2-c1-g holding 327s busy=5% procs= 651414 ctest 663660 kds_tests 
+2026-11-26T21:26:23Z gate ab-new1-s2-c1-g holding 330s busy=5% procs= 651414 ctest 664046 kds_tests 
+2026-11-26T21:26:26Z gate ab-new1-s2-c1-g holding 333s busy=6% procs= 651414 ctest 664046 kds_tests 
+2026-11-26T21:26:29Z gate ab-new1-s2-c1-g holding 336s busy=5% procs= 651414 ctest 664046 kds_tests 
+2026-11-26T21:26:32Z gate ab-new1-s2-c1-g holding 339s busy=6% procs= 651414 ctest 664046 kds_tests 
+2026-11-26T21:26:35Z gate ab-new1-s2-c1-g holding 342s busy=5% procs= 651414 ctest 664318 kds_tests 
+2026-11-26T21:26:38Z gate ab-new1-s2-c1-g holding 345s busy=5% procs= 651414 ctest 664318 kds_tests 
+2026-11-26T21:26:41Z gate ab-new1-s2-c1-g holding 348s busy=5% procs= 651414 ctest 664318 kds_tests 
+2026-11-26T21:26:44Z gate ab-new1-s2-c1-g holding 351s busy=5% procs= 651414 ctest 664565 kds_tests 
+2026-11-26T21:26:47Z gate ab-new1-s2-c1-g holding 354s busy=5% procs= 651414 ctest 664565 kds_tests 
+2026-11-26T21:26:50Z gate ab-new1-s2-c1-g holding 357s busy=5% procs= 651414 ctest 664565 kds_tests 
+2026-11-26T21:26:53Z gate ab-new1-s2-c1-g holding 360s busy=5% procs= 651414 ctest 664565 kds_tests 
+2026-11-26T21:26:56Z gate ab-new1-s2-c1-g holding 363s busy=6% procs= 651414 ctest 664841 kds_tests 
+2026-11-26T21:26:59Z gate ab-new1-s2-c1-g holding 366s busy=5% procs= 651414 ctest 664841 kds_tests 
+2026-11-26T21:27:02Z gate ab-new1-s2-c1-g holding 369s busy=6% procs= 651414 ctest 664841 kds_tests 
+2026-11-26T21:27:05Z gate ab-new1-s2-c1-g holding 372s busy=5% procs= 651414 ctest 664841 kds_tests 
+2026-11-26T21:27:08Z gate ab-new1-s2-c1-g holding 375s busy=5% procs= 651414 ctest 665121 kds_tests 
+2026-11-26T21:27:11Z gate ab-new1-s2-c1-g holding 378s busy=5% procs= 651414 ctest 665121 kds_tests 
+2026-11-26T21:27:14Z gate ab-new1-s2-c1-g holding 381s busy=6% procs= 651414 ctest 665121 kds_tests 
+2026-11-26T21:27:17Z gate ab-new1-s2-c1-g holding 384s busy=5% procs= 651414 ctest 665121 kds_tests 
+2026-11-26T21:27:20Z gate ab-new1-s2-c1-g holding 387s busy=5% procs= 651414 ctest 665121 kds_tests 
+2026-11-26T21:27:23Z gate ab-new1-s2-c1-g holding 390s busy=5% procs= 651414 ctest 665492 kds_tests 
+2026-11-26T21:27:26Z gate ab-new1-s2-c1-g holding 393s busy=6% procs= 651414 ctest 665492 kds_tests 
+2026-11-26T21:27:29Z gate ab-new1-s2-c1-g holding 396s busy=5% procs= 651414 ctest 665492 kds_tests 
+2026-11-26T21:27:32Z gate ab-new1-s2-c1-g holding 399s busy=6% procs= 651414 ctest 665492 kds_tests 
+2026-11-26T21:27:35Z gate ab-new1-s2-c1-g holding 402s busy=5% procs= 651414 ctest 665492 kds_tests 
+2026-11-26T21:27:38Z gate ab-new1-s2-c1-g holding 405s busy=5% procs= 651414 ctest 665830 kds_tests 
+2026-11-26T21:27:41Z gate ab-new1-s2-c1-g holding 408s busy=5% procs= 651414 ctest 665830 kds_tests 
+2026-11-26T21:27:44Z gate ab-new1-s2-c1-g holding 411s busy=5% procs= 651414 ctest 665830 kds_tests 
+2026-11-26T21:27:47Z gate ab-new1-s2-c1-g holding 414s busy=5% procs= 651414 ctest 666101 kds_tests 
+2026-11-26T21:27:50Z gate ab-new1-s2-c1-g holding 417s busy=5% procs= 651414 ctest 666101 kds_tests 
+2026-11-26T21:27:53Z gate ab-new1-s2-c1-g holding 420s busy=5% procs= 651414 ctest 666101 kds_tests 
+2026-11-26T21:27:57Z gate ab-new1-s2-c1-g holding 424s busy=5% procs= 651414 ctest 666101 kds_tests 
+2026-11-26T21:28:00Z gate ab-new1-s2-c1-g holding 427s busy=5% procs= 651414 ctest 666101 kds_tests 
+2026-11-26T21:28:03Z gate ab-new1-s2-c1-g holding 430s busy=5% procs= 651414 ctest 666415 kds_tests 
+2026-11-26T21:28:06Z gate ab-new1-s2-c1-g holding 433s busy=5% procs= 651414 ctest 666415 kds_tests 
+2026-11-26T21:28:09Z gate ab-new1-s2-c1-g holding 436s busy=5% procs= 651414 ctest 666415 kds_tests 
+2026-11-26T21:28:12Z gate ab-new1-s2-c1-g holding 439s busy=6% procs= 651414 ctest 666415 kds_tests 
+2026-11-26T21:28:15Z gate ab-new1-s2-c1-g holding 442s busy=5% procs= 651414 ctest 
+2026-11-26T21:28:18Z gate ab-new1-s2-c1-g holding 445s busy=5% procs= 651414 ctest 
+2026-11-26T21:28:21Z gate ab-new1-s2-c1-g holding 448s busy=5% procs= 651414 ctest 667478 kds_tests 
+2026-11-26T21:28:24Z gate ab-new1-s2-c1-g holding 451s busy=5% procs= 651414 ctest 667553 kds_tests 
+2026-11-26T21:28:27Z gate ab-new1-s2-c1-g holding 454s busy=5% procs= 651414 ctest 667592 kds_tests 
+2026-11-26T21:28:30Z gate ab-new1-s2-c1-g holding 457s busy=6% procs= 651414 ctest 667592 kds_tests 
+2026-11-26T21:28:33Z gate ab-new1-s2-c1-g holding 460s busy=5% procs= 651414 ctest 667922 kds_tests 
+2026-11-26T21:28:36Z gate ab-new1-s2-c1-g holding 463s busy=5% procs= 651414 ctest 667922 kds_tests 
+2026-11-26T21:28:39Z gate ab-new1-s2-c1-g holding 466s busy=5% procs= 651414 ctest 667989 kds_tests 
+2026-11-26T21:28:42Z gate ab-new1-s2-c1-g holding 469s busy=5% procs= 651414 ctest 668142 kds_tests 
+2026-11-26T21:28:45Z gate ab-new1-s2-c1-g holding 472s busy=15% procs= 651414 ctest 668250 kds_tests 
+2026-11-26T21:28:48Z gate ab-new1-s2-c1-g holding 475s busy=15% procs= 651414 ctest 668250 kds_tests 
+2026-11-26T21:28:51Z gate ab-new1-s2-c1-g holding 478s busy=15% procs= 651414 ctest 668250 kds_tests 
+2026-11-26T21:28:54Z gate ab-new1-s2-c1-g holding 481s busy=6% procs= 651414 ctest 668250 kds_tests 
+2026-11-26T21:28:57Z gate ab-new1-s2-c1-g holding 484s busy=5% procs= 651414 ctest 668595 kds_tests 
+2026-11-26T21:29:00Z gate ab-new1-s2-c1-g holding 487s busy=6% procs= 651414 ctest 
+2026-11-26T21:29:03Z gate ab-new1-s2-c1-g holding 490s busy=5% procs= 651414 ctest 669140 kds_tests 
+2026-11-26T21:29:06Z gate ab-new1-s2-c1-g holding 493s busy=3% procs= 651414 ctest 669456 kds_tests 
+2026-11-26T21:29:09Z gate ab-new1-s2-c1-g holding 496s busy=5% procs= 651414 ctest 669664 kds_tests 
+2026-11-26T21:29:12Z gate ab-new1-s2-c1-g holding 499s busy=5% procs= 651414 ctest 669689 kds_tests 
+2026-11-26T21:29:15Z gate ab-new1-s2-c1-g holding 502s busy=5% procs= 651414 ctest 669847 kds_tests 
+2026-11-26T21:29:18Z gate ab-new1-s2-c1-g holding 505s busy=5% procs= 651414 ctest 669986 kds_tests 
+2026-11-26T21:29:21Z gate ab-new1-s2-c1-g holding 508s busy=5% procs= 651414 ctest 670057 kds_tests 
+2026-11-26T21:29:24Z gate ab-new1-s2-c1-g holding 511s busy=3% procs= 651414 ctest 670184 kds_tests 
+2026-11-26T21:29:27Z gate ab-new1-s2-c1-g holding 514s busy=5% procs= 651414 ctest 670267 kds_tests 
+2026-11-26T21:29:30Z gate ab-new1-s2-c1-g holding 517s busy=5% procs= 651414 ctest 
+2026-11-26T21:29:33Z gate ab-new1-s2-c1-g holding 520s busy=6% procs= 651414 ctest 670586 kds_tests 
+2026-11-26T21:29:36Z gate ab-new1-s2-c1-g holding 523s busy=5% procs= 651414 ctest 670821 kds_tests 
+2026-11-26T21:29:39Z gate ab-new1-s2-c1-g holding 526s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:29:42Z gate ab-new1-s2-c1-g holding 529s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:29:45Z gate ab-new1-s2-c1-g holding 532s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:29:48Z gate ab-new1-s2-c1-g holding 535s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:29:51Z gate ab-new1-s2-c1-g holding 538s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:29:54Z gate ab-new1-s2-c1-g holding 541s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:29:57Z gate ab-new1-s2-c1-g holding 544s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:30:00Z gate ab-new1-s2-c1-g holding 547s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:30:03Z gate ab-new1-s2-c1-g holding 550s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:30:06Z gate ab-new1-s2-c1-g holding 553s busy=6% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:30:09Z gate ab-new1-s2-c1-g holding 556s busy=5% procs= 651414 ctest 670896 kds_tests 
+2026-11-26T21:30:12Z gate ab-new1-s2-c1-g holding 559s busy=6% procs= 651414 ctest 671696 kds_tests 
+2026-11-26T21:30:15Z gate ab-new1-s2-c1-g holding 562s busy=5% procs= 651414 ctest 671797 kds_tests 
+2026-11-26T21:30:18Z gate ab-new1-s2-c1-g holding 565s busy=5% procs= 651414 ctest 671797 kds_tests 
+2026-11-26T21:30:21Z gate ab-new1-s2-c1-g holding 568s busy=5% procs= 651414 ctest 671797 kds_tests 
+2026-11-26T21:30:24Z gate ab-new1-s2-c1-g holding 571s busy=5% procs= 651414 ctest 671797 kds_tests 
+2026-11-26T21:30:28Z gate ab-new1-s2-c1-g holding 575s busy=5% procs= 651414 ctest 671797 kds_tests 
+2026-11-26T21:30:31Z gate ab-new1-s2-c1-g holding 578s busy=5% procs= 651414 ctest 672177 kds_tests 
+2026-11-26T21:30:34Z gate ab-new1-s2-c1-g holding 581s busy=5% procs= 651414 ctest 672177 kds_tests 
+2026-11-26T21:30:37Z gate ab-new1-s2-c1-g holding 584s busy=5% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:30:40Z gate ab-new1-s2-c1-g holding 587s busy=5% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:30:43Z gate ab-new1-s2-c1-g holding 590s busy=5% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:30:46Z gate ab-new1-s2-c1-g holding 593s busy=6% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:30:49Z gate ab-new1-s2-c1-g holding 596s busy=5% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:30:52Z gate ab-new1-s2-c1-g holding 599s busy=5% procs= 651414 ctest 672305 kds_tests 
+2026-11-26T21:30:55Z gate ab-new1-s2-c1-g holding 602s busy=5% procs= 651414 ctest 672744 kds_tests 
+2026-11-26T21:30:58Z gate ab-new1-s2-c1-g holding 605s busy=5% procs= 651414 ctest 672830 kds_tests 
+2026-11-26T21:31:01Z gate ab-new1-s2-c1-g holding 608s busy=6% procs= 651414 ctest 672855 kds_tests 
+2026-11-26T21:31:04Z gate ab-new1-s2-c1-g holding 611s busy=5% procs= 651414 ctest 672855 kds_tests 
+2026-11-26T21:31:07Z gate ab-new1-s2-c1-g holding 614s busy=5% procs= 651414 ctest 672855 kds_tests 
+2026-11-26T21:31:10Z gate ab-new1-s2-c1-g holding 617s busy=5% procs= 651414 ctest 672855 kds_tests 
+2026-11-26T21:31:13Z gate ab-new1-s2-c1-g holding 620s busy=6% procs= 651414 ctest 672855 kds_tests 
+2026-11-26T21:31:16Z gate ab-new1-s2-c1-g holding 623s busy=5% procs= 651414 ctest 672855 kds_tests 
+2026-11-26T21:31:19Z gate ab-new1-s2-c1-g holding 626s busy=5% procs= 651414 ctest 673291 kds_tests 
+2026-11-26T21:31:22Z gate ab-new1-s2-c1-g holding 629s busy=5% procs= 651414 ctest 673291 kds_tests 
+2026-11-26T21:31:25Z gate ab-new1-s2-c1-g holding 632s busy=5% procs= 651414 ctest 673388 kds_tests 
+2026-11-26T21:31:28Z gate ab-new1-s2-c1-g holding 635s busy=5% procs= 651414 ctest 673566 kds_tests 
+2026-11-26T21:31:31Z gate ab-new1-s2-c1-g holding 638s busy=5% procs= 651414 ctest 673581 kds_tests 
+2026-11-26T21:31:34Z gate ab-new1-s2-c1-g holding 641s busy=5% procs= 651414 ctest 673691 kds_tests 
+2026-11-26T21:31:37Z gate ab-new1-s2-c1-g holding 644s busy=5% procs= 651414 ctest 673766 kds_tests 
+2026-11-26T21:31:40Z gate ab-new1-s2-c1-g holding 647s busy=5% procs= 651414 ctest 673837 kds_tests 
+2026-11-26T21:31:43Z gate ab-new1-s2-c1-g holding 650s busy=5% procs= 651414 ctest 673886 kds_tests 
+2026-11-26T21:31:46Z gate ab-new1-s2-c1-g holding 653s busy=5% procs= 651414 ctest 673886 kds_tests 
+2026-11-26T21:31:49Z gate ab-new1-s2-c1-g holding 656s busy=5% procs= 651414 ctest 673886 kds_tests 
+2026-11-26T21:31:52Z gate ab-new1-s2-c1-g holding 659s busy=5% procs= 651414 ctest 673886 kds_tests 
+2026-11-26T21:31:55Z gate ab-new1-s2-c1-g holding 662s busy=5% procs= 651414 ctest 674183 kds_tests 
+2026-11-26T21:31:58Z gate ab-new1-s2-c1-g holding 665s busy=5% procs= 651414 ctest 674183 kds_tests 
+2026-11-26T21:32:01Z gate ab-new1-s2-c1-g holding 668s busy=5% procs= 651414 ctest 674343 kds_tests 
+2026-11-26T21:32:04Z gate ab-new1-s2-c1-g holding 671s busy=5% procs= 651414 ctest 674343 kds_tests 
+2026-11-26T21:32:07Z gate ab-new1-s2-c1-g holding 674s busy=6% procs= 651414 ctest 674471 kds_tests 
+2026-11-26T21:32:10Z gate ab-new1-s2-c1-g holding 677s busy=5% procs= 651414 ctest 674471 kds_tests 
+2026-11-26T21:32:13Z gate ab-new1-s2-c1-g holding 680s busy=5% procs= 651414 ctest 674619 kds_tests 
+2026-11-26T21:32:16Z gate ab-new1-s2-c1-g holding 683s busy=5% procs= 651414 ctest 674714 kds_tests 
+2026-11-26T21:32:19Z gate ab-new1-s2-c1-g holding 686s busy=5% procs= 651414 ctest 674714 kds_tests 
+2026-11-26T21:32:22Z gate ab-new1-s2-c1-g holding 689s busy=5% procs= 651414 ctest 674837 kds_tests 
+2026-11-26T21:32:25Z gate ab-new1-s2-c1-g holding 692s busy=4% procs= 651414 ctest 674837 kds_tests 
+2026-11-26T21:32:28Z gate ab-new1-s2-c1-g holding 695s busy=1% procs= 651414 ctest 674967 kds_tests 
+2026-11-26T21:32:31Z gate ab-new1-s2-c1-g holding 698s busy=4% procs= 651414 ctest 675124 kds_tests 
+2026-11-26T21:32:34Z gate ab-new1-s2-c1-g holding 701s busy=5% procs= 651414 ctest 675179 kds_tests 
+2026-11-26T21:32:37Z gate ab-new1-s2-c1-g holding 704s busy=5% procs= 651414 ctest 675264 kds_tests 
+2026-11-26T21:32:40Z gate ab-new1-s2-c1-g holding 707s busy=5% procs= 651414 ctest 675313 kds_tests 
+2026-11-26T21:32:43Z gate ab-new1-s2-c1-g holding 710s busy=5% procs= 651414 ctest 675422 kds_tests 
+2026-11-26T21:32:46Z gate ab-new1-s2-c1-g holding 713s busy=5% procs= 651414 ctest 675490 kds_tests 
+2026-11-26T21:32:50Z gate ab-new1-s2-c1-g holding 717s busy=6% procs= 651414 ctest 675582 kds_tests 
+2026-11-26T21:32:53Z gate ab-new1-s2-c1-g holding 720s busy=5% procs= 651414 ctest 
+2026-11-26T21:32:54Z cell ab-new1-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:32:57Z cell ab-new1-s2-c1-g done rc=0
+2026-11-26T21:32:58Z cell ab-new1-b1-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:33:02Z cell ab-new1-b1-s2-c1-s done rc=0
+2026-11-26T21:33:03Z cell ab-new1-s3-c1-n10000-none start (kds_server cores=1 group)
+2026-11-26T21:33:07Z cell ab-new1-s3-c1-n10000-none done rc=0
+2026-11-26T21:33:08Z cell ab-new1-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:33:12Z cell ab-new1-s2-c8-g done rc=0
+2026-11-26T21:33:13Z cell ab-new1-s3-c1-n10000-all start (kds_server cores=1 group)
+2026-11-26T21:33:21Z cell ab-new1-s3-c1-n10000-all done rc=0
+2026-11-26T21:33:24Z gate ab-old2-s1-c1-g holding 3s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:27Z gate ab-old2-s1-c1-g holding 6s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:33:30Z gate ab-old2-s1-c1-g holding 9s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:33Z gate ab-old2-s1-c1-g holding 12s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:36Z gate ab-old2-s1-c1-g holding 15s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:39Z gate ab-old2-s1-c1-g holding 18s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:42Z gate ab-old2-s1-c1-g holding 21s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:33:45Z gate ab-old2-s1-c1-g holding 24s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:48Z gate ab-old2-s1-c1-g holding 27s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:51Z gate ab-old2-s1-c1-g holding 30s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:54Z gate ab-old2-s1-c1-g holding 33s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:33:57Z gate ab-old2-s1-c1-g holding 36s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:34:00Z gate ab-old2-s1-c1-g holding 39s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:03Z gate ab-old2-s1-c1-g holding 42s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:34:06Z gate ab-old2-s1-c1-g holding 45s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:09Z gate ab-old2-s1-c1-g holding 48s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:12Z gate ab-old2-s1-c1-g holding 51s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:15Z gate ab-old2-s1-c1-g holding 54s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:18Z gate ab-old2-s1-c1-g holding 57s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:21Z gate ab-old2-s1-c1-g holding 60s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:24Z gate ab-old2-s1-c1-g holding 63s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:27Z gate ab-old2-s1-c1-g holding 66s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:30Z gate ab-old2-s1-c1-g holding 69s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:34:33Z gate ab-old2-s1-c1-g holding 72s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:36Z gate ab-old2-s1-c1-g holding 75s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:34:39Z gate ab-old2-s1-c1-g holding 78s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:43Z gate ab-old2-s1-c1-g holding 82s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:46Z gate ab-old2-s1-c1-g holding 85s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:49Z gate ab-old2-s1-c1-g holding 88s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:52Z gate ab-old2-s1-c1-g holding 91s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:34:55Z gate ab-old2-s1-c1-g holding 94s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:34:58Z gate ab-old2-s1-c1-g holding 97s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:35:01Z gate ab-old2-s1-c1-g holding 100s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:35:04Z gate ab-old2-s1-c1-g holding 103s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:07Z gate ab-old2-s1-c1-g holding 106s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:10Z gate ab-old2-s1-c1-g holding 109s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:13Z gate ab-old2-s1-c1-g holding 112s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:16Z gate ab-old2-s1-c1-g holding 115s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:35:19Z gate ab-old2-s1-c1-g holding 118s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:22Z gate ab-old2-s1-c1-g holding 121s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:25Z gate ab-old2-s1-c1-g holding 124s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:35:28Z gate ab-old2-s1-c1-g holding 127s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:31Z gate ab-old2-s1-c1-g holding 130s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:35:34Z gate ab-old2-s1-c1-g holding 133s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:37Z gate ab-old2-s1-c1-g holding 136s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:40Z gate ab-old2-s1-c1-g holding 139s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:43Z gate ab-old2-s1-c1-g holding 142s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:46Z gate ab-old2-s1-c1-g holding 145s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:49Z gate ab-old2-s1-c1-g holding 148s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:52Z gate ab-old2-s1-c1-g holding 151s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:55Z gate ab-old2-s1-c1-g holding 154s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:35:58Z gate ab-old2-s1-c1-g holding 157s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:36:01Z gate ab-old2-s1-c1-g holding 160s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:04Z gate ab-old2-s1-c1-g holding 163s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:36:07Z gate ab-old2-s1-c1-g holding 166s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:10Z gate ab-old2-s1-c1-g holding 169s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:13Z gate ab-old2-s1-c1-g holding 172s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:16Z gate ab-old2-s1-c1-g holding 175s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:20Z gate ab-old2-s1-c1-g holding 179s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:23Z gate ab-old2-s1-c1-g holding 182s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:26Z gate ab-old2-s1-c1-g holding 185s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:36:29Z gate ab-old2-s1-c1-g holding 188s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:32Z gate ab-old2-s1-c1-g holding 191s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:35Z gate ab-old2-s1-c1-g holding 194s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:38Z gate ab-old2-s1-c1-g holding 197s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:41Z gate ab-old2-s1-c1-g holding 200s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:44Z gate ab-old2-s1-c1-g holding 203s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:47Z gate ab-old2-s1-c1-g holding 206s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:50Z gate ab-old2-s1-c1-g holding 209s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:53Z gate ab-old2-s1-c1-g holding 212s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:36:56Z gate ab-old2-s1-c1-g holding 215s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:36:59Z gate ab-old2-s1-c1-g holding 218s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:37:02Z gate ab-old2-s1-c1-g holding 221s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:05Z gate ab-old2-s1-c1-g holding 224s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:08Z gate ab-old2-s1-c1-g holding 227s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:11Z gate ab-old2-s1-c1-g holding 230s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:14Z gate ab-old2-s1-c1-g holding 233s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:17Z gate ab-old2-s1-c1-g holding 236s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:20Z gate ab-old2-s1-c1-g holding 239s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:23Z gate ab-old2-s1-c1-g holding 242s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:26Z gate ab-old2-s1-c1-g holding 245s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:37:29Z gate ab-old2-s1-c1-g holding 248s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:32Z gate ab-old2-s1-c1-g holding 251s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:37:35Z gate ab-old2-s1-c1-g holding 254s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:38Z gate ab-old2-s1-c1-g holding 257s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:37:41Z gate ab-old2-s1-c1-g holding 260s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:44Z gate ab-old2-s1-c1-g holding 263s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:47Z gate ab-old2-s1-c1-g holding 266s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:50Z gate ab-old2-s1-c1-g holding 269s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:53Z gate ab-old2-s1-c1-g holding 272s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:37:57Z gate ab-old2-s1-c1-g holding 276s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:38:00Z gate ab-old2-s1-c1-g holding 279s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:03Z gate ab-old2-s1-c1-g holding 282s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:38:06Z gate ab-old2-s1-c1-g holding 285s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:09Z gate ab-old2-s1-c1-g holding 288s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:12Z gate ab-old2-s1-c1-g holding 291s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:38:15Z gate ab-old2-s1-c1-g holding 294s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:38:18Z gate ab-old2-s1-c1-g holding 297s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:21Z gate ab-old2-s1-c1-g holding 300s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:24Z gate ab-old2-s1-c1-g holding 303s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:27Z gate ab-old2-s1-c1-g holding 306s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:30Z gate ab-old2-s1-c1-g holding 309s busy=2% procs= 676549 kds_tests 
+2026-11-26T21:38:33Z gate ab-old2-s1-c1-g holding 312s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:38:36Z gate ab-old2-s1-c1-g holding 315s busy=1% procs= 676549 kds_tests 
+2026-11-26T21:39:00Z gate rule changed to v2 (a build or test process holds only while it uses CPU); runner restarted
+2026-11-26T21:39:00Z runner 684971 start
+2026-11-26T21:39:00Z phase s1 end
+2026-11-26T21:39:00Z phase s2 end
+2026-11-26T21:39:00Z phase s3 end
+2026-11-26T21:39:00Z phase s4 run A end
+2026-11-26T21:39:01Z cell ab-old2-s1-c1-g start (kds_server_old cores=1 group)
+2026-11-26T21:39:18Z cell ab-old2-s1-c1-g done rc=0
+2026-11-26T21:39:19Z cell ab-old2-s2-c1-g start (kds_server_old cores=1 group)
+2026-11-26T21:39:22Z cell ab-old2-s2-c1-g done rc=0
+2026-11-26T21:39:23Z cell ab-old2-b1-s2-c1-s start (kds_server_old cores=1 strict)
+2026-11-26T21:39:28Z cell ab-old2-b1-s2-c1-s done rc=0
+2026-11-26T21:39:29Z cell ab-old2-s3-c1-n10000-none start (kds_server_old cores=1 group)
+2026-11-26T21:39:38Z cell ab-old2-s3-c1-n10000-none done rc=0
+2026-11-26T21:39:39Z cell ab-old2-s2-c8-g start (kds_server_old cores=8 group)
+2026-11-26T21:39:42Z cell ab-old2-s2-c8-g done rc=0
+2026-11-26T21:39:43Z cell ab-old2-s3-c1-n10000-all start (kds_server_old cores=1 group)
+2026-11-26T21:39:47Z cell ab-old2-s3-c1-n10000-all done rc=0
+2026-11-26T21:39:48Z cell ab-new2-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:40:04Z cell ab-new2-s1-c1-g done rc=0
+2026-11-26T21:40:05Z cell ab-new2-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:40:08Z cell ab-new2-s2-c1-g done rc=0
+2026-11-26T21:40:09Z cell ab-new2-b1-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:40:14Z cell ab-new2-b1-s2-c1-s done rc=0
+2026-11-26T21:40:15Z cell ab-new2-s3-c1-n10000-none start (kds_server cores=1 group)
+2026-11-26T21:40:19Z cell ab-new2-s3-c1-n10000-none done rc=0
+2026-11-26T21:40:20Z cell ab-new2-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:40:23Z cell ab-new2-s2-c8-g done rc=0
+2026-11-26T21:40:24Z cell ab-new2-s3-c1-n10000-all start (kds_server cores=1 group)
+2026-11-26T21:40:27Z cell ab-new2-s3-c1-n10000-all done rc=0
+2026-11-26T21:40:28Z cell ab-old3-s1-c1-g start (kds_server_old cores=1 group)
+2026-11-26T21:40:46Z cell ab-old3-s1-c1-g done rc=0
+2026-11-26T21:40:47Z cell ab-old3-s2-c1-g start (kds_server_old cores=1 group)
+2026-11-26T21:40:50Z cell ab-old3-s2-c1-g done rc=0
+2026-11-26T21:40:51Z cell ab-old3-b1-s2-c1-s start (kds_server_old cores=1 strict)
+2026-11-26T21:40:55Z cell ab-old3-b1-s2-c1-s done rc=0
+2026-11-26T21:40:56Z cell ab-old3-s3-c1-n10000-none start (kds_server_old cores=1 group)
+2026-11-26T21:41:00Z cell ab-old3-s3-c1-n10000-none done rc=0
+2026-11-26T21:41:01Z cell ab-old3-s2-c8-g start (kds_server_old cores=8 group)
+2026-11-26T21:41:07Z cell ab-old3-s2-c8-g done rc=0
+2026-11-26T21:41:08Z cell ab-old3-s3-c1-n10000-all start (kds_server_old cores=1 group)
+2026-11-26T21:41:14Z cell ab-old3-s3-c1-n10000-all done rc=0
+2026-11-26T21:41:15Z cell ab-new3-s1-c1-g start (kds_server cores=1 group)
+2026-11-26T21:41:32Z cell ab-new3-s1-c1-g done rc=0
+2026-11-26T21:41:33Z cell ab-new3-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:41:37Z cell ab-new3-s2-c1-g done rc=0
+2026-11-26T21:41:38Z cell ab-new3-b1-s2-c1-s start (kds_server cores=1 strict)
+2026-11-26T21:41:42Z cell ab-new3-b1-s2-c1-s done rc=0
+2026-11-26T21:41:43Z cell ab-new3-s3-c1-n10000-none start (kds_server cores=1 group)
+2026-11-26T21:41:47Z cell ab-new3-s3-c1-n10000-none done rc=0
+2026-11-26T21:41:48Z cell ab-new3-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:41:51Z cell ab-new3-s2-c8-g done rc=0
+2026-11-26T21:41:52Z cell ab-new3-s3-c1-n10000-all start (kds_server cores=1 group)
+2026-11-26T21:42:00Z cell ab-new3-s3-c1-n10000-all done rc=0
+2026-11-26T21:42:00Z phase ab end
+2026-11-26T21:42:01Z cell ab-old1-s4 start (kds_server_old, three servers)
+2026-11-26T21:46:34Z cell ab-old1-s4 done rc=0
+2026-11-26T21:46:34Z phase s4 old-binary control end
+2026-11-26T21:46:34Z extras deadline 22:09:29 (21:50:00 plus the gate holds)
+2026-11-26T21:46:35Z cell rr-s2-c1-g start (kds_server cores=1 group)
+2026-11-26T21:46:38Z cell rr-s2-c1-g done rc=0
+2026-11-26T21:46:39Z cell rr-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:46:42Z cell rr-s2-c8-g done rc=0
+2026-11-26T21:46:43Z cell sat-b16-s2-c8-g start (kds_server cores=8 group)
+2026-11-26T21:46:49Z cell sat-b16-s2-c8-g done rc=0
+2026-11-26T21:46:50Z cell sat-b16-s2-c8-s start (kds_server cores=8 strict)
+2026-11-26T21:46:54Z cell sat-b16-s2-c8-s done rc=0
+2026-11-26T21:46:55Z cell cd2-s4 start (kds_server, three servers)
+2026-11-26T21:51:29Z cell cd2-s4 done rc=0
+2026-11-26T21:51:29Z phase extras end
+2026-11-26T21:51:29Z runner 684971 DONE
+2026-11-26T21:51:30Z runner2 684990 start (pinned A/B), deadline 22:11:29 (21:52:00 plus the gate holds)
+2026-11-26T21:51:34Z gate pin-ab-old1-s1-c1-g holding 4s busy=6% procs= 704642 kds_tests 101% 
+2026-11-26T21:51:37Z gate pin-ab-old1-s1-c1-g holding 7s busy=5% procs= 704642 kds_tests 101% 
+2026-11-26T21:51:40Z gate pin-ab-old1-s1-c1-g holding 10s busy=5% procs= 704642 kds_tests 100% 
+2026-11-26T21:51:43Z gate pin-ab-old1-s1-c1-g holding 13s busy=5% procs= 704642 kds_tests 100% 
+2026-11-26T21:51:46Z gate pin-ab-old1-s1-c1-g holding 16s busy=5% procs= 704642 kds_tests 100% 
+2026-11-26T21:51:49Z gate pin-ab-old1-s1-c1-g holding 19s busy=5% procs= 705243 exited-in-sample 
+2026-11-26T21:51:52Z gate pin-ab-old1-s1-c1-g holding 22s busy=6% procs= 
+2026-11-26T21:51:55Z gate pin-ab-old1-s1-c1-g holding 25s busy=6% procs= 705448 kds_tests 104% 
+2026-11-26T21:51:58Z gate pin-ab-old1-s1-c1-g holding 28s busy=6% procs= 705448 kds_tests 103% 
+2026-11-26T21:52:01Z gate pin-ab-old1-s1-c1-g holding 31s busy=6% procs= 705448 kds_tests 105% 
+2026-11-26T21:52:04Z gate pin-ab-old1-s1-c1-g holding 34s busy=5% procs= 705448 kds_tests 103% 
+2026-11-26T21:52:07Z gate pin-ab-old1-s1-c1-g holding 37s busy=5% procs= 705448 kds_tests 100% 
+2026-11-26T21:52:10Z gate pin-ab-old1-s1-c1-g holding 40s busy=4% procs= 705963 exited-in-sample 
+2026-11-26T21:52:11Z cell pin-ab-old1-s1-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T21:52:28Z cell pin-ab-old1-s1-c1-g done rc=0
+2026-11-26T21:52:29Z cell pin-ab-old1-s2-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T21:52:32Z cell pin-ab-old1-s2-c1-g done rc=0
+2026-11-26T21:52:34Z cell pin-ab-old1-b1-s2-c1-s start (pin_old.sh cores=1 strict)
+2026-11-26T21:52:37Z cell pin-ab-old1-b1-s2-c1-s done rc=0
+2026-11-26T21:52:38Z cell pin-ab-old1-s2-c8-g start (pin_old.sh cores=8 group)
+2026-11-26T21:52:41Z cell pin-ab-old1-s2-c8-g done rc=0
+2026-11-26T21:52:42Z cell pin-ab-old1-s3-c1-n10000-none start (pin_old.sh cores=1 group)
+2026-11-26T21:52:53Z cell pin-ab-old1-s3-c1-n10000-none done rc=0
+2026-11-26T21:52:54Z cell pin-ab-old1-s3-c1-n10000-all start (pin_old.sh cores=1 group)
+2026-11-26T21:52:58Z cell pin-ab-old1-s3-c1-n10000-all done rc=0
+2026-11-26T21:52:59Z cell pin-ab-new1-s1-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T21:53:16Z cell pin-ab-new1-s1-c1-g done rc=0
+2026-11-26T21:53:17Z cell pin-ab-new1-s2-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T21:53:20Z cell pin-ab-new1-s2-c1-g done rc=0
+2026-11-26T21:53:23Z gate pin-ab-new1-b1-s2-c1-s holding 3s busy=3% procs= 708374 exited-in-sample 
+2026-11-26T21:53:26Z gate pin-ab-new1-b1-s2-c1-s holding 6s busy=5% procs= 708632 exited-in-sample 
+2026-11-26T21:53:29Z gate pin-ab-new1-b1-s2-c1-s holding 9s busy=5% procs= 708836 exited-in-sample 
+2026-11-26T21:53:32Z gate pin-ab-new1-b1-s2-c1-s holding 12s busy=5% procs= 708938 exited-in-sample 
+2026-11-26T21:53:35Z gate pin-ab-new1-b1-s2-c1-s holding 15s busy=2% procs= 709152 exited-in-sample 
+2026-11-26T21:53:38Z gate pin-ab-new1-b1-s2-c1-s holding 18s busy=6% procs= 709249 exited-in-sample 
+2026-11-26T21:53:41Z gate pin-ab-new1-b1-s2-c1-s holding 21s busy=5% procs= 709365 exited-in-sample 
+2026-11-26T21:53:44Z gate pin-ab-new1-b1-s2-c1-s holding 24s busy=6% procs= 709413 exited-in-sample 
+2026-11-26T21:53:47Z gate pin-ab-new1-b1-s2-c1-s holding 27s busy=5% procs= 
+2026-11-26T21:53:50Z gate pin-ab-new1-b1-s2-c1-s holding 30s busy=6% procs= 709893 exited-in-sample 
+2026-11-26T21:53:53Z gate pin-ab-new1-b1-s2-c1-s holding 33s busy=5% procs= 710121 exited-in-sample 
+2026-11-26T21:53:56Z gate pin-ab-new1-b1-s2-c1-s holding 36s busy=2% procs= 710441 exited-in-sample 
+2026-11-26T21:53:59Z gate pin-ab-new1-b1-s2-c1-s holding 39s busy=1% procs= 710531 exited-in-sample 
+2026-11-26T21:54:03Z gate pin-ab-new1-b1-s2-c1-s holding 42s busy=2% procs= 710584 exited-in-sample 
+2026-11-26T21:54:06Z gate pin-ab-new1-b1-s2-c1-s holding 46s busy=1% procs= 710709 exited-in-sample 
+2026-11-26T21:54:07Z cell pin-ab-new1-b1-s2-c1-s start (pin_new.sh cores=1 strict)
+2026-11-26T21:54:11Z cell pin-ab-new1-b1-s2-c1-s done rc=0
+2026-11-26T21:54:14Z gate pin-ab-new1-s2-c8-g holding 3s busy=2% procs= 710907 exited-in-sample 
+2026-11-26T21:54:17Z gate pin-ab-new1-s2-c8-g holding 6s busy=1% procs= 711056 exited-in-sample 
+2026-11-26T21:54:18Z cell pin-ab-new1-s2-c8-g start (pin_new.sh cores=8 group)
+2026-11-26T21:54:20Z cell pin-ab-new1-s2-c8-g done rc=0
+2026-11-26T21:54:23Z gate pin-ab-new1-s3-c1-n10000-none holding 3s busy=4% procs= 701445 ctest 5% 711359 exited-in-sample 
+2026-11-26T21:54:26Z gate pin-ab-new1-s3-c1-n10000-none holding 6s busy=5% procs= 701445 ctest 10% 
+2026-11-26T21:54:29Z gate pin-ab-new1-s3-c1-n10000-none holding 9s busy=5% procs= 701445 ctest 7% 712010 exited-in-sample 
+2026-11-26T21:54:32Z gate pin-ab-new1-s3-c1-n10000-none holding 12s busy=6% procs= 701445 ctest 7% 
+2026-11-26T21:54:35Z gate pin-ab-new1-s3-c1-n10000-none holding 15s busy=5% procs= 712556 exited-in-sample 
+2026-11-26T21:54:38Z gate pin-ab-new1-s3-c1-n10000-none holding 18s busy=5% procs= 
+2026-11-26T21:54:41Z gate pin-ab-new1-s3-c1-n10000-none holding 21s busy=5% procs= 701445 ctest 5% 
+2026-11-26T21:54:45Z gate pin-ab-new1-s3-c1-n10000-none holding 25s busy=5% procs= 713357 exited-in-sample 
+2026-11-26T21:54:48Z gate pin-ab-new1-s3-c1-n10000-none holding 28s busy=5% procs= 713475 exited-in-sample 
+2026-11-26T21:54:51Z gate pin-ab-new1-s3-c1-n10000-none holding 31s busy=5% procs= 713758 kds_tests 101% 
+2026-11-26T21:54:54Z gate pin-ab-new1-s3-c1-n10000-none holding 34s busy=6% procs= 713758 exited-in-sample 
+2026-11-26T21:54:57Z gate pin-ab-new1-s3-c1-n10000-none holding 37s busy=5% procs= 713821 kds_tests 101% 
+2026-11-26T21:55:00Z gate pin-ab-new1-s3-c1-n10000-none holding 40s busy=5% procs= 713821 kds_tests 100% 
+2026-11-26T21:55:03Z gate pin-ab-new1-s3-c1-n10000-none holding 43s busy=5% procs= 714070 kds_tests 101% 
+2026-11-26T21:55:06Z gate pin-ab-new1-s3-c1-n10000-none holding 46s busy=5% procs= 714070 kds_tests 100% 
+2026-11-26T21:55:09Z gate pin-ab-new1-s3-c1-n10000-none holding 49s busy=5% procs= 714070 kds_tests 102% 
+2026-11-26T21:55:12Z gate pin-ab-new1-s3-c1-n10000-none holding 52s busy=5% procs= 714070 kds_tests 100% 
+2026-11-26T21:55:15Z gate pin-ab-new1-s3-c1-n10000-none holding 55s busy=5% procs= 714070 kds_tests 100% 
+2026-11-26T21:55:18Z gate pin-ab-new1-s3-c1-n10000-none holding 58s busy=5% procs= 714070 exited-in-sample 
+2026-11-26T21:55:21Z gate pin-ab-new1-s3-c1-n10000-none holding 61s busy=5% procs= 714550 kds_tests 100% 
+2026-11-26T21:55:24Z gate pin-ab-new1-s3-c1-n10000-none holding 64s busy=5% procs= 714550 kds_tests 101% 
+2026-11-26T21:55:27Z gate pin-ab-new1-s3-c1-n10000-none holding 67s busy=6% procs= 714550 kds_tests 100% 
+2026-11-26T21:55:30Z gate pin-ab-new1-s3-c1-n10000-none holding 70s busy=5% procs= 714835 kds_tests 101% 
+2026-11-26T21:55:33Z gate pin-ab-new1-s3-c1-n10000-none holding 73s busy=5% procs= 714835 kds_tests 102% 
+2026-11-26T21:55:36Z gate pin-ab-new1-s3-c1-n10000-none holding 76s busy=5% procs= 714835 kds_tests 100% 
+2026-11-26T21:55:39Z gate pin-ab-new1-s3-c1-n10000-none holding 79s busy=5% procs= 714835 exited-in-sample 
+2026-11-26T21:55:42Z gate pin-ab-new1-s3-c1-n10000-none holding 82s busy=5% procs= 715158 kds_tests 101% 
+2026-11-26T21:55:45Z gate pin-ab-new1-s3-c1-n10000-none holding 85s busy=5% procs= 715158 kds_tests 101% 
+2026-11-26T21:55:48Z gate pin-ab-new1-s3-c1-n10000-none holding 88s busy=5% procs= 715158 kds_tests 101% 
+2026-11-26T21:55:51Z gate pin-ab-new1-s3-c1-n10000-none holding 91s busy=5% procs= 715440 kds_tests 100% 
+2026-11-26T21:55:54Z gate pin-ab-new1-s3-c1-n10000-none holding 94s busy=5% procs= 715440 kds_tests 101% 
+2026-11-26T21:55:57Z gate pin-ab-new1-s3-c1-n10000-none holding 97s busy=5% procs= 715440 kds_tests 100% 
+2026-11-26T21:56:00Z gate pin-ab-new1-s3-c1-n10000-none holding 100s busy=6% procs= 715440 kds_tests 100% 
+2026-11-26T21:56:03Z gate pin-ab-new1-s3-c1-n10000-none holding 103s busy=5% procs= 715747 kds_tests 101% 
+2026-11-26T21:56:06Z gate pin-ab-new1-s3-c1-n10000-none holding 106s busy=6% procs= 715747 kds_tests 101% 
+2026-11-26T21:56:09Z gate pin-ab-new1-s3-c1-n10000-none holding 109s busy=5% procs= 715747 kds_tests 100% 
+2026-11-26T21:56:12Z gate pin-ab-new1-s3-c1-n10000-none holding 112s busy=5% procs= 715747 kds_tests 100% 
+2026-11-26T21:56:15Z gate pin-ab-new1-s3-c1-n10000-none holding 115s busy=5% procs= 715747 kds_tests 101% 
+2026-11-26T21:56:18Z gate pin-ab-new1-s3-c1-n10000-none holding 118s busy=5% procs= 716121 kds_tests 101% 
+2026-11-26T21:56:21Z gate pin-ab-new1-s3-c1-n10000-none holding 121s busy=5% procs= 716121 kds_tests 100% 
+2026-11-26T21:56:25Z gate pin-ab-new1-s3-c1-n10000-none holding 124s busy=5% procs= 716121 kds_tests 101% 
+2026-11-26T21:56:28Z gate pin-ab-new1-s3-c1-n10000-none holding 128s busy=5% procs= 716121 kds_tests 101% 
+2026-11-26T21:56:31Z gate pin-ab-new1-s3-c1-n10000-none holding 131s busy=5% procs= 716121 exited-in-sample 
+2026-11-26T21:56:34Z gate pin-ab-new1-s3-c1-n10000-none holding 134s busy=5% procs= 716507 kds_tests 101% 
+2026-11-26T21:56:37Z gate pin-ab-new1-s3-c1-n10000-none holding 137s busy=5% procs= 716507 kds_tests 100% 
+2026-11-26T21:56:40Z gate pin-ab-new1-s3-c1-n10000-none holding 140s busy=5% procs= 716507 kds_tests 101% 
+2026-11-26T21:56:43Z gate pin-ab-new1-s3-c1-n10000-none holding 143s busy=5% procs= 716751 kds_tests 101% 
+2026-11-26T21:56:46Z gate pin-ab-new1-s3-c1-n10000-none holding 146s busy=5% procs= 716751 kds_tests 101% 
+2026-11-26T21:56:49Z gate pin-ab-new1-s3-c1-n10000-none holding 149s busy=5% procs= 716751 kds_tests 100% 
+2026-11-26T21:56:52Z gate pin-ab-new1-s3-c1-n10000-none holding 152s busy=5% procs= 716751 kds_tests 101% 
+2026-11-26T21:56:55Z gate pin-ab-new1-s3-c1-n10000-none holding 155s busy=5% procs= 716751 kds_tests 101% 
+2026-11-26T21:56:58Z gate pin-ab-new1-s3-c1-n10000-none holding 158s busy=5% procs= 717174 kds_tests 100% 
+2026-11-26T21:57:01Z gate pin-ab-new1-s3-c1-n10000-none holding 161s busy=5% procs= 717174 kds_tests 101% 
+2026-11-26T21:57:04Z gate pin-ab-new1-s3-c1-n10000-none holding 164s busy=5% procs= 717174 kds_tests 101% 
+2026-11-26T21:57:07Z gate pin-ab-new1-s3-c1-n10000-none holding 167s busy=5% procs= 717174 kds_tests 101% 
+2026-11-26T21:57:10Z gate pin-ab-new1-s3-c1-n10000-none holding 170s busy=5% procs= 701445 ctest 9% 
+2026-11-26T21:57:13Z gate pin-ab-new1-s3-c1-n10000-none holding 173s busy=5% procs= 701445 ctest 6% 
+2026-11-26T21:57:16Z gate pin-ab-new1-s3-c1-n10000-none holding 176s busy=5% procs= 718197 kds_tests 101% 
+2026-11-26T21:57:19Z gate pin-ab-new1-s3-c1-n10000-none holding 179s busy=5% procs= 718343 exited-in-sample 
+2026-11-26T21:57:22Z gate pin-ab-new1-s3-c1-n10000-none holding 182s busy=5% procs= 718397 kds_tests 101% 
+2026-11-26T21:57:25Z gate pin-ab-new1-s3-c1-n10000-none holding 185s busy=5% procs= 718397 exited-in-sample 
+2026-11-26T21:57:28Z gate pin-ab-new1-s3-c1-n10000-none holding 188s busy=6% procs= 718666 kds_tests 100% 
+2026-11-26T21:57:31Z gate pin-ab-new1-s3-c1-n10000-none holding 191s busy=5% procs= 718793 kds_tests 101% 
+2026-11-26T21:57:34Z gate pin-ab-new1-s3-c1-n10000-none holding 194s busy=6% procs= 718793 exited-in-sample 
+2026-11-26T21:57:37Z gate pin-ab-new1-s3-c1-n10000-none holding 197s busy=9% procs= 718975 exited-in-sample 
+2026-11-26T21:57:40Z gate pin-ab-new1-s3-c1-n10000-none holding 200s busy=15% procs= 719013 kds_tests 343% 
+2026-11-26T21:57:43Z gate pin-ab-new1-s3-c1-n10000-none holding 203s busy=15% procs= 719013 kds_tests 345% 
+2026-11-26T21:57:46Z gate pin-ab-new1-s3-c1-n10000-none holding 206s busy=15% procs= 719013 kds_tests 342% 
+2026-11-26T21:57:49Z gate pin-ab-new1-s3-c1-n10000-none holding 209s busy=5% procs= 719337 exited-in-sample 
+2026-11-26T21:57:52Z gate pin-ab-new1-s3-c1-n10000-none holding 212s busy=3% procs= 719505 exited-in-sample 
+2026-11-26T21:57:55Z gate pin-ab-new1-s3-c1-n10000-none holding 215s busy=5% procs= 719691 exited-in-sample 719715 exited-in-sample 
+2026-11-26T21:57:58Z gate pin-ab-new1-s3-c1-n10000-none holding 218s busy=5% procs= 701445 ctest 8% 720071 exited-in-sample 
+2026-11-26T21:58:01Z gate pin-ab-new1-s3-c1-n10000-none holding 221s busy=6% procs= 701445 ctest 7% 720345 exited-in-sample 
+2026-11-26T21:58:05Z gate pin-ab-new1-s3-c1-n10000-none holding 225s busy=5% procs= 720592 exited-in-sample 
+2026-11-26T21:58:08Z gate pin-ab-new1-s3-c1-n10000-none holding 228s busy=5% procs= 720607 exited-in-sample 
+2026-11-26T21:58:11Z gate pin-ab-new1-s3-c1-n10000-none holding 231s busy=5% procs= 720757 exited-in-sample 
+2026-11-26T21:58:14Z gate pin-ab-new1-s3-c1-n10000-none holding 234s busy=5% procs= 720941 exited-in-sample 
+2026-11-26T21:58:17Z gate pin-ab-new1-s3-c1-n10000-none holding 237s busy=5% procs= 721006 exited-in-sample 
+2026-11-26T21:58:20Z gate pin-ab-new1-s3-c1-n10000-none holding 240s busy=5% procs= 721101 exited-in-sample 
+2026-11-26T21:58:23Z gate pin-ab-new1-s3-c1-n10000-none holding 243s busy=6% procs= 721213 exited-in-sample 
+2026-11-26T21:58:26Z gate pin-ab-new1-s3-c1-n10000-none holding 246s busy=3% procs= 721475 exited-in-sample 
+2026-11-26T21:58:29Z gate pin-ab-new1-s3-c1-n10000-none holding 249s busy=5% procs= 701445 ctest 5% 
+2026-11-26T21:58:32Z gate pin-ab-new1-s3-c1-n10000-none holding 252s busy=5% procs= 721790 exited-in-sample 
+2026-11-26T21:58:35Z gate pin-ab-new1-s3-c1-n10000-none holding 255s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:58:38Z gate pin-ab-new1-s3-c1-n10000-none holding 258s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:58:41Z gate pin-ab-new1-s3-c1-n10000-none holding 261s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:58:44Z gate pin-ab-new1-s3-c1-n10000-none holding 264s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:58:47Z gate pin-ab-new1-s3-c1-n10000-none holding 267s busy=5% procs= 721825 kds_tests 101% 
+2026-11-26T21:58:50Z gate pin-ab-new1-s3-c1-n10000-none holding 270s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:58:53Z gate pin-ab-new1-s3-c1-n10000-none holding 273s busy=5% procs= 721825 kds_tests 101% 
+2026-11-26T21:58:56Z gate pin-ab-new1-s3-c1-n10000-none holding 276s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:58:59Z gate pin-ab-new1-s3-c1-n10000-none holding 279s busy=5% procs= 721825 kds_tests 101% 
+2026-11-26T21:59:02Z gate pin-ab-new1-s3-c1-n10000-none holding 282s busy=5% procs= 721825 kds_tests 100% 
+2026-11-26T21:59:05Z gate pin-ab-new1-s3-c1-n10000-none holding 285s busy=5% procs= 721825 exited-in-sample 
+2026-11-26T21:59:08Z gate pin-ab-new1-s3-c1-n10000-none holding 288s busy=5% procs= 722697 kds_tests 101% 
+2026-11-26T21:59:11Z gate pin-ab-new1-s3-c1-n10000-none holding 291s busy=6% procs= 722790 kds_tests 100% 
+2026-11-26T21:59:14Z gate pin-ab-new1-s3-c1-n10000-none holding 294s busy=5% procs= 722790 kds_tests 102% 
+2026-11-26T21:59:17Z gate pin-ab-new1-s3-c1-n10000-none holding 297s busy=5% procs= 722790 kds_tests 100% 
+2026-11-26T21:59:20Z gate pin-ab-new1-s3-c1-n10000-none holding 300s busy=5% procs= 722790 kds_tests 100% 
+2026-11-26T21:59:23Z gate pin-ab-new1-s3-c1-n10000-none holding 303s busy=5% procs= 722790 exited-in-sample 
+2026-11-26T21:59:26Z gate pin-ab-new1-s3-c1-n10000-none holding 306s busy=6% procs= 723172 kds_tests 101% 
+2026-11-26T21:59:29Z gate pin-ab-new1-s3-c1-n10000-none holding 309s busy=6% procs= 723172 exited-in-sample 
+2026-11-26T21:59:32Z gate pin-ab-new1-s3-c1-n10000-none holding 312s busy=5% procs= 723343 kds_tests 99% 
+2026-11-26T21:59:35Z gate pin-ab-new1-s3-c1-n10000-none holding 315s busy=6% procs= 723343 kds_tests 100% 
+2026-11-26T21:59:38Z gate pin-ab-new1-s3-c1-n10000-none holding 318s busy=5% procs= 723343 kds_tests 101% 
+2026-11-26T21:59:49Z runner2 723918 start (pinned A/B), deadline now 22:18:19 (21:52:00 plus the gate holds, read at every pair)
+2026-11-26T21:59:52Z gate pin-ab-new1-s3-c1-n10000-none holding 3s busy=5% procs= 723835 exited-in-sample 
+2026-11-26T21:59:55Z gate pin-ab-new1-s3-c1-n10000-none holding 6s busy=5% procs= 723995 kds_tests 101% 
+2026-11-26T21:59:58Z gate pin-ab-new1-s3-c1-n10000-none holding 9s busy=6% procs= 723995 kds_tests 100% 724122 exited-in-sample 
+2026-11-26T22:00:01Z gate pin-ab-new1-s3-c1-n10000-none holding 12s busy=5% procs= 723995 kds_tests 101% 
+2026-11-26T22:00:04Z gate pin-ab-new1-s3-c1-n10000-none holding 15s busy=9% procs= 723995 kds_tests 101% 
+2026-11-26T22:00:07Z gate pin-ab-new1-s3-c1-n10000-none holding 18s busy=9% procs= 723995 kds_tests 100% 
+2026-11-26T22:00:11Z gate pin-ab-new1-s3-c1-n10000-none holding 22s busy=9% procs= 723995 kds_tests 100% 
+2026-11-26T22:00:14Z gate pin-ab-new1-s3-c1-n10000-none holding 25s busy=10% procs= 724539 kds_tests 101% 
+2026-11-26T22:00:17Z gate pin-ab-new1-s3-c1-n10000-none holding 28s busy=9% procs= 724656 kds_tests 100% 
+2026-11-26T22:00:20Z gate pin-ab-new1-s3-c1-n10000-none holding 31s busy=10% procs= 
+2026-11-26T22:00:23Z gate pin-ab-new1-s3-c1-n10000-none holding 34s busy=10% procs= 724852 kds_tests 100% 
+2026-11-26T22:00:26Z gate pin-ab-new1-s3-c1-n10000-none holding 37s busy=9% procs= 724969 kds_tests 100% 
+2026-11-26T22:00:29Z gate pin-ab-new1-s3-c1-n10000-none holding 40s busy=9% procs= 725015 kds_tests 101% 
+2026-11-26T22:00:32Z gate pin-ab-new1-s3-c1-n10000-none holding 43s busy=9% procs= 725127 kds_tests 101% 
+2026-11-26T22:00:35Z gate pin-ab-new1-s3-c1-n10000-none holding 46s busy=10% procs= 725127 exited-in-sample 
+2026-11-26T22:00:38Z gate pin-ab-new1-s3-c1-n10000-none holding 49s busy=9% procs= 725200 kds_tests 101% 
+2026-11-26T22:00:41Z gate pin-ab-new1-s3-c1-n10000-none holding 52s busy=10% procs= 725200 kds_tests 101% 
+2026-11-26T22:00:44Z gate pin-ab-new1-s3-c1-n10000-none holding 55s busy=8% procs= 725200 kds_tests 100% 
+2026-11-26T22:00:47Z gate pin-ab-new1-s3-c1-n10000-none holding 58s busy=8% procs= 725200 exited-in-sample 
+2026-11-26T22:00:50Z gate pin-ab-new1-s3-c1-n10000-none holding 61s busy=5% procs= 725642 kds_tests 101% 
+2026-11-26T22:00:53Z gate pin-ab-new1-s3-c1-n10000-none holding 64s busy=5% procs= 725642 exited-in-sample 
+2026-11-26T22:00:56Z gate pin-ab-new1-s3-c1-n10000-none holding 67s busy=5% procs= 725799 kds_tests 101% 
+2026-11-26T22:00:59Z gate pin-ab-new1-s3-c1-n10000-none holding 70s busy=5% procs= 725799 kds_tests 102% 
+2026-11-26T22:01:02Z gate pin-ab-new1-s3-c1-n10000-none holding 73s busy=6% procs= 725977 kds_tests 101% 
+2026-11-26T22:01:05Z gate pin-ab-new1-s3-c1-n10000-none holding 76s busy=5% procs= 725977 kds_tests 100% 
+2026-11-26T22:01:08Z gate pin-ab-new1-s3-c1-n10000-none holding 79s busy=6% procs= 726199 kds_tests 101% 
+2026-11-26T22:01:11Z gate pin-ab-new1-s3-c1-n10000-none holding 82s busy=6% procs= 726322 kds_tests 100% 
+2026-11-26T22:01:14Z gate pin-ab-new1-s3-c1-n10000-none holding 85s busy=6% procs= 726426 kds_tests 100% 
+2026-11-26T22:01:17Z gate pin-ab-new1-s3-c1-n10000-none holding 88s busy=5% procs= 726426 kds_tests 101% 
+2026-11-26T22:01:18Z cell pin-ab-new1-s3-c1-n10000-none start (pin_new.sh cores=1 group)
+2026-11-26T22:01:22Z cell pin-ab-new1-s3-c1-n10000-none done rc=0
+2026-11-26T22:01:25Z gate pin-ab-new1-s3-c1-n10000-all holding 3s busy=5% procs= 726658 exited-in-sample 
+2026-11-26T22:01:28Z gate pin-ab-new1-s3-c1-n10000-all holding 6s busy=5% procs= 726877 kds_tests 100% 
+2026-11-26T22:01:31Z gate pin-ab-new1-s3-c1-n10000-all holding 9s busy=5% procs= 726922 exited-in-sample 
+2026-11-26T22:01:34Z gate pin-ab-new1-s3-c1-n10000-all holding 12s busy=5% procs= 727052 exited-in-sample 
+2026-11-26T22:01:37Z gate pin-ab-new1-s3-c1-n10000-all holding 15s busy=5% procs= 727146 exited-in-sample 
+2026-11-26T22:01:40Z gate pin-ab-new1-s3-c1-n10000-all holding 18s busy=5% procs= 
+2026-11-26T22:01:43Z gate pin-ab-new1-s3-c1-n10000-all holding 21s busy=6% procs= 
+2026-11-26T22:01:46Z gate pin-ab-new1-s3-c1-n10000-all holding 24s busy=5% procs= 701445 exited-in-sample 
+2026-11-26T22:01:47Z cell pin-ab-new1-s3-c1-n10000-all start (pin_new.sh cores=1 group)
+2026-11-26T22:01:56Z cell pin-ab-new1-s3-c1-n10000-all done rc=0
+2026-11-26T22:01:56Z pinned A/B pair 1 end
+2026-11-26T22:01:57Z cell pin-ab-old2-s1-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:02:14Z cell pin-ab-old2-s1-c1-g done rc=0
+2026-11-26T22:02:15Z cell pin-ab-old2-s2-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:02:18Z cell pin-ab-old2-s2-c1-g done rc=0
+2026-11-26T22:02:19Z cell pin-ab-old2-b1-s2-c1-s start (pin_old.sh cores=1 strict)
+2026-11-26T22:02:23Z cell pin-ab-old2-b1-s2-c1-s done rc=0
+2026-11-26T22:02:24Z cell pin-ab-old2-s2-c8-g start (pin_old.sh cores=8 group)
+2026-11-26T22:02:27Z cell pin-ab-old2-s2-c8-g done rc=0
+2026-11-26T22:02:28Z cell pin-ab-old2-s3-c1-n10000-none start (pin_old.sh cores=1 group)
+2026-11-26T22:02:31Z cell pin-ab-old2-s3-c1-n10000-none done rc=0
+2026-11-26T22:02:32Z cell pin-ab-old2-s3-c1-n10000-all start (pin_old.sh cores=1 group)
+2026-11-26T22:02:36Z cell pin-ab-old2-s3-c1-n10000-all done rc=0
+2026-11-26T22:02:37Z cell pin-ab-new2-s1-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:02:56Z cell pin-ab-new2-s1-c1-g done rc=0
+2026-11-26T22:02:57Z cell pin-ab-new2-s2-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:03:00Z cell pin-ab-new2-s2-c1-g done rc=0
+2026-11-26T22:03:01Z cell pin-ab-new2-b1-s2-c1-s start (pin_new.sh cores=1 strict)
+2026-11-26T22:03:05Z cell pin-ab-new2-b1-s2-c1-s done rc=0
+2026-11-26T22:03:06Z cell pin-ab-new2-s2-c8-g start (pin_new.sh cores=8 group)
+2026-11-26T22:03:09Z cell pin-ab-new2-s2-c8-g done rc=0
+2026-11-26T22:03:10Z cell pin-ab-new2-s3-c1-n10000-none start (pin_new.sh cores=1 group)
+2026-11-26T22:03:14Z cell pin-ab-new2-s3-c1-n10000-none done rc=0
+2026-11-26T22:03:15Z cell pin-ab-new2-s3-c1-n10000-all start (pin_new.sh cores=1 group)
+2026-11-26T22:03:18Z cell pin-ab-new2-s3-c1-n10000-all done rc=0
+2026-11-26T22:03:18Z pinned A/B pair 2 end
+2026-11-26T22:03:19Z cell pin-ab-old3-s1-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:03:37Z cell pin-ab-old3-s1-c1-g done rc=0
+2026-11-26T22:03:38Z cell pin-ab-old3-s2-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:03:41Z cell pin-ab-old3-s2-c1-g done rc=0
+2026-11-26T22:03:42Z cell pin-ab-old3-b1-s2-c1-s start (pin_old.sh cores=1 strict)
+2026-11-26T22:03:45Z cell pin-ab-old3-b1-s2-c1-s done rc=0
+2026-11-26T22:03:46Z cell pin-ab-old3-s2-c8-g start (pin_old.sh cores=8 group)
+2026-11-26T22:03:49Z cell pin-ab-old3-s2-c8-g done rc=0
+2026-11-26T22:03:50Z cell pin-ab-old3-s3-c1-n10000-none start (pin_old.sh cores=1 group)
+2026-11-26T22:03:58Z cell pin-ab-old3-s3-c1-n10000-none done rc=0
+2026-11-26T22:03:59Z cell pin-ab-old3-s3-c1-n10000-all start (pin_old.sh cores=1 group)
+2026-11-26T22:04:08Z cell pin-ab-old3-s3-c1-n10000-all done rc=0
+2026-11-26T22:04:09Z cell pin-ab-new3-s1-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:04:27Z cell pin-ab-new3-s1-c1-g done rc=0
+2026-11-26T22:04:28Z cell pin-ab-new3-s2-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:04:31Z cell pin-ab-new3-s2-c1-g done rc=0
+2026-11-26T22:04:32Z cell pin-ab-new3-b1-s2-c1-s start (pin_new.sh cores=1 strict)
+2026-11-26T22:04:36Z cell pin-ab-new3-b1-s2-c1-s done rc=0
+2026-11-26T22:04:37Z cell pin-ab-new3-s2-c8-g start (pin_new.sh cores=8 group)
+2026-11-26T22:04:39Z cell pin-ab-new3-s2-c8-g done rc=0
+2026-11-26T22:04:40Z cell pin-ab-new3-s3-c1-n10000-none start (pin_new.sh cores=1 group)
+2026-11-26T22:04:44Z cell pin-ab-new3-s3-c1-n10000-none done rc=0
+2026-11-26T22:04:45Z cell pin-ab-new3-s3-c1-n10000-all start (pin_new.sh cores=1 group)
+2026-11-26T22:04:49Z cell pin-ab-new3-s3-c1-n10000-all done rc=0
+2026-11-26T22:04:49Z pinned A/B pair 3 end
+2026-11-26T22:04:50Z cell pin-ab-old4-s1-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:05:07Z cell pin-ab-old4-s1-c1-g done rc=0
+2026-11-26T22:05:08Z cell pin-ab-old4-s2-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:05:11Z cell pin-ab-old4-s2-c1-g done rc=0
+2026-11-26T22:05:12Z cell pin-ab-old4-b1-s2-c1-s start (pin_old.sh cores=1 strict)
+2026-11-26T22:05:16Z cell pin-ab-old4-b1-s2-c1-s done rc=0
+2026-11-26T22:05:17Z cell pin-ab-old4-s2-c8-g start (pin_old.sh cores=8 group)
+2026-11-26T22:05:20Z cell pin-ab-old4-s2-c8-g done rc=0
+2026-11-26T22:05:21Z cell pin-ab-old4-s3-c1-n10000-none start (pin_old.sh cores=1 group)
+2026-11-26T22:05:24Z cell pin-ab-old4-s3-c1-n10000-none done rc=0
+2026-11-26T22:05:25Z cell pin-ab-old4-s3-c1-n10000-all start (pin_old.sh cores=1 group)
+2026-11-26T22:05:29Z cell pin-ab-old4-s3-c1-n10000-all done rc=0
+2026-11-26T22:05:30Z cell pin-ab-new4-s1-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:05:47Z cell pin-ab-new4-s1-c1-g done rc=0
+2026-11-26T22:05:48Z cell pin-ab-new4-s2-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:05:51Z cell pin-ab-new4-s2-c1-g done rc=0
+2026-11-26T22:05:52Z cell pin-ab-new4-b1-s2-c1-s start (pin_new.sh cores=1 strict)
+2026-11-26T22:05:56Z cell pin-ab-new4-b1-s2-c1-s done rc=0
+2026-11-26T22:05:57Z cell pin-ab-new4-s2-c8-g start (pin_new.sh cores=8 group)
+2026-11-26T22:06:00Z cell pin-ab-new4-s2-c8-g done rc=0
+2026-11-26T22:06:01Z cell pin-ab-new4-s3-c1-n10000-none start (pin_new.sh cores=1 group)
+2026-11-26T22:06:04Z cell pin-ab-new4-s3-c1-n10000-none done rc=0
+2026-11-26T22:06:05Z cell pin-ab-new4-s3-c1-n10000-all start (pin_new.sh cores=1 group)
+2026-11-26T22:06:09Z cell pin-ab-new4-s3-c1-n10000-all done rc=0
+2026-11-26T22:06:09Z pinned A/B pair 4 end
+2026-11-26T22:06:10Z cell pin-ab-old5-s1-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:06:28Z cell pin-ab-old5-s1-c1-g done rc=0
+2026-11-26T22:06:29Z cell pin-ab-old5-s2-c1-g start (pin_old.sh cores=1 group)
+2026-11-26T22:06:37Z cell pin-ab-old5-s2-c1-g done rc=0
+2026-11-26T22:06:38Z cell pin-ab-old5-b1-s2-c1-s start (pin_old.sh cores=1 strict)
+2026-11-26T22:06:42Z cell pin-ab-old5-b1-s2-c1-s done rc=0
+2026-11-26T22:06:43Z cell pin-ab-old5-s2-c8-g start (pin_old.sh cores=8 group)
+2026-11-26T22:06:46Z cell pin-ab-old5-s2-c8-g done rc=0
+2026-11-26T22:06:47Z cell pin-ab-old5-s3-c1-n10000-none start (pin_old.sh cores=1 group)
+2026-11-26T22:06:54Z cell pin-ab-old5-s3-c1-n10000-none done rc=0
+2026-11-26T22:06:55Z cell pin-ab-old5-s3-c1-n10000-all start (pin_old.sh cores=1 group)
+2026-11-26T22:06:59Z cell pin-ab-old5-s3-c1-n10000-all done rc=0
+2026-11-26T22:07:00Z cell pin-ab-new5-s1-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:07:17Z cell pin-ab-new5-s1-c1-g done rc=0
+2026-11-26T22:07:18Z cell pin-ab-new5-s2-c1-g start (pin_new.sh cores=1 group)
+2026-11-26T22:07:21Z cell pin-ab-new5-s2-c1-g done rc=0
+2026-11-26T22:07:22Z cell pin-ab-new5-b1-s2-c1-s start (pin_new.sh cores=1 strict)
+2026-11-26T22:07:26Z cell pin-ab-new5-b1-s2-c1-s done rc=0
+2026-11-26T22:07:27Z cell pin-ab-new5-s2-c8-g start (pin_new.sh cores=8 group)
+2026-11-26T22:07:33Z cell pin-ab-new5-s2-c8-g done rc=0
+2026-11-26T22:07:34Z cell pin-ab-new5-s3-c1-n10000-none start (pin_new.sh cores=1 group)
+2026-11-26T22:07:40Z cell pin-ab-new5-s3-c1-n10000-none done rc=0
+2026-11-26T22:07:41Z cell pin-ab-new5-s3-c1-n10000-all start (pin_new.sh cores=1 group)
+2026-11-26T22:07:44Z cell pin-ab-new5-s3-c1-n10000-all done rc=0
+2026-11-26T22:07:44Z pinned A/B pair 5 end
+2026-11-26T22:07:44Z runner2 723918 DONE
+2026-11-26T22:07:45Z runner3 726022 start (scenario 4 run A again)
+2026-11-26T22:07:46Z cell r2-s4 start (kds_server, three servers)
+2026-11-26T22:12:20Z cell r2-s4 done rc=0
+2026-11-26T22:12:20Z runner3 726022 DONE

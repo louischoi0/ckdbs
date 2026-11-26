@@ -1,0 +1,33 @@
+created 8 relations with suffix _abb1c1s:
+  organizations_abb1c1s
+  ships_abb1c1s
+  operations_abb1c1s
+  cargos_abb1c1s
+  fees_abb1c1s
+  recipes_abb1c1s
+  freights_abb1c1s
+  charges_abb1c1s
+
+--load-only: stopping before the bookings. Drive this data file with
+  /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/src/tools/scenario2_freight.py --suffix abb1c1s
+
+ckdbs benchmark - 68 columns, 4735 rows resident, 1 connection
+server 127.0.0.1:15706  table scenario2_abb1c1s
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          8         0     348.9    208.7    210.1    294.8    684.6    684.6     684.6     0
+load-organizations         300         0     152.3    131.0    137.4    139.9    179.0    288.3    1124.6     0
+load-ships                  30         0     137.2    134.6    136.2    136.6    145.2    146.4     146.4     0
+load-operations            300         0     137.3    133.4    135.2    135.8    145.3    161.0     212.2     0
+load-fees                   12         0     136.8    134.5    135.2    136.2    144.1    144.1     144.1     0
+load-recipes                93         0     137.0    133.0    134.9    135.3    138.6    275.6     275.6     0
+load-cargos               4000         0     147.3    127.4    136.1    144.8    171.9    180.8    2587.1     0
+
+  ddl: 8 relations
+
+  S2-01..S2-05: builds, loads, books from --bookers processes, and
+  runs the analytic reporter beside them. The PostgreSQL twin is
+  tools/pg_scenario2_freight.py (single booker, reporter interleaved);
+  diff the two --json files with tools/compare_scenario2.py.
+  every relation is BTREE (AS-Q6, 2026-09-08: heap relations are suspended under SUS-1 and measurement is BTREE only for now); freights/charges were HEAP in the AL-S8 files at f6ed10c, so a number from this driver compares only with a number from this driver.

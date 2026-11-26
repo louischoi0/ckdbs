@@ -1,0 +1,49 @@
+
+ckdbs benchmark - 34 columns, 10000 rows resident, 1 connection
+server 127.0.0.1:15720  table users_pin_ab_old5_s3_c1_n10000_none, books_pin_ab_old5_s3_c1_n10000_none, reservations_pin_ab_old5_s3_c1_n10000_none, loans_pin_ab_old5_s3_c1_n10000_none
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0     750.8    448.8    448.8    450.3   1432.2   1432.2    1432.2     0
+load                     19000         0     346.0    121.0    136.5    138.2    166.6    249.6  361281.9     0
+pk-user                    200         0      33.0     29.6     31.0     31.8     33.5     37.7     244.3     0
+loans-by-user              200         0     144.6    137.1    141.4    143.6    150.7    155.2     221.5     0
+loans-by-book              200         0     141.5    134.1    139.2    141.3    147.0    149.9     152.1     0
+resv-by-user               200         0      85.0     79.1     83.3     84.8     89.4     92.2     102.1     0
+books-by-author            200         0      57.8     50.8     56.0     57.4     62.6     65.0      81.6     0
+books-by-genre             200         0     168.0    153.6    162.6    167.5    178.0    188.1     199.1     0
+loans-by-daterange         200         0     657.7    212.1    593.6    687.5    755.4    770.9     785.8     0
+overdue                    200         0     513.5    271.4    461.4    486.7    633.0    651.8     672.2     0
+join-loan-user             200         0     145.9    139.4    143.2    145.1    152.4    156.5     207.3     0
+join-no-literal            200         0     239.4    235.0    237.5    238.7    243.7    253.1     300.0     0
+exists-correlated          200         0     243.8    235.8    238.9    241.2    252.9    281.9     378.8     0
+count-by-user              200         0     132.8    128.4    131.1    132.4    137.3    139.8     148.2     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  pk-user: WHERE id = ? - Lookup, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode none (after load), cabin off, server indexes on
+  sizes: users=2000, books=2000, reservations=5000, loans=10000
+  ANALYZE (the access kind each shape compiled to):
+      loans-by-user: FilterScan
+      loans-by-book: FilterScan
+      resv-by-user: FilterScan
+      books-by-author: FilterScan
+      books-by-genre: FilterScan
+      loans-by-daterange: Scan
+      overdue: FilterScan
+      join-no-literal: Range, Scan
+      exists-correlated: Range, Scan
+  wrote /home/ukjin/bench-runs/scenarios-v3.4.17-159-g9f8f8b354/out/json/pin-ab-old5-s3-c1-n10000-none.json
