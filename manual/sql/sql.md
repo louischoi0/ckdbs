@@ -19,7 +19,7 @@ dispatcher's own commands):
 | Session | `USE <namespace>` |
 | DDL | `CREATE TABLE`, `CREATE NAMESPACE` / `DROP NAMESPACE`, `CREATE INDEX` / `DROP INDEX` / `REINDEX INDEX`, `CREATE ASSERTION` / `DROP ASSERTION`, `CREATE CABIN` / `DROP CABIN` |
 | DML | `INSERT`, `UPDATE`, `DELETE` |
-| Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>` |
+| Query | `SELECT` (joins, subqueries, `GROUP BY`, aggregates), `ANALYZE <select>`, `ANALYZE <update | delete>` |
 | Waystone | `WAYSTONE ON <select>`, `WAYSTONE OFF <select>`, `WAYSTONE OFF <fetch_id>` |
 | Transactions | `BEGIN`/`START`, `COMMIT`, `ROLLBACK`/`ABORT`, `SET ISOLATION LEVEL` |
 | Introspection | `SELECT ... FROM sys.<view>`; `SHOW META/TABLES/NAMESPACES/PAGE/PATTERNS/ACCESS/BUDGET/CABINS/INDEXES/FKEYS/ASSERTIONS/TRANSITIONS/CABIN_OPTIMIZER` and `DESCRIBE` as its shorter spellings |
@@ -1133,6 +1133,34 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
   compile, before any storage is touched, so a refused UPDATE writes
   nothing.
 - An UPDATE never migrates a tuple.
+- **How its rows are found.** By the first of these its `WHERE` names,
+  each row then tested against the whole `WHERE` where it is found, so
+  the rows written are the same whichever it is:
+  - the key itself, `id = 42`, or a list of keys, `id IN (1, 7, 42)`;
+  - a unique key named whole, `branch = 1 AND no = 100`;
+  - a range of the key with both ends, `id BETWEEN 10 AND 20`: only the
+    part of the table that range covers is read;
+  - an index, entered by equalities on its leading columns, by one `IN`
+    list among them, or by a `BETWEEN` on the column after them
+    (`owner = 7`, `owner IN (1, 9)`, `grp = 1 AND owner BETWEEN 2 AND 4`):
+    the index is read for the rows, then each is written by its key;
+  - a one-sided or strict bound on the key, `id > 5000`, where no index
+    stands;
+  - otherwise the whole table is read.
+
+  This is the order a `SELECT` with the same `WHERE` chooses in, and
+  `ANALYZE UPDATE ...` shows which was taken (ANALYZE, below). Two things
+  follow from "the index is read for the rows". **A very large update
+  through an index can cost more than reading the whole table would**:
+  past 65,536 index entries (`max_locks_per_txn`) the statement reads the
+  table instead, and below that an administrator can pin the statement's
+  shape to the table read with `CREATE PLAN ... FOR UPDATE ... ACCESS
+  <table> SCAN` (CREATE PLAN, under SELECT). And **on a `HEAP` table rows
+  found by key or index are written in key order**, not in the order the
+  table stores them, which matters only to a statement whose rows are
+  checked against each other as it goes: `SET code = code + 1` over a
+  unique `code` can be refused in one order and accepted in the other. A
+  `WHERE` holding a subquery always reads the whole table.
 - A statement whose expression does not type is refused at compile whether or
   not a row matches, naming both types and the byte. A bare literal keeps its
   per-row check, so `SET int_col = 'abc'` over a WHERE that matches nothing
@@ -1230,7 +1258,9 @@ and executes. It arrived with the transaction work (T01-T14). Semantics:
   key.
 - No column list, nothing to assign; the WHERE is UPDATE's (above), which
   nests subqueries exactly as SELECT's does and takes no expression operand.
-  An empty WHERE marks every row.
+  An empty WHERE marks every row. Its rows are found as UPDATE's are - by
+  key, by a range of the key, through an index - and `ANALYZE DELETE ...`
+  shows how.
 - DELETE deliberately does not touch Cabins or secondary indexes (removal is
   forbidden — an older snapshot may still match), and has no assertion
   check (upper bounds only make DELETE check-free), though it does write the
@@ -1507,6 +1537,31 @@ WHERE a.balance > 100 AND o.amount BETWEEN 10 AND 500;
   - `CREATE PLAN <name> FOR <select> AS SEARCHED` stores the order the
     engine would choose right now as a plan of one variant, and prints it.
     Use it to fix a statement that is not captured.
+  - **An `UPDATE` or a `DELETE` takes a plan too, for how it finds its
+    rows** (DU). It names one table, so there is no order to choose, only
+    an access to pin:
+
+    ```
+    CREATE PLAN p_close_batch FOR
+      UPDATE orders SET status = 'closed' WHERE batch = 7
+    VARIANT wide WHEN ARG(2) = 0 ORDER (orders) ACCESS orders SCAN
+    VARIANT rest ELSE ORDER (orders)
+    ```
+
+    `ARG(k)` counts every literal of the statement in written order, the
+    `SET` list's first: above, `ARG(1)` is `'closed'` and `ARG(2)` the
+    batch. The pins are a `SELECT`'s: `TUPLE_KEY` (the key, a list of
+    keys, a range of the key), `INDEX [<name>]`, `SCAN` (the whole table)
+    and `NOT <one of them>`. A pin never forces an access the statement
+    cannot use - `CREATE PLAN` refuses one the example cannot run, and a
+    statement whose values leave the pin nothing is run unpinned and
+    counted in `plan_declined`. `BUILD` and `CABIN` are refused: a write
+    has no join and reads through no Cabin. `AS SEARCHED`, `ADVISE PLAN`
+    and a statement whose `WHERE` holds a subquery do not apply to a
+    write. Everything else is as for a `SELECT`'s plan: one plan a
+    statement shape, `ALTER PLAN`, `DROP PLAN`, and the plan keeps its
+    table and a pinned index from being dropped while it is enabled.
+    `ANALYZE UPDATE ...` shows the plan and the access it left.
   - **`ADVISE PLAN FOR <select>` asks the engine what it would choose now,
     without changing anything.** It is written with literals, as `CREATE
     PLAN` is, and answers with the join order the engine's cost model
@@ -1645,10 +1700,11 @@ is one of (verified — the `PredicateKind` enum):
   the tuple key beside a list (`id IN (1, 7) AND id < 100`) still
   descends, and the rows are written under the range's lock window
   instead of a lock each. A `WHERE` that holds a subquery is the
-  exception: `id = 1 AND status IN (SELECT ...)` walks the relation. So
-  does a write keyed only by a range (`id BETWEEN 10 AND 20`), and a
-  write never finds its rows through an
-  index or a Cabin. `PURGE` takes no list. (A
+  exception: `id = 1 AND status IN (SELECT ...)` walks the relation. A
+  write keyed only by a range (`id BETWEEN 10 AND 20`) reads the part of
+  the relation the range covers, and a write whose `WHERE` enters an
+  index finds its rows through it (UPDATE, above); a write reads through
+  no Cabin. `PURGE` takes no list. (A
   list on a relation a write only reads - `UPDATE ... FROM`, `DELETE ...
   USING`, a subquery, `INSERT ... SELECT` - is a read and is keyed.) `LIKE`, `NOT BETWEEN` and `NOT IN` (a list of `!=`)
   key nothing. A relation of a few dozen rows is read faster by its walk
@@ -1941,11 +1997,12 @@ lose one of the two writes, and nothing refuses either.
   row).
 - **Two transactions that lock rows in opposite orders deadlock**, and one
   of them is refused naming deadlock - lock in one order, lowest key first.
-- **Cost.** `WHERE <tuple key> = k` and `WHERE <tuple key> IN (...)` descend
-  to their rows and cost what the `UPDATE` would. **Every other predicate
-  walks the whole relation, whatever index the column has, without
-  yielding its core**, and a range on the tuple key also fences every key
-  of the range against inserts until the decide. On a `HEAP` relation the
+- **Cost.** The rows are found as an `UPDATE` with the same `WHERE` finds
+  them (UPDATE, above): by the key or a list of keys, by a range of the
+  key, through an index its `WHERE` enters. **Any other predicate walks
+  the whole relation without yielding its core**, and a range on the tuple
+  key also fences every key of the range against inserts until the
+  decide. On a `HEAP` relation the
   key is its declared `int64` `PRIMARY KEY` or `keyidentity`, found through its
   key's index.
   One transaction holds at most 65,536 row claims; a read that needs more
@@ -1967,8 +2024,37 @@ lose one of the two writes, and nothing refuses either.
 remainder runs the ordinary SELECT path with statistics collection on — same
 parse, same compile, same fingerprint — and reports the run that actually
 happened (per-step access kinds, rows touched, pages fetched,
-`index_filtered`, etc.). SELECT-class only; a write statement cannot be
-wrapped.
+`index_filtered`, etc.).
+
+**`ANALYZE UPDATE ...` and `ANALYZE DELETE ...` run the write and report how
+it found its rows** (DU). The statement is the write it is - it needs the
+role a write needs, is refused in a `READ ONLY` transaction, waits for a row
+another transaction holds, and **its rows are written**; inside `BEGIN` a
+`ROLLBACK` takes them back. The reply is two or three lines:
+
+```
+analyze rows=12 class=Update
+write IndexProbe orders index=orders_owner keys=12
+```
+
+- `write Lookup <table>`: by the key; `key_set=<n>` for a list of keys.
+- `write Range <table> range=[lo, hi]`: the part of the table a range of
+  the key covers (`range=empty` where no key can be in it).
+- `write IndexProbe` / `IndexRange <table> index=<name> keys=<n>`: through
+  an index - `keys` is how many rows the index named and the statement
+  then looked at, which can be more than it wrote; `key_set=<n>` for a
+  list. On a `HEAP` table a range of the key reads `index=$keystone_<oid>`.
+- `write Scan <table>`: the whole table. `past_cap=<index>` after it says
+  an index named more than `max_locks_per_txn` entries and the table was
+  read instead.
+- `arm=plan`, and a third line `planned plan=<name>/<variant>`, where an
+  administrator's plan chose; `plan_declined=1` where the plan's pin did
+  not fit this statement and it ran as if unpinned.
+
+`RETURNING` under `ANALYZE` is refused before anything is written. A byte
+position in a refusal is counted from the statement's own first word, not
+from `ANALYZE`, for a write as for a `SELECT`. `INSERT` cannot be wrapped,
+nor can `SELECT ... FOR UPDATE`.
 
 `examined=` counts every row a step filtered, including the rows a scan
 rejected on their stored bytes before building them: a simple

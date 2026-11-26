@@ -1,6 +1,6 @@
 # Work order DU - a write that finds its rows by a key: a bound on the tuple key, an index, and what a subquery leaves
 
-Status: **OPEN since 2026-11-26.** Written on worktree
+Status: **CLOSED 2026-11-26 on the work branch**, every stage landed there (DU-S0 `c2b138317`, DU-S1 `b248c1cb1`, DU-S2 `3abb5ea39`, DU-S3 `0babe36e6`, DU-S4 the close; §7), on the operator's standing go-ahead, and landed on `main` on the operator's word given in advance (`raft-marks-2026-11-26.md` §4). Opened 2026-11-26. Written on worktree
 `known-gaps-milestone-orders` (branch
 `worktree-known-gaps-milestone-orders`) from `8274c951`
 (`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
@@ -11,8 +11,8 @@ Status: **OPEN since 2026-11-26.** Written on worktree
 (a) in each, **on the operator's standing go-ahead of 2026-11-26
 (go-ahead-achieving-milestone)** - none is the operator's own per-item
 mark - DU-Q2 (a) with its reading fixed against DU-R4 and DU-Q3 (a) with
-its premise corrected (§4, §7), and DU-Q7 (a), an item CLA added at
-DU-S2, adopted the same way. A `[source-read]` claim with a `path:line`
+its premise corrected (§4, §7), and DU-Q7 (a) and DU-Q8 (a), items CLA
+added at DU-S2 and at the close, adopted the same way. A `[source-read]` claim with a `path:line`
 in §0-§2 was read at `8274c951`, and one in §7 at the commit its entry
 names; a claim taken from `known-gaps.md` carries that entry's own
 verification commit and is not re-verified here.
@@ -121,6 +121,7 @@ at `:14041` and `:14231`); the read side's correlated index probe is
 | DU-Q5 | A write whose `WHERE` holds a subquery | (a) stays outside DU until the pending entry is ruled on; (b) the operator rules now and DU carries it | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q6 | `PURGE` by list or range | (a) outside DU; (b) inside | (a) | (a), adopted on the standing go-ahead of 2026-11-26 |
 | DU-Q7 | **On a heap a keyed write meets its rows in key order and its walk met them in page order.** A check made per row against the rows as they stand - a unique key the statement shifts, an assertion's bound - can therefore answer one order and refuse the other (added by CLA at DU-S2, from its review; `tests/keyed_write_test.cpp`, `OnAHeapAnOrderDependentWriteIsJudgedInKeyOrder`) | (a) accepted and stated: both orders are executions the statement allows, a btree's walk is already in key order, and CU-S3's list and DR-S3a's unique key have written a heap in key order since they landed; (b) a heap's collected keys written in the walk's order - not computable from the keys, since the walk follows the page chain and a rowid does not say where its page is in it, so it costs a walk of the chain; (c) no keyed arm on a heap | (a): the alternative that keeps the walk's order is the walk | (a), adopted on the standing go-ahead of 2026-11-26 (go-ahead-achieving-milestone). **It narrows DU-R4 on a heap**: a statement whose rows are judged against each other may be refused where its walk was answered, and answered where it was refused |
+| DU-Q8 | **Where the index arm costs more than the walk it replaced.** The arm is taken by rank; the close measured its crossing at about 1 row written in 9 to 11 of the relation and a loss of 11.2 % at 1 in 2 (added by CLA at DU-S4, from the close's measurement) | (a) stated and bounded: DU-Q2's bound of 65,536 entries caps the loss - about 16 ms a statement, computed - and a plan pinning the shape to `SCAN` gives the walk back, measured level with it; (b) the arm declined where the collection is more than a share of the relation's rows, read from the planner's statistics - an arm chosen by a count, which IX9 excludes for every index arm of a read and CX's `join_order = fixed` excludes for a plan; (c) a lower bound - the crossing is a share, so a constant moves the loss and does not remove it | (a): the remedy the engine's own rule admits is the administrator's pin, and it is built | (a), adopted on the standing go-ahead of 2026-11-26 (go-ahead-achieving-milestone) |
 
 ## 5. Stages
 
@@ -604,3 +605,65 @@ DU's: it fails 12 of 60 runs alone on this tree and 12 of 60 at
 `60dc593af`, built apart (`docs/inflight/bugs/two-core-increment-starves-one-core.md`,
 filed with this stage). `DurableKickRigTest`, the host's other flake,
 passed. Overhead not measured; measured at the milestone's close.
+
+### DU-S4 - the close (2026-11-26)
+
+On `du-keyed-write`, the closing code `0babe36e6`
+(`v3.4.17-155-g0babe36e6`).
+
+**The measurement** `[measured]` (`bench/v3.5.0/results-du-close-v3.4.17-155-g0babe36e6.md`, run by `ck-tester`): the
+milestone's whole code change, `60dc593af` against `0babe36e6`, Release,
+`cores = 1`, two servers on one CPU and never busy at once, the arms
+interleaved, server CPU a statement, at 1,000,000 and at 100,000 rows.
+
+- **The writes DU does not serve did not move**: a point `UPDATE`, a list
+  of three keys, a walked `UPDATE` of a 1,000-row relation and a `DELETE`
+  that misses are within -3.4 % to +1.5 % in all eight cells, inside the
+  4.5 % floor the control (a point `SELECT`) set.
+- **The writes it serves**, at 1,000,000 rows: by an index, 481x at 10
+  rows a statement, 18x at 1,000, 2.7x at 10,000, 10.4 % at 50,000; by a
+  bound on the tuple key, 52x at 1,000 rows.
+- **Where the index arm stops paying**: the walk costs 33 ns a row of the
+  relation once and the arm 0.30-0.34 µs more than the walk a row written,
+  so the crossing is about 1 row written in 9 to 11 of the relation. At
+  100,000 rows the arm is level at 1 in 10 and **11.2 % slower at 1 in 2**
+  (113.7 ms against 102.3 ms). DU-S0 put the crossing between 1 in 16 and
+  1 in 65 from a two-statement stand-in; the built arm is cheaper than
+  that.
+- **The pin gives the walk back**: the same write under a plan pinning its
+  shape to `SCAN` is +0.8 % and +1.9 % against the base's walk, inside the
+  floor.
+
+**The loss is a regression for the shape that has it, and DU-Q8 (a) is its
+answer** (§4): it is bounded by DU-Q2's bound and the remedy the engine's
+rule admits - an administrator's pin - is built and measured. An arm
+declined by a count of rows was not built: no index arm of a read is
+chosen so (IX9).
+
+**What the run does not say**: two sizes, one core, `UPDATE` for the large
+shapes, no concurrent writer; the 100,000-row run's host read one process
+matching the build pattern in every block, not identified and probably the
+watchdog's own shell; two p50 readings outside the floor that no CPU
+figure confirms; one statement of 0.2-2 s off the CPU in every large cell
+of both arms. Time: about 3 minutes of building and 5 of running, no
+quiet-gate hold, inside the hour.
+
+**The documents.** `docs/spec/index.md` §9a (IX9a: a write's index arm,
+its three properties, its rank, its bound, its cost, a heap's order) and
+§12.3; `docs/spec/parser-v2.md` I10 (how a write finds its rows) and I12
+(a write's plan, `ANALYZE` of a write); `docs/spec/txn.md` §5 (the units,
+the wait forgone, the locking read); `docs/spec/sys-views.md` §6.2b;
+`docs/spec/client-manual.md`; `docs/inflight/known-gaps.md`, "A write
+found by a key (DU)", and the CU and DC entries DU answered;
+`manual/sql/sql.md` (UPDATE, DELETE, ANALYZE, CREATE PLAN, FOR UPDATE);
+`CLAUDE.md`'s rows. `docs/pending/keyed-write-beside-a-subquery.md` stays
+pending (DU-Q5 (a)).
+
+**Rules, at the close.** DU-R1: held by construction - every candidate is
+qualified where it is written - and by the twin's 106 statements and the
+contract family's 30 writes in five configurations. DU-R2: argued at
+DU-S0, with its one forgone wait stated. DU-R3: the units read off the
+ledger are the walk's. DU-R4: held but for two stated narrowings - on a
+heap, DU-Q7's order, and a collection's read error. DU-R5: no keyword,
+format, record kind or fingerprint moved; `ANALYZE` and `CREATE PLAN ...
+FOR` read statements they refused before.
