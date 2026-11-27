@@ -358,6 +358,42 @@ for it at base, on a two-core path S2 does not touch.
 
 Overhead not measured; measured at the milestone's close.
 
+### EB-S3 - the elided order, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `78f98354b`. **An `ORDER BY` an
+embedded primary key already holds is not sorted** (`parser-v2.md` I11,
+`EmbeddedKeyOrderOf`): the key's columns in key order all ascending, whole
+or a prefix, wherever the driving step emits tuple key order, and the whole
+key all descending under a `LIMIT` by the reverse walk. A descending prefix,
+mixed directions, the columns out of key order and a column past the key
+keep their sort (EB-Q8 (a)). A bare walk is not moved to a user index on the
+key's columns for that order: the walk holds it for nothing. The cells:
+`tests/ordered_walk_test.cpp`'s `EmbeddedOrderTest`, each against a twin
+whose tuple keys were issued in key order, so its sort's ties are the key's
+order too - every embeddable type (`int8` with negatives, `bool`, `date`,
+`int32`, `int16`), a join the embedded relation drives, a user index.
+
+**The review** (`critics-developer`, report only) found no `[quiet-wrong]`
+defect: the code is order-preserving for every embeddable type, the sort
+breaks ties by arrival so an ascending prefix's ties match, slot 0 is
+`steps[0]` after a reorder, and OFFSET, views, the query layer, folds,
+`FOR UPDATE` and `ALTER TABLE` cannot reach a wrong order. **Applied**: an
+ordered index walk took a bare walk's free order over (now declined in
+`OrderedIndexChoiceOf`); the four booleans folded into one direction and
+`EmbeddedKeyOrderOf`, and two dead checks removed; the `known-gaps.md`
+wording; three cells. **Rejected**: eliding the whole key followed by more
+columns (`ORDER BY a, b, v`) - outside S3's cells, which state that a
+column past the key keeps its sort, and a unique key's vacuous tail is a
+rule of its own to write.
+
+The full suite before the review's edits: 5,398 of 5,399, the one failure
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, which failed 4 of
+30 repeated alone on that binary - the rate memory records for it at base,
+on the group commit's kick, which S3 does not touch. The suite after them
+ran with S4's code in the tree (S4's stage log).
+
+Overhead not measured; measured at the milestone's close.
+
 ### Written 2026-11-26
 
 On `known-gaps-milestone-orders` from `8274c951`, on the operator's word.

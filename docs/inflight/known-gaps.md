@@ -4226,10 +4226,15 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
 - **A row may name another key's home**: `INSERT ... (keyidentity, ...)`
   on a hashed relation places the row at the id it wrote. It costs the
   home's own key its place and no answer.
-- **`ORDER BY` an embedded key is sorted, not elided.** The rows of such a
-  relation are in key order, and a range by the key reads them so, but the
-  elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
-  with no range is a walk and a top-N.
+- **A descending prefix of an embedded key is sorted** (EB-Q8 (a); EB-S3,
+  verified on `eb-key-forms-in-the-executor` over `78f98354b`): the key's
+  columns in key order all ascending, whole or a prefix, are elided, and the
+  whole key all descending is the reverse walk under a `LIMIT` over a walk,
+  a filter scan or a range, but `ORDER BY a DESC LIMIT n` on a key `(a, b)`
+  keeps its top-N,
+  because the reverse walk would return its ties by descending `b` where
+  the sort returns them ascending. So do mixed directions, the key's
+  columns out of key order, and a column past the key.
 - **`ON CONFLICT` on a relation whose key is embedded is refused
   `NotImplemented`**, whatever its target - a column of another unique
   index included, which the insert path could serve: no arbiter computes

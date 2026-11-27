@@ -1540,6 +1540,26 @@ std::optional<IndexChoice> IndexProbeOf(const catalog::TableAccess& access, cons
     return best;
 }
 
+// **Whether sort keys on slot 0 are an embedded primary key's order**
+// (EB-S3): its columns in key order, all ascending - the whole key or a
+// prefix - or the whole key all descending. Its id is the columns' code
+// (`embedded_key.hpp`), so that order is the tuple key's, which a walk of the
+// relation emits for nothing; a descending prefix is not, its ties leaving by
+// descending tuple key (EB-Q8 (a)).
+bool EmbeddedKeyOrderOf(const catalog::Schema& schema, std::span<const SortKey> keys) {
+    const catalog::EmbeddedKeyColumns& key = schema.embedded_key;
+    if (key.empty() || keys.empty() || keys.size() > key.size()) return false;
+    const bool descending = keys[0].descending;
+    if (descending && keys.size() != key.size()) return false;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        if (keys[i].ref.rel_slot != 0 || keys[i].ref.col_pos != key[i] ||
+            keys[i].descending != descending) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ---- The ordered index walk (CV O1) ---------------------------------------
 //
 // What a statement's `ORDER BY` asks of its driving step, where an index
@@ -1635,6 +1655,14 @@ std::optional<IndexProbe> OrderedIndexChoiceOf(const catalog::TableAccess& acces
                       step.index->key_cols.begin() + step.index->eq_prefix);
     } else if (step.kind != AccessKind::kScan || step.build.has_value() ||
                !OnlyBoundsOn(step, order.cols.front())) {
+        return std::nullopt;
+    } else if (const catalog::EmbeddedKeyColumns& key = access.schema.embedded_key;
+               !key.empty() && order.cols.size() <= key.size() &&
+               (!order.descending || order.cols.size() == key.size()) &&
+               std::equal(order.cols.begin(), order.cols.end(), key.begin())) {
+        // A bare walk already emits an embedded key's order (EB-S3, section
+        // 5a): an index walked for it would read each row by a descent where
+        // the walk reads them in place.
         return std::nullopt;
     }
     for (const std::uint16_t col : order.cols) {
@@ -4120,9 +4148,27 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                                chain.sort_keys[0].ref.rel_slot == 0 &&
                                IsTupleKey(chain.sort_keys[0].ref) && !chain.steps.empty() &&
                                !scope.relations.empty() && !scope.relations[0].access->heap();
-    if (one_tuple_key && !chain.sort_keys[0].descending) {
+    // **An embedded primary key's columns are the tuple key's order**
+    // (EB-S3): the id is the columns' code, ascending as the key does
+    // (`embedded_key.hpp`), so the key's columns in key order, all ascending -
+    // the whole key or a prefix of it, whose ties the walk returns by
+    // ascending tuple key, the sort's own tie order - are elided as the tuple
+    // key is, and the whole key descending under a LIMIT is the reverse walk,
+    // its ties vacuous. **A descending prefix keeps its sort** (EB-Q8 (a)):
+    // its ties would leave by descending tuple key. Asked only of a sort the
+    // tuple key's own test did not take.
+    // The direction of a sort the tuple key's order is, or nullopt.
+    std::optional<bool> key_descending;
+    if (one_tuple_key) {
+        key_descending = chain.sort_keys[0].descending;
+    } else if (!chain.steps.empty() && !scope.relations.empty() &&
+               chain.steps[0].emit_order == EmitOrder::kAny &&
+               EmbeddedKeyOrderOf(scope.relations[0].access->schema, chain.sort_keys)) {
+        key_descending = chain.sort_keys[0].descending;
+    }
+    if (key_descending == false) {
         if (EmitsTupleKeyOrder(chain.steps[0].kind)) chain.sort_keys.clear();
-    } else if (one_tuple_key && stmt.limit.has_value()) {
+    } else if (key_descending == true && stmt.limit.has_value()) {
         Step& driver = chain.steps[0];
         const bool walked = driver.kind == AccessKind::kScan ||
                             driver.kind == AccessKind::kFilterScan ||

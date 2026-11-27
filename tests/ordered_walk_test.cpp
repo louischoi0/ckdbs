@@ -862,5 +862,138 @@ TEST(EmbeddedProbeTrailTest, AnEmbeddedKeyProbeIsNoTrailsStep) {
     EXPECT_FALSE(exec::IsTrailReplayable(step));
 }
 
+
+// ---- EB-S3: an order an embedded key already holds --------------------------
+//
+// `instructions/v3.2.0/workorder-eb-key-forms-in-the-executor.md` S3: the
+// rows of a relation whose primary key is embedded are in key order, so an
+// ascending `ORDER BY` of the key's columns - whole or a prefix - and the
+// whole key descending under a LIMIT are not sorted. Every reply is checked
+// against a twin whose tuple keys were issued in key order, so its sort's
+// ties - by ascending tuple key - are the key's order too.
+
+class EmbeddedOrderTest : public OrderedWalkTest {
+protected:
+    void Load() {
+        Run("CREATE TABLE e (a int32, b int16, v int64, PRIMARY KEY (a, b))");
+        Run("CREATE TABLE ep (id int64, a int32, b int16, v int64)");
+        int id = 1;
+        for (int a = -3; a <= 8; ++a) {
+            for (int b : {-2, 0, 5}) {
+                const std::string row = std::to_string(a) + ", " + std::to_string(b) + ", " +
+                                        std::to_string((a * 7 + b) % 5);
+                Run("INSERT INTO e VALUES (" + row + ")");
+                Run("INSERT INTO ep VALUES (" + std::to_string(id++) + ", " + row + ")");
+            }
+        }
+        Run("DELETE FROM e WHERE a = 2 AND b = 0");
+        Run("DELETE FROM ep WHERE a = 2 AND b = 0");
+    }
+    std::string Plan(const std::string& sql) { return Run("ANALYZE " + sql); }
+    void ExpectUnsorted(const std::string& e_sql, const std::string& twin_sql) {
+        const std::string plan = Plan(e_sql);
+        EXPECT_EQ(plan.find("sorted="), std::string::npos) << e_sql << ": " << plan;
+        EXPECT_EQ(Rows(e_sql), Rows(twin_sql)) << e_sql;
+    }
+    void ExpectSorted(const std::string& e_sql, const std::string& twin_sql) {
+        const std::string plan = Plan(e_sql);
+        EXPECT_NE(plan.find("sorted="), std::string::npos) << e_sql << ": " << plan;
+        EXPECT_EQ(Rows(e_sql), Rows(twin_sql)) << e_sql;
+    }
+};
+
+TEST_F(EmbeddedOrderTest, TheWholeKeyAscendingIsTheWalksOrder) {
+    Load();
+    ExpectUnsorted("SELECT a, b, v FROM e ORDER BY a, b LIMIT 5 OFFSET 2",
+                   "SELECT a, b, v FROM ep ORDER BY a, b LIMIT 5 OFFSET 2");
+    ExpectUnsorted("SELECT a, b FROM e ORDER BY a, b",
+                   "SELECT a, b FROM ep ORDER BY a, b");
+    ExpectUnsorted("SELECT a, b FROM e WHERE a >= 5 ORDER BY a, b LIMIT 4",
+                   "SELECT a, b FROM ep WHERE a >= 5 ORDER BY a, b LIMIT 4");
+    ExpectUnsorted("SELECT a, b FROM e WHERE a = 6 ORDER BY a, b",
+                   "SELECT a, b FROM ep WHERE a = 6 ORDER BY a, b");
+}
+
+TEST_F(EmbeddedOrderTest, AnAscendingPrefixIsElidedWithItsTiesInKeyOrder) {
+    Load();
+    ExpectUnsorted("SELECT a, b, v FROM e ORDER BY a LIMIT 7",
+                   "SELECT a, b, v FROM ep ORDER BY a LIMIT 7");
+    ExpectUnsorted("SELECT a, b FROM e WHERE v = 1 ORDER BY a",
+                   "SELECT a, b FROM ep WHERE v = 1 ORDER BY a");
+}
+
+TEST_F(EmbeddedOrderTest, TheWholeKeyDescendingUnderALimitIsTheReverseWalk) {
+    Load();
+    const std::string sql = "SELECT a, b, v FROM e ORDER BY a DESC, b DESC LIMIT 5 OFFSET 1";
+    EXPECT_NE(Plan(sql).find("order=tuple_key_desc"), std::string::npos) << Plan(sql);
+    ExpectUnsorted(sql, "SELECT a, b, v FROM ep ORDER BY a DESC, b DESC LIMIT 5 OFFSET 1");
+    ExpectUnsorted("SELECT a, b FROM e WHERE a < 0 ORDER BY a DESC, b DESC LIMIT 4",
+                   "SELECT a, b FROM ep WHERE a < 0 ORDER BY a DESC, b DESC LIMIT 4");
+}
+
+TEST_F(EmbeddedOrderTest, WhatKeepsItsSort) {
+    Load();
+    // A descending prefix: its ties would leave descending (EB-Q8 (a)).
+    ExpectSorted("SELECT a, b FROM e ORDER BY a DESC LIMIT 5",
+                 "SELECT a, b FROM ep ORDER BY a DESC LIMIT 5");
+    // Mixed directions, the key out of order, a column past the key, no LIMIT
+    // on a descending order.
+    ExpectSorted("SELECT a, b FROM e ORDER BY a, b DESC LIMIT 5",
+                 "SELECT a, b FROM ep ORDER BY a, b DESC LIMIT 5");
+    ExpectSorted("SELECT a, b FROM e ORDER BY b, a LIMIT 5",
+                 "SELECT a, b FROM ep ORDER BY b, a LIMIT 5");
+    ExpectSorted("SELECT a, b, v FROM e ORDER BY a, b, v LIMIT 5",
+                 "SELECT a, b, v FROM ep ORDER BY a, b, v LIMIT 5");
+    ExpectSorted("SELECT a, b FROM e ORDER BY a DESC, b DESC",
+                 "SELECT a, b FROM ep ORDER BY a DESC, b DESC");
+}
+
+
+// EB-S3's review: the sign-flip and packing paths of the other embeddable
+// types, a join the embedded relation drives, and a user index on the key's
+// columns, which takes no bare walk's order away.
+TEST_F(EmbeddedOrderTest, EveryEmbeddableTypeIsInItsKeysOrder) {
+    Run("CREATE TABLE d (s int8, f bool, day date, v int64, PRIMARY KEY (s, f, day))");
+    Run("CREATE TABLE dp (id int64, s int8, f bool, day date, v int64)");
+    int id = 1;
+    for (const char* s : {"-128", "-1", "0", "127"}) {
+        for (const char* f : {"0", "1"}) {
+            for (const char* day : {"'1970-01-01'", "'2026-11-27'"}) {
+                const std::string row = std::string(s) + ", " + f + ", " + day + ", " +
+                                        std::to_string(id);
+                Run("INSERT INTO d VALUES (" + row + ")");
+                Run("INSERT INTO dp VALUES (" + std::to_string(id++) + ", " + row + ")");
+            }
+        }
+    }
+    ExpectUnsorted("SELECT s, f, day FROM d ORDER BY s, f, day",
+                   "SELECT s, f, day FROM dp ORDER BY s, f, day");
+    ExpectUnsorted("SELECT s, f, v FROM d ORDER BY s, f LIMIT 9",
+                   "SELECT s, f, v FROM dp ORDER BY s, f LIMIT 9");
+    ExpectUnsorted("SELECT s, f, day FROM d ORDER BY s DESC, f DESC, day DESC LIMIT 6",
+                   "SELECT s, f, day FROM dp ORDER BY s DESC, f DESC, day DESC LIMIT 6");
+}
+
+TEST_F(EmbeddedOrderTest, AJoinTheEmbeddedRelationDrivesKeepsItsOrder) {
+    Load();
+    Run("CREATE TABLE w (id int64, a int32)");
+    for (int i = 1; i <= 6; ++i) {
+        Run("INSERT INTO w VALUES (" + std::to_string(i) + ", " + std::to_string(i - 2) + ")");
+    }
+    const std::string sql =
+        "SELECT e.a, e.b, w.id FROM e JOIN w ON w.a = e.a ORDER BY e.a, e.b LIMIT 8";
+    EXPECT_EQ(Rows(sql), Rows("SELECT ep.a, ep.b, w.id FROM ep JOIN w ON w.a = ep.a "
+                              "ORDER BY ep.a, ep.b LIMIT 8"));
+}
+
+TEST_F(EmbeddedOrderTest, AUserIndexOnTheKeyTakesNoBareWalksOrder) {
+    Load();
+    Run("CREATE INDEX e_a ON e (a)");
+    const std::string sql = "SELECT a, b FROM e ORDER BY a LIMIT 5";
+    const std::string plan = Plan(sql);
+    EXPECT_EQ(plan.find("order=index"), std::string::npos) << plan;
+    ExpectUnsorted(sql, "SELECT a, b FROM ep ORDER BY a LIMIT 5");
+}
+
 }  // namespace
 }  // namespace kds::server
