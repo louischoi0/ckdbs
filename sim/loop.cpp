@@ -1,4 +1,6 @@
 #include "sim/loop.hpp"
+
+#include "kds/server/volume_census.hpp"
 #include "kds/storage/page_header.hpp"
 #include "kds/exec/assertion_check.hpp"
 #include "kds/exec/bound_cabin.hpp"
@@ -106,6 +108,22 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
                " abandoned_checkpoints=" + std::to_string(abandoned_checkpoints);
     }
     if (mounts_refused != 0) out += " mounts_refused=" + std::to_string(mounts_refused);
+    if (volume_censuses != 0) {
+        out += " volume_censuses=" + std::to_string(volume_censuses) +
+               " unreached=" + std::to_string(volume_unreached);
+        if (!volume_unreached_by_class.empty()) {
+            out += "(";
+            bool first = true;
+            for (const auto& [name, n] : volume_unreached_by_class) {
+                out += (first ? "" : ",") + name + ":" + std::to_string(n);
+                first = false;
+            }
+            out += ")";
+        }
+        out += " undo_unprovable=" + std::to_string(volume_unprovable) +
+               " census_incomplete=" + std::to_string(volume_incomplete);
+        if (!volume_first_refusal.empty()) out += " first_refusal=[" + volume_first_refusal + "]";
+    }
     if (derived_reads != 0 || indexes_created != 0) {
         out += " derived_reads=" + std::to_string(derived_reads) +
                " indexes=" + std::to_string(indexes_created);
@@ -1552,6 +1570,27 @@ void CutPower(Iteration& it, std::string_view at = {}) {
     }
 }
 
+// **DV-S0's volume census** of a settled instance: every allocated page no
+// root reaches, by class, into the verdict. Reported, never failed.
+void CountUnreached(SimInstance& instance, SimVerdict& verdict) {
+    auto census = instance.RunCensus();
+    ++verdict.volume_censuses;
+    std::string refusal;
+    if (!census.ok()) {
+        refusal = census.status().message();
+    } else if (!census.value().complete && !census.value().refusals.empty()) {
+        refusal = census.value().refusals.front();
+    }
+    if (!census.ok() || !census.value().complete) ++verdict.volume_incomplete;
+    if (verdict.volume_first_refusal.empty()) verdict.volume_first_refusal = refusal;
+    if (!census.ok()) return;
+    verdict.volume_unreached += census.value().unmarked;
+    verdict.volume_unprovable += census.value().unprovable;
+    for (const auto& [key, n] : census.value().unmarked_by_class) {
+        verdict.volume_unreached_by_class[key.page_class] += n;
+    }
+}
+
 bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iteration,
                   SimVerdict& verdict) {
     auto instance_or = SimInstance::Create(InstanceOptions(config, plan.toggles));
@@ -1856,6 +1895,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     Reconcile(it);
     ReconcileDrops(it);
     ReconcileAssertion(it);
+    if (verdict.ok) CountUnreached(it.instance, verdict);
     if (it.tear_healable && verdict.ok) ++verdict.tears_healed;
     record_recycling();
     if (!verdict.ok || !backup.has_value()) return verdict.ok;
@@ -1894,6 +1934,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                                  "', dropped before the stop, is back");
         }
     }
+    if (verdict.ok) CountUnreached(*restored.value(), verdict);
     if (verdict.ok) ++verdict.backups_restored;
     return verdict.ok;
 }
@@ -1948,6 +1989,14 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     tears_refused += other.tears_refused;
     tears_healed += other.tears_healed;
     unlogged_ddl_lost_tables += other.unlogged_ddl_lost_tables;
+    volume_censuses += other.volume_censuses;
+    volume_unreached += other.volume_unreached;
+    volume_unprovable += other.volume_unprovable;
+    volume_incomplete += other.volume_incomplete;
+    for (const auto& [name, n] : other.volume_unreached_by_class) {
+        volume_unreached_by_class[name] += n;
+    }
+    if (volume_first_refusal.empty()) volume_first_refusal = other.volume_first_refusal;
     if (ok && !other.ok) {
         ok = false;
         detail = other.detail;

@@ -45,6 +45,7 @@
 #include "kds/storage/page_reader.hpp"
 #include "kds/txn/manager.hpp"
 #include "kds/txn/trx_id.hpp"
+#include "kds/server/volume_census.hpp"
 #include "kds/txn/undo_log.hpp"
 #include "kds/wal/manager.hpp"
 #include "kds/wal/memory_log_device.hpp"
@@ -259,6 +260,9 @@ public:
     storage::MemoryPageDevice& page_device() { return *page_device_; }
     wal::MemoryLogDevice& log_device() { return *log_device_; }
     txn::TransactionManager& txn_manager() { return *txn_; }
+    // DV's volume census of this instance, which the caller holds quiescent
+    // (`server/volume_census.hpp`).
+    StatusOr<server::VolumeCensus> RunCensus();
 
 private:
     SimInstance() = default;

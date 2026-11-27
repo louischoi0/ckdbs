@@ -209,6 +209,15 @@ public:
     }
     std::uint64_t PagesRecycled() const noexcept { return pages_recycled_; }
 
+    // This run's pages - the live chain and the recycle list - appended to
+    // `out`, for the volume census (`server/volume_census.hpp`). The caller
+    // holds the log quiescent, as every other reader of `pages_` is the
+    // appender itself.
+    void AppendOwnedPages(std::vector<PageId>& out) const {
+        for (const TrackedPage& page : pages_) out.push_back(page.page_id);
+        out.insert(out.end(), recycle_.begin(), recycle_.end());
+    }
+
 private:
     // The page the next record goes on, **held**: the caller appends
     // through the hold that checked its room (BN-S3,

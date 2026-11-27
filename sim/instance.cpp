@@ -215,6 +215,14 @@ Status SimInstance::ReclaimStep() {
     return reclaimer_->Step(Pinned(anchor_->durable_redo_start()));
 }
 
+StatusOr<server::VolumeCensus> SimInstance::RunCensus() {
+    if (!reclaimer_) return Status::NotFound("no reclaimer on this boot");
+    std::vector<PageId> undo;
+    if (undo_) undo_->AppendOwnedPages(undo);
+    return server::RunVolumeCensus(*store_, boot_->catalog, *reclaimer_,
+                                   page_device_->page_capacity(), undo);
+}
+
 Status SimInstance::SettleReclaim() {
     if (!reclaimer_.has_value()) return Status::OK();
     // A gate the completion checkpoint did not open will not open by

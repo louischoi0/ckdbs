@@ -72,6 +72,7 @@
 // failing (seed, iteration, mode, profile) quadruple replays exactly.
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -252,6 +253,17 @@ struct SimVerdict {
     // Pages of a reclaimed relation still allocated and reached by no walk,
     // under faults: a failed growth's or split's (a stated leak).
     std::size_t census_leaks = 0;
+    // DV-S0: the volume census (`server/volume_census.hpp`) after each
+    // mount the iteration reconciles and after its restore - runs, pages
+    // allocated and reached by no root, by class, previous runs' undo
+    // pages (counted apart), and runs whose mark was not whole. Reported,
+    // never failed: S0 measures.
+    std::size_t volume_censuses = 0;
+    std::size_t volume_unreached = 0;
+    std::size_t volume_unprovable = 0;
+    std::size_t volume_incomplete = 0;
+    std::map<std::string, std::size_t> volume_unreached_by_class;
+    std::string volume_first_refusal;
     // BR-S8: backups taken and restored and reconciled.
     std::size_t backups_restored = 0;
     // CL-Q5 (a): restarts after which the asserted relation's group totals

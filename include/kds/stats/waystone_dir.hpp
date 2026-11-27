@@ -114,6 +114,15 @@ constexpr std::size_t DirIndexAt(std::uint64_t arg_hash, int depth, int level) n
     return static_cast<std::size_t>((arg_hash >> shift) & kDirIndexMask);
 }
 
+// The child at `index` of an interior page; kEmptyDirSlot for an empty slot.
+// **A slot reading 0 is an empty one** (BF-S1's Census A, A1). An interior
+// page is unlogged, so after a crash that left its frame unwritten it reads
+// as the device's zeros - a never-written id, or one `CreateDirPage` zeroed
+// over a reclaimed page's dead image (`CreateNewHeaderlessUnpinned`). Zero
+// is the superblock's id and never a directory child, so it means no child
+// rather than a walk into page 0, which `WriteTrail` would then format.
+PageId LoadDirChild(std::span<const std::byte, kPageSize> page, std::size_t index);
+
 // Allocates an empty interior page - every slot kEmptyDirSlot - and
 // returns its id. One of these is the root of a new pattern's directory;
 // the same shape serves at every level. Headerless, for the reason above.

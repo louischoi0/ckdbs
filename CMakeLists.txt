@@ -84,6 +84,7 @@ add_library(kds
     src/server/superblock.cpp
     src/server/superblock_checkpoint_anchor.cpp
     src/server/page_reclaim.cpp
+    src/server/volume_census.cpp
     src/server/restore.cpp
     src/server/backup.cpp
     src/server/backup_manifest.cpp

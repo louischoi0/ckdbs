@@ -7,18 +7,6 @@ namespace kds::stats {
 
 namespace {
 
-// **A slot reading 0 is an empty one** (BF-S1's Census A, A1). An interior
-// page is unlogged, so after a crash that left its frame unwritten it reads
-// as the device's zeros - a never-written id, or one `CreateDirPage` zeroed
-// over a reclaimed page's dead image (`CreateNewHeaderlessUnpinned`). Zero
-// is the superblock's id and never a directory child, so it means no child
-// rather than a walk into page 0, which `WriteTrail` would then format.
-PageId LoadChild(std::span<const std::byte, kPageSize> page, std::size_t index) {
-    PageId child;
-    std::memcpy(&child, page.data() + index * sizeof(PageId), sizeof(PageId));
-    return child == 0 ? kEmptyDirSlot : child;
-}
-
 void StoreChild(std::span<std::byte, kPageSize> page, std::size_t index, PageId child) {
     std::memcpy(page.data() + index * sizeof(PageId), &child, sizeof(PageId));
 }
@@ -39,6 +27,12 @@ Status CheckDepth(int depth) {
 }
 
 }  // namespace
+
+PageId LoadDirChild(std::span<const std::byte, kPageSize> page, std::size_t index) {
+    PageId child;
+    std::memcpy(&child, page.data() + index * sizeof(PageId), sizeof(PageId));
+    return child == 0 ? kEmptyDirSlot : child;
+}
 
 StatusOr<PageId> CreateDirPage(storage::PageStore& store) {
     // Headerless: 2048 x 4 bytes tiles the page exactly, so a common
@@ -64,7 +58,7 @@ StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int 
         auto bytes = store.GetForRead(current);
         if (!bytes.ok()) return bytes.status();
 
-        const PageId child = LoadChild(bytes.value().bytes(), DirIndexAt(key.arg_hash, depth, level));
+        const PageId child = LoadDirChild(bytes.value().bytes(), DirIndexAt(key.arg_hash, depth, level));
         if (child == kEmptyDirSlot) {
             // Never populated. The ordinary answer on the replay path, not
             // an error: most instances of a pattern have no trail.
@@ -85,7 +79,7 @@ StatusOr<PageId> LookupOrCreateWaystonePage(storage::PageStore& store, PageId ro
 
         auto bytes = store.Get(current);
         if (!bytes.ok()) return bytes.status();
-        const PageId child = LoadChild(bytes.value().bytes(), index);
+        const PageId child = LoadDirChild(bytes.value().bytes(), index);
         if (child != kEmptyDirSlot) {
             current = child;
             continue;

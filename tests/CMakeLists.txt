@@ -56,6 +56,7 @@ add_executable(kds_tests
     btree_primary_key_test.cpp
     heap_rowid_test.cpp
     heap_rowid_consumers_test.cpp
+    volume_census_test.cpp
     btree_test.cpp
     btree_lookup_statement_test.cpp
     catalog_read_failure_test.cpp
