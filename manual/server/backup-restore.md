@@ -114,6 +114,29 @@ destination; nothing else is needed.
 is skipped (a restart), and with different bytes stops archiving with
 `wal_archive_last_error`. An `archive_command` must be idempotent.
 
+**A command that never exits holds the archive**, and with it every segment
+after its own. Bound it:
+
+```
+archive_command_timeout_s = 300     # 0, the default: no bound
+```
+
+A command still running after that many seconds is sent `SIGTERM`, and
+`SIGKILL` five seconds later, together with everything still in its process
+group. The attempt is a failure - `wal_archive_failures` counts it and
+`wal_archive_last_error` names the bound - and the segment is tried again
+under the usual backoff. **A command that was signalled archived nothing,
+whatever it exited with**: a handler that cleans up and exits 0 does not get
+its segment removed from the log. Choose a bound well above the slowest
+upload of one segment: a bound below it fails every attempt.
+
+A bounded command runs in a process group of its own, which is how the
+signal reaches what it started; a process it moves to another group or
+session outlives the bound, and a terminal's Ctrl-C does not reach it. A
+server stop ends a bounded command the same way, waiting the five seconds
+at most. The key is a boot key, applies to `archive_command` only, and is
+refused at startup without one.
+
 **Lineage.** A volume's history has a lineage id (`SHOW META`:
 `wal_lineage`). Every restore that opens takes a new one, so a restored
 instance archiving into the same place never writes over the original's
@@ -208,6 +231,7 @@ note it before an operation you may want to undo, and restore to it.
 | `restore: the archive's history ... ends at lsn E ... segment K is missing` | the archive does not reach the target | a lower target, or find segment K |
 | `restore: the WAL archive <dir> does not exist` / `cannot be read` / `is not a directory` | the archive path is mistyped, not mounted, or not readable | fix or mount the archive path; the restore wrote nothing |
 | `archive_command: its exit could not be read (waitpid: ...)` in `wal_archive_last_error` | the server was started with SIGCHLD ignored and it was set so again after start | start the server with SIGCHLD at its default; the segment is retried |
+| `archive_command ran past archive_command_timeout_s = N and was ended` in `wal_archive_last_error` | the command hung, or the bound is shorter than one segment's upload | fix the destination, or raise the bound; the segment is retried |
 | `restore of backup N (start ..., stop ...) did not complete; the instance does not open` | the log does not reach the stop, or recovery failed | the message's tail says which; a restore that stops short never opens |
 | `ERR ... the WAL archive is failing (...)` on a write | §4's fail-closed | fix the archive destination |
 
@@ -222,5 +246,24 @@ parallel copy, concurrent backups, logical dump or standby. A torn page in a
 crash-consistent snapshot is refused, not healed: the backup's checks do not
 lean on the log's page images, which heal a power cut at mount
 (`docs/inflight/known-gaps.md`).
-`kds_backup` reaches the admin role only on an `auth = off` server (its KWP
-client has no SCRAM).
+
+## 10. A server that authenticates
+
+`BACKUP START`, `COPY`, `STOP` and `ABORT` are `admin` statements. On an
+`auth = scram` server name an `admin` user, and on a `tls = on` port ask for
+TLS; the options stand before the sub-command:
+
+```
+KDS_PASSWORD=... tools/kds_backup.py --user backup_admin \
+    --tls-ca /etc/kds/server.crt --host db.example base --target /backups/b1
+```
+
+| Option | Meaning |
+|---|---|
+| `--user <name>` | authenticate by SCRAM-SHA-256. The password is read from `KDS_PASSWORD`; without it, it is asked for on a terminal, and refused where there is none. No option takes a password |
+| `--tls` | TLS 1.3, the server's certificate and name verified against the system's CAs |
+| `--tls-ca <file>` | the same, verified against this CA or self-signed certificate |
+| `--tls-insecure` | TLS with nothing verified, said on stderr. SCRAM has no channel binding here, so this channel does not notice a relay |
+
+`tools/ckdbs_cli.py` takes the same four. `verify`, `restore`, `list` and
+`expire` open no session and need none of them.

@@ -68,6 +68,7 @@ std::string Expeditor::Config::LogPath() const {
 
 std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
     return {"data_file",  "port",     "listen_address", "wal_dir",  "archive_dir", "archive_command",
+            "archive_command_timeout_s",
             "checkpoint_interval_ms", "durability",
             "tls",        "tls_cert_file",        "tls_key_file",
             "auth",       "users_file",
@@ -296,6 +297,17 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         return Status::InvalidArgument(file.origin() +
                                        ": archive_dir and archive_command are two destinations "
                                        "for one archive; set one");
+    }
+    // The bound on one run of the command (DS-S2), `0` = none. It bounds
+    // the command and nothing else, so beside `archive_dir`, or with no
+    // archive at all, it is refused rather than accepted and ignored.
+    if (Status s = number("archive_command_timeout_s", archive.command_timeout_s); !s.ok()) {
+        return s;
+    }
+    if (archive.command_timeout_s != 0 && archive.archive_command.empty()) {
+        return Status::InvalidArgument(file.origin() +
+                                       ": archive_command_timeout_s bounds archive_command, "
+                                       "which is not set; archive_dir's copy is not a command");
     }
     // The buffer pool's maximum (BE-R3): **required**. A file without it is
     // refused here rather than run with some pool the operator did not

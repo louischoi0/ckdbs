@@ -197,6 +197,34 @@ TEST_F(AlterTableTest, CollisionsAndAbsencesRefuse) {
     Ok("SELECT x FROM b");
 }
 
+// DS-S4: a relation rename's refusal for its new name - one the catalog's
+// field cannot hold, one already taken - names that name's byte, as the
+// column form's and `CREATE TABLE`'s do. It named none
+// (`known-gaps.md`, "The audit's logic defects").
+TEST_F(AlterTableTest, ARelationRenamesNewNameIsRefusedAtItsByte) {
+    Ok("CREATE TABLE a (id int64, x int64)");
+    Ok("CREATE TABLE b (id int64, x int64)");
+    // "ALTER TABLE a RENAME TO " is 24 bytes: the new name starts there.
+    // The code is the one it was; the byte is what the refusal gained.
+    const auto taken = dispatcher_->Dispatch("ALTER TABLE a RENAME TO b");
+    EXPECT_EQ(taken.status.code(), StatusCode::kAlreadyExists) << taken.response;
+    EXPECT_NE(taken.response.find("(byte 24)"), std::string::npos) << taken.response;
+
+    const std::string long_name(64, 'n');  // the first length the field cuts
+    const auto too_long = dispatcher_->Dispatch("ALTER TABLE a RENAME TO " + long_name);
+    EXPECT_EQ(too_long.status.code(), StatusCode::kInvalidArgument) << too_long.response;
+    EXPECT_NE(too_long.response.find("longer than 63 bytes"), std::string::npos)
+        << too_long.response;
+    EXPECT_NE(too_long.response.find("(byte 24)"), std::string::npos) << too_long.response;
+    EXPECT_EQ(too_long.response.find("(byte "), too_long.response.rfind("(byte "))
+        << too_long.response;
+
+    // 63 bytes fit, and nothing above renamed anything.
+    Ok("SELECT x FROM a");
+    EXPECT_EQ(Run("ALTER TABLE a RENAME TO " + std::string(63, 'n')).rfind("RENAMED", 0), 0u);
+    Ok("SELECT x FROM b");
+}
+
 // AL3: a pattern whose shape names the old name is *allowed to die* - it
 // breaks nothing, answers nothing, and the new name's traffic registers
 // fresh shapes on the ordinary path. This is invariant 8 doing its job:

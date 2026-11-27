@@ -918,8 +918,10 @@ Status EncodeColumn(const catalog::Schema& schema, const catalog::RowLayout& lay
             return Status::InvalidArgument(
                 "column '" + std::string(catalog::NameView(schema.columns[i].name)) +
                 "' is NOT NULL and cannot take NULL (declare it NULL at CREATE TABLE to "
-                "opt in - docs/spec/null.md) (byte " +
-                std::to_string(value.byte_offset) + ")");
+                "opt in - docs/spec/null.md)" +
+                // No byte for a NULL no token wrote (DS-S3): 0 is not one.
+                (value.byte_offset != 0 ? " (byte " + std::to_string(value.byte_offset) + ")"
+                                        : std::string()));
         }
         catalog::SetNullBit(out, layout, i);
         if (schema.columns[i].type_val == kTypeValVarchar) {
@@ -928,6 +930,29 @@ Status EncodeColumn(const catalog::Schema& schema, const catalog::RowLayout& lay
         return Status::OK();
     }
     return EncodeOneValue(schema.columns[i], value, MutableCellOf(layout, out, i), varheap);
+}
+
+// **A value's refusal names the value's byte** (DS-S3), as every other
+// `INSERT` refusal does: the cell encoder knows the column and not where
+// its value was written, and this is the one place that has both.
+//
+// By code: the four a value earns - mistyped or malformed, out of range,
+// and the two "too long to store" refusals. `Corruption`, an I/O error and
+// a full pool are the storage's and are at no byte of the statement. A
+// value no token of the statement produced (a KWP load row, an `INSERT ...
+// SELECT`'s row) has `byte_offset` 0 and gets none: byte 0 is the
+// statement's first token, never a value. A NULL's refusal is written with
+// its byte where it is raised (`EncodeColumn`), so a NULL is passed over.
+Status AtValue(const Status& refusal, const parser::AstValue& value) {
+    const bool the_values = refusal.code() == StatusCode::kInvalidArgument ||
+                            refusal.code() == StatusCode::kOutOfRange ||
+                            refusal.code() == StatusCode::kUnsupported ||
+                            refusal.code() == StatusCode::kNotImplemented;
+    if (!the_values || value.byte_offset == 0 || value.type == parser::ValueType::kNull) {
+        return refusal;
+    }
+    return refusal.WithMessage(refusal.message() + " (byte " +
+                               std::to_string(value.byte_offset) + ")");
 }
 
 // The checks and the Keystone word every encode starts from.
@@ -975,7 +1000,7 @@ StatusOr<std::vector<std::byte>> EncodeRow(const catalog::Schema& schema,
             continue;
         }
         if (Status s = EncodeColumn(schema, layout, i, values[i - 1], out, varheap); !s.ok()) {
-            return s;
+            return AtValue(s, values[i - 1]);
         }
     }
 

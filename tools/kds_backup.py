@@ -18,8 +18,10 @@ Two backup paths over one restore:
             retained backup needs - never one a retained backup needs.
 
 The server runs START/COPY/STOP; the backup directory is a path on the
-server's host. The client speaks KWP/1 through tools/kwp.py, which has no
-SCRAM or TLS: it reaches an `auth = off` server's admin role only.
+server's host. The client speaks KWP/1 through tools/kwp.py: on an
+`auth = scram` server give `--user` (an `admin` - the BACKUP statements are
+admin-classed) with the password in KDS_PASSWORD or at the prompt, and on a
+`tls = on` port `--tls` or `--tls-ca <file>`.
 """
 
 import argparse
@@ -30,6 +32,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kwp  # noqa: E402
 from ckdbs_cli import ServerConnection  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,8 +83,16 @@ def finish(conn, backup_id, target, timeout):
           f"stop lsn {stop['stop_lsn']}")
 
 
+def connect(args):
+    options = kwp.connection_options(args)
+    try:
+        return ServerConnection(args.host, args.port, timeout=args.timeout, **options)
+    except (OSError, kwp.KwpError) as e:
+        raise SystemExit(f"could not open a session on {args.host}:{args.port}: {e}")
+
+
 def cmd_base(args):
-    conn = ServerConnection(args.host, args.port, timeout=args.timeout)
+    conn = connect(args)
     started = run(conn, f"BACKUP START {quote(args.label)}")
     backup_id = started["backup_id"]
     print(f"backup {backup_id} started at lsn {started['start_lsn']}, "
@@ -98,7 +109,7 @@ def cmd_base(args):
 
 
 def cmd_snapshot(args):
-    conn = ServerConnection(args.host, args.port, timeout=args.timeout)
+    conn = connect(args)
     started = run(conn, f"BACKUP START {quote(args.label)}")
     backup_id = started["backup_id"]
     print(f"backup {backup_id} started at lsn {started['start_lsn']}; taking the snapshot")
@@ -217,6 +228,7 @@ def main():
     p.add_argument("--timeout", type=float, default=30.0, help="per statement, seconds")
     p.add_argument("--wait", type=float, default=3600.0, help="for a copy, seconds")
     p.add_argument("--server", help="the kds_server binary (default build/kds_server)")
+    kwp.add_connection_arguments(p)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     b = sub.add_parser("base", help="path B: the server copies its data file")
