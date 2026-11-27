@@ -285,3 +285,10 @@ runs of 24 and 48 rounds, driver `tools/ea_close.py`.
 On `ea-prepared-statement-reuse`, every stage landed on the work branch:
 S0 `52c226c69`, S1 `ea0592074`, S2 `2c5c195f7`, S3 not run (EA-Q3 (a)),
 S4 the close. The landing is recorded in `raft-marks-2026-11-27.md` §16.
+
+### Landed 2026-11-27
+
+On the operator's word given with the go-ahead ("push no verify"):
+`origin/main` `044ba5053` merged into the work branch at `e3d99b1f2`, the
+full suite 5,382 of 5,382 there, merged into `main` `--no-ff` at `b1708f964`
+and pushed with the pre-push hook skipped (`raft-marks-2026-11-27.md` §16).
