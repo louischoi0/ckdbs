@@ -1,0 +1,410 @@
+{
+ "cell": "M-rec",
+ "host_before": {
+  "loadavg": "3.29 4.67 3.35 1/1250 798514",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "entries_before": {
+  "a": 5605659,
+  "b": 5605659,
+  "c": 5605659
+ },
+ "height_before": {
+  "a": 3,
+  "b": 3,
+  "c": 3
+ },
+ "relation_stats": {
+  "a": {
+   "leaves": 302,
+   "est_rows": null,
+   "deletes": 0,
+   "updates": 5562000,
+   "inserts": 50000,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 2
+  },
+  "b": {
+   "leaves": 302,
+   "est_rows": null,
+   "deletes": 0,
+   "updates": 5562000,
+   "inserts": 50000,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 2
+  },
+  "c": {
+   "leaves": 302,
+   "est_rows": null,
+   "deletes": 0,
+   "updates": 5562000,
+   "inserts": 50000,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 2
+  }
+ },
+ "live_distinct_keys": 31670,
+ "live_rows_per_key_mean": 1.579,
+ "analyze": {
+  "a": [
+   "analyze rows=1 class=JoinSelect steps=1 examined=113 pages=114 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_a",
+   "  filter 0:0.1 = 2254",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_a opens=1 examined=113 matched=1 sel=0% pages=114 index_scanned=113 index_resolved=113",
+   "DB time 0.14 ms = CPU 0.14"
+  ],
+  "b": [
+   "analyze rows=1 class=JoinSelect steps=1 examined=113 pages=114 opens=1 pattern_id=0xea8de818ce3e0b93 fetch_id=0xa8a89c94e2039f00",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_b",
+   "  filter 0:0.1 = 2254",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_b opens=1 examined=113 matched=1 sel=0% pages=114 index_scanned=113 index_resolved=113",
+   "DB time 0.11 ms = CPU 0.11"
+  ],
+  "c": [
+   "analyze rows=1 class=JoinSelect steps=1 examined=113 pages=114 opens=1 pattern_id=0xc83f821d169e27b4 fetch_id=0x53b4efbf2eac7ecf",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_c",
+   "  filter 0:0.1 = 2254",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_c opens=1 examined=113 matched=1 sel=0% pages=114 index_scanned=113 index_resolved=113",
+   "DB time 0.11 ms = CPU 0.11"
+  ]
+ },
+ "reindex": {
+  "tag": "REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=50886",
+  "wall_ms": 25.0
+ },
+ "entries_after_reindex": {
+  "a": 50000,
+  "b": 5605659,
+  "c": 5605659
+ },
+ "height_after_reindex": {
+  "a": 2,
+  "b": 3,
+  "c": 3
+ },
+ "pages_allocated_delta_reindex": 133,
+ "key_pool": 500,
+ "rows_per_probe_mean": 1.638,
+ "after_reindex": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 8.144,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 27.167,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 8.04,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.959,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 8.205,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 27.427,
+      "rows_per_stmt": 1.638
+     }
+    ],
+    "cpu_us_per_stmt": 8.13,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 24.1,
+     "p25": 26.3,
+     "p50": 26.9,
+     "p95": 29.1,
+     "p99": 30.8,
+     "mean": 27.2
+    },
+    "block_cpu": [
+     8.13,
+     8.03,
+     7.98,
+     8.44,
+     8.05,
+     7.93,
+     7.94,
+     8.24,
+     7.98,
+     8.62,
+     8.23,
+     7.99
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 39.827,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 59.218,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 39.84,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 59.681,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 40.034,
+      "wait_us_per_stmt": 0.003,
+      "wall_us_per_stmt": 59.515,
+      "rows_per_stmt": 1.638
+     }
+    ],
+    "cpu_us_per_stmt": 39.9,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 50.4,
+     "p25": 56.8,
+     "p50": 58.8,
+     "p95": 65.0,
+     "p99": 68.7,
+     "mean": 59.5
+    },
+    "block_cpu": [
+     40.22,
+     39.54,
+     39.51,
+     40.03,
+     40.74,
+     39.66,
+     39.52,
+     39.44,
+     39.99,
+     40.17,
+     40.16,
+     39.83
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 39.69,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 58.988,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 39.684,
+      "wait_us_per_stmt": 0.002,
+      "wall_us_per_stmt": 59.314,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 40.265,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 59.998,
+      "rows_per_stmt": 1.638
+     }
+    ],
+    "cpu_us_per_stmt": 39.879,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 50.3,
+     "p25": 56.8,
+     "p50": 58.9,
+     "p95": 65.1,
+     "p99": 69.0,
+     "mean": 59.4
+    },
+    "block_cpu": [
+     39.59,
+     39.48,
+     39.45,
+     40.24,
+     39.58,
+     39.47,
+     39.63,
+     40.06,
+     40.09,
+     40.31,
+     40.29,
+     40.36
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ },
+ "host_after_timed": {
+  "loadavg": "3.10 4.61 3.34 2/1251 798576",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "refused_during_read": {},
+ "purge": {
+  "tag": "PURGED INDEX name=ix_b entries=5539114 skipped_rows=0 attempts=1035",
+  "wall_ms": 3977.1
+ },
+ "entries_after_purge": {
+  "a": 50000,
+  "b": 66545,
+  "c": 5605659
+ },
+ "height_after_purge": {
+  "a": 2,
+  "b": 3,
+  "c": 3
+ },
+ "pages_allocated_delta_purge": 0,
+ "after_purge": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 8.115,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 27.131,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 8.008,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 26.877,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 8.139,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 27.145,
+      "rows_per_stmt": 1.638
+     }
+    ],
+    "cpu_us_per_stmt": 8.087,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 24.0,
+     "p25": 26.2,
+     "p50": 26.8,
+     "p95": 28.9,
+     "p99": 30.4,
+     "mean": 27.1
+    },
+    "block_cpu": [
+     8.23,
+     8.11,
+     8.06,
+     8.06,
+     8.07,
+     8.11,
+     7.92,
+     7.94,
+     7.95,
+     7.93,
+     8.73,
+     7.95
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.563,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 26.637,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 7.463,
+      "wait_us_per_stmt": 0.002,
+      "wall_us_per_stmt": 26.462,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 7.426,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.232,
+      "rows_per_stmt": 1.638
+     }
+    ],
+    "cpu_us_per_stmt": 7.484,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.7,
+     "p25": 25.5,
+     "p50": 26.1,
+     "p95": 28.2,
+     "p99": 29.8,
+     "mean": 26.4
+    },
+    "block_cpu": [
+     8.03,
+     7.4,
+     7.44,
+     7.38,
+     7.43,
+     7.9,
+     7.21,
+     7.31,
+     7.4,
+     7.28,
+     7.28,
+     7.75
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 40.106,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 59.312,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 39.776,
+      "wait_us_per_stmt": 0.003,
+      "wall_us_per_stmt": 59.093,
+      "rows_per_stmt": 1.638
+     },
+     {
+      "cpu_us_per_stmt": 39.928,
+      "wait_us_per_stmt": 0.038,
+      "wall_us_per_stmt": 60.158,
+      "rows_per_stmt": 1.638
+     }
+    ],
+    "cpu_us_per_stmt": 39.937,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 49.6,
+     "p25": 56.7,
+     "p50": 58.8,
+     "p95": 65.2,
+     "p99": 70.3,
+     "mean": 59.5
+    },
+    "block_cpu": [
+     40.16,
+     40.04,
+     40.11,
+     40.12,
+     40.03,
+     40.05,
+     39.56,
+     39.46,
+     39.44,
+     39.51,
+     40.53,
+     40.23
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ }
+}

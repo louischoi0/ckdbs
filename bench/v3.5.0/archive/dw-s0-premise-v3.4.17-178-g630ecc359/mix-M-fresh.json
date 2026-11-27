@@ -1,0 +1,1 @@
+{"base_entries": {"a": 50000, "b": 50000, "c": 50000}, "base_height": {"a": 2, "b": 2, "c": 2}, "base_pages_allocated": 1566, "n": 50000, "domain": 50000, "kind": "M", "fresh": true, "mix_wall_s": 480.3, "ops": {"inserts": 0, "deletes": 0, "moves": 6057600, "same_value_moves": 0}, "refused": {}, "live_rows": 50000}

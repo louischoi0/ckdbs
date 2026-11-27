@@ -1,0 +1,162 @@
+
+## D-rec  (n=50000, domain=5000, mix 480.3 s, 3084200 deletes, refused {})
+t_s | entries a | dead a | dead/s since 0 | stmts/s | probe CPU us | probe wall us | probe rows | pages alloc
+   0.0 | 50000 | 0 |        0 | None | 14.228 | 39.459 | 10.683 | 1365
+  30.0 | 196200 | 146200 |     4873 | 29249.0 | 27.924 | 50.528 | 10.85 | 5271
+  60.0 | 406700 | 356700 |     5945 | 42095.4 | 50.389 | 76.605 | 11.03 | 10854
+  90.1 | 648800 | 598800 |     6646 | 48426.7 | 80.574 | 104.708 | 10.743 | 17904
+ 120.1 | 855000 | 805000 |     6703 | 41246.7 | 105.673 | 128.766 | 11.25 | 23088
+ 150.2 | 1090000 | 1040000 |     6924 | 46997.5 | 200.72 | 209.559 | 11.193 | 29403
+ 180.2 | 1301000 | 1251000 |     6942 | 42201.5 | 172.578 | 197.197 | 10.843 | 36090
+ 210.3 | 1507200 | 1457200 |     6929 | 41245.4 | 201.38 | 229.479 | 10.873 | 41724
+ 240.4 | 1706900 | 1656900 |     6892 | 39938.3 | 240.178 | 263.088 | 10.86 | 46017
+ 270.5 | 1876700 | 1826700 |     6753 | 33961.5 | 261.179 | 284.258 | 10.953 | 49458
+ 300.6 | 2080900 | 2030900 |     6756 | 40835.8 | 293.179 | 316.392 | 11.053 | 54669
+ 330.7 | 2251000 | 2201000 |     6656 | 34022.2 | 321.688 | 349.838 | 10.993 | 59763
+ 361.1 | 2449500 | 2399500 |     6645 | 39406.9 | 358.916 | 385.009 | 11.007 | 68083
+ 391.2 | 2610600 | 2560600 |     6546 | 32226.7 | 397.902 | 610.615 | 11.037 | 73927
+ 421.5 | 2777900 | 2727900 |     6472 | 33437.1 | 433.594 | 457.0 | 10.977 | 79555
+ 451.6 | 2954900 | 2904900 |     6432 | 35403.8 | 456.086 | 487.856 | 11.08 | 83608
+ 480.0 | 3134200 | 3084200 |     6425 | 38163.0 | 664.592 | 717.002 | 10.927 | 87670
+dead entries: linear fit 6503.4/s (intercept 26971); first half 7094.0/s, second half 5929.8/s; per delete: 1.0000; twins equal at end: True
+stale entries per key value at end: 616.8 (live rows per value 10.00)
+probe CPU on x_c: t=0 14.228 us; fit 1120.932 ns/s; first sample > 1.05x t=0: 30.0 s; fit crosses 1.05x at 29.2 s
+entries before/after REINDEX x_a: {'a': 3134200, 'b': 3134200, 'c': 3134200} -> {'a': 3134200, 'b': 3134200, 'c': 3134200}; height {'a': 3, 'b': 3, 'c': 3} -> {'a': 3, 'b': 3, 'c': 3}; pages_allocated delta 10304; {'tag': 'REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=88174', 'wall_ms': 1973.2}
+purge: {'tag': 'PURGED INDEX name=ix_b entries=3073929 skipped_rows=0 attempts=642', 'wall_ms': 3275.2}; entries after {'a': 3134200, 'b': 60271, 'c': 3134200}; height {'a': 3, 'b': 3, 'c': 3}; pages_allocated delta -2753
+live distinct keys 5000, live rows/key 10.0, rows/probe in the pool 10.096, refused in read {}
+analyze: ['analyze rows=7 class=JoinSelect steps=1 examined=7 pages=615 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225', 'class=JoinSelect steps=1 hoisted=0']
+after REINDEX x_a (wrong-row counts 0): CPU us/stmt a(rebuilt) 458.45, b 459.27, c 457.97; churned/rebuilt 1.000; delta 0.17 us; control b-c range -2.17..7.81 us (2.2 % of ref)
+after PURGE x_b (wrong 0): CPU us/stmt a 471.22, b(purged) 14.47, c 469.08; churned/purged 32.494; delta 455.68 us; control a-c range -6.09..8.61 us (101.6 % of ref; a D cell's churned a and c, an M cell has none)
+after_reindex median of the 12 blocks' CPU us/stmt: {'a': 455.99, 'b': 457.33, 'c': 457.45}
+after_purge median of the 12 blocks' CPU us/stmt: {'a': 469.76, 'b': 14.14, 'c': 464.62}
+latency us (p0 p25 p50 p95 p99, ops):
+  after_reindex x_a: 389.0 501.9 517.0 558.5 601.5 ops=12000 mean=518.6
+  after_reindex x_b: 387.1 504.4 518.6 560.7 608.3 ops=12000 mean=520.5
+  after_reindex x_c: 358.0 502.7 517.5 556.3 583.4 ops=12000 mean=517.5
+  after_reindex per-rep CPU: {'a': [455.598, 458.331, 461.427], 'b': [453.521, 456.602, 467.694], 'c': [455.254, 458.77, 459.88]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 518.6, 'b': 520.5, 'c': 517.5}
+  after_purge x_a: 402.3 518.0 532.2 570.6 610.4 ops=12000 mean=534.0
+  after_purge x_b: 27.4 33.8 35.9 74.1 87.5 ops=12000 mean=39.7
+  after_purge x_c: 363.7 509.1 524.5 566.3 641.8 ops=12000 mean=526.3
+  after_purge per-rep CPU: {'a': [468.714, 474.364, 470.577], 'b': [14.108, 15.155, 14.143], 'c': [474.808, 465.751, 466.676]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 534.0, 'b': 39.7, 'c': 526.3}
+per stale entry in the key run: 738.7 ns CPU (delta 455.68 us / 616.8 stale per run)
+stale per run for +5 %: 1.0; at the fit growth 0.8 s; statements: 4896 deletes
+
+## D-fresh  (n=50000, domain=5000, mix 480.1 s, 3165400 deletes, refused {})
+t_s | entries a | dead a | dead/s since 0 | stmts/s | probe CPU us | probe wall us | probe rows | pages alloc
+   0.0 | 50000 | 0 |        0 | None | 9.455 | 33.257 | 1.0 | 1566
+  30.0 | 197600 | 147600 |     4920 | 29520.6 | 8.526 | 27.044 | 1.0 | 6102
+  60.0 | 406700 | 356700 |     5945 | 41828.0 | 8.465 | 26.923 | 1.0 | 12522
+  90.0 | 651300 | 601300 |     6681 | 48927.3 | 8.166 | 26.817 | 1.0 | 20040
+ 120.1 | 861800 | 811800 |     6759 | 42107.5 | 8.644 | 27.209 | 1.0 | 26502
+ 150.2 | 1098600 | 1048600 |     6981 | 47163.0 | 8.809 | 27.486 | 1.0 | 33777
+ 180.2 | 1314700 | 1264700 |     7018 | 43218.0 | 8.612 | 27.055 | 1.0 | 40413
+ 210.3 | 1525900 | 1475900 |     7018 | 42241.3 | 8.645 | 27.125 | 1.0 | 46902
+ 240.4 | 1732700 | 1682700 |     7000 | 41232.9 | 10.274 | 36.037 | 1.0 | 53253
+ 270.4 | 1913600 | 1863600 |     6892 | 36183.9 | 8.867 | 28.563 | 1.0 | 58809
+ 300.4 | 2121500 | 2071500 |     6896 | 41583.0 | 8.702 | 27.137 | 1.0 | 65197
+ 330.5 | 2297100 | 2247100 |     6799 | 35116.5 | 9.345 | 27.885 | 1.0 | 70591
+ 360.5 | 2502900 | 2452900 |     6804 | 41156.3 | 8.314 | 26.758 | 1.0 | 76912
+ 390.6 | 2670300 | 2620300 |     6708 | 33487.8 | 8.516 | 27.335 | 1.0 | 82054
+ 420.6 | 2841700 | 2791700 |     6637 | 34285.5 | 8.729 | 27.358 | 1.0 | 87319
+ 450.6 | 3024700 | 2974700 |     6602 | 36600.6 | 8.515 | 27.227 | 1.0 | 92941
+ 480.0 | 3215400 | 3165400 |     6595 | 39005.4 | 8.774 | 26.986 | 1.0 | 98797
+dead entries: linear fit 6690.2/s (intercept 14600); first half 7198.2/s, second half 6156.0/s; per delete: 1.0000; twins equal at end: True
+probe CPU on x_c: t=0 9.455 us; fit -0.122 ns/s; first sample > 1.05x t=0: 240.4 s; fit crosses 1.05x at nan s
+entries before/after REINDEX x_a: {'a': 3215400, 'b': 3215400, 'c': 3215400} -> {'a': 3215400, 'b': 3215400, 'c': 3215400}; height {'a': 3, 'b': 3, 'c': 3} -> {'a': 3, 'b': 3, 'c': 3}; pages_allocated delta 13523; {'tag': 'REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=99301', 'wall_ms': 1049.9}
+purge: {'tag': 'PURGED INDEX name=ix_b entries=3152155 skipped_rows=0 attempts=841', 'wall_ms': 1629.0}; entries after {'a': 3215400, 'b': 63245, 'c': 3215400}; height {'a': 3, 'b': 3, 'c': 3}; pages_allocated delta 0
+live distinct keys 50000, live rows/key 1.0, rows/probe in the pool 1.0, refused in read {}
+analyze: ['analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225', 'class=JoinSelect steps=1 hoisted=0']
+after REINDEX x_a (wrong-row counts 0): CPU us/stmt a(rebuilt) 7.50, b 10.34, c 7.49; churned/rebuilt 1.189; delta 1.42 us; control b-c range 0.02..8.41 us (111.9 % of ref)
+after PURGE x_b (wrong 0): CPU us/stmt a 7.48, b(purged) 7.47, c 7.49; churned/purged 1.002; delta 0.02 us; control a-c range -0.07..0.02 us (1.2 % of ref; a D cell's churned a and c, an M cell has none)
+after_reindex median of the 12 blocks' CPU us/stmt: {'a': 7.48, 'b': 7.46, 'c': 7.46}
+after_purge median of the 12 blocks' CPU us/stmt: {'a': 7.45, 'b': 7.42, 'c': 7.42}
+latency us (p0 p25 p50 p95 p99, ops):
+  after_reindex x_a: 23.6 25.5 25.8 26.6 27.4 ops=12000 mean=25.8
+  after_reindex x_b: 23.8 25.5 25.8 26.9 147.2 ops=12000 mean=28.3
+  after_reindex x_c: 23.7 25.5 25.8 26.6 27.4 ops=12000 mean=25.9
+  after_reindex per-rep CPU: {'a': [7.451, 7.559, 7.484], 'b': [7.566, 15.963, 7.493], 'c': [7.439, 7.554, 7.471]} wait us: {'a': 0.0, 'b': 0.1, 'c': 0.0} wall us: {'a': 25.8, 'b': 28.3, 'c': 25.9}
+  after_purge x_a: 23.8 25.4 25.7 26.5 27.2 ops=12000 mean=25.8
+  after_purge x_b: 23.4 25.4 25.7 26.5 27.2 ops=12000 mean=25.8
+  after_purge x_c: 23.5 25.4 25.7 26.4 27.1 ops=12000 mean=25.8
+  after_purge per-rep CPU: {'a': [7.468, 7.425, 7.533], 'b': [7.538, 7.4, 7.459], 'c': [7.453, 7.403, 7.604]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 25.8, 'b': 25.8, 'c': 25.8}
+
+## M-rec  (n=50000, domain=50000, mix 480.1 s, 5562000 moves, refused {})
+t_s | entries a | dead a | dead/s since 0 | stmts/s | probe CPU us | probe wall us | probe rows | pages alloc
+   0.0 | 50000 | 0 |        0 | None | 10.229 | 32.775 | 2.003 | 1332
+  30.0 | 323976 | 273976 |     9133 | 27404.3 | 12.735 | 33.096 | 1.977 | 4011
+  60.0 | 706903 | 656903 |    10948 | 38309.8 | 13.674 | 32.496 | 2.037 | 7185
+  90.0 | 1146142 | 1096142 |    12179 | 43949.4 | 16.592 | 35.516 | 1.973 | 12357
+ 120.1 | 1526256 | 1476256 |    12292 | 38034.2 | 21.353 | 40.917 | 2.04 | 13731
+ 150.1 | 1949766 | 1899766 |    12657 | 42343.0 | 24.602 | 43.586 | 1.933 | 18717
+ 180.2 | 2331652 | 2281652 |    12662 | 38206.7 | 25.318 | 42.989 | 1.993 | 23985
+ 210.2 | 2703950 | 2653950 |    12626 | 37279.1 | 30.81 | 46.18 | 2.093 | 25647
+ 240.4 | 3066636 | 3016636 |    12548 | 36172.6 | 46.27 | 87.034 | 1.94 | 26679
+ 270.4 | 3381430 | 3331430 |    12320 | 31523.1 | 29.32 | 48.661 | 2.01 | 29037
+ 300.5 | 3746773 | 3696773 |    12302 | 36599.6 | 33.751 | 53.041 | 1.92 | 34113
+ 330.5 | 4047456 | 3997456 |    12095 | 30125.8 | 34.31 | 53.544 | 1.947 | 38967
+ 360.6 | 4397669 | 4347669 |    12057 | 35088.3 | 35.505 | 54.648 | 2.067 | 43893
+ 391.0 | 4683364 | 4633364 |    11850 | 28238.0 | 49.583 | 71.115 | 2.063 | 46905
+ 421.1 | 4979195 | 4929195 |    11706 | 29648.9 | 38.421 | 57.984 | 2.033 | 48762
+ 451.2 | 5287156 | 5237156 |    11607 | 30862.7 | 41.159 | 65.149 | 1.937 | 49908
+ 480.0 | 5605659 | 5555659 |    11574 | 33280.1 | 62.413 | 122.375 | 2.0 | 50772
+dead entries: linear fit 11724.9/s (intercept 68980); first half 12902.6/s, second half 10526.4/s; per move: 0.9989; twins equal at end: True
+stale entries per key value at end: 111.1 (live rows per value 1.00)
+probe CPU on x_c: t=0 10.229 us; fit 84.031 ns/s; first sample > 1.05x t=0: 30.0 s; fit crosses 1.05x at -0.1 s
+entries before/after REINDEX x_a: {'a': 5605659, 'b': 5605659, 'c': 5605659} -> {'a': 50000, 'b': 5605659, 'c': 5605659}; height {'a': 3, 'b': 3, 'c': 3} -> {'a': 2, 'b': 3, 'c': 3}; pages_allocated delta 133; {'tag': 'REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=50886', 'wall_ms': 25.0}
+purge: {'tag': 'PURGED INDEX name=ix_b entries=5539114 skipped_rows=0 attempts=1035', 'wall_ms': 3977.1}; entries after {'a': 50000, 'b': 66545, 'c': 5605659}; height {'a': 2, 'b': 3, 'c': 3}; pages_allocated delta 0
+live distinct keys 31670, live rows/key 1.579, rows/probe in the pool 1.638, refused in read {}
+analyze: ['analyze rows=1 class=JoinSelect steps=1 examined=113 pages=114 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225', 'class=JoinSelect steps=1 hoisted=0']
+after REINDEX x_a (wrong-row counts 0): CPU us/stmt a(rebuilt) 8.13, b 39.90, c 39.88; churned/rebuilt 4.907; delta 31.76 us; control b-c range -0.23..0.16 us (4.8 % of ref)
+after PURGE x_b (wrong 0): CPU us/stmt a 8.09, b(purged) 7.48, c 39.94; churned/purged 5.336; delta 32.45 us; control a-c range 0.00..0.00 us (0.0 % of ref; a D cell's churned a and c, an M cell has none)
+after_reindex median of the 12 blocks' CPU us/stmt: {'a': 8.04, 'b': 39.91, 'c': 39.84}
+after_purge median of the 12 blocks' CPU us/stmt: {'a': 8.06, 'b': 7.4, 'c': 40.05}
+latency us (p0 p25 p50 p95 p99, ops):
+  after_reindex x_a: 24.1 26.3 26.9 29.1 30.8 ops=12000 mean=27.2
+  after_reindex x_b: 50.4 56.8 58.8 65.0 68.7 ops=12000 mean=59.5
+  after_reindex x_c: 50.3 56.8 58.9 65.1 69.0 ops=12000 mean=59.4
+  after_reindex per-rep CPU: {'a': [8.144, 8.04, 8.205], 'b': [39.827, 39.84, 40.034], 'c': [39.69, 39.684, 40.265]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 27.2, 'b': 59.5, 'c': 59.4}
+  after_purge x_a: 24.0 26.2 26.8 28.9 30.4 ops=12000 mean=27.1
+  after_purge x_b: 23.7 25.5 26.1 28.2 29.8 ops=12000 mean=26.4
+  after_purge x_c: 49.6 56.7 58.8 65.2 70.3 ops=12000 mean=59.5
+  after_purge per-rep CPU: {'a': [8.115, 8.008, 8.139], 'b': [7.563, 7.463, 7.426], 'c': [40.106, 39.776, 39.928]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 27.1, 'b': 26.4, 'c': 59.5}
+per stale entry in the key run: 285.8 ns CPU (delta 31.76 us / 111.1 stale per run)
+stale per run for +5 %: 1.4; at the fit growth 6.1 s; statements: 71185 moves
+
+## M-fresh  (n=50000, domain=50000, mix 480.3 s, 6057600 moves, refused {})
+t_s | entries a | dead a | dead/s since 0 | stmts/s | probe CPU us | probe wall us | probe rows | pages alloc
+   0.0 | 50000 | 0 |        0 | None | 9.632 | 34.246 | 1.0 | 1566
+  30.0 | 330000 | 280000 |     9333 | 28007.4 | 8.805 | 27.979 | 1.0 | 5100
+  60.0 | 738300 | 688300 |    11472 | 40838.6 | 8.08 | 26.704 | 1.0 | 10251
+  90.0 | 1203400 | 1153400 |    12816 | 46518.1 | 8.246 | 26.679 | 1.0 | 16119
+ 120.1 | 1608000 | 1558000 |    12973 | 40468.6 | 8.172 | 26.856 | 1.0 | 21225
+ 150.1 | 2062400 | 2012400 |    13407 | 45405.0 | 28.325 | 76.732 | 1.0 | 26958
+ 180.2 | 2475700 | 2425700 |    13461 | 41335.1 | 8.06 | 26.643 | 1.0 | 32172
+ 210.2 | 2880400 | 2830400 |    13465 | 40470.3 | 8.33 | 27.099 | 1.0 | 37278
+ 240.4 | 3273200 | 3223200 |    13408 | 39075.5 | 11.331 | 37.116 | 1.0 | 42234
+ 270.4 | 3613400 | 3563400 |    13178 | 34025.0 | 9.164 | 30.322 | 1.0 | 46524
+ 300.5 | 4015000 | 3965000 |    13195 | 40161.7 | 8.135 | 26.852 | 1.0 | 51594
+ 330.5 | 4350300 | 4300300 |    13011 | 33533.7 | 8.613 | 27.317 | 1.0 | 55824
+ 360.5 | 4742700 | 4692700 |    13017 | 39244.7 | 8.233 | 26.869 | 1.0 | 60774
+ 390.6 | 5064500 | 5014500 |    12838 | 32186.8 | 8.095 | 26.663 | 1.0 | 64836
+ 421.0 | 5392300 | 5342300 |    12690 | 32789.4 | 8.074 | 26.623 | 1.0 | 68971
+ 451.1 | 5741400 | 5691400 |    12617 | 34913.6 | 8.094 | 26.832 | 1.0 | 73375
+ 480.0 | 6107600 | 6057600 |    12620 | 38053.0 | 8.464 | 26.746 | 1.0 | 77995
+dead entries: linear fit 12788.0/s (intercept 32472); first half 13800.4/s, second half 11761.6/s; per move: 1.0000; twins equal at end: True
+probe CPU on x_c: t=0 9.632 us; fit -5.960 ns/s; first sample > 1.05x t=0: 150.1 s; fit crosses 1.05x at nan s
+entries before/after REINDEX x_a: {'a': 6107600, 'b': 6107600, 'c': 6107600} -> {'a': 50000, 'b': 6107600, 'c': 6107600}; height {'a': 3, 'b': 3, 'c': 3} -> {'a': 2, 'b': 3, 'c': 3}; pages_allocated delta 132; {'tag': 'REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=78110', 'wall_ms': 23.9}
+purge: {'tag': 'PURGED INDEX name=ix_b entries=6032264 skipped_rows=0 attempts=1598', 'wall_ms': 4400.4}; entries after {'a': 50000, 'b': 75336, 'c': 6107600}; height {'a': 2, 'b': 3, 'c': 3}; pages_allocated delta 0
+live distinct keys 50000, live rows/key 1.0, rows/probe in the pool 1.0, refused in read {}
+analyze: ['analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225', 'class=JoinSelect steps=1 hoisted=0']
+after REINDEX x_a (wrong-row counts 0): CPU us/stmt a(rebuilt) 7.75, b 7.48, c 7.50; churned/rebuilt 0.967; delta -0.26 us; control b-c range -0.05..0.01 us (0.7 % of ref)
+after PURGE x_b (wrong 0): CPU us/stmt a 7.73, b(purged) 7.21, c 7.53; churned/purged 1.045; delta 0.32 us; control a-c range 0.00..0.00 us (0.0 % of ref; a D cell's churned a and c, an M cell has none)
+after_reindex median of the 12 blocks' CPU us/stmt: {'a': 7.71, 'b': 7.44, 'c': 7.46}
+after_purge median of the 12 blocks' CPU us/stmt: {'a': 7.67, 'b': 7.13, 'c': 7.45}
+latency us (p0 p25 p50 p95 p99, ops):
+  after_reindex x_a: 23.8 25.5 26.0 27.4 28.5 ops=12000 mean=26.2
+  after_reindex x_b: 23.9 25.2 25.8 27.0 28.0 ops=12000 mean=25.9
+  after_reindex x_c: 23.9 25.2 25.8 27.0 28.0 ops=12000 mean=25.9
+  after_reindex per-rep CPU: {'a': [7.734, 7.78, 7.729], 'b': [7.512, 7.42, 7.52], 'c': [7.558, 7.433, 7.513]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 26.2, 'b': 25.9, 'c': 25.9}
+  after_purge x_a: 23.6 25.5 26.0 27.4 28.3 ops=12000 mean=26.3
+  after_purge x_b: 23.8 24.9 25.7 26.9 27.9 ops=12000 mean=25.7
+  after_purge x_c: 23.9 25.3 25.9 27.1 28.4 ops=12000 mean=26.0
+  after_purge per-rep CPU: {'a': [7.711, 7.751, 7.723], 'b': [7.139, 7.347, 7.139], 'c': [7.431, 7.687, 7.479]} wait us: {'a': 0.0, 'b': 0.0, 'c': 0.0} wall us: {'a': 26.3, 'b': 25.7, 'c': 26.0}

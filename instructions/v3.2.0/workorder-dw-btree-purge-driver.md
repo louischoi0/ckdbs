@@ -169,3 +169,93 @@ No stage is opened and no code is written. **Not reviewed**: the
 `critics-developer` review was started and stopped before it reported,
 so no line reference or reading in this order has a second reader behind
 it.
+
+### DW-S0: the premise (2026-11-27)
+
+On `dw-btree-purge-driver` at `630ecc359` (`v3.4.17-178-g630ecc359`), a
+Release binary of that commit, `[measured]`
+`bench/v3.5.0/results-dw-s0-premise-v3.4.17-178-g630ecc359.md`. Four
+mixes of 480 s each over three twin btree relations of 50,000 live rows
+with a plain index on `k`, nothing purging: a delete-heavy and a
+key-moving mix, each with key values that recur and with key values
+never used again.
+
+**What it measured.**
+
+- **Dead entries grow one per `DELETE` or key-moving `UPDATE`, and there
+  is no steady state**: 3.1 to 6.1 million entries for 50,000 live rows
+  after 480 s, in every cell.
+- **A point read by the index pays where its key's run holds the dead
+  entries, and nowhere else.** Recurring keys: 32.5 times the purged
+  twin's server CPU in the delete-heavy cell (470 us against 14.5 us,
+  617 dead entries in the run) and 4.9 times the rebuilt twin's in the
+  key-moving one (39.9 us against 8.1 us, 111 in the run); 739 ns and
+  286 ns a dead entry. Fresh keys: 1.002 and 0.967, and 1.045 against a
+  purged twin in the key-moving cell, which the data do not settle
+  against 5 % (the twins differ from each other by more).
+- **`REINDEX INDEX` takes out no deleted row's entry** (the count stayed
+  at 3,134,200); `PURGE INDEX` took out 98.0 % to 98.8 % of every
+  index's entries in 1.6 s to 4.4 s of one core, 0.5 us to 1.1 us a
+  removed entry, no row skipped.
+- `sys.relation_stats`' `deletes` and `updates` were exact;
+  `est_delete_marked` was NULL on every twin, the steward never having
+  sampled a leaf of a relation no planned join named.
+
+**DW-Q1's bar, read by CLA** (adopted (a), §4 "Marks"): *"if a point
+read by index pays under 5 % at steady state, DW stops and says so."*
+There is no steady state to read it at - the dead entries grow for as
+long as the mix runs - so the bar is read at the end of each mix, and by
+shape. **A point read pays 32.5 and 4.9 times where key values recur**,
+over 5 % from about one dead entry a key run (derived: 0.75 s and 6.1 s
+into these mixes), **and nothing where they do not**. The bar is not
+met: DW does not stop, and DW-S1 opens. The reading is CLA's, on the
+standing go-ahead; what it rests on is that a key whose values recur - a
+status, an owner, a foreign key - is an ordinary OLTP index.
+
+**What S0 hands the driver's design.**
+
+- The signal DW-Q2 (a) leaves is `deletes + updates`: `est_delete_marked`
+  is absent wherever no join asked for a prior, and `sys.indexes`'
+  `entries` is a walk. `updates` counts every `UPDATE`, one that moves no
+  key included, so the signal is a superset and the driver must not keep
+  walking a relation whose passes remove nothing.
+- An idle-instance purge at the measured growth is under 1 % of a core;
+  what a slice costs a statement on core 0 is DW-S4's to measure.
+
+**The census of the heap release's scheduling**, `[source-read]` at
+`630ecc359`, for reuse:
+
+- **The queue** is `exec::HeapSpace`'s dead list (`NoteDead` /
+  `TakeDead`, `src/exec/heap_store.cpp:49`), one for the instance: a
+  heap `DELETE`'s statement end queues its relation
+  (`src/server/command_dispatcher.cpp:9367`), as do a rolled-back heap
+  insert (the manager's observer, `include/kds/server/command_dispatcher.hpp:2247`),
+  a row `PURGE` (`:17906`) and a job that ended owing a slot
+  (`src/exec/heap_release.cpp:84`). Nothing queues a btree, and nothing
+  queues a heap for an `UPDATE`.
+- **The tick** is core 0's `system` group, every 50 ms
+  (`src/server/expeditor.cpp:2303`): one `StepHeapRelease` of
+  `PagesPerSlice(Priority::kAnalytic)` (16) pages or leaves, a predicate
+  and a return when nothing is queued. The simulator steps it beside its
+  reclaim (`sim/instance.cpp:213`).
+- **A step** (`src/server/command_dispatcher.cpp:9779`) takes the
+  relation's `IX` under a read holder's id, try-only - a refusal skips
+  the step - makes the catalog memo current under it
+  (`src/exec/heap_release.cpp:59`), runs one phase's bounded work under
+  `DrainOnPressure`, and gives everything back. Nothing is held between
+  two steps, so a relation `X` asked on any core is granted in the gap,
+  which is 50 ms less one slice.
+- **Its purge phase** (`src/exec/heap_release.cpp:176`) is the part DW
+  reuses: every index of the relation in oid order, each walked once
+  left to right by `PurgeIndexLeaves` with its resume entry, a building
+  or dropped index passed over.
+
+**Not explained**: `sys.meta`'s `pages_allocated` read 2,753 lower after
+the delete-heavy cell's `PURGE INDEX` (the results file, section 6).
+Outside DW; not followed.
+
+**Cut**, to the stage's 20 minutes: 480 s a mix, not 10 minutes; one run
+a cell; one size; `cores = 1`, `relaxed`; no reader holding an old view
+(DW-R5 is a test's, DW-S1). The quiet gate held the run about 1.5 min
+for this session's own Debug build, outside the budget. **Suite not
+executed: no engine code changed.**

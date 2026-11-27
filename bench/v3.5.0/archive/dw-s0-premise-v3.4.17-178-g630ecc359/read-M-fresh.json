@@ -1,0 +1,410 @@
+{
+ "cell": "M-fresh",
+ "host_before": {
+  "loadavg": "2.93 4.55 3.32 1/1258 798685",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "entries_before": {
+  "a": 6107600,
+  "b": 6107600,
+  "c": 6107600
+ },
+ "height_before": {
+  "a": 3,
+  "b": 3,
+  "c": 3
+ },
+ "relation_stats": {
+  "a": {
+   "leaves": 302,
+   "est_rows": null,
+   "deletes": 0,
+   "updates": 6057600,
+   "inserts": 50000,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 2
+  },
+  "b": {
+   "leaves": 302,
+   "est_rows": null,
+   "deletes": 0,
+   "updates": 6057600,
+   "inserts": 50000,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 2
+  },
+  "c": {
+   "leaves": 302,
+   "est_rows": null,
+   "deletes": 0,
+   "updates": 6057600,
+   "inserts": 50000,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 2
+  }
+ },
+ "live_distinct_keys": 50000,
+ "live_rows_per_key_mean": 1.0,
+ "analyze": {
+  "a": [
+   "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_a",
+   "  filter 0:0.1 = 1006053801",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_a opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "DB time 0.09 ms = CPU 0.09"
+  ],
+  "b": [
+   "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xea8de818ce3e0b93 fetch_id=0xa8a89c94e2039f00",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_b",
+   "  filter 0:0.1 = 1006053801",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_b opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "DB time 0.01 ms = CPU 0.01"
+  ],
+  "c": [
+   "analyze rows=1 class=JoinSelect steps=1 examined=1 pages=2 opens=1 pattern_id=0xc83f821d169e27b4 fetch_id=0x53b4efbf2eac7ecf",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_c",
+   "  filter 0:0.1 = 1006053801",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_c opens=1 examined=1 matched=1 sel=100% pages=2 index_scanned=1 index_resolved=1",
+   "DB time 0.03 ms = CPU 0.03"
+  ]
+ },
+ "reindex": {
+  "tag": "REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=78110",
+  "wall_ms": 23.9
+ },
+ "entries_after_reindex": {
+  "a": 50000,
+  "b": 6107600,
+  "c": 6107600
+ },
+ "height_after_reindex": {
+  "a": 2,
+  "b": 3,
+  "c": 3
+ },
+ "pages_allocated_delta_reindex": 132,
+ "key_pool": 500,
+ "rows_per_probe_mean": 1.0,
+ "after_reindex": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.734,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.149,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.78,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.171,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.729,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.199,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.748,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.8,
+     "p25": 25.5,
+     "p50": 26.0,
+     "p95": 27.4,
+     "p99": 28.5,
+     "mean": 26.2
+    },
+    "block_cpu": [
+     7.72,
+     7.66,
+     7.88,
+     7.67,
+     7.88,
+     7.89,
+     7.66,
+     7.69,
+     7.85,
+     7.67,
+     7.73,
+     7.67
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.512,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.894,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.42,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.809,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.52,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.026,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.484,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.9,
+     "p25": 25.2,
+     "p50": 25.8,
+     "p95": 27.0,
+     "p99": 28.0,
+     "mean": 25.9
+    },
+    "block_cpu": [
+     7.46,
+     7.43,
+     7.48,
+     7.68,
+     7.44,
+     7.41,
+     7.41,
+     7.41,
+     7.46,
+     7.86,
+     7.38,
+     7.38
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.558,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 25.979,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.433,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 25.765,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.513,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.977,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.501,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.9,
+     "p25": 25.2,
+     "p50": 25.8,
+     "p95": 27.0,
+     "p99": 28.0,
+     "mean": 25.9
+    },
+    "block_cpu": [
+     7.48,
+     7.69,
+     7.41,
+     7.65,
+     7.44,
+     7.4,
+     7.46,
+     7.43,
+     7.46,
+     7.54,
+     7.6,
+     7.45
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ },
+ "host_after_timed": {
+  "loadavg": "2.78 4.49 3.31 1/1258 798693",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "refused_during_read": {},
+ "purge": {
+  "tag": "PURGED INDEX name=ix_b entries=6032264 skipped_rows=0 attempts=1598",
+  "wall_ms": 4400.4
+ },
+ "entries_after_purge": {
+  "a": 50000,
+  "b": 75336,
+  "c": 6107600
+ },
+ "height_after_purge": {
+  "a": 2,
+  "b": 3,
+  "c": 3
+ },
+ "pages_allocated_delta_purge": 0,
+ "after_purge": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.711,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.502,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.751,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.147,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.723,
+      "wait_us_per_stmt": 0.002,
+      "wall_us_per_stmt": 26.121,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.728,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.6,
+     "p25": 25.5,
+     "p50": 26.0,
+     "p95": 27.4,
+     "p99": 28.3,
+     "mean": 26.3
+    },
+    "block_cpu": [
+     7.71,
+     7.81,
+     7.67,
+     7.66,
+     7.66,
+     7.63,
+     7.62,
+     8.09,
+     7.63,
+     7.66,
+     7.69,
+     7.91
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.139,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.495,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.347,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.858,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.139,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.602,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.208,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.8,
+     "p25": 24.9,
+     "p50": 25.7,
+     "p95": 26.9,
+     "p99": 27.9,
+     "mean": 25.7
+    },
+    "block_cpu": [
+     7.22,
+     7.1,
+     7.12,
+     7.11,
+     7.45,
+     7.29,
+     7.14,
+     7.51,
+     7.21,
+     7.11,
+     7.13,
+     7.11
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.431,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 25.764,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.687,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.319,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.479,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.963,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.532,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.9,
+     "p25": 25.3,
+     "p50": 25.9,
+     "p95": 27.1,
+     "p99": 28.4,
+     "mean": 26.0
+    },
+    "block_cpu": [
+     7.45,
+     7.45,
+     7.41,
+     7.42,
+     7.4,
+     7.63,
+     8.0,
+     7.72,
+     7.62,
+     7.44,
+     7.44,
+     7.42
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ }
+}
