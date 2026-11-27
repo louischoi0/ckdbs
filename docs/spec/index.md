@@ -95,9 +95,10 @@ Two rules ride along, and both are load-bearing rather than tidy:
   correct by IX1's superset rule, and useless. This is `cabin.md` §5's
   third row, and the index carries the same contract test.
 - **Nothing on the write path reclaims.** A superseded entry costs memory,
-  a page, and a read-time skip until an administrator's `PURGE INDEX`
-  takes it out (§2.2); on a btree relation nothing runs one unasked, and a
-  heap's indexes are purged by its slot release (`heap-and-tuple.md` §3.1b).
+  a page, and a read-time skip until a purge takes it out (§2.2): an
+  administrator's `PURGE INDEX`, on a btree relation the unasked driver
+  where `index_purge_driver` is on (§2.3) and nothing unasked where it is
+  off, and on a heap its slot release (`heap-and-tuple.md` §3.1b).
 
 ### 2.1 Failure on the write path
 
@@ -173,6 +174,46 @@ answered, which leaves those entries in place. A DDL on the purge's own
 core passes between two slices; one on another core is not queued for, and
 gets its `X` only in the gap between a slice's release and the next one's
 `IX`.
+
+### 2.3 The unasked purge of a btree relation's indexes (DW)
+
+`index_purge_driver` (a boot key, **off by default**) gives a btree
+relation what a heap has from its slot release: §2.2's pass with no
+statement asking (`exec/index_purge_driver.hpp`,
+`instructions/v3.2.0/workorder-dw-btree-purge-driver.md`).
+
+> **IX2d - the driver chooses what a pass runs on and when, and nothing
+> of what it removes.** A pass is every index of one relation walked once
+> (`RelationIndexPurge`, the walk a heap's release runs), each slice one
+> `PurgeIndexLeaves` attempt: IX2a's judge, IX2b's fence and IX2c's first
+> entry, unchanged. So a result is the same with the key on and off.
+
+**What it runs on** is a count that already exists: a relation's `deletes`
+in `sys.relation_stats`' store, read once a second by core 0's `system`
+tick. A relation is queued once its deletes since it was last queued
+reach its threshold - 4,096, and one fifth of the entries an index kept
+at its last pass, the indexes averaged, which is the rows near enough -
+and no page is read to choose. Each delete leaves one dead entry an
+index, so the count is what a pass can take but for a row an older view
+still sees, which is owed its entries: a pass such a view makes fruitless
+has spent the deletes that bought it, and the next is bought at the same
+price. A relation dropped, a heap and a catalog chain end their pass with
+nothing walked.
+
+**How it runs** is the heap release's way: one slice - the `analytic`
+level's 16 leaves - on each 50 ms tick of core 0's `system` group, under
+the relation's `IX` taken try-only by a read holder's id and given back
+when the slice returns, the catalog memo made current under it. **Nothing
+is held between two slices**, so a relation `X` asked on any core is
+granted in the gap, and a slice that finds the relation held is skipped,
+not waited for. No transaction, no view and no purge horizon is held; the
+horizon is read as the statement reads it (`ResolvedForEveryReader`).
+
+**Off, nothing exists**: no driver is built, no tick is submitted and no
+count is read. On, `sys.meta` on core 0 carries the `index_purge` section
+(`sys-views.md` §7). The driver's state is memory-resident and a restart
+starts it empty; a pass's images are §2.2's, so a crash can lose a pass,
+which leaves those entries in place for the next.
 
 ---
 

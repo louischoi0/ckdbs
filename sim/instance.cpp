@@ -157,6 +157,14 @@ Status SimInstance::Boot() {
                         options_.access_statistics,
                         cabin_store_ ? &*cabin_store_ : nullptr, &*txn_);
     if (locks_ != nullptr) dispatcher_->set_locks(locks_.get());
+    if (options_.index_purge_driver) {
+        // The driver's signal is the process's relation statistics, which a
+        // server's restart empties: emptied here at every boot, so a pass is
+        // bought by deletes of this boot alone, whatever ran in the process
+        // before it.
+        stats::RelationStats::ResetForTest();
+        dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/1);
+    }
     session_ = server::Session();
     if (options_.read_off_reactor) {
         // DE-Q12. The mode outlives a crash - it is the device's - and is set
@@ -211,6 +219,14 @@ Status SimInstance::ReclaimStep() {
     // The heap slot release too, as core 0's tick steps it beside the
     // reclaim (DN-R2): its frees and reuses run under the harness's crashes.
     if (auto owed = dispatcher_->StepHeapRelease(16); !owed.ok()) return owed.status();
+    // And the unasked index purge (DW), where the seed runs one.
+    if (const exec::IndexPurgeDriver* driver = dispatcher_->index_purge_driver()) {
+        dispatcher_->QueueIndexPurges();
+        const std::uint64_t removed = driver->counts().removed;
+        const auto owed = dispatcher_->StepIndexPurge(16);
+        unasked_purged_entries_ += driver->counts().removed - removed;
+        if (!owed.ok()) return owed.status();
+    }
     if (!reclaimer_.has_value() || reclaim_counters_.pending.load() == 0) return Status::OK();
     return reclaimer_->Step(Pinned(anchor_->durable_redo_start()));
 }

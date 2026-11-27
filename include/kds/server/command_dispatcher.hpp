@@ -20,6 +20,7 @@
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/aggregate.hpp"
 #include "kds/exec/heap_release.hpp"
+#include "kds/exec/index_purge_driver.hpp"
 #include "kds/exec/heap_store.hpp"
 #include "kds/exec/query_layer.hpp"
 #include "kds/exec/sort.hpp"
@@ -2262,6 +2263,24 @@ public:
     const exec::HeapReleaseCounts& last_heap_release() const noexcept {
         return last_heap_release_;
     }
+    // **The unasked index purge** (DW; the protocol is
+    // `exec/index_purge_driver.hpp`'s), built on the one dispatcher whose
+    // tick drives it - core 0's - and only where `index_purge_driver` is on:
+    // with none, the two calls below do nothing. `min_deletes` is the
+    // driver's floor, a test's and the simulator's to lower.
+    void EnableIndexPurgeDriver(
+        std::uint64_t min_deletes = exec::IndexPurgeDriver::kMinDeletes) {
+        index_purge_.emplace(min_deletes);
+    }
+    // Offers every relation's delete count to the driver, off the relation
+    // statistics' snapshot.
+    void QueueIndexPurges();
+    // One step of the driver's pass under the relation's `IX`, `budget`
+    // leaves; a refused `IX` skips it. Returns whether a pass is still owed.
+    StatusOr<bool> StepIndexPurge(std::uint32_t budget);
+    const exec::IndexPurgeDriver* index_purge_driver() const noexcept {
+        return index_purge_.has_value() ? &*index_purge_ : nullptr;
+    }
     exec::HeapSpace& heap_space() noexcept {
         return heap_space_ != nullptr ? *heap_space_ : own_heap_space_;
     }
@@ -3307,6 +3326,7 @@ private:
     exec::HeapSpace own_heap_space_;
     std::optional<exec::HeapSlotRelease> heap_release_;
     exec::HeapReleaseCounts last_heap_release_;
+    std::optional<exec::IndexPurgeDriver> index_purge_;
     // Statement heads open on this core: only the outermost publishes.
     int epoch_depth_ = 0;
     // Whether a DDL was open anywhere when the last statement head read the

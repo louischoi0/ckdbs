@@ -693,6 +693,15 @@ captured order did not compile for the statement, or adds a sort its
 `LIMIT` does not bound), the last three having run their written order.
 `captured_served` counts a declined compile too: it found an order. Then `sys.plans`' side (CX-S1a): `captured_pending`, the captures waiting for the persisting task; `captured_persisted`, the rows it wrote in this run; `captured_loaded`, the captures this mount installed from the relation. And the administrator's plans (CX-S1b): `admin_plans`, the plans the instance's table holds - every one whose relations exist; `admin_plans_enabled`, how many of them are served; `plan_served`, the compiles that found an enabled plan; `plan_declined`, the variants declined for a statement, which ran its written order.
 
+**The `index_purge` section** (DW, `index.md` §2.3) exists only on the
+dispatcher that runs the unasked index purge - core 0's, where
+`index_purge_driver` is on - so a session on another core, or any session
+with the key off, reads none. It carries `index_purge_passes`, the
+relations whose pass ended, however it ended; `index_purge_queued`, the
+relations waiting for one; and the passes' totals from the process's
+start: `index_purge_entries_read`, `index_purge_entries_removed` and
+`index_purge_rows_skipped`, the rows whose unit a writer held.
+
 **The `txn` section** (CS-Q8 (a), `txn.md` §1) carries this core's
 `read_only_begins`, the `BEGIN ... READ ONLY` transactions it opened, and
 `read_only_write_refusals`, the statements it refused

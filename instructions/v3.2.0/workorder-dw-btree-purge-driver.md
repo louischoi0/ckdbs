@@ -291,3 +291,110 @@ on is named. **Rejected**: asserting a row count on the mix's writes and
 the five cuts proposed in the two tools - a driver changed after its run
 is a driver that measured nothing, and the as-run copy is the archive's;
 the results file now says what the writes' check does not cover.
+
+### DW-S1: the driver for btree indexes (2026-11-27)
+
+On `dw-btree-purge-driver`, over `05c32f378`.
+
+**Built.**
+
+- **`exec::RelationIndexPurge`** (`exec/index_purge.hpp`): every index
+  of one relation walked once, one `PurgeIndexLeaves` attempt a step, its
+  place an index's oid and a resume entry. It is the heap release's purge
+  phase, factored out so the release and the driver run one walk
+  (`HeapSlotRelease::Purge` is now a call of it). `IndexPurgeAttempt`
+  gained `read`, the entries the walked leaves held. **Nothing the judge
+  decides moved** (DW-R1): the one line added to `PurgeIndexLeaves` is
+  that count.
+- **`exec::IndexPurgeDriver`** (`exec/index_purge_driver.hpp`): the
+  choice of what a pass runs on. The signal is `sys.relation_stats`'
+  store's `deletes` (DW-Q2 (a)); a relation is queued once its deletes
+  since it was last queued reach `max(4,096, kept / 5)`, `kept` being the
+  entries an index held after the last pass, the indexes averaged.
+  **DW-S1's signal is `deletes` alone**: this section's S0 log named
+  `deletes + updates`, and `updates` is DW-S2's, with the moved key.
+- **`CommandDispatcher::QueueIndexPurges` / `StepIndexPurge`**: the step
+  is `StepHeapRelease`'s shape - the relation's `IX` by a read holder's
+  id, try-only, a refusal skipping the step, the catalog memo made
+  current under it, everything given back at the return.
+- **The switch** (DW-Q3 (a)): `index_purge_driver`, a boot key, off by
+  default. `Expeditor::Open` builds the driver on core 0's dispatcher
+  only where it is on, and `Start` submits its two ticks (the offer once
+  a second, a slice of 16 leaves every 50 ms) only where a driver exists.
+  Off, there is no driver, no tick and no count read (DW-R3).
+- **`sys.meta`'s `index_purge` section**, on the dispatcher that runs
+  the driver: `index_purge_passes`, `_queued`, `_entries_read`,
+  `_entries_removed`, `_rows_skipped`.
+- **The simulator** runs the driver, floor 1, on seeds with
+  `seed % 8 == 7` - half of those with a lock table - offered and stepped
+  beside its reclaim step; every boot empties the relation statistics, as
+  a server's restart does.
+
+**DW-R2 as built: the driver paces, it does not register.** One slice a
+50 ms tick, nothing held between two, so a relation `X` asked on any
+core is granted in the gap; a slice that finds the relation held is
+skipped. No `HolderProgress` registration is made: the driver never
+holds across a wait, so no waiter's fault net has anything to ask it.
+
+**Cells** (`tests/index_purge_driver_test.cpp`, 14; one each in
+`config_file_test.cpp` and `expeditor_test.cpp`): a deleted row's
+entries leave unasked and no probe moves; off, nothing is offered,
+stepped or shown; the threshold, and that it follows one index's kept
+entries however many indexes; DW-R5 on one core and across two (a view
+keeps its rows' entries, and the next pass takes them); an undecided
+deleter's rows skipped and counted; DW-R2 (an `X` granted between every
+two slices, a held relation skipping the slice; a DDL on another core
+between two slices, its index walked by the pass); an index dropped or
+created mid-pass; an index still being built passed over (DD-R8); a
+dropped relation and a heap; no lock table; a pass crashed durable and
+not; and a serving instance whose tick purges only where the key is on.
+
+**The review** (`critics-developer`, on the uncommitted tree): no
+correctness defect; the heap release's refactor read as
+behaviour-preserving, with two timing differences recorded (moving to
+the next index, or passing one over, no longer costs an empty step; the
+last index's walk ends the phase in its own step). Four mutations each
+failed a named cell. **Applied**: the threshold mixed units - entries
+summed over every index against deleted rows - and now reads one index's
+kept entries; **the back-off CLA first built was removed** - under a
+deletes-only signal a fruitless pass means an older view, not a useless
+relation, and doubling the threshold on it left the dead entries growing
+after the reader ended; the simulator emptied the statistics at `Create`
+only, so a reboot ran a pass a server's restart would not, and the crash
+cell pinned that artifact; one release guard for the three read-holder
+scopes; the pacing explained in two places, not four; why no statement
+epoch is owed, stated in the driver's header; and the cells the review
+named - DW-R5 across cores, the skipped-rows count, the key's default
+and parse, the serving instance. **Rejected**: a "never" flag for a
+relation that is not a btree (DW-S2 walks heaps, and a relation with no
+index can gain one; an empty pass is one memo lookup); the building
+index as a two-core cell with a parked online build (it would step core
+0's dispatcher from the cell's thread while its reactor runs - pinned on
+the pass itself instead); folding the two tick steps' prologues into one
+helper (it touches DD's statement run for about ten lines).
+
+**Suite**: 5,315 of 5,315 passed on this tree, at `-j4`
+(`ctest -LE bs-nightly`, 178 s). **Six earlier runs were not green and no
+failure is the change's**: this host's `/tmp` is a `tmpfs` under a user
+quota of 12.6 GB, another session's scratch held 5.0 GB of it, and at
+`-j8` or `-j12` the crash rigs' copies ran three cells into `Disk quota
+exceeded` (each passes alone); the other failures were the two-core
+cells `known-gaps.md` ("Testing") lists -
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, 12 of 42 runs
+alone on this tree against 5 of 30 at `60dc593af`, the two rates not
+separated and no code the cell runs changed, and
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`. A run
+with the tests' directory moved to disk took 504 s and failed a cell
+that times a sync; it was stopped and is no evidence either way.
+
+**The simulator**: 108 of 108 runs passed on six seeds that draw the
+driver (7, 15, 23, 31, 39, 47; `clean`, `sync-crash` and `crash`; faults
+`none`, `io` and `grow`; `uniform` and `colliding`; 1,500 ops, two
+iterations), in the Debug binary, before the count below was added and
+again after it. The verdict line now carries
+`unasked_purged_entries`: 130 to 380 a `clean` run on those seeds, so the
+driver's passes took entries under the harness and did not merely run.
+No committed seed of `tests/testdata/sim_seeds.txt` draws the driver
+(none is 7 mod 8); the sweep above is by hand and no seed was added.
+
+**Overhead not measured; measured at the milestone's close.**

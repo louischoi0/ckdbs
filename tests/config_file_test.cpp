@@ -213,6 +213,17 @@ TEST(ExpeditorConfigTest, TheArchiveCommandsBoundIsOffByDefaultAndRefusedWithout
     EXPECT_TRUE(zero.ApplyFile(WithPool("archive_command_timeout_s = 0\n")).ok());
 }
 
+TEST(ExpeditorConfigTest, TheIndexPurgeDriverIsOffByDefaultAndABooleanKey) {
+    // DW-Q3 (a): off unless the file says on.
+    Expeditor::Config config;
+    EXPECT_FALSE(config.index_purge_driver);
+    ASSERT_TRUE(config.ApplyFile(WithPool("index_purge_driver = on\n")).ok());
+    EXPECT_TRUE(config.index_purge_driver);
+    ASSERT_TRUE(config.ApplyFile(WithPool("index_purge_driver = off\n")).ok());
+    EXPECT_FALSE(config.index_purge_driver);
+    EXPECT_FALSE(config.ApplyFile(WithPool("index_purge_driver = sometimes\n")).ok());
+}
+
 TEST(ExpeditorConfigTest, TheJoinOrderIsOneOfThreeValuesAndFixedByDefault) {
     // CX-S0: `fixed` by default, `planned` and `written` by name, and a
     // fourth word refuses the file rather than reading as any of them.

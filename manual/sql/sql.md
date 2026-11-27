@@ -636,6 +636,10 @@ other statements on its core run between two batches.
   INDEX $pkey_4012`. The engine made it and no other statement names it.
   On a `BTREE` this is what takes out the entries of deleted rows and of
   key values a row moved off; a `HEAP` purges its own.
+- **A server started with `index_purge_driver = on` runs the same purge by
+  itself** over a `BTREE` relation's indexes once enough of its rows were
+  deleted (`manual/server/server.md`); the statement is then for the moment
+  an administrator wants it done now.
 - Queries answer exactly as before. The tree keeps its pages: a leaf left
   thin is refilled by later inserts, and only `REINDEX` returns pages.
 - **Each leaf keeps its first entry**, so at most one dead entry a leaf
