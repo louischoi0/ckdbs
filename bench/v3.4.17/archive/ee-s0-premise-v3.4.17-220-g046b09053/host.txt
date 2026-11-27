@@ -1,0 +1,6 @@
+cell wake 19:56:40 load 0.59 0.81 0.65 3/1450 981715 builds=0
+cell wake-drain0 19:56:45 load 0.73 0.83 0.66 1/1428 982128 builds=0
+cell hot0 19:56:48 load 0.73 0.83 0.66 1/1454 982274 builds=0
+cell hot2 19:57:03 load 1.43 0.99 0.71 1/1456 982929 builds=0
+cell fence8 19:57:19 load 1.34 0.99 0.72 1/1441 983586 builds=0
+cell end 19:57:26 load 1.44 1.02 0.73 1/1468 983954 builds=0

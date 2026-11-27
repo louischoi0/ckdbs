@@ -1003,6 +1003,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     the net). A holder still in flight when its row's probe is granted
     polls `IsInFlight`; no cell reaches that arm and no writer is known to
     take it.
+  - **What a poll costs, measured at `046b09053`** (EE-S0,
+    `bench/v3.4.17/results-ee-s0-premise-v3.4.17-220-g046b09053.md`): a
+    polled wait ends at the waiter core's next drain tick, every core
+    arming the WAL drain at `wal_drain_interval_us` (1 ms by default), so
+    cross-core it answers 0.6-0.7 ms later at p50 than a slot-woken wait -
+    +629 us for an assertion group's reserver, +572 us for a `PURGE`'s
+    deleter. With the drain off (`wal_drain_interval_us = 0`) the idle
+    block's 10 ms ceiling bounds it, and half and a third of those waits
+    reached it. Of the polled arms only those two are reachable with a
+    lock table by any writer known. **Neither opens a `sys.lock_waits` row
+    or counts in `relation_stats`' `lock_waits`**, which count waits on a
+    slot only. On one hot row, eight sessions and 3.6 million waits, none
+    ended at the fault net; at 2 ms held inside the transaction a commit
+    cost 7 parks and the slowest transaction 344 ms.
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 
@@ -1025,20 +1039,30 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   row mid-walk and be refused retryably. CP-Q4 (a) marks the form that
   avoids it, (α): the fence-taker waits out the statements that began
   before its publish, so no wait becomes a refusal. It is a design for its
-  own order. Read at `f5d310ec`; nothing of it is in the tree.
+  own order. Read at `f5d310ec`; nothing of it is in the tree. **Its order,
+  EE (`instructions/v3.2.0/workorder-ee-decide-slot.md`), was abandoned at
+  EE-S0 on 2026-11-27 with nothing built**: the poll it would replace
+  costs one drain tick, under a millisecond at the default, on waits that
+  mostly end in a refusal, and no wait ended at the net (EE-Q1 (a)'s bar,
+  CLA's reading on the operator's standing go-ahead; "What a poll costs"
+  above).
 
 - **The per-relation lock header is not built, and its eight-core number
-  is not measured** (CP's C3, the order's §3, §8.4). A standing range
+  reproduces BP-H10's** (CP's C3, the order's §3, §8.4). A standing range
   fence costs every point write of the relation one walk of the 64
   partitions: about 1 µs a statement at four cores at CP-S0
   (`bench/v3.4.7/results-cp-s0-premise-v3.4.7-1-gcc54a296.md` §7), against
   a point write whose own floor is about 36 µs (CP-Q12 (a) reads the rule's
-  "floor" as the write's). BP-H10's +12 % of a statement's CPU at eight
-  cores was not reproduced because eight cores were not run, and the
-  four-core cells barely exercised cross-core partition contention. A
-  relation header holding its entry and its fences under one latch is the
-  design; it is re-proposed as its own item only if an eight-core run
-  reproduces the figure. Read at `f5d310ec`.
+  "floor" as the write's). **At eight cores and eight writers, measured at
+  `046b09053`** (EE-S0, EE-Q5 (a);
+  `bench/v3.4.17/results-ee-s0-premise-v3.4.17-220-g046b09053.md` §5), it
+  is **+1.78 µs of server CPU a statement** over an unfenced 12.1 µs, paired
+  over 22 blocks (t-interval +0.63 to +2.93 µs), about +15 % against
+  BP-H10's +12 %, with 2.4x the partition-latch waits; the client's p50
+  does not move outside its block spread at that concurrency. A relation
+  header holding its entry and its fences under one latch is the design;
+  **under EE-Q5 (a) it is re-proposed as its own item**, and no order for
+  it is written. Read at `f5d310ec`; the measurement at `046b09053`.
 
 - **A parent `UPDATE` no longer waits for child writers, and one class of
   deadlock replaced the one that removed** (CP-S2b, `766f6a6d`; `txn.md`

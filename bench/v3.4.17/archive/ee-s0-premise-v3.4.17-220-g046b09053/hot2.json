@@ -1,0 +1,55 @@
+{
+ "sessions": 8,
+ "seconds": 15.0,
+ "think_ms": 2.0,
+ "outcomes": {
+  "commit": 5885
+ },
+ "lock_waits": {
+  "granted": 16384
+ },
+ "lock_waits_rows": 16384,
+ "waited_us": {
+  "n": 16384,
+  "p0": 497.0,
+  "p25": 2273.0,
+  "p50": 2480.0,
+  "p75": 2654.0,
+  "p95": 2841.0,
+  "p100": 7335.0,
+  "mean": 2450.1314086914062
+ },
+ "txn_us": {
+  "n": 5885,
+  "p0": 2187.0009986741934,
+  "p25": 10497.338000277523,
+  "p50": 15014.458000223385,
+  "p75": 23400.04500001669,
+  "p95": 52675.11899728561,
+  "p100": 343953.0429968727,
+  "mean": 20395.33051146067
+ },
+ "meta_wait_aborts": "0",
+ "relation_locks": {
+  "lock_waits": "41166",
+  "lock_wait_us": "100657900",
+  "lock_deadlocks": "0",
+  "lock_fault_nets": "0"
+ },
+ "config": {
+  "binary": "/home/ukjin/ee-s0-run/final/kds_server",
+  "workdir": "/home/ukjin/ee-s0-run/final/w-hot2",
+  "port": 15965,
+  "cell": "hot",
+  "cores": 4,
+  "cpus": "0,1,2,3",
+  "rounds": 40,
+  "hold_ms": 20.0,
+  "cap": 4,
+  "sessions": 8,
+  "seconds": 15.0,
+  "think_ms": 2.0,
+  "drain_us": null,
+  "json": "/home/ukjin/ee-s0-run/final/hot2.json"
+ }
+}
