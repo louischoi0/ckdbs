@@ -420,3 +420,13 @@ against `481d101aa`, release, copied.
   `known-gaps.md`, the comment left unchanged so the suite run at
   `00ca380a9` stands for the pushed tree.
 
+### Landed 2026-11-27
+
+On the operator's word given with the schedule (`raft-marks-2026-11-27.md`
+§11, *"when it is done, commit push no verify"*): the work branch pushed to
+`main` from `dz-checkpoint-reactor-residue`, a fast-forward of `origin/main`
+at `481d101aa`, which had not moved; **the pre-push hook skipped**. The
+suite had run on the tree pushed: 5,366 of 5,366 at `00ca380a9`
+(`ctest -LE bs-nightly -j4`); nothing after it changed a build input. No
+tag.
+
