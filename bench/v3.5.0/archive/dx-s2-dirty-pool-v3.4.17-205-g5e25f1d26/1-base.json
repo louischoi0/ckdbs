@@ -1,0 +1,76 @@
+{
+ "bin": "build-dx-base/run/bin/kds_server",
+ "sha256": "17cda4082ac1714e5ba146bf72b212f50593de24aead4a4a87b61fb736cce0c7",
+ "started": "2026-11-27 14:33:34 UTC",
+ "args": {
+  "bin": "build-dx-base/run/bin/kds_server",
+  "base": "build-dx-base/run/cold_base",
+  "workdir": "build-dx-s2/run/ab/w1",
+  "out": "build-dx-s2/run/ab/1-base.json",
+  "port": 15781,
+  "arms": "0,0",
+  "rows": 1000000,
+  "frames": 2048,
+  "sessions": 4,
+  "seconds": 6.0
+ },
+ "arms": [
+  {
+   "arm": 0,
+   "ok": 84170,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 1546,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 304
+   },
+   "pool": {
+    "pool_misses": 139905.0,
+    "pool_hits": 373214.0,
+    "pool_reclaimed_inline": 125906.0,
+    "pool_reclaimed_background": 11310.0,
+    "pool_batches_inline": 90433.0,
+    "pool_batches_background": 231.0,
+    "pool_dirty_queued": 75058.0,
+    "pool_dirty_drained": 75058.0,
+    "pool_refused": 2458.0,
+    "pool_resident": 1777.0,
+    "contention_checkpoint_pages_written": 386.0,
+    "contention_checkpoint_runs": 0.0,
+    "pool_resident_end": 1798.0
+   },
+   "host_before": {
+    "loadavg": "2.65 2.90 3.05 2/1594 173108",
+    "builds": []
+   }
+  },
+  {
+   "arm": 0,
+   "ok": 89489,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 1624,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 426
+   },
+   "pool": {
+    "pool_misses": 149105.0,
+    "pool_hits": 396678.0,
+    "pool_reclaimed_inline": 133011.0,
+    "pool_reclaimed_background": 12878.0,
+    "pool_batches_inline": 105354.0,
+    "pool_batches_background": 270.0,
+    "pool_dirty_queued": 79745.0,
+    "pool_dirty_drained": 78996.0,
+    "pool_refused": 2902.0,
+    "pool_resident": 1938.0,
+    "contention_checkpoint_pages_written": 103.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1959.0
+   },
+   "host_before": {
+    "loadavg": "2.59 2.89 3.05 2/1570 173325",
+    "builds": []
+   }
+  }
+ ],
+ "ended": "2026-11-27 14:33:47 UTC"
+}

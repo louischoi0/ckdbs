@@ -1,0 +1,72 @@
+{
+ "bin": "build-dx-s2/run/bin/kds_server",
+ "sha256": "926719225d557275ae56ddbfa83385eb5dd5b7a6634388cfa71f3a9bb35ec25e",
+ "started": "2026-11-27 14:33:47 UTC",
+ "args": {
+  "bin": "build-dx-s2/run/bin/kds_server",
+  "base": "build-dx-base/run/cold_base",
+  "workdir": "build-dx-s2/run/ab/w2",
+  "out": "build-dx-s2/run/ab/2-s2.json",
+  "port": 15781,
+  "arms": "0,0",
+  "rows": 1000000,
+  "frames": 2048,
+  "sessions": 4,
+  "seconds": 6.0
+ },
+ "arms": [
+  {
+   "arm": 0,
+   "ok": 55385,
+   "not_one": 0,
+   "errors": {},
+   "pool": {
+    "pool_misses": 88005.0,
+    "pool_hits": 245028.0,
+    "pool_reclaimed_inline": 79228.0,
+    "pool_reclaimed_background": 7000.0,
+    "pool_batches_inline": 4343.0,
+    "pool_batches_background": 149.0,
+    "pool_dirty_queued": 48976.0,
+    "pool_dirty_drained": 48976.0,
+    "pool_refused": 20.0,
+    "pool_resident": 1777.0,
+    "contention_checkpoint_pages_written": 31.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1798.0
+   },
+   "host_before": {
+    "loadavg": "2.43 2.84 3.03 1/1572 173541",
+    "builds": []
+   }
+  },
+  {
+   "arm": 0,
+   "ok": 26095,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 1
+   },
+   "pool": {
+    "pool_misses": 41589.0,
+    "pool_hits": 115309.0,
+    "pool_reclaimed_inline": 36009.0,
+    "pool_reclaimed_background": 3709.0,
+    "pool_batches_inline": 1570.0,
+    "pool_batches_background": 92.0,
+    "pool_dirty_queued": 21939.0,
+    "pool_dirty_drained": 21939.0,
+    "pool_refused": 6.0,
+    "pool_resident": 1871.0,
+    "contention_checkpoint_pages_written": 5.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1892.0
+   },
+   "host_before": {
+    "loadavg": "2.55 2.86 3.03 5/1593 173769",
+    "builds": []
+   }
+  }
+ ],
+ "ended": "2026-11-27 14:34:00 UTC"
+}

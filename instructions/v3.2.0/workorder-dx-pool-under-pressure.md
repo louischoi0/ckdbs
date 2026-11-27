@@ -382,5 +382,17 @@ there. Every `path:line` below was read on the worktree's tree.
   then failed 54 of 200 runs alone on this tree against 45 of 200 at
   `481d101aa`, interleaved (the last 120: 33 and 33) - the flake, not this
   change.
-- **The dirty-pool cell in Release**: measured at this commit, recorded in the commit after it.
+- **The dirty-pool cell in Release** `[measured]`
+  (`bench/v3.5.0/results-dx-s2-dirty-pool-v3.4.17-205-g5e25f1d26.md`,
+  `5e25f1d26` against `481d101aa`, interleaved, `cores = 1`):
+  - the client's refusals fell from 746-2,050 a 6 s lifetime (2.00-2.24 %
+    of statements) to 0-1;
+  - `pool_refused` fell from 1,120-2,902 to 6-27, because a drain writes
+    the queue before the next walk asks;
+  - no answer moved. Throughput is not compared: the cell's
+    lifetime-to-lifetime variance is 3.1 times on one binary.
+  - **DX-S2's bar is met on CLA's reading**: the cell refuses no client
+    inside its deadline but 2 statements in 173,915, each a window's open
+    whose drain wrote nothing or whose deadline passed, which
+    `known-gaps.md` records.
 - Overhead not measured; measured at the milestone's close.
