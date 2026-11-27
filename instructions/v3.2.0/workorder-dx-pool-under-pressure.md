@@ -1,6 +1,6 @@
 # Work order DX - the buffer pool under pressure: a full pool that waits for its writeback, and an abort that cannot be refused a frame
 
-Status: **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
+Status: **CLOSED 2026-11-27 on the work branch, not landed** (`raft-marks-2026-11-27.md` §13): DX-S0..S3 at `8167fa139`, `7271241e4`, `5e25f1d26` and the close commit; a merge, a push, a tag and a version wait for the operator. **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
 (branch `worktree-dx-pool-under-pressure`) from `481d101aa`
 (`v3.4.17-202-g481d101aa`), under the operator's standing go-ahead of
 2026-11-27 (`raft-marks-2026-11-27.md` §11): every DX-Q item is **adopted
@@ -123,6 +123,7 @@ each can cost:
 | DX-Q3 | What the wait is bounded by | (a) the statement's existing deadline (`lock_wait_fault_net_ms`); (b) its own key | (a) |
 | DX-Q4 | The scan queue (BG-S2..S4) | (a) stays closed, as the operator closed it on 2026-11-23; (b) reopened inside DX | (a) |
 | DX-Q5 | BE's three untested rules | (a) each gets a cell in the stage that touches it, with a seam between reclaim batches; (b) outside DX | (a) |
+| DX-Q6 | Raised at DX-S2's review (B1, `[quiet-wrong]`): a `DELETE` reserves its row's assertion departure before its trail entry, so a refused statement of an explicit transaction may leave a reservation the trail does not show | (a) an explicit transaction holding any pending reservation keeps the refusal, as before DX-S2; (b) a per-statement mark of the pending set, unwound before a re-run | (a); (b) adds an unwind path to the assertion registry for a refusal that (a) leaves as it was |
 
 ### Marks
 
@@ -130,7 +131,7 @@ each can cost:
 of 2026-11-27 (go-ahead-achieving-milestone)** - *"go ahead until
 achieving milestone, I will follow CLA proposal if decision needed"*
 (`raft-marks-2026-11-27.md` §11) - and none is the operator's own mark on
-the item. No item is tagged `[quiet-wrong]`.
+the item. Of DX-Q0..Q5 no item is tagged `[quiet-wrong]`; **DX-Q6 is**, written at DX-S2's review and adopted under the same word.
 
 | | adopted | note |
 |---|---|---|
@@ -140,6 +141,7 @@ the item. No item is tagged `[quiet-wrong]`.
 | DX-Q3 | (a) | the statement's existing deadline (`lock_wait_fault_net_ms`) |
 | DX-Q4 | (a) | the scan queue stays closed, as the operator closed BG on 2026-11-23 |
 | DX-Q5 | (a) | each of BE's three untested rules gets a cell in the stage that touches it |
+| DX-Q6 | (a) | written at DX-S2 and adopted on the same go-ahead; `AssertionEnforcer::HasPending` in `EndWrite`'s test |
 
 ## 5. Stages
 
@@ -396,3 +398,36 @@ there. Every `path:line` below was read on the worktree's tree.
     whose drain wrote nothing or whose deadline passed, which
     `known-gaps.md` records.
 - Overhead not measured; measured at the milestone's close.
+
+### DX-S3 (2026-11-27): the close, on `dx-pool-under-pressure` at `8765d2d34`
+
+- **The dirty-pool cell**: DX-S2's, `results-dx-s2-dirty-pool-v3.4.17-205-g5e25f1d26.md`
+  (above).
+- **The resident control A/B** `[measured]`
+  (`bench/v3.5.0/results-dx-close-v3.4.17-206-g8765d2d34.md`, `ck-tester`,
+  Release, `5e25f1d26` against `481d101aa`, 24 interleaved rounds with a
+  second copy of the base as control, `cores = 1`, server on CPUs 0-7):
+  - server CPU per unit, DX / base, 0.985 over 24 cells (0.973-0.994),
+    none at or above 1; the control 0.999 (0.993-1.005);
+  - `pool_refused` 0 and no reclaim in all 72 arm runs, and the same
+    pool-hit count in every arm;
+  - the 1.5 % saving is not attributed - DX's diff only adds work - and is
+    read as the binary pair's, as the DW close read the same sign.
+  - **DX-R5, CLA's reading: holds** to the harness's 1-2 % resolution.
+    `[source-read]` The hit path (`FetchPinned`'s hit) and the free-list
+    path of `ReserveFrame` are unchanged; what DX adds per statement is
+    outside them (two thread-local clears in `StageStatement`, one read in
+    `EndWrite` on a failure, a pin-count test at each abort's entry).
+  - Cut: `strict` durability, `cores > 1`, a committing explicit
+    transaction, relations above 10,000 rows. The measurement took 6
+    minutes, about 25 with its driver.
+- **Not executed**: the `tsan` cell under TSan (no TSan build on the host;
+  the nightly's `tsan` step runs it).
+- **Durable content moved**: `eviction.md` §3.3 and EV8, `page.md` §8 and
+  §10, `wait-events.md`, `known-gaps.md`, `CLAUDE.md`'s buffer-pool row.
+  The SQL surface did not change, so the manual did not.
+- **Synced**: `git fetch origin` found `origin/main` at `481d101aa`, DX's
+  base; nothing to merge.
+- **The suite** at `5e25f1d26`: 5,353 of 5,354 (DX-S2's entry). The close
+  commits change no build input.
+
