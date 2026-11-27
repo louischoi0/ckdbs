@@ -186,16 +186,18 @@ never used again.
   is no steady state**: 3.1 to 6.1 million entries for 50,000 live rows
   after 480 s, in every cell.
 - **A point read by the index pays where its key's run holds the dead
-  entries, and nowhere else.** Recurring keys: 32.5 times the purged
-  twin's server CPU in the delete-heavy cell (470 us against 14.5 us,
-  617 dead entries in the run) and 4.9 times the rebuilt twin's in the
-  key-moving one (39.9 us against 8.1 us, 111 in the run); 739 ns and
-  286 ns a dead entry. Fresh keys: 1.002 and 0.967, and 1.045 against a
+  entries, and nowhere else.** Recurring keys, **at 480 s and still
+  rising**: 32.5 times the purged twin's server CPU in the delete-heavy
+  cell (470 us against 14.5 us, 617 dead entries in the run) and 4.9
+  times the rebuilt twin's in the key-moving one (39.9 us against 8.1 us,
+  111 in the run); 739 ns and 286 ns a dead entry. The figures are a
+  point on a line, set by how long the mix ran and how many rows share a
+  key value, not a property of the shape. Fresh keys: 1.002 and 0.967, and 1.045 against a
   purged twin in the key-moving cell, which the data do not settle
   against 5 % (the twins differ from each other by more).
 - **`REINDEX INDEX` takes out no deleted row's entry** (the count stayed
-  at 3,134,200); `PURGE INDEX` took out 98.0 % to 98.8 % of every
-  index's entries in 1.6 s to 4.4 s of one core, 0.5 us to 1.1 us a
+  at 3,134,200); `PURGE INDEX` took out 98.0 % to 98.8 % of each
+  purged index's entries in 1.6 s to 4.4 s of one core, 0.5 us to 1.1 us a
   removed entry, no row skipped.
 - `sys.relation_stats`' `deletes` and `updates` were exact;
   `est_delete_marked` was NULL on every twin, the steward never having
@@ -205,19 +207,24 @@ never used again.
 read by index pays under 5 % at steady state, DW stops and says so."*
 There is no steady state to read it at - the dead entries grow for as
 long as the mix runs - so the bar is read at the end of each mix, and by
-shape. **A point read pays 32.5 and 4.9 times where key values recur**,
-over 5 % from about one dead entry a key run (derived: 0.75 s and 6.1 s
-into these mixes), **and nothing where they do not**. The bar is not
-met: DW does not stop, and DW-S1 opens. The reading is CLA's, on the
-standing go-ahead; what it rests on is that a key whose values recur - a
-status, an owner, a foreign key - is an ordinary OLTP index.
+shape. **Where key values recur a point read was over the bar at the
+first sample, 30 s into the mix** (+96 % delete-heavy, +24 % key-moving,
+observed) **and 32.5 and 4.9 times at 480 s; where they do not it pays
+nothing.** A derived figure, not observed, puts the crossing at about
+one dead entry a key run (0.75 s and 6.1 s into these mixes). The bar is
+not met: DW does not stop, and DW-S1 opens. **The reading is CLA's
+`[design]`, on the standing go-ahead, and it holds for two of the four
+shapes**: what it rests on is the premise that a key whose values recur -
+a status, an owner, a foreign key - is an ordinary OLTP index. An
+operator who does not hold that premise reads the same data as "stop".
 
 **What S0 hands the driver's design.**
 
 - The signal DW-Q2 (a) leaves is `deletes + updates`: `est_delete_marked`
   is absent wherever no join asked for a prior, and `sys.indexes`'
-  `entries` is a walk. `updates` counts every `UPDATE`, one that moves no
-  key included, so the signal is a superset and the driver must not keep
+  `entries` is a walk. `updates` counts every row an `UPDATE` writes, one
+  that moves no key included (`src/stats/relation_stats.cpp:16`, by
+  statement kind; M-rec's count holds its 101 same-value moves), so the signal is a superset and the driver must not keep
   walking a relation whose passes remove nothing.
 - An idle-instance purge at the measured growth is under 1 % of a core;
   what a slice costs a statement on core 0 is DW-S4's to measure.
@@ -226,13 +233,18 @@ status, an owner, a foreign key - is an ordinary OLTP index.
 `630ecc359`, for reuse:
 
 - **The queue** is `exec::HeapSpace`'s dead list (`NoteDead` /
-  `TakeDead`, `src/exec/heap_store.cpp:49`), one for the instance: a
-  heap `DELETE`'s statement end queues its relation
-  (`src/server/command_dispatcher.cpp:9367`), as do a rolled-back heap
-  insert (the manager's observer, `include/kds/server/command_dispatcher.hpp:2247`),
-  a row `PURGE` (`:17906`) and a job that ended owing a slot
-  (`src/exec/heap_release.cpp:84`). Nothing queues a btree, and nothing
-  queues a heap for an `UPDATE`.
+  `TakeDead`, `src/exec/heap_store.cpp:49`), one for the instance, a
+  relation in it once however often it is noted: a heap `DELETE` queues
+  its relation at every row it marks
+  (`src/server/command_dispatcher.cpp:18356`), as do an insert whose
+  unlogged placement is taken back by retiring its slot (`:9367`), a
+  rolled-back heap insert (the manager's observer,
+  `include/kds/server/command_dispatcher.hpp:2247`), a row `PURGE`
+  (`src/server/command_dispatcher.cpp:17906`), a job that ended owing a
+  slot (`src/exec/heap_release.cpp:84`), a failed step
+  (`src/server/command_dispatcher.cpp:9806`) and a mount, every heap
+  once (`src/server/expeditor.cpp:1418`). Nothing queues a btree, and
+  nothing queues a heap for an `UPDATE`.
 - **The tick** is core 0's `system` group, every 50 ms
   (`src/server/expeditor.cpp:2303`): one `StepHeapRelease` of
   `PagesPerSlice(Priority::kAnalytic)` (16) pages or leaves, a predicate
@@ -259,3 +271,23 @@ a cell; one size; `cores = 1`, `relaxed`; no reader holding an old view
 (DW-R5 is a test's, DW-S1). The quiet gate held the run about 1.5 min
 for this session's own Debug build, outside the budget. **Suite not
 executed: no engine code changed.**
+
+**The review of DW-S0** (`critics-developer`, on `acdf8b6a6`): no defect
+that makes a number wrong - the twins' history, the liveness of the read
+keys, the schedstat windows and the 5 % arithmetic were each re-derived,
+and the report script reproduces `report.txt` byte for byte from the
+archive. **Applied**: six corrections in the results file (the key-moving
+cell's 6,341 moves that made no entry are 101 same-value moves and moves
+back to a value the row held; the fresh cells' probe series is not flat
+at one sample; the control column mixed two definitions; the recheck's
+median ratio is 1.01; `updates` does count an `UPDATE` that moves no
+value; the census is in this section) and three in this log (a heap
+`DELETE` queues at each row it marks, `src/server/command_dispatcher.cpp:18356`,
+not at `:9367`, which is an insert taken back; a failed step and a mount
+queue too; the purge figures are of the purged twin). The bar's reading
+was reworded on the review's finding: it rests on the observed 30 s
+samples, the multipliers are quoted at 480 s, and the premise it depends
+on is named. **Rejected**: asserting a row count on the mix's writes and
+the five cuts proposed in the two tools - a driver changed after its run
+is a driver that measured nothing, and the as-run copy is the archive's;
+the results file now says what the writes' check does not cover.
