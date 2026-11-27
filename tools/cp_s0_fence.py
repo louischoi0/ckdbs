@@ -134,14 +134,18 @@ def host_state(with_pgrep=True):
 # ---- The server's CPU, per arm (optional: --server-pid) --------------------
 
 class ServerCpu:
-    """`utime + stime` of every thread of the server, in seconds, keyed
+    """`utime + stime` (or, with `--cpu-schedstat`, on-CPU ns from `schedstat`) of every thread of the server, in seconds, keyed
     `reactor@cpu<k>` for a thread pinned to the one CPU `k` and `other` for
     the rest (the docstring above says why that tells a reactor). Read
     before and after each arm, off the timed path."""
 
-    def __init__(self, pid):
+    def __init__(self, pid, schedstat=False):
         self.pid = pid
         self._tick = os.sysconf("SC_CLK_TCK")
+        # EE-S0: `schedstat`'s first field is the thread's on-CPU time in
+        # ns, so a delta of a few us a statement resolves where 100 Hz
+        # ticks cannot.
+        self.schedstat = schedstat
         if not self():
             raise SystemExit(f"--server-pid {pid}: no readable threads under /proc/{pid}/task")
 
@@ -165,6 +169,13 @@ class ServerCpu:
                 if line.startswith("Cpus_allowed_list:"):
                     cpus = line.split(":", 1)[1].strip()
             key = f"reactor@cpu{cpus}" if cpus.isdigit() else "other"
+            if self.schedstat:
+                try:
+                    with open(f"{base}/{tid}/schedstat") as f:
+                        out[key] = out.get(key, 0.0) + int(f.read().split()[0]) / 1e9
+                except OSError:
+                    pass
+                continue
             # fields[0] is stat field 3 (state); utime/stime are fields 14/15.
             out[key] = out.get(key, 0.0) + (int(fields[11]) + int(fields[12])) / self._tick
         return out
@@ -342,8 +353,10 @@ def main():
     p.add_argument("--progress", default=None,
                    help="a JSON file rewritten after every arm, for a watchdog to poll")
     p.add_argument("--json", default=None, help="write the raw summaries here")
+    p.add_argument("--cpu-schedstat", action="store_true",
+                   help="read on-CPU ns from /proc/<pid>/task/*/schedstat, not 100 Hz ticks (EE-S0)")
     p.add_argument("--server-pid", type=int, default=None,
-                   help="the kds_server pid: bracket each arm with its threads' utime+stime "
+                   help="the kds_server pid: bracket each arm with its threads' utime+stime, or schedstat with --cpu-schedstat "
                         "(/proc/<pid>/task/*/stat), reported per reactor and per statement")
     args = p.parse_args()
 
@@ -364,7 +377,7 @@ def main():
     label = args.label or f"{args.protocol}-w{args.writers}"
 
     host_before = host_state()
-    cpu = ServerCpu(args.server_pid) if args.server_pid else None
+    cpu = ServerCpu(args.server_pid, args.cpu_schedstat) if args.server_pid else None
 
     control = connect(args.host, args.port, args.protocol)   # setup, SHOW META, sys views
     fence = connect(args.host, args.port, args.protocol)     # the fence holder
@@ -552,7 +565,7 @@ def main():
         spread = max((max(s) - min(s)) if s else 0.0 for s in cpu_per_stmt.values())
         print(f"  C3 (server CPU, pid {args.server_pid}, every thread): fenced {cf:.2f} us/stmt, "
               f"unfenced {cu:.2f} us/stmt, delta {cf - cu:+.2f} us/stmt; block-to-block spread "
-              f"within one arm up to {spread:.2f} us (CLK_TCK {os.sysconf('SC_CLK_TCK')} Hz)")
+              f"within one arm up to {spread:.2f} us ({'schedstat ns' if args.cpu_schedstat else 'CLK_TCK ' + str(os.sysconf('SC_CLK_TCK')) + ' Hz'})")
     print(f"  walks: {census_end[WALKS_KEY] - census_start[WALKS_KEY]} fence walks over the run; "
           f"fenced arm {min(walks[ARM_FENCED]) if walks[ARM_FENCED] else 0:.3f}..{max(walks[ARM_FENCED]) if walks[ARM_FENCED] else 0:.3f} per statement, "
           f"unfenced arm {min(walks[ARM_UNFENCED]) if walks[ARM_UNFENCED] else 0:.3f}..{max(walks[ARM_UNFENCED]) if walks[ARM_UNFENCED] else 0:.3f}")

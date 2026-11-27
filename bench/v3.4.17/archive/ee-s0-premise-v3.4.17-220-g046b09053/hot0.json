@@ -1,0 +1,56 @@
+{
+ "sessions": 8,
+ "seconds": 15.0,
+ "think_ms": 0.0,
+ "outcomes": {
+  "commit": 599178,
+  "refused: ERR TXN_CONFLICT retryable=1 row id=1 was written by transac": 1001
+ },
+ "lock_waits": {
+  "granted": 16384
+ },
+ "lock_waits_rows": 16384,
+ "waited_us": {
+  "n": 16384,
+  "p0": 5.0,
+  "p25": 14.0,
+  "p50": 16.0,
+  "p75": 18.0,
+  "p95": 22.0,
+  "p100": 1257.0,
+  "mean": 16.6326904296875
+ },
+ "txn_us": {
+  "n": 599178,
+  "p0": 49.60500154993497,
+  "p25": 137.43599993176758,
+  "p50": 175.50200209370814,
+  "p75": 242.52299772342667,
+  "p95": 371.7179970408324,
+  "p100": 7416.644999466371,
+  "mean": 199.79648069937554
+ },
+ "meta_wait_aborts": "0",
+ "relation_locks": {
+  "lock_waits": "3596623",
+  "lock_wait_us": "59666365",
+  "lock_deadlocks": "0",
+  "lock_fault_nets": "0"
+ },
+ "config": {
+  "binary": "/home/ukjin/ee-s0-run/final/kds_server",
+  "workdir": "/home/ukjin/ee-s0-run/final/w-hot0",
+  "port": 15963,
+  "cell": "hot",
+  "cores": 4,
+  "cpus": "0,1,2,3",
+  "rounds": 40,
+  "hold_ms": 20.0,
+  "cap": 4,
+  "sessions": 8,
+  "seconds": 15.0,
+  "think_ms": 0.0,
+  "drain_us": null,
+  "json": "/home/ukjin/ee-s0-run/final/hot0.json"
+ }
+}
