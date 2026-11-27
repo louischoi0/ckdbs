@@ -562,13 +562,14 @@ indexes = on
 
 # index_purge_driver: whether the engine purges index entries unasked
 # (docs/spec/index.md §2.3). On, core 0 runs `PURGE INDEX`'s own pass over
-# the indexes of a relation once its deletes and updates pass a threshold -
-# 4,096, and a fifth of the entries an index kept at its last pass, which is
-# about a fifth of the rows - one batch of 16 leaves every 50 ms, holding the
-# relation the way a writer does and only for the batch. An update counts for
-# less, down to an eighth, on a relation whose updates have been moving no
-# indexed value. What a pass removes is exactly what the statement would: no
-# query answers differently with the key on or off.
+# the indexes of a relation once the writes that left a dead entry - a
+# delete, and an update that changed a value an index carries - pass a
+# threshold: 4,096, and a fifth of the entries an index kept at its last
+# pass, which is about a fifth of the rows. A pass is one batch of 16 leaves
+# every 50 ms, holding the relation the way a writer does and only for the
+# batch. An update that changes no indexed or covered value buys nothing.
+# What a pass removes is exactly what the statement would: no query answers
+# differently with the key on or off.
 #
 # Off by default: off, a BTREE's index keeps a deleted row's entry, and any
 # index the entry of a value a row moved off, until an administrator runs

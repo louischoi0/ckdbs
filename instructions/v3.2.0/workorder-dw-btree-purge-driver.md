@@ -138,12 +138,12 @@ the item. No item is tagged `[quiet-wrong]`.
 |---|---|---|
 | DW-Q0 | (a) | the index driver for btree relations and the moved-key purge for both kinds |
 | DW-Q1 | (a) | DW-S0 gates; the bar is read in §7 |
-| DW-Q2 | (a) | existing counters only |
+| DW-Q2 | (a), **amended by DW-Q7 (b) at the close** | existing counters only, and one new one: `deletes` as it stood, and `key_updates` |
 | DW-Q3 | (a) | one boot key, off by default |
 | DW-Q4 | (a) | the row is left to `PURGE`; DW-S3 has no subject. (c) needs the operator's own word and the standing word is not that |
 | DW-Q5 | (a) | IX2c's first entry and spilled covered churn stay outside |
 | DW-Q6 | (a) | `PURGE`'s polling wait stays outside |
-| DW-Q7 | (a) | raised by CLA at DW-S2 and adopted the same way: the item is not in the order as the operator read it |
+| DW-Q7 | **(b), revised by CLA at the close from its own (a)** | raised by CLA at DW-S2 and adopted the same way: the item is not in the order as the operator read it. (a)'s proposal named its own trigger - "(b) is proposed only if a close measures the learned weight's cost as a regression" - and the first close measured it (§7, "DW-S4"): updates that move no key bought a fruitless pass every 2 s, 4.8 % of server CPU a statement for one index. **(b) adds one count, and so amends DW-Q2 (a)**, "existing counters only": `key_updates` is new, counted on the write path, and - DW-R3 - only where the driver is on |
 
 ## 5. Stages
 

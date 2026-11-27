@@ -2270,9 +2270,16 @@ public:
     // driver's floor, a test's and the simulator's to lower.
     void EnableIndexPurgeDriver(std::uint64_t min_writes = exec::IndexPurgeDriver::kMinWrites) {
         index_purge_.emplace(min_writes);
+        count_key_updates_ = true;
     }
-    // Offers every relation's delete and update counts to the driver, off
-    // the relation statistics' snapshot.
+    // Whether this dispatcher's `UPDATE`s count the rows that moved what an
+    // index carries (`RelationActivity::key_updates`), the driver's signal:
+    // on for every core's dispatcher of an instance that runs the driver,
+    // and off - nothing counted - everywhere else (DW-R3).
+    void CountKeyUpdates(bool on) noexcept { count_key_updates_ = on; }
+    bool counts_key_updates() const noexcept { return count_key_updates_; }
+    // Offers every relation's delete and key-update counts to the driver,
+    // off the relation statistics' snapshot.
     void QueueIndexPurges();
     // One step of the driver's pass under the relation's `IX`, `budget`
     // leaves; a refused `IX` skips it. Returns whether a pass is still owed.
@@ -3326,6 +3333,7 @@ private:
     std::optional<exec::HeapSlotRelease> heap_release_;
     exec::HeapReleaseCounts last_heap_release_;
     std::optional<exec::IndexPurgeDriver> index_purge_;
+    bool count_key_updates_ = false;
     // Statement heads open on this core: only the outermost publishes.
     int epoch_depth_ = 0;
     // Whether a DDL was open anywhere when the last statement head read the

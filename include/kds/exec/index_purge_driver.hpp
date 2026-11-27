@@ -20,35 +20,32 @@
 //
 // ---- What it runs on --------------------------------------------------------
 //
-// **Signals that already exist** (DW-Q2 (a)): a relation's `deletes` and
-// `updates` as `stats::RelationStats` counts them, cumulative. A relation is
-// queued once its writes since it was last queued reach its threshold, and a
-// pass is every index of the relation walked once (`RelationIndexPurge`). No
-// page is read to choose.
+// **Two counts of `stats::RelationStats`, cumulative**, each a write that
+// left the tree a dead entry more:
 //
-// **A delete counts whole**: it leaves one dead entry an index. On a heap it
-// does not count at all - the slot release purges for a heap's deletes
-// (`heap_release.hpp`) - which the driver learns at the relation's first
-// pass, a relation's kind being fixed for the life of its oid.
+//   - `deletes`: a deleted row's entry, one an index. On a heap it does not
+//     count - the slot release purges for a heap's deletes
+//     (`heap_release.hpp`) - which the driver reads at the relation's first
+//     pass, a relation's kind being fixed for the life of its oid.
+//   - `key_updates` (DW-Q7 (b)): the rows an `UPDATE` wrote with a new
+//     entry appended to some index - a key or a covered value moved, and the
+//     row's old entry is the dead one, on a btree and on a heap alike; no
+//     slot is retired by an `UPDATE`, so nothing else purges it. Counted on
+//     the write path, at the row, and only where the driver is switched on.
+//     An `UPDATE` that moves nothing an index carries is not counted, and
+//     nor is one back to a value whose entry is still there: it kills one
+//     entry and revives another.
 //
-// **An update counts by what the relation's updates have been leaving**
-// (the moved key's entry, on a btree and on a heap alike - no slot is retired
-// by an `UPDATE`, so nothing else purges it). The count is every `UPDATE`,
-// and only one that moves a key or a covered column leaves an entry, so a
-// pass whose removals, beyond its deletes' entries, are under one
-// `kUsefulShare`th of the updates that helped buy it halves the weight of
-// the relation's updates (`update_shift`, to `kMaxUpdateShift`), and a pass
-// that did better restores it. **A pass an older view could have made
-// fruitless says nothing of the updates**, and the weight stands: a row such
-// a view still sees is owed its entries, whatever its writer did. The pass
-// knows by a mark - the commit ceiling when the relation was queued, under
-// which every write that bought the pass committed - which the read horizon
-// must have reached by the pass's first step.
+// A relation is queued once its writes since it was last queued reach its
+// threshold, and a pass is every index of the relation walked once
+// (`RelationIndexPurge`). No page is read to choose.
 //
 // **The threshold follows what a pass costs**: a pass reads every entry of
 // every index, so the writes that buy one are at least `kMinWrites` and at
 // least one `kLiveShare`th of the entries an index kept at the last pass -
-// the rows, near enough.
+// the rows, near enough. A pass an older view makes fruitless (its rows are
+// still owed their entries) has spent the writes that bought it, and the
+// next is bought at the same price.
 //
 // ---- Protocol ---------------------------------------------------------------
 //
@@ -75,7 +72,7 @@
 //
 // **Switched off, none exists** (DW-R3): the dispatcher builds one only where
 // `index_purge_driver` is on, and with none nothing is offered, counted or
-// stepped.
+// stepped - `key_updates` included.
 namespace kds::exec {
 
 struct IndexPurgeDriverCounts {
@@ -89,23 +86,16 @@ class IndexPurgeDriver {
 public:
     // 4,096 writes: under it a pass is not worth a walk of the smallest
     // index. One fifth of an index's kept entries: the share of a table
-    // PostgreSQL's autovacuum waits for by default. An eighth of the updates
-    // and three halvings: a relation whose updates move no key is walked an
-    // eighth as often, and one misread under an older view waits eight times
-    // its threshold at most. [PROPOSED], all four.
+    // PostgreSQL's autovacuum waits for by default. [PROPOSED], both.
     static constexpr std::uint64_t kMinWrites = 4096;
     static constexpr std::uint64_t kLiveShare = 5;
-    static constexpr std::uint64_t kUsefulShare = 8;
-    static constexpr std::uint32_t kMaxUpdateShift = 3;
 
     explicit IndexPurgeDriver(std::uint64_t min_writes = kMinWrites) : min_writes_(min_writes) {}
 
-    // A relation's cumulative deletes and updates, as the statistics count
-    // them now: queued once those since it was last queued reach its
-    // threshold. `commit_ceiling` is the instance's as it stands, the mark a
-    // queued relation's pass reads the horizon against.
-    void Offer(catalog::Oid oid, std::uint64_t deletes, std::uint64_t updates,
-               std::uint64_t commit_ceiling);
+    // A relation's cumulative deletes and key-moving updates, as the
+    // statistics count them now: queued once those since it was last queued
+    // reach its threshold.
+    void Offer(catalog::Oid oid, std::uint64_t deletes, std::uint64_t key_updates);
 
     // The relation the next step is on - the running pass's, else the next
     // queued one's, whose pass this begins - or none.
@@ -125,16 +115,10 @@ public:
 
 private:
     struct Relation {
-        std::uint64_t deletes = 0;    // the counts it was last queued at
-        std::uint64_t updates = 0;
-        // What bought its queued or running pass - the writes since it was
-        // queued before, deletes 0 on a heap - and the commit ceiling then.
-        std::uint64_t bought_deletes = 0;
-        std::uint64_t bought_updates = 0;
-        std::uint64_t mark = 0;
-        std::uint64_t threshold = 0;  // 0: `min_writes_`, no pass has ended whole yet
-        std::uint32_t update_shift = 0;
-        bool heap = false;            // read at its first pass
+        std::uint64_t deletes = 0;      // the counts it was last queued at
+        std::uint64_t key_updates = 0;
+        std::uint64_t threshold = 0;    // a share of its last whole pass; `Offer` floors it
+        bool heap = false;              // read at its first pass
         bool queued = false;
     };
     struct Pass {
@@ -143,8 +127,6 @@ private:
         std::uint64_t indexes = 1;  // the relation's, as the last step read them
         std::uint64_t read = 0;
         std::uint64_t removed = 0;
-        bool started = false;
-        bool horizon_past_mark = false;  // at its first step
     };
 
     void EndPass();

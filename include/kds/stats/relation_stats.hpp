@@ -39,7 +39,10 @@
 // `OidParts` (`stats/oid_parts.hpp`): one part per core and **no latch**
 // (`docs/rules/rules.md` §3a; DL-S2), the core a statement ran on its only
 // writer - once per write statement at its end, once per lock wait at its
-// end - and a reader summing the parts by oid. A relation's counts in a
+// end, and where the unasked index purge is on once per `UPDATE` row that
+// moved what an index carries, at the row under its leaf's hold
+// (`key_updates`, which `oid_parts.hpp` admits) - and a reader summing the
+// parts by oid. A relation's counts in a
 // part are relaxed single-writer words: a record takes nothing and waits
 // for nothing, and a row a view reads may differ by a statement in flight.
 // No cross-core write is added to a statement's path.
@@ -57,13 +60,21 @@
 
 namespace kds::stats {
 
-enum class RelationWrite : std::uint8_t { kInsert, kUpdate, kDelete, kPurge };
+enum class RelationWrite : std::uint8_t { kInsert, kUpdate, kDelete, kPurge, kKeyUpdate };
 
 struct RelationActivity {
     sched::RelaxedU64 inserts;
     sched::RelaxedU64 updates;
     sched::RelaxedU64 deletes;
     sched::RelaxedU64 purged;
+    // The rows an `UPDATE` wrote with a new entry appended to some index
+    // (DW-Q7 (b)): each left the tree a dead entry more. **Counted at the
+    // row, not at the statement's end, and only where the unasked index
+    // purge is switched on** (`CommandDispatcher::CountKeyUpdates`) - it is
+    // that driver's signal and no view's column - so it holds the rows of a
+    // statement that failed or rolled back too, whose entries are dead all
+    // the same.
+    sched::RelaxedU64 key_updates;
     // The lock waits registered on a unit of the relation, cumulative
     // (DF-S3): every row `sys.lock_waits` was written, counted where it is
     // written, so the columns hold what that ring has overwritten too.
@@ -78,6 +89,7 @@ struct RelationActivity {
         updates.add(o.updates);
         deletes.add(o.deletes);
         purged.add(o.purged);
+        key_updates.add(o.key_updates);
         lock_waits.add(o.lock_waits);
         lock_wait_us.add(o.lock_wait_us);
         lock_deadlocks.add(o.lock_deadlocks);

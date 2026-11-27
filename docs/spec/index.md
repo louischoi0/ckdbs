@@ -190,31 +190,35 @@ entry of a key a row moved off, which no retired slot ever queues.
 > `PurgeIndexLeaves` attempt: IX2a's judge, IX2b's fence and IX2c's first
 > entry, unchanged. So a result is the same with the key on and off.
 
-**What it runs on** is counts that already exist: a relation's `deletes`
-and `updates` in `sys.relation_stats`' store, read once a second by core
-0's `system` tick. A relation is queued once its writes since it was
-last queued reach its threshold - 4,096, and one fifth of the entries an
-index kept at its last pass, the indexes averaged, which is the rows near
+**What it runs on** is two counts of `sys.relation_stats`' store, each a
+write that left a dead entry, read once a second by core 0's `system`
+tick. A relation is queued once its writes since it was last queued
+reach its threshold - 4,096, and one fifth of the entries an index kept
+at its last whole pass, the indexes averaged, which is the rows near
 enough - and no page is read to choose.
 
-- **A delete counts whole**: it leaves one dead entry an index, which a
-  pass takes but for a row an older view still sees. A pass such a view
-  makes fruitless has spent the writes that bought it, and the next is
-  bought at the same price. **On a heap a delete does not count**: its
-  slot release purges for it. The driver reads a relation's kind at its
-  first pass.
-- **An update counts by what the relation's updates have been leaving.**
-  `updates` is every `UPDATE`, and only one that moves a key or a covered
-  column leaves an entry. A pass whose removals, beyond its deletes'
-  entries, are under an eighth of the updates that helped buy it halves
-  the weight of the relation's updates, to an eighth; a pass that did
-  better makes it whole. **A pass an older view could have made fruitless
-  says nothing of the updates**: the relation is queued with the commit
-  ceiling of that moment as its mark, and its pass judges the updates
-  only if the read horizon had reached the mark at its first step.
+- **`deletes`**: a deleted row's entry, one an index, which a pass takes
+  but for a row an older view still sees. A pass such a view makes
+  fruitless has spent the writes that bought it, and the next is bought
+  at the same price. **On a heap a delete does not count**: its slot
+  release purges for it. The driver reads a relation's kind at its first
+  pass.
+- **`key_updates`** (DW-Q7 (b)): the rows an `UPDATE` wrote with a new
+  entry appended to some index (`MaintainIndexes`' `appended`). A row is
+  owed one entry an index, so an append is exactly one dead entry more:
+  the row's old one. It is counted at the row, on the core that wrote it,
+  **and only where the driver is switched on**; it is no column of
+  `sys.relation_stats`. A row of a statement that failed or rolled back
+  is counted too, rightly: a rollback removes no entry (IX2), so the
+  entry it appended is dead. Not counted, and buying nothing: an `UPDATE`
+  that moves nothing an index carries, and one back to a value whose
+  entry is still in the tree, which kills one entry and revives another.
+  **One count that no pass can answer**: a spilled covered value changed
+  to another of the same length appends an entry IX2a keeps.
 
 A relation dropped and a catalog chain end their pass with nothing
-walked.
+walked. **A rolled-back `INSERT`'s entries are in neither count**: they
+go with the next pass something else buys.
 
 **How it runs** is the heap release's way: one slice - the `analytic`
 level's 16 leaves - on each 50 ms tick of core 0's `system` group, under
@@ -225,8 +229,8 @@ granted in the gap, and a slice that finds the relation held is skipped,
 not waited for. No transaction, no view and no purge horizon is held; the
 horizon is read as the statement reads it (`ResolvedForEveryReader`).
 
-**Off, nothing exists**: no driver is built, no tick is submitted and no
-count is read. On, `sys.meta` on core 0 carries the `index_purge` section
+**Off, nothing exists**: no driver is built, no tick is submitted, no
+count is read and `key_updates` is not counted. On, `sys.meta` on core 0 carries the `index_purge` section
 (`sys-views.md` §7). The driver's state is memory-resident and a restart
 starts it empty; a pass's images are §2.2's, so a crash can lose a pass,
 which leaves those entries in place for the next.
@@ -1413,9 +1417,8 @@ off is a catalog act: `DROP INDEX`.
 ## 13. Open decisions this spec deliberately does not settle
 
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
-split point and fill factor, the column caps, reclamation of superseded
-entries unasked on a btree relation (`PURGE INDEX`, §2.2, is the
-administrator's there; a heap's slot release drives one), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
+split point and fill factor, the column caps, whether the unasked purge
+(§2.3) is on by default (its key is off), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
 stays refused, BX-Q5 (a)), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.

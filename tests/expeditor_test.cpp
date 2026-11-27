@@ -465,6 +465,31 @@ TEST_F(ExpeditorTest, TheTickPurgesABtreesIndexOnlyWhereTheKeyIsOn) {
     }
 }
 
+// DW-Q7 (b), DW-R3: the driver is core 0's, and its signal is counted where
+// a row is written - on every core's dispatcher of an instance that runs the
+// driver, and on none of an instance that does not.
+TEST_F(ExpeditorTest, EveryCoreCountsKeyUpdatesOnlyWhereTheDriverIsOn) {
+    for (const bool on : {false, true}) {
+        Expeditor::Config config = ConfigAt(/*cores=*/2);
+        config.data_file = (dir_ / (on ? "on2.db" : "off2.db")).string();
+        config.wal_dir = (dir_ / (on ? "on2.wal" : "off2.wal")).string();
+        config.index_purge_driver = on;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        ASSERT_TRUE(Started(db.Start()));
+        ASSERT_EQ(db.cores().size(), 1u);
+        EXPECT_EQ(db.dispatcher().counts_key_updates(), on);
+        EXPECT_EQ(db.cores().front()->dispatcher().counts_key_updates(), on);
+        EXPECT_EQ(db.dispatcher().index_purge_driver() != nullptr, on);
+        EXPECT_EQ(db.cores().front()->dispatcher().index_purge_driver(), nullptr)
+            << "one driver for the instance, on core 0";
+        RunningInstance running(db, config.debug_text_port);
+        ASSERT_TRUE(running.Run()) << "the debug text port never accepted";
+        EXPECT_TRUE(running.Stop().ok());
+    }
+}
+
 // BP-R1's arming cells (BP-H1, H2, H3): each structure the instance shares
 // latches or fences above one core and not at one, where its every caller
 // runs on the reactor thread (the census is in each header).

@@ -641,9 +641,6 @@ public:
     // **The acknowledged-commit bound** (BA-R1c, `instance_visibility.hpp`):
     // whether a snapshot minted now covers commit LSN `lsn` - always, for
     // `wal::kNoLsn`.
-    // The highest commit LSN any core has published: every transaction
-    // decided by now committed at or below it.
-    std::uint64_t CommitCeiling() const noexcept { return visibility_->CommitCeiling(); }
     bool CeilingCovers(std::uint64_t lsn) const noexcept {
         return visibility_->SnapshotCeiling() >= lsn;
     }

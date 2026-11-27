@@ -2,27 +2,20 @@
 
 #include <algorithm>
 
-#include "kds/txn/manager.hpp"
-
 namespace kds::exec {
 
-void IndexPurgeDriver::Offer(catalog::Oid oid, std::uint64_t deletes, std::uint64_t updates,
-                             std::uint64_t commit_ceiling) {
+void IndexPurgeDriver::Offer(catalog::Oid oid, std::uint64_t deletes, std::uint64_t key_updates) {
     Relation& r = relations_[oid];
     // A count below the baseline is a statistics reset (a test's): start over.
     if (deletes < r.deletes) r.deletes = deletes;
-    if (updates < r.updates) r.updates = updates;
+    if (key_updates < r.key_updates) r.key_updates = key_updates;
     if (r.queued || (pass_.has_value() && pass_->oid == oid)) return;
-    const std::uint64_t by_deletes = r.heap ? 0 : deletes - r.deletes;
-    const std::uint64_t by_updates = updates - r.updates;
-    if (by_deletes + (by_updates >> r.update_shift) < std::max(r.threshold, min_writes_)) return;
+    const std::uint64_t writes = (r.heap ? 0 : deletes - r.deletes) + (key_updates - r.key_updates);
+    if (writes < std::max(r.threshold, min_writes_)) return;
     // Writes after this count toward the next pass: this one may already be
     // past the leaf their entries are on.
     r.deletes = deletes;
-    r.updates = updates;
-    r.bought_deletes = by_deletes;
-    r.bought_updates = by_updates;
-    r.mark = commit_ceiling;
+    r.key_updates = key_updates;
     r.queued = true;
     queue_.push_back(oid);
 }
@@ -55,12 +48,7 @@ Status IndexPurgeDriver::Step(storage::PageStore& store, catalog::Catalog& catal
         EndPass();
         return Status::OK();
     }
-    Relation& r = relations_[pass_->oid];
-    r.heap = access.value()->heap();
-    if (!pass_->started) {
-        pass_->started = true;
-        pass_->horizon_past_mark = txns != nullptr && txns->ReadHorizon() >= r.mark;
-    }
+    relations_[pass_->oid].heap = access.value()->heap();
     pass_->indexes = std::max<std::uint64_t>(1, access.value()->indexes.size());
     IndexPurgeAttempt attempt;
     const Status ran = pass_->walk.Step(store, catalog, *access.value(), txns, wal, locks, holder,
@@ -76,23 +64,12 @@ Status IndexPurgeDriver::Step(storage::PageStore& store, catalog::Catalog& catal
 
 void IndexPurgeDriver::EndPass() {
     // A pass a refusal, a drop or a catalog chain ended walked too little to
-    // say anything: the relation keeps what its last whole pass found.
+    // say what the relation holds: it keeps its last whole pass's threshold.
     if (pass_->walk.done()) {
-        Relation& r = relations_[pass_->oid];
         // What an index kept, the indexes averaged: the relation's rows, plus
         // what the pass could not take.
         const std::uint64_t kept = (pass_->read - pass_->removed) / pass_->indexes;
-        r.threshold = std::max(min_writes_, kept / kLiveShare);
-        // What the pass says of the relation's updates, where no older view
-        // stood between it and the writes that bought it: its removals less
-        // its deletes' entries are what the updates left.
-        if (r.bought_updates != 0 && pass_->horizon_past_mark) {
-            const std::uint64_t by_deletes = r.bought_deletes * pass_->indexes;
-            const std::uint64_t by_updates = pass_->removed - std::min(pass_->removed, by_deletes);
-            r.update_shift = by_updates * kUsefulShare < r.bought_updates
-                                 ? std::min(r.update_shift + 1, kMaxUpdateShift)
-                                 : 0;
-        }
+        relations_[pass_->oid].threshold = kept / kLiveShare;
     }
     ++counts_.passes;
     pass_.reset();

@@ -3855,10 +3855,12 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
 Verified on worktree `dd-index-entry-purge` at `b8880f9b` (DD-S2,
 2026-11-20); re-read at `bf289a82`, after DN-S2's slot release.
 
-- **Nothing drives it on a btree**: there `PURGE INDEX` runs when an
-  administrator runs it (DD-Q4 (a)). A heap's indexes are purged unasked by
-  its slot release (DD-S4 option (b), `raft-marks-2026-11-21.md` §6; built
-  in DN-S2, verified at `bc8c9d97`, `heap-and-tuple.md` §3.1b).
+- **Nothing drives it on a btree unless `index_purge_driver` is on, and
+  the key is off by default** (DW, below): with it off `PURGE INDEX` runs
+  when an administrator runs it (DD-Q4 (a)). A heap's indexes are purged
+  unasked by its slot release for the rows it deleted (DD-S4 option (b),
+  `raft-marks-2026-11-21.md` §6; built in DN-S2, verified at `bc8c9d97`,
+  `heap-and-tuple.md` §3.1b).
 - **A purge of a row `PURGE`'s window is about eight times dearer an
   entry** (DD's close, `bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`:
   about 20 us against 2.4 us): the judge's lookup of a purged key lands
@@ -3960,9 +3962,10 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   retired slot, so a relation whose keys move and whose rows are never
   deleted keeps every old entry: space, and a longer run for the value's
   next holder. `PURGE INDEX $pkey_<oid>` takes them out when asked
-  (DR-Q21; its cell is the btree form's, `btree_primary_key_test.cpp`) and
-  nothing runs it unasked. The remedy named and not built: the release's
-  index purge run with no retired slot.
+  (DR-Q21; its cell is the btree form's, `btree_primary_key_test.cpp`).
+  **Unasked, only where `index_purge_driver` is on** (DW-S2, verified at
+  `0c2092df8`: the driver counts updates and walks a heap, `index.md`
+  §2.3); the key is off by default, and with it off nothing runs it.
 - **A join key enters an index by its leading column only**
   (`CorrelatedIndexProbeOf`): a join on every column of a composite key
   probes the first and filters the rest, so its cost follows the first
@@ -4030,11 +4033,13 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
 - **`PURGE` on an embedded key names a live key by its id**: the refusal
   of a one-key window over a live row says `tuple key N is live`, not the
   key the statement wrote.
-- **A btree's indexed key keeps its dead entries until a statement purges
-  them.** A heap's slot release purges its indexes; nothing releases a
-  btree's slots, so `$pkey_<oid>`'s entries of deleted and moved rows wait
-  for `PURGE INDEX $pkey_<oid>`, and its delete-marked rows for `PURGE
-  FROM t WHERE keyidentity ...`.
+- **A btree's indexed key keeps its dead entries until a purge, and its
+  delete-marked rows until a statement.** A heap's slot release purges its
+  indexes; nothing releases a btree's slots, so `$pkey_<oid>`'s entries of
+  deleted and moved rows wait for `PURGE INDEX $pkey_<oid>` - or for the
+  unasked driver where `index_purge_driver` is on (DW, off by default) -
+  and its delete-marked rows for `PURGE FROM t WHERE keyidentity ...`,
+  which nothing runs unasked (DW-Q4 (a)).
 - **An embedded relation's `next_id` is its highest key's id plus one**,
   and `SHOW BUDGET` reads it as ids issued: a named key moves the mark, as
   on any btree, and here every row names its key.

@@ -2435,6 +2435,8 @@ void Expeditor::WireInstanceServices(CommandDispatcher& dispatcher) {
     dispatcher.SetStatementEpochs(&*statement_epochs_);
     dispatcher.SetReclaimQueue(&*reclaimer_);
     dispatcher.SetHeapSpace(&heap_space_);
+    // DW-R3: an instance with no driver counts nothing for one.
+    dispatcher.CountKeyUpdates(config_.index_purge_driver);
 }
 
 void Expeditor::StopDataSync() {

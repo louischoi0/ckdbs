@@ -9825,12 +9825,9 @@ StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
 }
 
 void CommandDispatcher::QueueIndexPurges() {
-    if (!index_purge_.has_value() || txn_ == nullptr) return;
-    // Read after the counts' writers decided, so no write a count holds
-    // committed above it but one still open.
-    const std::uint64_t ceiling = txn_->CommitCeiling();
+    if (!index_purge_.has_value()) return;
     for (const auto& [oid, activity] : stats::RelationStats::Snapshot()) {
-        index_purge_->Offer(oid, activity.deletes, activity.updates, ceiling);
+        index_purge_->Offer(oid, activity.deletes, activity.key_updates);
     }
 }
 
@@ -14737,16 +14734,20 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
         // A heap's entry carries the row's rowid, which an in-place
         // overwrite keeps (DN, IX1).
-        if (Status s = exec::MaintainIndexes(
-                catalog_, page_store_, ta, row,
-                /*first_col_pos=*/0, encoded.value(), id, previous,
-                log_index ? &log_index : nullptr,
-                ta.heap()
-                    ? heap::EncodeRowid(heap::Rowid{page_id, slot})
-                    : 0);
-            !s.ok()) {
-            return s;
+        bool appended = false;
+        const Status maintained = exec::MaintainIndexes(
+            catalog_, page_store_, ta, row,
+            /*first_col_pos=*/0, encoded.value(), id, previous,
+            log_index ? &log_index : nullptr,
+            ta.heap() ? heap::EncodeRowid(heap::Rowid{page_id, slot}) : 0,
+            count_key_updates_ ? &appended : nullptr);
+        // The unasked index purge's signal (DW-Q7 (b)): the tree holds a dead
+        // entry more from here, whatever becomes of the statement - counted
+        // before the refusal below, which may follow an index that appended.
+        if (appended) {
+            stats::RelationStats::Record(core_id_, ta.oid, stats::RelationWrite::kKeyUpdate, 1);
         }
+        if (!maintained.ok()) return maintained;
         // The row's entries are in, so its key units go back (BX-Q2 (a)).
         unique_holds.Release();
         unique_cleared.reset();

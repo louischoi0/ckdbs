@@ -151,6 +151,10 @@ TEST_F(IndexPurgeDriverTest, SwitchedOffNothingIsOfferedSteppedOrShown) {
     EXPECT_EQ(dispatcher_->index_purge_driver(), nullptr);
     EXPECT_EQ(Entries("by_k"), 600u);
     EXPECT_EQ(Run("SHOW META").find("index_purge"), std::string::npos);
+    // And the write path counts nothing for a driver that is not there.
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 100");
+    EXPECT_EQ(stats::RelationStats::Snapshot()[Oid("t")].key_updates.get(), 0u);
+    EXPECT_EQ(stats::RelationStats::Snapshot()[Oid("t")].updates.get(), 100u);
 }
 
 TEST_F(IndexPurgeDriverTest, ARelationIsQueuedOnlyOnceItsDeletesReachTheThreshold) {
@@ -423,96 +427,82 @@ TEST_F(IndexPurgeDriverTest, AMovedPrimaryKeysOldEntriesGoUnasked) {
         << "the value the key moved off is free";
 }
 
-// `updates` counts every UPDATE, and only one that moves a key leaves an
-// entry. A pass that found the updates left nothing halves their weight, to
-// an eighth; the first pass that finds their entries restores it.
-TEST_F(IndexPurgeDriverTest, UpdatesThatMoveNoKeyBuyPassesAtAFallingRateUntilOneDoes) {
+// DW-Q7 (b): what buys a pass beside a delete is an UPDATE that moved what
+// an index carries - a key or a covered value - counted at the row. One that
+// moved nothing leaves no entry and buys nothing, however many there are.
+TEST_F(IndexPurgeDriverTest, OnlyAnUpdateThatMovesWhatAnIndexCarriesBuysAPass) {
     dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
-    Ok("CREATE TABLE t (id int64, k int64, w int64) BTREE");
-    Ok("CREATE INDEX by_k ON t (k)");
+    Ok("CREATE TABLE t (id int64, k int64, c int64, w int64) BTREE");
+    Ok("CREATE INDEX by_k ON t (k) COVERING (c)");
     for (int i = 1; i <= 200; ++i) {
-        Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", " + std::to_string(i % 8) + ", 0)");
+        Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", " + std::to_string(i % 8) +
+           ", 0, 0)");
     }
-    const auto bump = [&](int rows) {  // moves no key
-        Ok("UPDATE t SET w = w + 1 WHERE id <= " + std::to_string(rows));
-    };
-    bump(40);
-    EXPECT_EQ(Drive(), 1u);
-    EXPECT_EQ(Counts().removed, 0u);
-    bump(40);
-    EXPECT_EQ(Drive(), 0u) << "halved: 40 updates weigh 20";
-    bump(40);
-    EXPECT_EQ(Drive(), 1u) << "80 weigh 40";
-    bump(120);
-    EXPECT_EQ(Drive(), 0u) << "quartered: 120 weigh 30";
-    bump(40);
-    EXPECT_EQ(Drive(), 1u) << "160 weigh 40";
-    bump(200);
-    EXPECT_EQ(Drive(), 0u) << "an eighth: 200 weigh 25";
-    bump(120);
-    EXPECT_EQ(Drive(), 1u) << "320 weigh 40";
-    bump(200);
-    bump(120);
-    EXPECT_EQ(Drive(), 1u) << "and no further: the ceiling is an eighth";
-    EXPECT_EQ(Counts().removed, 0u);
+    for (int round = 0; round < 20; ++round) Ok("UPDATE t SET w = w + 1");  // 4,000 updates
+    Ok("UPDATE t SET k = k WHERE id <= 100");  // a key assigned the value it has
+    EXPECT_EQ(Drive(), 0u) << "no update moved what the index carries";
+    EXPECT_EQ(Entries("by_k"), 200u);
 
-    // Updates that move keys: 320 weigh 40, the pass finds their entries,
-    // and the weight is whole again.
-    Ok("UPDATE t SET k = k + 100");
-    Ok("UPDATE t SET k = k + 100 WHERE id <= 120");
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 39");
+    EXPECT_EQ(Drive(), 0u) << "39 are under the floor";
+    Ok("UPDATE t SET c = c + 1 WHERE id = 40");  // a covered value moves the entry too
+    ASSERT_EQ(Entries("by_k"), 240u);
     EXPECT_EQ(Drive(), 1u);
-    EXPECT_GE(Counts().removed, 300u);
-    Ok("UPDATE t SET k = k + 100 WHERE id <= 40");
-    EXPECT_EQ(Drive(), 1u) << "40 updates buy a pass again";
+    EXPECT_GE(Counts().removed, 39u);
+    EXPECT_LE(Entries("by_k"), 201u);
 }
 
-// An older view answers neither a delete nor an update: a row it still sees
-// is owed its entries. A pass that began with such a view standing below the
-// writes that bought it says nothing of the relation's updates, with a
-// delete among them or with none, and their weight stands.
-TEST_F(IndexPurgeDriverTest, APassAnOlderViewMadeFruitlessLeavesTheUpdatesWeight) {
-    // 150 rows: a fifth of what an index keeps stays under the floor of 40.
+// A value that recurs on one row - a status that flips - appends an entry
+// the first time it is taken and finds it there every time after. The dead
+// entries are one a row an index however often it flips, and so is the count.
+TEST_F(IndexPurgeDriverTest, ARowFlippingBetweenTwoValuesIsCountedOncePerEntryItLeaves) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Table(200);
+    for (int flip = 0; flip < 5; ++flip) {
+        Ok("UPDATE t SET k = k + 100 WHERE id <= 10");
+        Ok("UPDATE t SET k = k - 100 WHERE id <= 10");
+    }
+    EXPECT_EQ(stats::RelationStats::Snapshot()[Oid("t")].updates.get(), 100u);
+    EXPECT_EQ(stats::RelationStats::Snapshot()[Oid("t")].key_updates.get(), 10u);
+    EXPECT_EQ(Entries("by_k"), 210u);
+    EXPECT_EQ(Drive(), 0u) << "100 updates left 10 dead entries, under the floor";
+}
+
+// A row an `UPDATE` wrote is counted where it is written, so a statement a
+// `ROLLBACK` undoes is counted too - rightly: nothing on the write path
+// removes an entry, a rollback included (IX2), so the entry the undone
+// update appended is the dead one.
+TEST_F(IndexPurgeDriverTest, ARolledBackUpdatesEntriesAreCountedAndGo) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Table(200);
+    Session writer;
+    Ok("BEGIN", &writer);
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 50", &writer);
+    Ok("ROLLBACK", &writer);
+    ASSERT_EQ(Entries("by_k"), 250u);
+    const std::vector<std::string> before = Probes();
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_LE(Entries("by_k"), 201u);
+    EXPECT_EQ(Probes(), before);
+}
+
+// DW-R5 for a moved key: the row's old version is one an older view reads,
+// through the old key's entry, which a pass under that view keeps.
+TEST_F(IndexPurgeDriverTest, AnOlderViewFindsAMovedRowThroughItsOldKey) {
+    // 150 rows: a fifth of what the index keeps stays under the floor of 40.
     dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
     Table(150);
     Session reader;
     Ok("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader);
     const std::vector<std::string> seen = Probes(&reader);
-    Ok("DELETE FROM t WHERE id > 130");            // 20 deletes
-    Ok("UPDATE t SET k = k + 100 WHERE id <= 20");  // 20 updates that move a key
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 40");
     EXPECT_EQ(Drive(), 1u);
     EXPECT_EQ(Counts().removed, 0u);
-    EXPECT_EQ(Probes(&reader), seen);
-    // And with no delete in the pass: 40 updates that move a key, none of
-    // whose entries the view lets go.
-    Ok("UPDATE t SET k = k + 100 WHERE id > 20 AND id <= 60");
-    EXPECT_EQ(Drive(), 1u);
-    EXPECT_EQ(Counts().removed, 0u);
-    EXPECT_EQ(Probes(&reader), seen);
+    EXPECT_EQ(Probes(&reader), seen) << "the reader's rows are still under their old keys";
     Ok("COMMIT", &reader);
-    // Whole still: the index keeps 210 entries, so 42 writes buy the next,
-    // and 45 updates do - halved they would not. It takes every pass's
-    // entries.
-    Ok("UPDATE t SET k = k + 100 WHERE id > 60 AND id <= 105");
+    Ok("UPDATE t SET k = k + 100 WHERE id > 40 AND id <= 80");
     EXPECT_EQ(Drive(), 1u);
-    EXPECT_GE(Counts().removed, 120u) << "20 deleted rows' entries and 105 moved keys'";
-}
-
-// A pass's deletes' entries are not the updates' findings: with every
-// delete answered and no key moved, the updates' weight falls as it does
-// with no delete at all.
-TEST_F(IndexPurgeDriverTest, ADeletesEntriesAreNotCountedAsTheUpdatesFindings) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
-    Ok("CREATE TABLE t (id int64, k int64, w int64) BTREE");
-    Ok("CREATE INDEX by_k ON t (k)");
-    for (int i = 1; i <= 200; ++i) {
-        Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", " + std::to_string(i % 8) + ", 0)");
-    }
-    Ok("DELETE FROM t WHERE id > 180");              // 20 deletes
-    Ok("UPDATE t SET w = w + 1 WHERE id <= 20");     // 20 updates that move no key
-    EXPECT_EQ(Drive(), 1u);
-    EXPECT_GE(Counts().removed, 15u) << "the deletes were answered";
-    Ok("UPDATE t SET w = w + 1 WHERE id <= 40");
-    EXPECT_EQ(Drive(), 0u) << "halved: 40 updates weigh 20";
+    EXPECT_GE(Counts().removed, 78u) << "both updates' old entries, the reader gone";
 }
 
 // Every entry of every index of `table`, the ones naming a free slot
@@ -658,14 +648,14 @@ TEST(IndexPurgeDriverNoLocksTest, ADispatcherWithNoLockTableRunsNoPass) {
 
 TEST(IndexPurgeDriverThresholdTest, ARelationIsQueuedOnceAndNotAgainWhileItsPassRuns) {
     exec::IndexPurgeDriver driver(/*min_writes=*/10);
-    driver.Offer(7, 5, 4, /*commit_ceiling=*/0);
+    driver.Offer(7, /*deletes=*/5, /*key_updates=*/4);
     EXPECT_FALSE(driver.owed());
-    driver.Offer(7, 5, 5, 0);  // deletes and updates add up
-    driver.Offer(7, 500, 5, 0);
+    driver.Offer(7, 5, 5);  // the two add up
+    driver.Offer(7, 500, 5);
     EXPECT_EQ(driver.queued(), 1u);
     ASSERT_EQ(driver.Current(), std::optional<catalog::Oid>(7));
     EXPECT_EQ(driver.queued(), 0u);
-    driver.Offer(7, 5000, 5, 0);
+    driver.Offer(7, 5000, 5);
     EXPECT_EQ(driver.queued(), 0u) << "its pass is running";
     EXPECT_EQ(driver.Current(), std::optional<catalog::Oid>(7)) << "the same pass, not a new one";
 }
