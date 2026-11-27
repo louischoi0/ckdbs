@@ -1331,22 +1331,22 @@ std::optional<Operand> EqualitySourceOn(const Scope& scope, const catalog::Table
 // operand a key column, in key order (`EqualitySourceOn`), at least one an
 // outer column, or nullopt. Every column pinned, the id is one key's
 // (`exec::EmbeddedKeyId`), computed per outer row by the executor
-// (`Step::EmbeddedProbe`).
-std::optional<Step::EmbeddedProbe> EmbeddedProbeOnStep(const Scope& scope,
-                                                       const catalog::TableAccess& access,
-                                                       const Step& step, std::uint16_t slot) {
+// (`Step::from_row`'s `embedded`).
+std::optional<std::vector<Operand>> EmbeddedProbeOnStep(const Scope& scope,
+                                                        const catalog::TableAccess& access,
+                                                        const Step& step, std::uint16_t slot) {
     const catalog::EmbeddedKeyColumns& key = access.schema.embedded_key;
     if (key.empty() || !HasCorrelatedEquality(step, slot)) return std::nullopt;
-    Step::EmbeddedProbe probe;
+    std::vector<Operand> operands;
     bool correlated = false;
     for (const std::uint16_t col_pos : key) {
         auto operand = EqualitySourceOn(scope, access, step, slot, col_pos);
         if (!operand.has_value()) return std::nullopt;
         correlated = correlated || operand->kind == OperandKind::kColumn;
-        probe.key.push_back(std::move(*operand));
+        operands.push_back(std::move(*operand));
     }
     if (!correlated) return std::nullopt;  // a literal key is the lookup's
-    return probe;
+    return operands;
 }
 
 // Everything about a probe that comes from the index alone: the catalog
@@ -1660,7 +1660,7 @@ std::optional<IndexProbe> OrderedIndexChoiceOf(const catalog::TableAccess& acces
     std::vector<std::uint16_t> prefix;
     const bool indexed = (step.kind == AccessKind::kIndexProbe ||
                           step.kind == AccessKind::kIndexRange) &&
-                         step.index.has_value() && step.index_key_from.empty() &&
+                         step.index.has_value() && IndexKeyFromOf(step) == nullptr &&
                          !step.key_set.has_value();
     if (indexed) {
         prefix.assign(step.index->key_cols.begin(),
@@ -1831,7 +1831,7 @@ std::optional<CabinSetChoice> CabinSetOf(const catalog::TableAccess& access, con
 //    chain opens). A reference to this step or a later one has no value
 //    when the descent happens; same rule as the tuple-key-probe arm.
 // A correlated index probe: the probe, and its prefix's correlated columns
-// (`Step::index_key_from`).
+// (`Step::from_row`).
 struct CorrelatedIndexProbe {
     IndexProbe probe;
     std::vector<IndexKeyFrom> from;
@@ -3844,7 +3844,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                                       : std::nullopt;
             if (embedded_probe.has_value()) {
                 step.kind = AccessKind::kProbe;
-                step.embedded_probe = std::move(embedded_probe);
+                step.from_row.emplace().embedded = std::move(*embedded_probe);
             } else if (inclusive_range) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
@@ -3894,12 +3894,12 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // The correlated form, after the literal one for the reason
                 // its comment gives, and ahead of the Cabin per spec §9's
                 // ordering: an index is complete for every key value.
-                // `Step::index_key_from` is the single authority - the plan
+                // `Step::from_row` is the single authority - the plan
                 // printer renders it, and `Step::key` keeps its two-kind
                 // contract untouched.
                 step.kind = AccessKind::kIndexProbe;
                 step.index = std::move(cx->probe);
-                step.index_key_from = std::move(cx->from);
+                step.from_row.emplace().index = std::move(cx->from);
             } else if (auto probe = cabin ? CabinProbeOf(rel, step, slot, gate) : std::nullopt;
                        probe.has_value()) {
                 // Ahead of kFilterScan, and only ahead of it: a cabined

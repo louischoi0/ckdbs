@@ -638,7 +638,7 @@ private:
             // A key set is on `kLookup` and has no `key` (CU); nor has an
             // embedded key's computed probe, on `kProbe` (EB-S2).
             if (step.key_set.has_value()) co_return RunKeySetStep(steps, index, step, access);
-            if (step.embedded_probe.has_value()) {
+            if (EmbeddedProbeOf(step) != nullptr) {
                 co_return RunEmbeddedProbeStep(steps, index, step, access);
             }
             co_return co_await RunPointStep(steps, index, step, access);
@@ -707,12 +707,13 @@ private:
     // coroutine, as a key set's runner is not.
     Status RunEmbeddedProbeStep(const std::vector<Step>& steps, std::size_t index,
                                 const Step& step, const catalog::TableAccess& access) {
-        if (step.embedded_probe->key.size() != access.schema.embedded_key.size()) {
+        const std::vector<Operand>& key = *EmbeddedProbeOf(step);
+        if (key.size() != access.schema.embedded_key.size()) {
             return Status::Corruption(
                 "an embedded key probe names another number of columns than the key has");
         }
         embedded_values_.clear();
-        for (const Operand& operand : step.embedded_probe->key) {
+        for (const Operand& operand : key) {
             if (operand.kind == OperandKind::kLiteral) {
                 embedded_values_.push_back(operand.literal);
                 continue;
@@ -1608,7 +1609,7 @@ private:
         // the walk, per this function's opening rule.
         const std::vector<std::byte>* low = &probe.low;
         const std::vector<std::byte>* high = &probe.high;
-        if (!step.index_key_from.empty()) {
+        if (const std::vector<IndexKeyFrom>* key_from = IndexKeyFromOf(step)) {
             // The live index's prefix columns must be the ones the compiler
             // chose: each value is encoded into *that* column's key format
             // at *that* column's offset, and a different column would narrow
@@ -1634,8 +1635,8 @@ private:
                 if (!width.ok() || offset + width.value() > ix->key_width) {
                     co_return co_await RunWalkStep(steps, index, step, access);
                 }
-                if (next < step.index_key_from.size() && step.index_key_from[next].at == i) {
-                    const ColumnRef& from = step.index_key_from[next++].from;
+                if (next < key_from->size() && (*key_from)[next].at == i) {
+                    const ColumnRef& from = (*key_from)[next++].from;
                     if (!frame_.CanResolve(from)) {
                         co_return Status::Corruption(
                             "a correlated index probe references a column the frame cannot "
@@ -1659,7 +1660,7 @@ private:
                 }
                 offset += width.value();
             }
-            if (next != step.index_key_from.size()) {
+            if (next != key_from->size()) {
                 co_return co_await RunWalkStep(steps, index, step, access);
             }
             low = &corr_low_;
@@ -3559,7 +3560,7 @@ private:
     // the walk is the descents avoided.
     std::unordered_set<std::uint64_t> filtered_tuple_keys_;
 
-    // A correlated index probe's per-row bounds (Step::index_key_from): the
+    // A correlated index probe's per-row bounds (Step::from_row): the
     // compile-time padding templates with the outer row's value encoded into
     // the leading width. On the runner for index_scratch_'s allocation
     // reason, and safe against its re-entrancy hazard by a narrower

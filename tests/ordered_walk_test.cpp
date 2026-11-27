@@ -858,7 +858,7 @@ TEST(EmbeddedProbeTrailTest, AnEmbeddedKeyProbeIsNoTrailsStep) {
     exec::Step step;
     step.kind = exec::AccessKind::kProbe;
     ASSERT_TRUE(exec::IsTrailReplayableKind(step.kind));
-    step.embedded_probe.emplace();
+    step.from_row.emplace().embedded.push_back(exec::Operand{});
     EXPECT_FALSE(exec::IsTrailReplayable(step));
 }
 
