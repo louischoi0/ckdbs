@@ -1,6 +1,6 @@
 # Work order EA - a prepared statement parsed once: the parse kept across executions, and the compile's reuse put before the operator again
 
-Status: **OPENED 2026-11-27** on worktree `ea-prepared-statement-reuse`
+Status: **CLOSED 2026-11-27** on worktree `ea-prepared-statement-reuse` (§7): S0 `52c226c69`, S1 `ea0592074`, S2 `2c5c195f7`, S3 not run (EA-Q3 (a)), the close at `v3.4.17-205-g2c5c195f7` (`bench/v3.4.17/results-ea-close-v3.4.17-205-g2c5c195f7.md`: a prepared statement 0.47 - 1.73 us of server CPU cheaper, a text statement inside the floor with a 0.05 us lean on a point `SELECT` not excluded). **Opened 2026-11-27** on worktree `ea-prepared-statement-reuse`
 (branch `worktree-ea-prepared-statement-reuse`) from `481d101aa`
 (`v3.4.17-202-g481d101aa`), on the operator's word of 2026-11-27, a standing
 go-ahead scheduled four hours ahead with "mark as proposed" and the push at
@@ -250,3 +250,38 @@ keyed `UPDATE` and `DELETE` arms). A text statement lexes as before.
   place of the lexer's header, and the write arm's missing cell. Kept: the
   two-argument `Choose`, which the review itself left.
 - **Suite**: 5,358 of 5,358 on this tree (`ctest -LE bs-nightly -j4`, two disabled, two skipped). Overhead not measured; measured at the milestone's close.
+
+### EA-S3 - not run
+
+EA-Q3 (a): the compiled chain stays unbuilt, CX-Q37 (a) standing. EA-S0's
+figure for it is above.
+
+### EA-S4 - the close, 2026-11-27
+
+`bench/v3.4.17/results-ea-close-v3.4.17-205-g2c5c195f7.md`: `481d101aa`
+(A) against `2c5c195f7` (B), interleaved, `build-release`, server CPU, two
+runs of 24 and 48 rounds, driver `tools/ea_close.py`.
+
+- **The saving on a prepared statement**: 0.49 - 0.55 us on a point `SELECT`
+  (8.1 - 9.0 %), 0.47 - 0.52 us on a point `UPDATE` (7.4 - 8.1 %), 1.71 -
+  1.73 us on a three-relation join (18.0 - 18.3 %), each IQR clear of the
+  floor's.
+- **EA-R4 on a text statement**: B - A +0.04 / +0.07 us on the point
+  `SELECT`, -0.03 / +0.01 us on the `UPDATE`, +0.05 / +0.06 us on the join,
+  each IQR overlapping the A2 - A floor's. **The point `SELECT`'s lean is
+  positive in both runs and not excluded at about 0.05 us (0.8 %)**; what EA
+  adds to the text path is null tests and a null `shared_ptr` set and
+  reset a statement. CLA reads it as no regression resolved; the reading is
+  recorded for the operator, and no remedy was tried, since none of the
+  added instructions is a candidate a remedy could remove without removing
+  the kept parse's hand-off.
+- **Documents**: `protocol.md` §5 (the kept parse, the quote, what is not
+  kept, EA-R6's cap), `client-manual.md` (prepare into a named statement),
+  `known-gaps.md` (the BN entry rewritten, the text path's second lex, the
+  plan's second lex narrowed), `CLAUDE.md`'s KWP row.
+
+### Closed 2026-11-27
+
+On `ea-prepared-statement-reuse`, every stage landed on the work branch:
+S0 `52c226c69`, S1 `ea0592074`, S2 `2c5c195f7`, S3 not run (EA-Q3 (a)),
+S4 the close. The landing is recorded in `raft-marks-2026-11-27.md` §12.

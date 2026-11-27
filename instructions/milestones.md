@@ -70,7 +70,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 |---|---|---|---|---|---|---|---|---|---|
 | DV | closed-narrow | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 8dd5ce8e | - | pages no root reaches: counted, then reclaimed | v3.2.0/workorder-dv-unreachable-page-reclaim.md |
 | DW | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 9a229dbb | - | what a btree relation's deletes leave, purged unasked: index entries first | v3.2.0/workorder-dw-btree-purge-driver.md |
-| EA | open | 2026-11-27 | 2026-11-26 | 2026-11-27 | - | - | - | a prepared statement parsed once, and the compile's reuse put before the operator again | v3.2.0/workorder-ea-prepared-statement-reuse.md |
+| EA | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | - | - | a prepared statement parsed once, and the compile's reuse put before the operator again | v3.2.0/workorder-ea-prepared-statement-reuse.md |
 | EE | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | the decide slot: one wake behind every wait for a transaction's decide | v3.2.0/workorder-ee-decide-slot.md |
 | ED | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | backup, a second pass: recovery to a time, incremental, compressed and encrypted, a snapshot's torn page healed | v3.2.0/workorder-ed-backup-second-pass.md |
 | EC | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | a multi-core instance crashed and mounted under a seed: the simulator given cores | v3.2.0/workorder-ec-multi-core-crash-harness.md |
