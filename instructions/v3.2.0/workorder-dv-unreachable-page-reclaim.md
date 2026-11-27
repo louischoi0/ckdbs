@@ -116,6 +116,10 @@ further.
 | DV-Q4 | Waystone's stranded directories | (a) freed at the renewal and at `OFF`, the page list read from the directory being replaced under invariant 9's discipline; (b) left to the sweep | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q5 | Leaked spills inside live var-heap pages | (a) outside DV - a value's release is DW's and the var-heap's rule; (b) inside | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q6 | A restore's leak | (a) the restore's mount runs the sweep when asked, as any mount; (b) always after a restore | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q4' | DV-Q4 (a) revised against the tree at DV-S2 | (a) at the mount's renewal only: a stale directory's trail pages freed where each still reads `kWaystone`, its interior pages - allocated and headerless - reused as the renewal's fresh roots, the rest counted and left; `OFF` left; (b) DV-Q4 (a) as written, `OFF` included, interior pages freed | (a): `FreePage` refuses a headerless id (`device_page_store.cpp:1785`) because a reused one would read its dead image after a crash, so freeing one needs a durable zero first - a new primitive - while reuse needs none; and an `OFF` runs while another core's recorder may hold the old root in its memo, so freeing there needs a statement-epoch fence against a trail write into a reused logged page (`[quiet-wrong]`), for an operator act whose rate is far under DV-Q1's bar | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q7 | Is the sweep (DV-S3) reached? DV-Q0 (a) left it to S0's numbers | (a) no: S0 measured no class without a source over DV-Q1's bar, so S3 is not built and DV closes narrow; (b) build S3 regardless | (a): every class over the bar has a source fix (DV-S2); a failed growth or split leaked 0 pages over 50,102 `grow`-fault ops; a sweep is the one stage that can free a reachable page (DV-R1, `[quiet-wrong]`) and has nothing measured to free | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q8 | A create rolled back in the run whose queued job a crash loses | (a) a stated known gap: the transaction is decided, so the next mount's undo does not see it, and its pages stay leaked; (b) a durable owed record written at the rollback | (a): the window is a crash between a rollback and its job's gate; a durable record is a new record kind or catalog row, which DV-R4's spirit (no logged free state) argues against | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q9 | What `sys.volume_census` reads | (a) the census the mount took, memory only, empty where `volume_census_at_mount` is off; (b) a census taken at every read | (a): DV-R2 - a mark is only whole with no writer, and a read runs beside writers | (a), adopted on the standing go-ahead of 2026-11-27 |
 
 ## 5. Stages
 
@@ -136,6 +140,27 @@ further.
 - No reclaim of a retired slot's space inside a live leaf.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### DV-S0 - the census, measured (2026-11-27)
+
+On `dv-unreachable-page-reclaim`, the tool at `db21cbffc`
+(`v3.4.17-180-gdb21cbffc`): `server::RunVolumeCensus`
+(`src/server/volume_census.cpp`), the sim's count after every reconciled
+mount and every restore, and `tests/volume_census_test.cpp`. Results:
+`bench/v3.5.0/results-dv-s0-census-v3.4.17-180-gdb21cbffc.md`. Every root
+kind was listed from the code - every `CreateNew`, `CreateNewHeaderless` and
+`CreateAt` caller under `src/` - and the review confirmed none is missing.
+**DV-Q1's bar, read**: Waystone pages (4.7 to 8.3 a 1,000 ops; 9 a mount
+for two opted shapes) and an uncommitted `CREATE TABLE`'s pages (3 to 4
+each) are over it; a failed growth, split or unique index build leaked
+nothing; the refused catalog report, the dropped assertion's chain and the
+online build's root between H2 and H3 were produced by no run. The sweep
+is therefore not reached (DV-Q7 (a)). Review (`critics-developer`): three
+defects fixed - the clean cell's assertion was never created (its prefix
+matched every reply), a catalog var-heap and a Bound Cabin chain could end
+short of their tails without a refusal; F1, F2, S1, S3, S4, S5, S7 applied;
+S6 (one `sys.tables` scan) rejected - no public scan, and the census runs on
+request; S2 (the sim's older live-relation census) left to DV-R6.
 
 ### Written 2026-11-26
 
