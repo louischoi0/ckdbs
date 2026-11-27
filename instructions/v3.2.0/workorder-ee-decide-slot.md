@@ -2,7 +2,9 @@
 
 Status: **CLOSED 2026-11-27 on the operator's standing go-ahead, abandoned
 at EE-S0, with nothing built** (`raft-marks-2026-11-27.md` §18; §7's
-"EE-S0" and "Closed" entries). EE-S0
+"EE-S0" and "Closed" entries). Its record **landed on `main` at
+`da8b9436`** on the operator's "push no verify" (`raft-marks-2026-11-27.md`
+§19; the hook skipped, no suite run, no build input carried), untagged. EE-S0
 (`bench/v3.4.17/results-ee-s0-premise-v3.4.17-220-g046b09053.md`)
 priced the polling waits: at the default 1 ms drain tick a wait with no
 slot behind it ends 0.6-0.7 ms later than one woken at its slot (p50,
@@ -307,3 +309,17 @@ frames and text `SHOW META`, and the refactor is outside EE; the driver's
 percentile rule replaced by `bench_common.nearest_rank` - the published
 figures are the driver's rule (`pct`, round-half index), and changing it
 would move them by up to a rank with no re-run.
+
+### Landed 2026-11-27
+
+`--no-ff` merge `da8b94367` of `worktree-ee-decide-slot` (`bb7a2e24e`)
+onto `origin/main` (`046b09053`), pushed with `--no-verify` on the
+operator's word (`raft-marks-2026-11-27.md` §19). `origin/main` had not
+moved since the branch was cut, so the merge resolved nothing. **The
+pre-push hook was skipped and the suite was not run on the pushed tree.**
+The push carries no build input (`docs/`, `bench/`, `instructions/`,
+`tools/`; `tools/` is named by no CMake file or test): its build inputs
+are `b1708f964`'s, where EA's close ran the full suite 5,382 of 5,382. The
+merge commit was made from the work branch's tree with `git commit-tree`,
+the session being held to its worktree; the main checkout's local `main`
+ref was not moved.
