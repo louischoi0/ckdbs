@@ -165,6 +165,15 @@ checks are the dropped relation's. Cells:
 `ARolledBackHeapCreateFreesItsKeystoneIndex`, `ACommittedCreateOwesNothing`,
 `VolumeCensusTest.ACrashLosersCreateIsFreedAtTheMount`.
 
+**A burned oid, checked against the tree** `[quiet-wrong]`: `page.md` §2a
+says a rolled-back create's oid is issued again after a restart, so a
+relation created before the mount's job runs carries the loser's oid on
+every page and the walk's owner check passes for both. The job is sound
+because it walks by links from the loser's own anchor and finishes its walk
+before its first free; `ACrashLosersReclaimSparesARelationThatTookItsOid`
+creates that relation - it does take the oid - and reads it back whole
+after the reclaim. Found after the stage's review, not by it.
+
 **DV-S2, Waystone (DV-Q4').** `server::DiscardAdvisoryState` takes the stale
 directories back before the renewal: trail pages freed where they still
 read `kWaystone`, interior pages reused as the fresh roots. 100 mounts of

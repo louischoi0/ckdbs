@@ -319,6 +319,52 @@ TEST_F(VolumeCensusTest, ACrashLosersCreateIsFreedAtTheMount) {
     }
 }
 
+// `[quiet-wrong]` if it failed: **a burned oid is issued again after a
+// restart** (`page.md` §2a), so a relation created before the mount's
+// reclaim runs can carry the loser's oid on every page. The job walks from
+// the loser's own anchor, by links, never by owner, so it frees the loser's
+// pages and none of the new relation's.
+TEST_F(VolumeCensusTest, ACrashLosersReclaimSparesARelationThatTookItsOid) {
+    Boot();
+    Ok("BEGIN", "BEGIN");
+    Ok("CREATE TABLE loser (id int64, v int64, s varchar)", "CREATED");
+    for (int k = 1; k <= 300; ++k) {
+        Ok("INSERT INTO loser VALUES (" + std::to_string(k) + ", 1, '" + std::string(400, 'z') +
+               "')",
+           "INSERTED");
+    }
+    ASSERT_EQ(Run("SYNC"), "OK synced");
+    db_->Crash();
+    Status s = db_->Reboot();
+    ASSERT_TRUE(s.ok()) << s.message();
+    ASSERT_EQ(db_->recovery().undone_creates.size(), 1u);
+    const catalog::Oid burned = db_->recovery().undone_creates.front().oid;
+
+    // Before the mount's reclaim has run a step: the same oid, new pages.
+    Ok("CREATE TABLE taker (id int64, v int64, s varchar)", "CREATED");
+    auto taker = db_->catalog().FindTableOidByName(catalog::kNamespacePublic, "taker");
+    ASSERT_TRUE(taker.ok());
+    ASSERT_EQ(taker.value(), burned) << "the premise moved: the burned oid was not issued again";
+    for (int k = 1; k <= 300; ++k) {
+        Ok("INSERT INTO taker VALUES (" + std::to_string(k) + ", " + std::to_string(k) + ", '" +
+               std::string(400, 'y') + "')",
+           "INSERTED");
+    }
+    ASSERT_TRUE(db_->SettleReclaim().ok());
+    EXPECT_EQ(db_->reclaim_counters().refused.load(), 0u);
+    EXPECT_GT(db_->store().pages_freed(), 0u) << "the loser's pages were not freed";
+
+    const VolumeCensus c = Census();
+    Print("a loser's reclaim beside a relation with its oid", c);
+    EXPECT_EQ(c.unmarked, 0u);
+    for (int k : {1, 150, 300}) {
+        const std::string reply = Run("SELECT v, s FROM taker WHERE id = " + std::to_string(k));
+        EXPECT_NE(reply.find(std::string(400, 'y')), std::string::npos) << reply.substr(0, 80);
+    }
+    const std::string count = Run("SELECT COUNT(*) FROM taker");
+    EXPECT_NE(count.find("300"), std::string::npos) << count;
+}
+
 // §1: a failed `CREATE INDEX`'s pages - a unique build over duplicates.
 TEST_F(VolumeCensusTest, FailedCreateIndex) {
     Boot();

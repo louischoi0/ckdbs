@@ -116,7 +116,11 @@ public:
     // else names its pages. Gated on `undone_gate`, the log's end after
     // undo: unlike a drop's, a loser's own rows were compensated on the
     // relation's pages, and those records must lie below the redo start
-    // before a page is freed.
+    // before a page is freed. **Its oid can be issued again before the job
+    // runs** (`page.md` §2a: a burned oid after a restart), so the owner
+    // check tells nothing apart here; what keeps the new relation's pages
+    // is that the walk follows links from the loser's own anchor, and the
+    // whole walk precedes the first free.
     Status CollectAtMount(wal::Lsn gate_lsn,
                           std::span<const catalog::Catalog::PendingReclaim> undone = {},
                           wal::Lsn undone_gate = 0);

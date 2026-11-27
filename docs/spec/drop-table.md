@@ -69,7 +69,12 @@ idempotent (BF-R7). A freed id comes back through the store's free list
   (`txn::RecoveryUndo::SetInsertRetired`, `PageReclaimer::CollectAtMount`);
   the job's clear writes nothing, since no row owes the pages, and its
   gate at a mount is the log's end after undo, since a loser's own rows
-  were compensated on the relation's pages;
+  were compensated on the relation's pages. **The walk is from the roots
+  the create named, by links, never by owner** `[quiet-wrong]`: a burned
+  oid is issued again after a restart (`page.md` §2a), so a relation
+  created before the mount's job runs can carry the loser's oid on every
+  page, and a reclaim by owner would free it
+  (`VolumeCensusTest.ACrashLosersReclaimSparesARelationThatTookItsOid`);
 - a refused catalog report's page;
 - a previous run's undo pages (UP4);
 - a dropped assertion's Bound Cabin chain;
