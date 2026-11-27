@@ -83,3 +83,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | **DV-Q11 (a)**, CLA's proposal written into the order's §4 at the review of the close and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: DV-Q1's bar is read by what an operation leaks with no fault armed, so an uncommitted `CREATE TABLE` (3 pages a rollback) is closed and a crash loser's own index root (at most one page a crash landing between two adjacent records) is recorded and left, though both read 2.57 pages a 1,000 ops in the `io` fault cells and 0.05 over the matrix. Not `[quiet-wrong]`. **The review named this the operator's to rule on**; it is listed in the close's report for that reason. |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 |
+
+## 10. DV pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, to the report of DV's close |
+| **Mark** | `worktree-dv-unreachable-page-reclaim` - DV's close at `8e2b5869c`, then `origin/main` merged into it on the work branch twice (`fb08bcd67` for DW, `8cb53b614` for DW's landing record and DY-S0) - merged into `main` `--no-ff` at `8dd5ce8ea` and pushed, **the pre-push hook skipped**. **The full suite was not executed on the merged tree**: it was built, and 125 cells of DV's, DW's and the mount's ran green on it. No suite run before the merge was green either - three runs, 5,310 of 5,312, 5,312 of 5,314 and 5,313 of 5,314, each failing only two-core cells that fail alone at the base commit. No run is reported as a pass. |
+| **Does not settle** | DV-Q11, which the close's review named the operator's to rule on and the word did not speak to - the 18 index-root pages stay recorded and left on CLA's reading; every other DV item, each CLA's proposal adopted on the go-ahead of §5; a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` (header, §7 "Landed"); DV's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

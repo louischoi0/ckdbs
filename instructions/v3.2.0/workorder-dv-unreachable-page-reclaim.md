@@ -4,7 +4,9 @@ Status: **CLOSED NARROW 2026-11-27 on the work branch**, on CLA's reading
 of DV-S0 adopted on the go-ahead (DV-Q7 (a)): the census (S0, S1) and the
 two source fixes S0 ranked over DV-Q1's bar (S2) are built; **the sweep
 (S3) is not**, and the online build's root between H2 and H3 is not closed.
-Not on `main`: the landing waits for the operator's word. Opened
+**Landed on `main` at `8dd5ce8ea`** on the operator's word (*"push no
+verify"*, `raft-marks-2026-11-27.md` §10), pushed with the hook skipped and
+with no suite run on the merged tree (§7, "Landed"). Untagged. Opened
 2026-11-27 on worktree `dv-unreachable-page-reclaim` (branch
 `worktree-dv-unreachable-page-reclaim`) from `630ecc359`
 (`v3.4.17-178-g630ecc359`), on the operator's standing go-ahead
@@ -149,6 +151,27 @@ further.
 - No reclaim of a retired slot's space inside a live leaf.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### Landed (2026-11-27)
+
+On the operator's word *"push no verify"*, given to the close's report.
+`origin/main` had moved by then: DW's merge and its landing record
+(`c5cceb6f7`) and DY-S0 (`a12c857c6`). Both were merged on the work branch
+(`fb08bcd67`, `8cb53b614`), never on `main`: `expeditor.cpp`'s
+`WireInstanceServices` kept both milestones' lines, the register and the
+index kept both rows, and the day's raft marks were joined with DV's
+sections renumbered 5 to 9. The branch was merged into `main` `--no-ff` at
+`8dd5ce8ea` and pushed with **the pre-push hook skipped**.
+
+**What ran on the merged tree, and what did not.** The merged tree
+(`fb08bcd67`'s build inputs; `8cb53b614` and `8dd5ce8ea` add documents
+only) was built in Debug, and 125 cells ran green on it - DV's, DW's
+`IndexPurgeDriver*`, `ExpeditorTest`, `ConfigFile*`, the Waystone mount
+cells, the view cells, `BackupControlTest` - with one sim run. **The full
+suite was not executed on the merged tree**, and no run of it before the
+merge was green (the close, above): no pass is claimed. The close
+measurement is `82235ad2c`'s against `630ecc359`; nothing was measured on
+the merged tree, so DV beside DW is unmeasured.
 
 ### DV-S4 - the close (2026-11-27)
 
