@@ -1289,6 +1289,17 @@ std::optional<EmbeddedKeyWindow> EmbeddedKeyWindowOnStep(const catalog::TableAcc
     return window.ok() ? window.value() : std::nullopt;
 }
 
+// Whether any conjunct of the step is a correlated equality on its own
+// column (EB's close): the whole-key arms' gate, so a step keyed by
+// literals alone - every point read - pays one pass over its residual and
+// no index's templates, where each arm would otherwise build its probe
+// before learning that no outer row pins anything.
+bool HasCorrelatedEquality(const Step& step, std::uint16_t slot) {
+    return std::any_of(step.residual.begin(), step.residual.end(), [&](const StepPredicate& p) {
+        return CorrelatedEqualityOf(p, slot).has_value();
+    });
+}
+
 // What pins `col_pos` by an equality (EB-S2): a literal - already coerced
 // to the column at lowering (`CoercePredicate`) - or, failing one, the first
 // correlated equality whose other side is an earlier step's or an enclosing
@@ -1325,7 +1336,7 @@ std::optional<Step::EmbeddedProbe> EmbeddedProbeOnStep(const Scope& scope,
                                                        const catalog::TableAccess& access,
                                                        const Step& step, std::uint16_t slot) {
     const catalog::EmbeddedKeyColumns& key = access.schema.embedded_key;
-    if (key.empty()) return std::nullopt;
+    if (key.empty() || !HasCorrelatedEquality(step, slot)) return std::nullopt;
     Step::EmbeddedProbe probe;
     bool correlated = false;
     for (const std::uint16_t col_pos : key) {
@@ -1830,7 +1841,7 @@ std::optional<CorrelatedIndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
                                                  const Step& step, std::uint16_t slot,
                                                  std::string_view only = {}) {
-    if (access.indexes.empty()) return std::nullopt;
+    if (access.indexes.empty() || !HasCorrelatedEquality(step, slot)) return std::nullopt;
 
     // **Every prefix column an equality pins** (EB-S2): a key column is
     // pinned by a literal - encoded into the templates now, as a literal
