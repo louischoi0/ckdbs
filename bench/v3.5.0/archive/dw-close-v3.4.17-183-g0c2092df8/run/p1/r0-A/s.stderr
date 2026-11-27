@@ -1,0 +1,4 @@
+ckdbs on /home/ukjin/bench-runs/dw-close/run/p1/r0-A/d.db: 20 pages, superblock version 41
+logging to /home/ukjin/bench-runs/dw-close/run/p1/r0-A/s.log at level WARN
+listening on 127.0.0.1:15601
+stopped; 595 pages persisted

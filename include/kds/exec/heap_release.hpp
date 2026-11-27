@@ -2,12 +2,12 @@
 
 #include <cstdint>
 #include <set>
-#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/heap_store.hpp"
+#include "kds/exec/index_purge.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/txn/lock_table.hpp"
 
@@ -106,12 +106,12 @@ private:
     PageId page_ = kInvalidPageId;  // the collect's next data page
     bool started_ = false;
     std::set<std::uint64_t> candidates_;  // rowids
-    // The index the purge or the verify is on, by oid - an index created or
-    // dropped between steps moves no position - with its place: the purge's
-    // resume entry, the verify's next leaf. 0: the next index after `done_`.
+    RelationIndexPurge purge_;  // phase 2's place
+    // The index the verify is on, by oid - an index created or dropped
+    // between steps moves no position - and its next leaf. 0: the next index
+    // after `done_oid_`.
     std::uint64_t index_oid_ = 0;
     std::uint64_t done_oid_ = 0;
-    std::vector<std::byte> resume_;
     PageId leaf_ = kInvalidPageId;
     // A slot left owed for a reason that passes: the job queues its
     // relation again when it ends.

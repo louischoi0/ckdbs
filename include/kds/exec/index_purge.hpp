@@ -54,6 +54,7 @@ class WalManager;
 namespace kds::exec {
 
 struct IndexPurgeAttempt {
+    std::uint64_t read = 0;      // entries the walked leaves held
     std::uint64_t removed = 0;   // entries taken out
     std::uint64_t skipped = 0;   // rows whose unit was refused: their entries stay
     // The first entry of the leaf the next attempt starts at, or empty when
@@ -76,5 +77,37 @@ Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
                         txn::LockHoldings& holdings, const catalog::TableAccess::IndexRef& ix,
                         std::span<const std::byte> from, std::uint32_t max_leaves,
                         IndexPurgeAttempt& out);
+
+// The first index of `access` with an oid above `after`, or null: creation
+// order (`TableAccess::indexes` is sorted by oid). And the one with `oid`.
+const catalog::TableAccess::IndexRef* IndexAfter(const catalog::TableAccess& access,
+                                                 std::uint64_t after);
+const catalog::TableAccess::IndexRef* IndexById(const catalog::TableAccess& access,
+                                                std::uint64_t oid);
+
+// **Every index of one relation, purged once** - what a heap's slot release
+// runs before it verifies (`heap_release.hpp`) and what the unasked driver
+// runs on its own (`index_purge_driver.hpp`): the indexes in creation order,
+// each walked left to right, one `PurgeIndexLeaves` attempt a step. Its place
+// is an index's oid and a resume entry, so an index created or dropped
+// between two steps moves it nowhere, and nothing is held between steps. An
+// index dropped or still being built (DD-R8) is passed over.
+class RelationIndexPurge {
+public:
+    // One attempt of at most `max_leaves` leaves on the index the pass is at,
+    // the caller's arguments as `PurgeIndexLeaves` takes them; `out` counts
+    // what it did whatever the answer. `done()` once no index is left.
+    Status Step(storage::PageStore& store, catalog::Catalog& catalog,
+                const catalog::TableAccess& access, const txn::TransactionManager* txns,
+                wal::WalManager* wal, txn::LockTable& locks, std::uint64_t holder,
+                txn::LockHoldings& holdings, std::uint32_t max_leaves, IndexPurgeAttempt& out);
+    bool done() const noexcept { return done_; }
+
+private:
+    std::uint64_t index_oid_ = 0;  // the index the pass is on; 0: the next after `done_oid_`
+    std::uint64_t done_oid_ = 0;
+    std::vector<std::byte> resume_;
+    bool done_ = false;
+};
 
 }  // namespace kds::exec

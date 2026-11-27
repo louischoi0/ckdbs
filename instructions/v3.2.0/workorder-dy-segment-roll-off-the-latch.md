@@ -5,7 +5,7 @@ builds nothing, and DY stops behind it at DY-Q0.** Opened on worktree
 `dy-segment-roll-off-the-latch` (branch
 `worktree-dy-segment-roll-off-the-latch`) from `630ecc359`
 (`v3.4.17-178-g630ecc359`), on the operator's word of 2026-11-27
-(`raft-marks-2026-11-27.md` §1): the standing go-ahead
+(`raft-marks-2026-11-27.md` §3): the standing go-ahead
 (`go-ahead-achieving-milestone`), given with DY named as its milestone.
 **DY-Q0 is not marked.** BQ-Q5 (b) reserves rung 4's license to the
 operator's own word and this order says a standing go-ahead is not that

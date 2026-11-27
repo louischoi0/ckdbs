@@ -132,6 +132,7 @@ Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
         if (Status s = guard.Visit(leaf); !s.ok()) return s;
         auto copied = CopyLeaf(store, leaf, layout);
         if (!copied.ok()) return copied.status();
+        out.read += copied.value().entries.size();
         const Status purged = PurgeCopiedLeaf(store, catalog, access, txns, wal, locks, holder,
                                               holdings, ix, layout, copied.value().entries, out);
         give_back();
@@ -144,6 +145,60 @@ Status PurgeIndexLeaves(storage::PageStore& store, catalog::Catalog& catalog,
         auto next = CopyLeaf(store, leaf, layout);
         if (!next.ok()) return next.status();
         if (!next.value().entries.empty()) out.resume = std::move(next.value().entries.front());
+    }
+    return Status::OK();
+}
+
+const catalog::TableAccess::IndexRef* IndexAfter(const catalog::TableAccess& access,
+                                                 std::uint64_t after) {
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        if (ix.index_oid > after) return &ix;
+    }
+    return nullptr;
+}
+
+const catalog::TableAccess::IndexRef* IndexById(const catalog::TableAccess& access,
+                                                std::uint64_t oid) {
+    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
+        if (ix.index_oid == oid) return &ix;
+    }
+    return nullptr;
+}
+
+Status RelationIndexPurge::Step(storage::PageStore& store, catalog::Catalog& catalog,
+                                const catalog::TableAccess& access,
+                                const txn::TransactionManager* txns, wal::WalManager* wal,
+                                txn::LockTable& locks, std::uint64_t holder,
+                                txn::LockHoldings& holdings, std::uint32_t max_leaves,
+                                IndexPurgeAttempt& out) {
+    const catalog::TableAccess::IndexRef* ix = nullptr;
+    while (!done_ && ix == nullptr) {
+        if (index_oid_ == 0) {
+            const catalog::TableAccess::IndexRef* next = IndexAfter(access, done_oid_);
+            if (next == nullptr) {
+                done_ = true;
+                break;
+            }
+            index_oid_ = next->index_oid;
+            resume_.clear();
+        }
+        ix = IndexById(access, index_oid_);
+        if (ix == nullptr || ix->building) {  // dropped, or DD-R8: passed over
+            done_oid_ = index_oid_;
+            index_oid_ = 0;
+            ix = nullptr;
+        }
+    }
+    if (ix == nullptr) return Status::OK();
+    const Status ran = PurgeIndexLeaves(store, catalog, access, txns, wal, locks, holder, holdings,
+                                        *ix, resume_, max_leaves, out);
+    if (!ran.ok()) return ran;
+    resume_ = std::move(out.resume);
+    if (resume_.empty()) {
+        done_oid_ = index_oid_;
+        index_oid_ = 0;
+        // The last index walked ends the pass in this step, not the next.
+        if (IndexAfter(access, done_oid_) == nullptr) done_ = true;
     }
     return Status::OK();
 }

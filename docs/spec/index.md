@@ -95,9 +95,11 @@ Two rules ride along, and both are load-bearing rather than tidy:
   correct by IX1's superset rule, and useless. This is `cabin.md` §5's
   third row, and the index carries the same contract test.
 - **Nothing on the write path reclaims.** A superseded entry costs memory,
-  a page, and a read-time skip until an administrator's `PURGE INDEX`
-  takes it out (§2.2); on a btree relation nothing runs one unasked, and a
-  heap's indexes are purged by its slot release (`heap-and-tuple.md` §3.1b).
+  a page, and a read-time skip until a purge takes it out (§2.2): an
+  administrator's `PURGE INDEX`, the unasked driver where
+  `index_purge_driver` is on (§2.3), and on a heap its slot release for the
+  rows it deleted (`heap-and-tuple.md` §3.1b). With the driver off nothing
+  unasked purges a btree's indexes, nor a moved key's entry on either kind.
 
 ### 2.1 Failure on the write path
 
@@ -173,6 +175,76 @@ answered, which leaves those entries in place. A DDL on the purge's own
 core passes between two slices; one on another core is not queued for, and
 gets its `X` only in the gap between a slice's release and the next one's
 `IX`.
+
+### 2.3 The unasked purge (DW)
+
+`index_purge_driver` (a boot key, **off by default**) runs §2.2's pass
+with no statement asking (`exec/index_purge_driver.hpp`,
+`instructions/v3.2.0/workorder-dw-btree-purge-driver.md`): for a btree
+relation, what a heap has from its slot release; and for both kinds, the
+entry of a key a row moved off, which no retired slot ever queues.
+
+> **IX2d - the driver chooses what a pass runs on and when, and nothing
+> of what it removes.** A pass is every index of one relation walked once
+> (`RelationIndexPurge`, the walk a heap's release runs), each slice one
+> `PurgeIndexLeaves` attempt: IX2a's judge, IX2b's fence and IX2c's first
+> entry, unchanged. So a result is the same with the key on and off.
+
+**What it runs on** is two counts of `sys.relation_stats`' store, each a
+write that left a dead entry, read once a second by core 0's `system`
+tick. A relation is queued once its writes since it was last queued
+reach its threshold - 4,096, and one fifth of the entries an index kept
+at its last whole pass, the indexes averaged, which is the rows near
+enough - and no page is read to choose.
+
+- **`deletes`**: a deleted row's entry, one an index, which a pass takes
+  but for a row an older view still sees. A pass such a view makes
+  fruitless has spent the writes that bought it, and the next is bought
+  by the same rule, with no back-off: a fifth of what that pass kept, the
+  entries the view holds included. **On a heap a delete does not count**:
+  its slot release purges for it. The driver reads a relation's kind at
+  its first pass.
+- **`key_updates`** (DW-Q7 (b)): the rows an `UPDATE` wrote with a new
+  entry appended to some index (`MaintainIndexes`' `appended`). A row is
+  owed one entry an index, so an append is exactly one dead entry more:
+  the row's old one. It is counted at the row, on the core that wrote it,
+  **and only where the driver is switched on**; it is no column of
+  `sys.relation_stats`. A row of a statement that failed or rolled back
+  is counted too, rightly: a rollback removes no entry (IX2), so the
+  entry it appended is dead. Not counted, and buying nothing: an `UPDATE`
+  that moves nothing an index carries, and one back to a value whose
+  entry is still in the tree, which kills one entry and revives another.
+  **Only while that entry is in the tree, and a pass takes it**: where a
+  row goes back and forth between a few values the driver removes the
+  entry the next write appends again, so every such write is counted and
+  the passes go on, where with the driver off the index would stand at
+  one entry a value a row and no more (`known-gaps.md`).
+  **One count that no pass can answer**: a spilled covered value changed
+  to another of the same length appends an entry IX2a keeps.
+
+A relation dropped and a catalog chain end their pass with nothing
+walked. **A rolled-back `INSERT`'s entries are in neither count**: they
+go with the next pass something else buys.
+
+**How it runs** is the heap release's way: one slice - the `analytic`
+level's 16 leaves - on each 50 ms tick of core 0's `system` group, under
+the relation's `IX` taken try-only by a read holder's id and given back
+when the slice returns, the catalog memo made current under it. **Nothing
+is held between two slices**, so a relation `X` asked on any core is
+granted in the gap, and a slice that finds the relation held is skipped,
+not waited for. No transaction, no view and no purge horizon is held; the
+horizon is read as the statement reads it (`ResolvedForEveryReader`).
+**One pass runs at a time**, the relations in the order they were queued,
+and a relation is not offered while its own pass runs: the writes made
+during it count toward the next, queued at the first offer after it ends.
+
+**Off, nothing exists**: no driver is built, no tick is submitted, no
+count is read and `key_updates` is not counted. On, `sys.meta` on core 0
+carries the `index_purge` section (`sys-views.md` §7). The driver's state
+is memory-resident and a restart starts it empty, its counts and every
+relation's threshold with it, so a relation's first pass of a boot is
+bought by the floor's 4,096 writes; a pass's images are §2.2's, so a
+crash can lose a pass, which leaves those entries in place for the next.
 
 ---
 
@@ -1356,9 +1428,8 @@ off is a catalog act: `DROP INDEX`.
 ## 13. Open decisions this spec deliberately does not settle
 
 The decisions this spec leaves unsettled — `kIndexStringKeyBytes`, the leaf
-split point and fill factor, the column caps, reclamation of superseded
-entries unasked on a btree relation (`PURGE INDEX`, §2.2, is the
-administrator's there; a heap's slot release drives one), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
+split point and fill factor, the column caps, whether the unasked purge
+(§2.3) is on by default (its key is off), a leaf merged or freed after a purge thins it, an index-only scan, NULLs in a unique key (a nullable key column
 stays refused, BX-Q5 (a)), descending/partial/expression
 indexes, and index cost as a `CABIN AUTO` input — are unrecorded here; the refusals that stand
 in their place are §11's.
