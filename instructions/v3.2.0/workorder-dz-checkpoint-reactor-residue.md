@@ -323,3 +323,49 @@ On `dz-checkpoint-reactor-residue` at `78cbbf464`.
   than a write's microseconds; the pages-written tally counts pages cleaned;
   an empty snapshot counts no step.
 
+### DZ-S3 - the early carve's sync off the reactor, done 2026-11-27
+
+- **The premise, measured first** (DZ-Q4 (a)), at `481d101aa`
+  (`v3.4.17-202-g481d101aa`, release, copied, sha256 `c537e1124590b823...`):
+  BA's diagnosis shape - `insert1`, `relaxed`, `cores = 1`, 16 sessions, 8 s
+  after 2 s, server on CPU 0, clients on 4-7, port 15761, three runs,
+  `tools/ba_census.py`, data on `/dev/mapper/fedora-root` (xfs); load
+  3.6-4.5, no compiler running. **The longest carve is 437, 511 and 478 ms**,
+  and in each run it equals the reactor's longest hold outside a checkpoint
+  run (438, 511, 478 ms) to within 1 ms: the carve is the longest stall on
+  the core. 184-231 carves a run. Archive:
+  `bench/v3.5.0/archive/dz-s3-carve-premise-v3.4.17-202-g481d101aa/`. That
+  the time is the data-file `fsync` is BA's diagnosis's reading (page 0's
+  writeback 13 us at the median), not re-traced here.
+- **Built**, on DZ-Q4 (a) - the early carve is a tick's, where nothing waits
+  on its result, so it can be split without a statement parking: with a
+  `StagedCeilingPersist` the tick raises the ceiling and writes page 0, asks
+  the data-sync thread for the sync and holds the block pending; a later tick
+  that finds the sync done makes it the block ahead. A `Begin` that drains
+  the window with the block pending persists it whole, as a carve there
+  always has; a failed sync drops it, its ids burned. Wired on core 0 and on
+  every peer. The burn stays a whole carve.
+- **Cells** (`tests/trx_id_test.cpp`): a staged block is ahead only once its
+  sync is done and no second block is staged meanwhile; a window drained
+  with the block pending persists it once and installs it; a failed sync
+  drops it.
+- **Suite**: 5,363 of 5,364 at `98ccf34e5` (`ctest -LE bs-nightly -j4`,
+  174 s); the failure is memory's base flake
+  `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`, 1 of 10
+  alone at `75046f305`.
+- **Review** (`critics-developer`), at `98ccf34e5`: no defect; "durable
+  before issued" checked on every path (another core's page-0 write, a
+  claimed page 0, a clean page 0, a sticky failure, a burn, a stopped
+  syncer). **Added by the reviewer**: two cells, a drain over a failed staged
+  sync issuing nothing from the block and a burn dropping a pending block.
+  **Applied**: a dead guard removed. **Rejected**: folding the pending block
+  into the block ahead (it keeps "ahead" meaning durable, which
+  `has_block_ahead()` and BA-S13's readers rest on); one callback for `done`
+  and `result` (they mirror `DataSyncer`'s own pair); the stage method folded
+  into its lambda (it mirrors `PersistTrxIdCeiling`). **Recorded as gaps**
+  (`known-gaps.md`, at the close): page 0's write at the carve can wait out
+  a staged checkpoint batch that holds page 0's claim (`kSkip` would be
+  unsound - the claimed copy may predate the raise); a block drained before
+  its sync is done counts as two carves; no cell drives the expeditor's
+  staged persist through a crash.
+

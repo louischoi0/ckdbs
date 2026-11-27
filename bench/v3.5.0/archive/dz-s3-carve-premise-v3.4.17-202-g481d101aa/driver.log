@@ -1,0 +1,3 @@
+kds-insert1-relaxed-k1-s16-kernel-r0 load 3.63->4.49 stmts=946884 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=118264.6 p50=67.3
+kds-insert1-relaxed-k1-s16-kernel-r1 load 3.80->4.24 stmts=777743 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=97114.3 p50=67.4
+kds-insert1-relaxed-k1-s16-kernel-r2 load 3.98->3.82 stmts=753664 errors=0 refusals=0 client_bound=False cores=['0.0'] stmt/s=90501.0 p50=67.4

@@ -75,7 +75,7 @@ Status TrxIdSequence::ReserveBlock() {
     // A block the early carve staged and whose sync is not yet known done
     // (DZ-S3): made durable here, on this path, as a carve here always is.
     if (pending_.has_value()) {
-        if (!staged_.done(pending_->ticket) && persist_ != nullptr) {
+        if (!staged_.done(pending_->ticket)) {  // pending only where `persist_` is set
             const StallTimer stall(Tally::kCarves, Longest::kCarveNs);
             if (Status s = persist_(); !s.ok()) return s;
         } else if (Status s = staged_.result(pending_->ticket); !s.ok()) {

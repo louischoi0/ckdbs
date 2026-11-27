@@ -210,6 +210,45 @@ TEST(TrxIdSequenceTest, AFailedStagedSyncDropsThePendingBlock) {
     EXPECT_FALSE(seq.has_block_ahead()) << "a block whose sync failed is ahead";
 }
 
+TEST(TrxIdSequenceTest, AWindowDrainedOverAFailedStagedSyncIssuesNothingFromThePendingBlock) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    seq.SetStagedPersist({[]() -> StatusOr<std::uint64_t> { return std::uint64_t{1}; },
+                          [](std::uint64_t) { return true; },
+                          [](std::uint64_t) { return Status::IoError("injected: sync failed"); }});
+    ASSERT_TRUE(seq.Next().ok());
+    while (seq.remaining() > kTrxIdBlockSize / 4) ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_pending());
+    const std::uint64_t pending_ceiling = p.superblock().next_trx_id();
+    while (seq.remaining() > 0) ASSERT_TRUE(seq.Next().ok());
+    EXPECT_FALSE(seq.Next().ok()) << "an id issued from a block whose sync failed";
+    EXPECT_FALSE(seq.has_block_pending());
+    auto next = seq.Next();  // a fresh carve, above the dropped block
+    ASSERT_TRUE(next.ok());
+    EXPECT_GE(next.value(), pending_ceiling);
+}
+
+TEST(TrxIdSequenceTest, ABurnDropsAStagedPendingBlockAndCarvesAboveIt) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    seq.SetStagedPersist({[]() -> StatusOr<std::uint64_t> { return std::uint64_t{1}; },
+                          [](std::uint64_t) { return false; },
+                          [](std::uint64_t) { return Status::OK(); }});
+    std::uint64_t last = seq.Next().value();
+    while (seq.remaining() > kTrxIdBlockSize / 4) last = seq.Next().value();
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_pending());
+    const std::uint64_t pending_ceiling = p.superblock().next_trx_id();
+    ASSERT_TRUE(seq.BurnWindow().ok());
+    EXPECT_FALSE(seq.has_block_pending());
+    EXPECT_FALSE(seq.has_block_ahead());
+    auto next = seq.Next();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GE(next.value(), pending_ceiling);
+    EXPECT_GT(next.value(), last);
+}
+
 TEST(TrxIdSequenceTest, ABurnDropsTheBlockAheadAndCarvesAboveIt) {
     Persisted p;
     TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
