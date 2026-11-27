@@ -11,3 +11,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version; DW-Q4 beyond (a); any milestone but DW |
 | **At the close** | **DW closed at `f85aa3042` and nothing was pushed.** Three things in it are CLA's and not the operator's, each recorded as such in the order: **the reading of DW-Q1's bar** at DW-S0 (a point read pays where key values recur and nothing where they do not, read as "the bar is not met"); **DW-Q7**, an item CLA raised at DW-S2 and revised from its own (a) to (b) at the close, which adds a count and so **amends DW-Q2 (a)**, "existing counters only", as adopted; and **the reading of the close** - two measured costs with the key on (a row flipping between two values, 7.2 % of server CPU a statement for nothing; a slice's stall on core 0) taken as the mechanism's price and written into `known-gaps.md`, the other reading left to the operator in the order's §7. **The key is off by default and nothing here turns it on** |
 | **Recorded at** | this file; `workorder-dw-btree-purge-driver.md` (header, §4 "Marks", §7); DW's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 2. DW pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, to the report of DW's close |
+| **Mark** | `worktree-dw-btree-purge-driver` (`539cb0589`) merged into `main` `--no-ff` at `9a229dbbb` and pushed, **the pre-push hook skipped**. The suite had run on the tree pushed: 5,327 of 5,327 at `539cb0589` (`ctest -LE bs-nightly -j4`). `origin/main` had not moved from `630ecc359`, so the merge brought nothing the suite had not run on |
+| **Does not settle** | the two readings §1's "At the close" leaves to the operator - the word was the push and said nothing of them; whether `index_purge_driver` should be on by default; a tag or a version |
+| **Recorded at** | this file; `workorder-dw-btree-purge-driver.md` (header, §7 "Landed"); DW's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
