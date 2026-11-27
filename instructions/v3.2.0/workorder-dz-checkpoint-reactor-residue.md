@@ -1,6 +1,11 @@
 # Work order DZ - what a checkpoint still does on its reactor: the dirty-table walk, the page writes, the map barrier
 
-Status: **OPEN since 2026-11-27**, on worktree `dz-checkpoint-reactor-residue`
+Status: **CLOSED 2026-11-27** at `27e85e848` (`v3.4.17-209-g27e85e848`),
+its documents on top: DZ-R5's bar met at every size and core count
+measured, the run not longer, no server-level regression; the early carve's
+change met at `group` and not at `relaxed`, `cores = 1` (§7, "DZ-S4").
+**Closed on CLA's reading of the close measurement**, adopted on the standing
+go-ahead and not the operator's mark. Opened 2026-11-27 on worktree `dz-checkpoint-reactor-residue`
 (branch `worktree-dz-checkpoint-reactor-residue`) from `481d101aa`
 (`v3.4.17-202-g481d101aa`), under the operator's standing go-ahead of
 2026-11-27 (`raft-marks-2026-11-27.md` §11): every DZ-Q item is **adopted
@@ -368,4 +373,35 @@ On `dz-checkpoint-reactor-residue` at `78cbbf464`.
   unsound - the claimed copy may predate the raise); a block drained before
   its sync is done counts as two carves; no cell drives the expeditor's
   staged persist through a crash.
+
+### DZ-S4 - the close, 2026-11-27; DZ closed
+
+`bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`: `27e85e848`
+against `481d101aa`, release, copied.
+
+- **DZ-R5 met**: no poll of B's over 10 ms in 12 census cells (64 Ki, 256 Ki,
+  1 Mi; `cores` 1 and 4; two rounds), the longest 9.56 ms; A's up to
+  1,063.58 ms with 1,234-1,642 polls over 10 ms at 1 Mi. The run's length
+  summed per size fell (1 Mi 245.1 s to 233.4 s), so "+25 %" is not passed.
+  B's two 9.4-9.6 ms polls at 1 Mi are unattributed by the census's pieces
+  and recorded in `known-gaps.md`.
+- **The foreground A/B on the checkpointing core** (§5): BA's census driver,
+  A and B alternating. `insert1` `group` `cores = 2`: 12 pairs, medians
+  242,446 against 240,456 statements a run, B higher in 7 - the first six
+  pairs read -22 % and the second six +; no regression. `point` `group`
+  `cores = 2`: B 1.0-5.5 % lower in three pairs, unresolved, on a path DZ does
+  not touch. `insert1` `relaxed` `cores = 1`: statements a second equal
+  within the runs' spread.
+- **The carve, read by CLA and not the operator**: DZ-S3's early carve fell
+  from up to 440 ms to 12 ms at `group`, `cores = 2`, and did not fall at
+  `relaxed`, `cores = 1` (86-610 ms against 50-459 ms), where the window's
+  last quarter drains before the staged sync is done. **CLA reads DZ-Q4 (a)
+  as met where the carve can be split and stated where it cannot**: the
+  remedy - a block or a trigger sized to the sync's length - changes
+  `kTrxIdBlockSize`'s trade (ids a crash or a burn throws away), which is not
+  DZ's and is not taken on the standing word. Recorded in `known-gaps.md`.
+- **Documents**: `page.md` §8, `wal.md` §11, `txn.md` §4.2, `known-gaps.md`
+  ("Carve and checkpoint stalls", "The frame table's structure latch"),
+  `CLAUDE.md`'s WAL row, the index and the register.
+- **The close's review**: below, once run.
 

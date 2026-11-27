@@ -120,3 +120,13 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | **DZ-Q2 (b)**, revised by CLA from its own adopted (a) and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's mark: the checkpoint's page writes go to a writer thread inside `DataSyncer`, started and stopped with the sync's thread, because on the one thread a write queued behind a whole `fsync` (BI-Q13). (a)'s own text named (b) as its fallback; the order's §4 records the revision. Not `[quiet-wrong]` |
 | **Does not settle** | a tag or a version; any milestone but DZ |
 | **Recorded at** | this file; `workorder-dz-checkpoint-reactor-residue.md` §4 and §7 |
+
+## 14. DZ closed on the work branch
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §11 - no new word from the operator |
+| **Mark** | **DZ is closed on `worktree-dz-checkpoint-reactor-residue`** at `27e85e848`, on CLA's reading of the close measurement (`bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`), adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone) and not the operator's own word: DZ-R5 met; no regression; **DZ-Q4 (a) read as met at `group` and stated as a gap at `relaxed`, `cores = 1`**, where the early carve's staged sync outlasts the window's last quarter - the remedy sizes the block or its trigger to the sync, `kTrxIdBlockSize`'s trade, which CLA did not take on the standing word |
+| **The landing** | the operator's word of §11's second half covers it: merged into `main` and pushed with `--no-verify` once closed |
+| **Does not settle** | a tag or a version; the `relaxed` carve's remedy |
+| **Recorded at** | this file; the order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

@@ -68,7 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
-| DZ | open | 2026-11-27 | 2026-11-26 | 2026-11-27 | - | - | - | what a checkpoint still does on its reactor: the dirty-table walk, the page writes, the map barrier | v3.2.0/workorder-dz-checkpoint-reactor-residue.md |
+| DZ | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | - | - | what a checkpoint still does on its reactor: the dirty-table walk, the page writes, the map barrier | v3.2.0/workorder-dz-checkpoint-reactor-residue.md |
 | DV | closed-narrow | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 8dd5ce8e | - | pages no root reaches: counted, then reclaimed | v3.2.0/workorder-dv-unreachable-page-reclaim.md |
 | DW | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 9a229dbb | - | what a btree relation's deletes leave, purged unasked: index entries first | v3.2.0/workorder-dw-btree-purge-driver.md |
 | EE | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | the decide slot: one wake behind every wait for a transaction's decide | v3.2.0/workorder-ee-decide-slot.md |
