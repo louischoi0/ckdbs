@@ -124,6 +124,7 @@ OLTP mix, and what a read pays for them.
 | DW-Q4 | The row and its key | (a) left to `PURGE`, as built; (b) a delete-marked row's spills released unasked, the tombstone kept - no key freed, a var-heap release at `kNoTxnId` as `PURGE`'s is; (c) the keyed tombstone, K1's second exception or a new slot state | (a); (b) is CLA's next proposal and (c) needs the operator's own word |
 | DW-Q5 | IX2c's first entry and spilled covered churn | (a) outside DW, stated; (b) inside | (a): DM, which would have lifted IX2c, was abandoned |
 | DW-Q6 | `PURGE`'s polling wait | (a) outside DW (EE's decide slot would give it a wake); (b) inside | (a) |
+| DW-Q7 | `updates` counts every `UPDATE`, and only one that moves a key or a covered value leaves an entry. Raised at DW-S2 | (a) the existing count, weighted by what the relation's passes found (halved to an eighth by a pass whose updates left nothing, judged only where no older view stood below its writes); (b) a new count on the write path of the updates that appended an index entry, which DW-Q2 (a) excludes | (a): DW-Q2 (a) stands, and (b) is proposed only if a close measures the learned weight's cost - up to three fruitless passes a relation, then one in eight - as a regression |
 
 ### Marks
 
@@ -142,6 +143,7 @@ the item. No item is tagged `[quiet-wrong]`.
 | DW-Q4 | (a) | the row is left to `PURGE`; DW-S3 has no subject. (c) needs the operator's own word and the standing word is not that |
 | DW-Q5 | (a) | IX2c's first entry and spilled covered churn stay outside |
 | DW-Q6 | (a) | `PURGE`'s polling wait stays outside |
+| DW-Q7 | (a) | raised by CLA at DW-S2 and adopted the same way: the item is not in the order as the operator read it |
 
 ## 5. Stages
 
@@ -396,5 +398,86 @@ again after it. The verdict line now carries
 driver's passes took entries under the harness and did not merely run.
 No committed seed of `tests/testdata/sim_seeds.txt` draws the driver
 (none is 7 mod 8); the sweep above is by hand and no seed was added.
+
+**Overhead not measured; measured at the milestone's close.**
+
+### DW-S2: a moved key's entry, with no retired slot (2026-11-27)
+
+On `dw-btree-purge-driver`, over `39b19ea77`.
+
+**Built.**
+
+- **The driver counts `updates`.** `IndexPurgeDriver::Offer` takes a
+  relation's `deletes` and `updates`, and the writes that buy a pass are
+  `deletes + (updates >> update_shift)`. That is the whole of the
+  "moved-key purge with no retired slot" (`known-gaps.md`, DR-Q18): the
+  judge already called a moved key's old entry dead, and nothing ran it
+  where no row was deleted.
+- **A heap is walked.** The driver's pass runs on a heap as on a btree;
+  only a dropped relation and a catalog chain end a pass unwalked. **A
+  heap's deletes buy no pass** - its slot release purges for them - which
+  the driver reads at the relation's first pass, a kind being fixed for
+  the life of an oid; a first pass a heap's deletes bought is a pass the
+  release would have run.
+- **An update's weight is learned** (DW-Q7 (a)). `updates` is every
+  `UPDATE`, and only one that moves a key or a covered value leaves an
+  entry. A whole pass whose removals, beyond its deletes' entries, are
+  under an eighth of the updates that helped buy it halves the weight of
+  the relation's updates, to an eighth; a pass that did better makes it
+  whole.
+- **A pass an older view could have made fruitless judges nothing.** A
+  relation is queued with the commit ceiling of that moment as its mark
+  (`TransactionManager::CommitCeiling`, an accessor added), and its pass
+  judges the updates only if the read horizon had reached the mark at
+  its first step.
+
+**The heap release and the driver on one relation** `[source-read]`,
+confirmed by the review: both only remove entries, by the one judge,
+each seeking its leaf again at every step, a step of each by turns on
+core 0's tick and never at one moment; the release's verify reads what
+either left and its free asks each slot again under its page's hold. The
+judge keeps a declared Keystone's tombstone entry
+(`src/exec/index_ddl.cpp:1117`), so a pass frees no key (K1, DW-R4).
+
+**Cells** (`tests/index_purge_driver_test.cpp`, 23 in all): a btree and
+a heap whose keys only move return to a rebuild's size but for a leaf's
+first entry; a moved primary key's `$pkey_<oid>` entries go, and the
+value it moved off is free to place; a heap's deletes buy no pass once
+its kind is read; updates that move no key buy passes at a falling rate,
+to the ceiling, until updates that do restore it; a delete's entries are
+not counted as the updates' findings; a pass under an older view leaves
+the weight, with a delete in it and with none; a heap's release and a
+pass stepped by turns free no slot an entry names (every index walked
+after every step); a declared Keystone's tombstone keeps its key through
+a pass.
+
+**The review** (`critics-developer`, on the uncommitted tree): DN-R2, K1
+and every result hold; four mutations of the driver were run, three
+killed by the cells as written and the fourth - the deletes' entries not
+subtracted - by a cell the review added. **Applied by the review**: a
+pass a refusal or a drop ended no longer moves the weight; three cells
+(the fourth mutation's, the release and a pass by turns, the declared
+Keystone's tombstone); the manual's `PURGE INDEX` text, which said a
+heap purges its own moved keys. **Applied by CLA on its findings**: the
+guard CLA first wrote - "the deletes were at least half answered" -
+misread an older view that kept about half of a pass's writes, and any
+older view where the pass held no delete, as updates that move nothing;
+**it is replaced by the horizon mark above**, which reads the older view
+itself, and the cell with no delete in the pass pins it. A pass that did
+not walk every index leaves the threshold as well as the weight; the
+writes that bought a pass are kept once, on the relation. **Raised and
+adopted**: DW-Q7 (§4) - the review's other remedy, a count on the write
+path of the updates that appended an entry, is option (b), outside
+DW-Q2 (a). **Left as they are**: an index created or still building
+mid-pass is counted among the indexes a delete's entries are spread
+over, and `deletes` counts a statement a later `ROLLBACK` undoes - both
+make a pass's updates look more useful, never less, so neither lowers a
+weight wrongly.
+
+**Suite**: 5,324 of 5,324 passed on this tree at `-j4`, on the second
+run; the first failed `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`
+alone (`known-gaps.md`, "Testing"). **The simulator**: 108 of 108 on the
+six seeds of DW-S1's sweep, `unasked_purged_entries` 447 to 611 on three
+`clean` runs.
 
 **Overhead not measured; measured at the milestone's close.**

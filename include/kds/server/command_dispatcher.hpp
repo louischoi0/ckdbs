@@ -2266,14 +2266,13 @@ public:
     // **The unasked index purge** (DW; the protocol is
     // `exec/index_purge_driver.hpp`'s), built on the one dispatcher whose
     // tick drives it - core 0's - and only where `index_purge_driver` is on:
-    // with none, the two calls below do nothing. `min_deletes` is the
+    // with none, the two calls below do nothing. `min_writes` is the
     // driver's floor, a test's and the simulator's to lower.
-    void EnableIndexPurgeDriver(
-        std::uint64_t min_deletes = exec::IndexPurgeDriver::kMinDeletes) {
-        index_purge_.emplace(min_deletes);
+    void EnableIndexPurgeDriver(std::uint64_t min_writes = exec::IndexPurgeDriver::kMinWrites) {
+        index_purge_.emplace(min_writes);
     }
-    // Offers every relation's delete count to the driver, off the relation
-    // statistics' snapshot.
+    // Offers every relation's delete and update counts to the driver, off
+    // the relation statistics' snapshot.
     void QueueIndexPurges();
     // One step of the driver's pass under the relation's `IX`, `budget`
     // leaves; a refused `IX` skips it. Returns whether a pass is still owed.

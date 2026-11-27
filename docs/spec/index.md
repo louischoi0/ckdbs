@@ -96,9 +96,10 @@ Two rules ride along, and both are load-bearing rather than tidy:
   third row, and the index carries the same contract test.
 - **Nothing on the write path reclaims.** A superseded entry costs memory,
   a page, and a read-time skip until a purge takes it out (§2.2): an
-  administrator's `PURGE INDEX`, on a btree relation the unasked driver
-  where `index_purge_driver` is on (§2.3) and nothing unasked where it is
-  off, and on a heap its slot release (`heap-and-tuple.md` §3.1b).
+  administrator's `PURGE INDEX`, the unasked driver where
+  `index_purge_driver` is on (§2.3), and on a heap its slot release for the
+  rows it deleted (`heap-and-tuple.md` §3.1b). With the driver off nothing
+  unasked purges a btree's indexes, nor a moved key's entry on either kind.
 
 ### 2.1 Failure on the write path
 
@@ -175,12 +176,13 @@ core passes between two slices; one on another core is not queued for, and
 gets its `X` only in the gap between a slice's release and the next one's
 `IX`.
 
-### 2.3 The unasked purge of a btree relation's indexes (DW)
+### 2.3 The unasked purge (DW)
 
-`index_purge_driver` (a boot key, **off by default**) gives a btree
-relation what a heap has from its slot release: §2.2's pass with no
-statement asking (`exec/index_purge_driver.hpp`,
-`instructions/v3.2.0/workorder-dw-btree-purge-driver.md`).
+`index_purge_driver` (a boot key, **off by default**) runs §2.2's pass
+with no statement asking (`exec/index_purge_driver.hpp`,
+`instructions/v3.2.0/workorder-dw-btree-purge-driver.md`): for a btree
+relation, what a heap has from its slot release; and for both kinds, the
+entry of a key a row moved off, which no retired slot ever queues.
 
 > **IX2d - the driver chooses what a pass runs on and when, and nothing
 > of what it removes.** A pass is every index of one relation walked once
@@ -188,17 +190,31 @@ statement asking (`exec/index_purge_driver.hpp`,
 > `PurgeIndexLeaves` attempt: IX2a's judge, IX2b's fence and IX2c's first
 > entry, unchanged. So a result is the same with the key on and off.
 
-**What it runs on** is a count that already exists: a relation's `deletes`
-in `sys.relation_stats`' store, read once a second by core 0's `system`
-tick. A relation is queued once its deletes since it was last queued
-reach its threshold - 4,096, and one fifth of the entries an index kept
-at its last pass, the indexes averaged, which is the rows near enough -
-and no page is read to choose. Each delete leaves one dead entry an
-index, so the count is what a pass can take but for a row an older view
-still sees, which is owed its entries: a pass such a view makes fruitless
-has spent the deletes that bought it, and the next is bought at the same
-price. A relation dropped, a heap and a catalog chain end their pass with
-nothing walked.
+**What it runs on** is counts that already exist: a relation's `deletes`
+and `updates` in `sys.relation_stats`' store, read once a second by core
+0's `system` tick. A relation is queued once its writes since it was
+last queued reach its threshold - 4,096, and one fifth of the entries an
+index kept at its last pass, the indexes averaged, which is the rows near
+enough - and no page is read to choose.
+
+- **A delete counts whole**: it leaves one dead entry an index, which a
+  pass takes but for a row an older view still sees. A pass such a view
+  makes fruitless has spent the writes that bought it, and the next is
+  bought at the same price. **On a heap a delete does not count**: its
+  slot release purges for it. The driver reads a relation's kind at its
+  first pass.
+- **An update counts by what the relation's updates have been leaving.**
+  `updates` is every `UPDATE`, and only one that moves a key or a covered
+  column leaves an entry. A pass whose removals, beyond its deletes'
+  entries, are under an eighth of the updates that helped buy it halves
+  the weight of the relation's updates, to an eighth; a pass that did
+  better makes it whole. **A pass an older view could have made fruitless
+  says nothing of the updates**: the relation is queued with the commit
+  ceiling of that moment as its mark, and its pass judges the updates
+  only if the read horizon had reached the mark at its first step.
+
+A relation dropped and a catalog chain end their pass with nothing
+walked.
 
 **How it runs** is the heap release's way: one slice - the `analytic`
 level's 16 leaves - on each 50 ms tick of core 0's `system` group, under

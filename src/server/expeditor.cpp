@@ -2314,7 +2314,7 @@ Status Expeditor::Start() {
 
     // **The unasked index purge** (DW; `exec/index_purge_driver.hpp`,
     // `index.md` §2.3), only where `index_purge_driver` built the driver:
-    // the relations' delete counts offered once a second, and one slice of
+    // the relations' write counts offered once a second, and one slice of
     // the queued relation's pass a tick - `analytic`'s leaves, as the heap
     // release's - a predicate and a return when none is owed.
     if (dispatcher_->index_purge_driver() != nullptr) {

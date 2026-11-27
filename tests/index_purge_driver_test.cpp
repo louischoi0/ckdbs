@@ -6,11 +6,16 @@
 #include <gtest/gtest.h>
 
 #include "kds/bootstrap/bootstrap.hpp"
+#include "kds/exec/index_maintain.hpp"
 #include "kds/exec/index_purge_driver.hpp"
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/session.hpp"
 #include "kds/stats/relation_stats.hpp"
+#include "kds/storage/heap/heap_page.hpp"
+#include "kds/storage/heap/rowid.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/index/index_page.hpp"
+#include "kds/storage/index/index_tree.hpp"
 #include "kds/txn/lock_table.hpp"
 #include "kds/txn/manager.hpp"
 #include "sim/instance.hpp"
@@ -114,7 +119,7 @@ protected:
 };
 
 TEST_F(IndexPurgeDriverTest, ADeletedRowsEntriesLeaveUnaskedAndNoResultMoves) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/100);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
     Table(2000);
     Ok("DELETE FROM t WHERE id > 1000");
     const std::vector<std::string> before = Probes();
@@ -149,13 +154,12 @@ TEST_F(IndexPurgeDriverTest, SwitchedOffNothingIsOfferedSteppedOrShown) {
 }
 
 TEST_F(IndexPurgeDriverTest, ARelationIsQueuedOnlyOnceItsDeletesReachTheThreshold) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/50);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/50);
     Table(600);
     Ok("DELETE FROM t WHERE id > 551");  // 49 rows
     EXPECT_EQ(Drive(), 0u);
     EXPECT_EQ(Entries("by_k"), 600u);
-    // An UPDATE and an INSERT are no part of DW-S1's signal.
-    Ok("UPDATE t SET k = k + 100 WHERE id <= 100");
+    // An INSERT is no part of the signal.
     Ok("INSERT INTO t VALUES (9000, 1), (9001, 2)");
     EXPECT_EQ(Drive(), 0u);
     Ok("DELETE FROM t WHERE id = 551");  // the 50th
@@ -169,7 +173,7 @@ TEST_F(IndexPurgeDriverTest, ARelationIsQueuedOnlyOnceItsDeletesReachTheThreshol
 // fruitless pass are spent: the next is bought at the same price, and with
 // the reader gone it takes them all.
 TEST_F(IndexPurgeDriverTest, AnOldViewKeepsItsRowsEntriesAndTheNextPassTakesThem) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/40);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
     Table(200);
     Session reader;
     Ok("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader);
@@ -190,7 +194,7 @@ TEST_F(IndexPurgeDriverTest, AnOldViewKeepsItsRowsEntriesAndTheNextPassTakesThem
 // IX2b through the driver: a row an undecided writer holds is passed over,
 // its entries kept and counted, and nothing waits.
 TEST_F(IndexPurgeDriverTest, AnUndecidedDeletersRowsAreSkippedAndCounted) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/40);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
     Table(200);
     Ok("DELETE FROM t WHERE id > 160");
     Session writer;
@@ -244,7 +248,7 @@ TEST_F(IndexPurgeDriverTest, AnIndexStillBeingBuiltIsPassedOver) {
 // table, is granted there. While one is held the driver's slice is skipped,
 // not waited for, and the pass goes on after it.
 TEST_F(IndexPurgeDriverTest, NothingIsHeldBetweenTwoSlicesAndAHeldRelationSkipsTheSlice) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/100);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
     Table(3000);
     Ok("DELETE FROM t WHERE id > 500");
     const std::vector<std::string> before = Probes();
@@ -280,7 +284,7 @@ TEST_F(IndexPurgeDriverTest, NothingIsHeldBetweenTwoSlicesAndAHeldRelationSkipsT
 }
 
 TEST_F(IndexPurgeDriverTest, AnIndexDroppedMidPassIsPassedOverAndOneCreatedMidPassIsWalked) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/100);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
     Table(3000);
     Ok("CREATE INDEX by_k2 ON t (k)");
     Ok("DELETE FROM t WHERE id > 500");
@@ -304,23 +308,320 @@ TEST_F(IndexPurgeDriverTest, AnIndexDroppedMidPassIsPassedOverAndOneCreatedMidPa
               Run("SELECT id FROM t WHERE id <= 500 AND k = 3 ORDER BY id"));
 }
 
-TEST_F(IndexPurgeDriverTest, ADroppedRelationAndAHeapEndTheirPassesWithNothingWalked) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/10);
+TEST_F(IndexPurgeDriverTest, ADroppedRelationEndsItsPassWithNothingWalked) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/10);
     Table(200);
-    Ok("CREATE TABLE h (a int64, b int64) HEAP");
-    Ok("CREATE INDEX hb ON h (b)");
-    for (int i = 0; i < 40; ++i) {
-        Ok("INSERT INTO h VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")");
-    }
     Ok("DELETE FROM t WHERE id > 100");
-    Ok("DELETE FROM h WHERE a >= 10");
     dispatcher_->QueueIndexPurges();
     Ok("DROP TABLE t");
     Drive();
-    EXPECT_EQ(Counts().passes, 2u);
-    EXPECT_EQ(Counts().read, 0u) << "a heap's indexes are its slot release's";
-    // Neither is offered again by counts that no longer move.
+    EXPECT_EQ(Counts().passes, 1u);
+    EXPECT_EQ(Counts().read, 0u);
+    // Not offered again by counts that no longer move.
     EXPECT_EQ(Drive(), 0u);
+}
+
+// ---- A moved key's entry, with no retired slot (DW-S2) ------------------------
+
+// DR-Q18's gap: an `UPDATE` of a key column appends an entry and leaves the
+// old one, and where no row is ever deleted nothing took it out. The driver
+// counts updates, so a relation whose keys only move returns to the size a
+// rebuild gives it, but for a leaf's first entry.
+TEST_F(IndexPurgeDriverTest, ABtreeWhoseKeysOnlyMoveReturnsToItsRebuiltSize) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
+    Table(1000);
+    for (int round = 0; round < 3; ++round) Ok("UPDATE t SET k = k + 100");
+    ASSERT_EQ(Entries("by_k"), 4000u);
+    const std::string probe = "SELECT id FROM t WHERE k = 303 ORDER BY id";
+    const std::string before = Run(probe);
+    EXPECT_EQ(Drive(), 1u);
+    Ok("CREATE INDEX rebuilt ON t (k)");
+    ASSERT_EQ(Entries("rebuilt"), 1000u);
+    // The churned tree has more leaves than the rebuilt one, and each keeps
+    // its first entry (IX2c).
+    EXPECT_LE(Entries("by_k"), 1000u + 40u) << "a rebuild's entries, and a first entry a leaf";
+    EXPECT_EQ(Run(probe), before);
+    EXPECT_EQ(Run("SELECT id FROM t WHERE k = 3 ORDER BY id"),
+              Run("SELECT id FROM t WHERE id < 0"))
+        << "no row is found by a key it moved off";
+}
+
+TEST_F(IndexPurgeDriverTest, AHeapWhoseKeysOnlyMoveReturnsToItsRebuiltSize) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
+    Ok("CREATE TABLE h (a int64, b int64) HEAP");
+    Ok("CREATE INDEX hb ON h (b)");
+    for (int at = 1; at <= 1000; at += 100) {
+        std::string sql = "INSERT INTO h VALUES ";
+        for (int i = at; i < at + 100; ++i) {
+            if (i != at) sql += ", ";
+            sql += "(" + std::to_string(i) + ", " + std::to_string(i % 8) + ")";
+        }
+        Ok(sql);
+    }
+    for (int round = 0; round < 3; ++round) Ok("UPDATE h SET b = b + 100");
+    ASSERT_EQ(Entries("hb"), 4000u);
+    const std::string probe = "SELECT a FROM h WHERE b = 303 ORDER BY a";
+    const std::string before = Run(probe);
+    // No slot was retired, so the heap's own release has nothing queued.
+    auto released = dispatcher_->StepHeapRelease(16);
+    ASSERT_TRUE(released.ok());
+    EXPECT_FALSE(released.value());
+    EXPECT_EQ(Entries("hb"), 4000u);
+    EXPECT_EQ(Drive(), 1u);
+    Ok("CREATE INDEX rebuilt ON h (b)");
+    ASSERT_EQ(Entries("rebuilt"), 1000u);
+    EXPECT_LE(Entries("hb"), 1000u + 40u);
+    EXPECT_EQ(Run(probe), before);
+}
+
+// A heap's deletes are its slot release's to purge for: once the driver has
+// read the relation's kind - at its first pass - they buy no pass of its own.
+TEST_F(IndexPurgeDriverTest, AHeapsDeletesBuyNoPassOnceItsKindIsRead) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/10);
+    Ok("CREATE TABLE h (a int64, b int64) HEAP");
+    Ok("CREATE INDEX hb ON h (b)");
+    for (int i = 0; i < 100; ++i) {
+        Ok("INSERT INTO h VALUES (" + std::to_string(i) + ", " + std::to_string(i) + ")");
+    }
+    Ok("UPDATE h SET b = b + 1000 WHERE a < 20");
+    EXPECT_EQ(Drive(), 1u) << "its first pass, bought by updates, reads its kind";
+    Ok("DELETE FROM h WHERE a >= 50");
+    EXPECT_EQ(Drive(), 0u) << "50 deletes on a heap buy nothing";
+    Ok("UPDATE h SET b = b + 1000 WHERE a < 20");
+    EXPECT_EQ(Drive(), 1u) << "20 updates do";
+}
+
+// A primary key that is not the Keystone is the unique index `$pkey_<oid>`,
+// its value free to move (DR): the moved value's old entry goes unasked too.
+TEST_F(IndexPurgeDriverTest, AMovedPrimaryKeysOldEntriesGoUnasked) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
+    Ok("CREATE TABLE w (k varchar(40), n int64, v int64, PRIMARY KEY (k, n))");
+    for (int at = 1; at <= 300; at += 100) {
+        std::string sql = "INSERT INTO w VALUES ";
+        for (int i = at; i < at + 100; ++i) {
+            if (i != at) sql += ", ";
+            sql += "('key" + std::to_string(i) + "', 1, " + std::to_string(i) + ")";
+        }
+        Ok(sql);
+    }
+    Ok("UPDATE w SET n = n + 1");
+    const std::string shown = Run("SELECT name, entries FROM sys.indexes");
+    std::string pkey;
+    for (const std::string& name : testing_view::ReadViewText(shown).Column("name")) {
+        if (name.rfind("$pkey_", 0) == 0) pkey = name;
+    }
+    ASSERT_FALSE(pkey.empty()) << shown;
+    ASSERT_EQ(Entries(pkey), 600u);
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_LE(Entries(pkey), 300u + 10u);
+    EXPECT_NE(Run("SELECT v FROM w WHERE k = 'key7' AND n = 2").find("7"), std::string::npos);
+    EXPECT_EQ(Run("SELECT v FROM w WHERE k = 'key7' AND n = 1"),
+              Run("SELECT v FROM w WHERE k = 'none' AND n = 1"));
+    EXPECT_EQ(dispatcher_->Dispatch("INSERT INTO w VALUES ('key7', 2, 0)").status.code(),
+              StatusCode::kAlreadyExists);
+    EXPECT_TRUE(dispatcher_->Dispatch("INSERT INTO w VALUES ('key7', 1, 0)").status.ok())
+        << "the value the key moved off is free";
+}
+
+// `updates` counts every UPDATE, and only one that moves a key leaves an
+// entry. A pass that found the updates left nothing halves their weight, to
+// an eighth; the first pass that finds their entries restores it.
+TEST_F(IndexPurgeDriverTest, UpdatesThatMoveNoKeyBuyPassesAtAFallingRateUntilOneDoes) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Ok("CREATE TABLE t (id int64, k int64, w int64) BTREE");
+    Ok("CREATE INDEX by_k ON t (k)");
+    for (int i = 1; i <= 200; ++i) {
+        Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", " + std::to_string(i % 8) + ", 0)");
+    }
+    const auto bump = [&](int rows) {  // moves no key
+        Ok("UPDATE t SET w = w + 1 WHERE id <= " + std::to_string(rows));
+    };
+    bump(40);
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_EQ(Counts().removed, 0u);
+    bump(40);
+    EXPECT_EQ(Drive(), 0u) << "halved: 40 updates weigh 20";
+    bump(40);
+    EXPECT_EQ(Drive(), 1u) << "80 weigh 40";
+    bump(120);
+    EXPECT_EQ(Drive(), 0u) << "quartered: 120 weigh 30";
+    bump(40);
+    EXPECT_EQ(Drive(), 1u) << "160 weigh 40";
+    bump(200);
+    EXPECT_EQ(Drive(), 0u) << "an eighth: 200 weigh 25";
+    bump(120);
+    EXPECT_EQ(Drive(), 1u) << "320 weigh 40";
+    bump(200);
+    bump(120);
+    EXPECT_EQ(Drive(), 1u) << "and no further: the ceiling is an eighth";
+    EXPECT_EQ(Counts().removed, 0u);
+
+    // Updates that move keys: 320 weigh 40, the pass finds their entries,
+    // and the weight is whole again.
+    Ok("UPDATE t SET k = k + 100");
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 120");
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_GE(Counts().removed, 300u);
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 40");
+    EXPECT_EQ(Drive(), 1u) << "40 updates buy a pass again";
+}
+
+// An older view answers neither a delete nor an update: a row it still sees
+// is owed its entries. A pass that began with such a view standing below the
+// writes that bought it says nothing of the relation's updates, with a
+// delete among them or with none, and their weight stands.
+TEST_F(IndexPurgeDriverTest, APassAnOlderViewMadeFruitlessLeavesTheUpdatesWeight) {
+    // 150 rows: a fifth of what an index keeps stays under the floor of 40.
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Table(150);
+    Session reader;
+    Ok("BEGIN ISOLATION LEVEL REPEATABLE READ", &reader);
+    const std::vector<std::string> seen = Probes(&reader);
+    Ok("DELETE FROM t WHERE id > 130");            // 20 deletes
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 20");  // 20 updates that move a key
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_EQ(Counts().removed, 0u);
+    EXPECT_EQ(Probes(&reader), seen);
+    // And with no delete in the pass: 40 updates that move a key, none of
+    // whose entries the view lets go.
+    Ok("UPDATE t SET k = k + 100 WHERE id > 20 AND id <= 60");
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_EQ(Counts().removed, 0u);
+    EXPECT_EQ(Probes(&reader), seen);
+    Ok("COMMIT", &reader);
+    // Whole still: the index keeps 210 entries, so 42 writes buy the next,
+    // and 45 updates do - halved they would not. It takes every pass's
+    // entries.
+    Ok("UPDATE t SET k = k + 100 WHERE id > 60 AND id <= 105");
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_GE(Counts().removed, 120u) << "20 deleted rows' entries and 105 moved keys'";
+}
+
+// A pass's deletes' entries are not the updates' findings: with every
+// delete answered and no key moved, the updates' weight falls as it does
+// with no delete at all.
+TEST_F(IndexPurgeDriverTest, ADeletesEntriesAreNotCountedAsTheUpdatesFindings) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Ok("CREATE TABLE t (id int64, k int64, w int64) BTREE");
+    Ok("CREATE INDEX by_k ON t (k)");
+    for (int i = 1; i <= 200; ++i) {
+        Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", " + std::to_string(i % 8) + ", 0)");
+    }
+    Ok("DELETE FROM t WHERE id > 180");              // 20 deletes
+    Ok("UPDATE t SET w = w + 1 WHERE id <= 20");     // 20 updates that move no key
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_GE(Counts().removed, 15u) << "the deletes were answered";
+    Ok("UPDATE t SET w = w + 1 WHERE id <= 40");
+    EXPECT_EQ(Drive(), 0u) << "halved: 40 updates weigh 20";
+}
+
+// Every entry of every index of `table`, the ones naming a free slot
+// counted: DN-R2 says there is none.
+std::uint64_t EntriesNamingAFreeSlot(storage::PageStore& store, catalog::Catalog& catalog,
+                                     catalog::Oid table) {
+    catalog.Revalidate();
+    auto access = catalog.InitTableAccess(table);
+    EXPECT_TRUE(access.ok());
+    if (!access.ok()) return 0;
+    std::uint64_t named = 0;
+    for (const catalog::TableAccess::IndexRef& ix : access.value()->indexes) {
+        const index::IndexLayout layout = exec::IndexLayoutOf(ix);
+        const std::vector<std::byte> low(layout.sort_key_width(), std::byte{0});
+        auto leaf = index::IndexSeekLeaf(store, ix.root_page_id, layout, low);
+        EXPECT_TRUE(leaf.ok());
+        for (PageId at = leaf.ok() ? leaf.value() : kInvalidPageId; at != kInvalidPageId;) {
+            auto page = index::IndexFetchLeaf(store, at, layout, storage::PageAccess::kRead);
+            EXPECT_TRUE(page.ok());
+            if (!page.ok()) return named;
+            const index::IndexLeafView view(page.value().bytes());
+            for (std::uint16_t i = 0; i < view.entry_count(); ++i) {
+                const heap::Rowid rowid =
+                    heap::DecodeRowid(index::GetIndexRowid(layout, view.Entry(i).value()));
+                auto data = store.GetForRead(rowid.page_id);
+                EXPECT_TRUE(data.ok());
+                if (!data.ok()) continue;
+                const heap::PageView slots(data.value().bytes());
+                auto info = slots.DebugSlotInfo(rowid.slot);
+                if (info.ok() && (info.value().flags & heap::kSlotFlagFree) != 0) ++named;
+            }
+            at = view.right_sibling();
+        }
+    }
+    return named;
+}
+
+// A heap's slot release and a driver pass on one relation, a one-page or
+// one-leaf step of each by turns: the release's verify runs between the
+// pass's slices and the pass between its phases, and no slot an entry still
+// names is freed (DN-R2) - the freed slots are then taken again.
+TEST_F(IndexPurgeDriverTest, AHeapsReleaseAndAPassSteppedByTurnsFreeNoSlotAnEntryNames) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/100);
+    Ok("CREATE TABLE h (a int64, b int64) HEAP");
+    Ok("CREATE INDEX hb ON h (b)");
+    for (int at = 0; at < 1500; at += 100) {
+        std::string sql = "INSERT INTO h VALUES ";
+        for (int i = at; i < at + 100; ++i) {
+            if (i != at) sql += ", ";
+            sql += "(" + std::to_string(i) + ", " + std::to_string(i % 9) + ")";
+        }
+        Ok(sql);
+    }
+    Ok("DELETE FROM h WHERE a >= 500 AND a < 1000");
+    Ok("UPDATE h SET b = b + 100 WHERE a < 300");
+    dispatcher_->QueueIndexPurges();
+    bool releasing = true;
+    bool purging = true;
+    for (int steps = 0; (releasing || purging) && steps < 100000; ++steps) {
+        if (releasing) {
+            auto owed = dispatcher_->StepHeapRelease(1);
+            ASSERT_TRUE(owed.ok()) << owed.status().message();
+            releasing = owed.value();
+        }
+        if (purging) {
+            auto owed = dispatcher_->StepIndexPurge(1);
+            ASSERT_TRUE(owed.ok()) << owed.status().message();
+            purging = owed.value();
+        }
+        EXPECT_EQ(EntriesNamingAFreeSlot(store_, boot_->catalog, Oid("h")), 0u) << "step " << steps;
+    }
+    EXPECT_EQ(Counts().passes, 1u);
+    EXPECT_GE(dispatcher_->last_heap_release().freed, 490u);
+    EXPECT_LE(Entries("hb"), 1000u + 40u);
+    for (int at = 0; at < 400; at += 100) {
+        std::string sql = "INSERT INTO h VALUES ";
+        for (int i = at; i < at + 100; ++i) {
+            if (i != at) sql += ", ";
+            sql += "(" + std::to_string(10000 + i) + ", 7)";
+        }
+        Ok(sql);
+    }
+    for (const char* b : {"7", "103", "3"}) {
+        EXPECT_EQ(Run(std::string("SELECT a FROM h WHERE b = ") + b + " ORDER BY a"),
+                  Run(std::string("SELECT a FROM h WHERE b + 0 = ") + b + " ORDER BY a"))
+            << "b = " << b;
+    }
+}
+
+// A declared Keystone's tombstone keeps its Keystone entry through a pass -
+// it is what refuses the key named again until `PURGE` - while the deleted
+// row's other entries and a moved value's old one go.
+TEST_F(IndexPurgeDriverTest, ADeclaredKeystonesTombstoneKeepsItsKeyThroughAPass) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Ok("CREATE TABLE p (id int64 PRIMARY KEY, v int64) HEAP");
+    Ok("CREATE INDEX pv ON p (v)");
+    std::string sql = "INSERT INTO p VALUES ";
+    for (int i = 1; i <= 100; ++i) {
+        if (i != 1) sql += ", ";
+        sql += "(" + std::to_string(i) + ", " + std::to_string(i) + ")";
+    }
+    Ok(sql);
+    Ok("DELETE FROM p WHERE id > 50");
+    Ok("UPDATE p SET v = v + 1000 WHERE id <= 20");
+    EXPECT_EQ(Drive(), 1u);
+    EXPECT_LE(Entries("pv"), 50u + 2u);
+    EXPECT_EQ(dispatcher_->Dispatch("INSERT INTO p VALUES (60, 0)").status.code(),
+              StatusCode::kAlreadyExists)
+        << "a deleted key stays bound until PURGE";
 }
 
 TEST(IndexPurgeDriverNoLocksTest, ADispatcherWithNoLockTableRunsNoPass) {
@@ -336,7 +637,7 @@ TEST(IndexPurgeDriverNoLocksTest, ADispatcherWithNoLockTableRunsNoPass) {
     CommandDispatcher d(boot.value().superblock, boot.value().catalog, store, nullptr, nullptr,
                         nullptr, wal::DurabilityClass::kRelaxed, exec::Budget(), nullptr, false,
                         false, nullptr, &mgr);
-    d.EnableIndexPurgeDriver(/*min_deletes=*/1);
+    d.EnableIndexPurgeDriver(/*min_writes=*/1);
     ASSERT_EQ(d.Dispatch("CREATE TABLE t (id int64, k int64) BTREE").response.rfind("ERR", 0),
               std::string::npos);
     ASSERT_EQ(d.Dispatch("CREATE INDEX by_k ON t (k)").response.rfind("ERR", 0),
@@ -356,15 +657,15 @@ TEST(IndexPurgeDriverNoLocksTest, ADispatcherWithNoLockTableRunsNoPass) {
 // ---- The threshold, on the driver alone -------------------------------------
 
 TEST(IndexPurgeDriverThresholdTest, ARelationIsQueuedOnceAndNotAgainWhileItsPassRuns) {
-    exec::IndexPurgeDriver driver(/*min_deletes=*/10);
-    driver.Offer(7, 9);
+    exec::IndexPurgeDriver driver(/*min_writes=*/10);
+    driver.Offer(7, 5, 4, /*commit_ceiling=*/0);
     EXPECT_FALSE(driver.owed());
-    driver.Offer(7, 10);
-    driver.Offer(7, 500);
+    driver.Offer(7, 5, 5, 0);  // deletes and updates add up
+    driver.Offer(7, 500, 5, 0);
     EXPECT_EQ(driver.queued(), 1u);
     ASSERT_EQ(driver.Current(), std::optional<catalog::Oid>(7));
     EXPECT_EQ(driver.queued(), 0u);
-    driver.Offer(7, 5000);
+    driver.Offer(7, 5000, 5, 0);
     EXPECT_EQ(driver.queued(), 0u) << "its pass is running";
     EXPECT_EQ(driver.Current(), std::optional<catalog::Oid>(7)) << "the same pass, not a new one";
 }
@@ -372,7 +673,7 @@ TEST(IndexPurgeDriverThresholdTest, ARelationIsQueuedOnceAndNotAgainWhileItsPass
 // A pass over a relation with two indexes reads every entry twice; what buys
 // the next is a fifth of what one index kept - the rows - not of their sum.
 TEST_F(IndexPurgeDriverTest, TheNextPassCostsAFifthOfTheRowsHoweverManyIndexes) {
-    dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/10);
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/10);
     Table(1000);
     Ok("CREATE INDEX by_k2 ON t (k)");
     Ok("DELETE FROM t WHERE id > 900");  // 100: over the floor
@@ -398,7 +699,7 @@ TEST(IndexPurgeDriverRigTest, ADdlOnAnotherCoreIsGrantedBetweenTwoSlicesAndItsIn
     std::unique_ptr<TwoCoreRig> rig = std::move(opened.value());
     CommandDispatcher& d0 = rig->core(0).dispatcher();
     CommandDispatcher& d1 = rig->core(1).dispatcher();
-    d0.EnableIndexPurgeDriver(/*min_deletes=*/100);
+    d0.EnableIndexPurgeDriver(/*min_writes=*/100);
     const auto ok = [](CommandDispatcher& d, const std::string& sql) {
         const std::string out = d.Dispatch(sql).response;
         ASSERT_NE(out.rfind("ERR", 0), 0u) << sql << " -> " << out;

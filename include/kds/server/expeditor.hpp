@@ -338,9 +338,9 @@ public:
         // and every number is `[PROPOSED]`.
         bool cabin_optimizer = false;
         // **The unasked index purge** (DW-Q3 (a), `exec/index_purge_driver.hpp`):
-        // core 0's tick runs `PURGE INDEX`'s pass over a btree relation's
-        // indexes once its deletes reach a threshold. Off by default; off,
-        // no tick is submitted and nothing is collected (DW-R3).
+        // core 0's tick runs `PURGE INDEX`'s pass over a relation's indexes
+        // once its deletes and updates reach a threshold. Off by default;
+        // off, no tick is submitted and nothing is collected (DW-R3).
         bool index_purge_driver = false;
         std::uint64_t cabin_optimizer_page_budget = 1024;
         std::uint32_t cabin_optimizer_theta_create_pct = 300;

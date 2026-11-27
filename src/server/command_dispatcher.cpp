@@ -9825,9 +9825,12 @@ StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
 }
 
 void CommandDispatcher::QueueIndexPurges() {
-    if (!index_purge_.has_value()) return;
+    if (!index_purge_.has_value() || txn_ == nullptr) return;
+    // Read after the counts' writers decided, so no write a count holds
+    // committed above it but one still open.
+    const std::uint64_t ceiling = txn_->CommitCeiling();
     for (const auto& [oid, activity] : stats::RelationStats::Snapshot()) {
-        index_purge_->Offer(oid, activity.deletes);
+        index_purge_->Offer(oid, activity.deletes, activity.updates, ceiling);
     }
 }
 

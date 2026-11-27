@@ -160,10 +160,10 @@ Status SimInstance::Boot() {
     if (options_.index_purge_driver) {
         // The driver's signal is the process's relation statistics, which a
         // server's restart empties: emptied here at every boot, so a pass is
-        // bought by deletes of this boot alone, whatever ran in the process
+        // bought by writes of this boot alone, whatever ran in the process
         // before it.
         stats::RelationStats::ResetForTest();
-        dispatcher_->EnableIndexPurgeDriver(/*min_deletes=*/1);
+        dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/1);
     }
     session_ = server::Session();
     if (options_.read_off_reactor) {
