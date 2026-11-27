@@ -580,6 +580,23 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     owns the stall. The body stays reserved, zero-filled and synced ahead. Owner:
     `docs/spec/wal.md` §6.
 
+  **Re-measured by DY-S0** on worktree `dy-segment-roll-off-the-latch` at
+  `630ecc359`, on another host and filesystem than BQ's (xfs, 24 CPUs;
+  `bench/v3.5.0/results-dy-s0-premise-v3.4.17-178-g630ecc359.md`): at
+  `relaxed` the hold is p50 574 ms and at most 3.0 s over 60 rolls, 95.2 %
+  of it the wait for the writer's sync in flight, and a point reader's p99
+  beside the bulk writer is 1,300-1,700 times its p99 alone; at `group`
+  and `strict` the hold is 1.4-1.7 ms at the median, over 10 ms in one or
+  two rolls a run, and the reader is not slowed. With the sync, the header,
+  the rename and the directory sync taken out, a seal and a flush of at
+  most 74 us would stay under the latch; the body was ready at every one
+  of 122 rolls. **DY is open for its proof only and builds nothing**: the
+  proof of rung 4 closes on paper for a segment entered under its
+  temporary name and named by the next sync
+  (`instructions/v3.2.0/workorder-dy-segment-roll-off-the-latch.md` §7),
+  at the price of a `relaxed` commit lost at a process kill (DY-Q6), and
+  rung 4 is still unlicensed (DY-Q0).
+
 ## Multi-core state
 
 - **A peer's superblock is the volume's whole image** (closed 2026-09-03,
