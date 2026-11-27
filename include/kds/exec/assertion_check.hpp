@@ -327,6 +327,8 @@ public:
     // transaction with no pending set is a no-op for both.
     void CommitTxn(std::uint64_t txn_id);
     Status AbortTxn(storage::PageStore& store, wal::WalManager* wal, std::uint64_t txn_id);
+    // Whether `txn_id` holds a pending reservation (DX-S2's re-run guard).
+    bool HasPending(std::uint64_t txn_id) const;
 
 private:
     // One live assertion and the latch its chain appends under. Held by

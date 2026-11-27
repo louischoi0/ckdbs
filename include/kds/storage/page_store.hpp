@@ -564,6 +564,12 @@ public:
     virtual void BeginDrainOnPressure() noexcept {}
     virtual void EndDrainOnPressure() noexcept {}
 
+    // **A drain between two runs of a refused statement** (DX-S2): writes
+    // back the dirty frames a refused reservation queued, from a caller
+    // holding no pin and no latch, so the statement can run again. Returns
+    // how many it wrote; a store with no pool writes none.
+    virtual StatusOr<std::size_t> DrainForPressure() { return std::size_t{0}; }
+
     // ---- The raw seam: protected since MG06 ----------------------------
     //
     // What a store implements - and, since MG06, *only* what a store
@@ -948,6 +954,15 @@ std::size_t PinsHeldOnThisThread() noexcept;
 // is a caller mid-mutation, which no abort may unwind under. `site` names
 // the caller in the stop's line.
 void RequireNoPinsHeld(const char* site) noexcept;
+
+// **This thread's statement was refused a frame** (DX-S2): set at the
+// pool's two refusals (a reservation, a window's open), cleared by the
+// dispatcher before a statement runs and read by `EndWrite` after. A
+// reactor runs one statement at a time, so a thread-local is per statement,
+// as `storage::StructuralRefusalNoted` is.
+void NotePoolRefusal() noexcept;
+bool PoolRefusalNoted() noexcept;
+void ClearPoolRefusal() noexcept;
 
 // Drain mode for the life of the guard (`PageStore`'s note).
 class DrainOnPressure {

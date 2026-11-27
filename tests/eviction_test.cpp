@@ -2,6 +2,7 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -570,6 +571,88 @@ TEST(EvictionWritebackTest, ADrainLeavingAPinnedFrameAsksTheLogOnlyForWhatItWrit
     const std::vector<PageId> dirty = store.DirtyPageIds();
     EXPECT_EQ(dirty, std::vector<PageId>{pages[1]});
     EXPECT_EQ(probed.writes_before_gate(), 0u);
+}
+
+// **Writeback stamps the checksum into its copy, never the frame** (DX-S2).
+// The frame is held shared during the copy, so a stamp there was a write
+// beside every other share's read. The device holds a page that verifies,
+// and the frame's field is what it was. Killed by stamping the frame again.
+std::uint32_t ChecksumField(std::span<const std::byte, kPageSize> page) {
+    std::uint32_t field = 0;
+    std::memcpy(&field, page.data() + kPageChecksumOffset, sizeof field);
+    return field;
+}
+
+TEST(EvictionWritebackTest, AWritebackStampsItsCopyAndLeavesTheFramesChecksumAlone) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    auto opened = DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096},
+                                        /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    const std::uint32_t before = ChecksumField(created.value().second.bytes());
+    created.value().second.Release();
+
+    ASSERT_TRUE(store.Flush().ok());
+    std::array<std::byte, kPageSize> on_device{};
+    ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
+    EXPECT_TRUE(VerifyPageChecksum(on_device).ok()) << "the device holds an unstamped page";
+    EXPECT_NE(ChecksumField(on_device), before);
+    auto resident = store.GetForRead(page);
+    ASSERT_TRUE(resident.ok());
+    EXPECT_EQ(ChecksumField(resident.value().bytes()), before) << "the writeback stamped the frame";
+}
+
+// The same, as `tsan` reads it (the nightly's `tsan` step runs this suite):
+// a reader of the checksum field under a shared hold beside a writer that
+// dirties the page and flushes it, on two cores. A stamp into the frame is a
+// data race there; the copy's stamp is not.
+TEST(EvictionWritebackTest, AReaderOfTheChecksumFieldBesideAWritebackIsNoRace) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    auto opened = DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096},
+                                        /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    store.SetLatchArmed(true, /*concurrent_pinners=*/8);
+    auto created = store.CreateNew();
+    ASSERT_TRUE(created.ok());
+    const PageId page = created.value().first;
+    FormatPage(created.value().second.bytes(), PageType::kHeap);
+    created.value().second.Release();
+
+    constexpr int kRounds = 500;
+    std::atomic<bool> writing{true};
+    std::thread writer([&] {
+        SetCurrentCore(0);
+        for (int i = 0; i < kRounds; ++i) {
+            {
+                auto held = store.Get(page);  // exclusive
+                if (!held.ok()) break;
+                held.value().bytes()[4000] = static_cast<std::byte>(i);
+            }
+            (void)store.Flush();
+        }
+        writing.store(false, std::memory_order_release);
+    });
+    std::thread reader([&] {
+        SetCurrentCore(1);
+        std::uint32_t sink = 0;
+        while (writing.load(std::memory_order_acquire)) {
+            auto shared = store.GetForRead(page);
+            if (shared.ok()) sink ^= ChecksumField(shared.value().bytes());
+        }
+        (void)sink;
+    });
+    writer.join();
+    reader.join();
+    std::array<std::byte, kPageSize> on_device{};
+    ASSERT_TRUE(device.value()->ReadPage(page, on_device).ok());
+    EXPECT_TRUE(VerifyPageChecksum(on_device).ok());
 }
 
 // **A fail-stopped log writes nothing back** (`wal/durability.hpp`, BC-S4).

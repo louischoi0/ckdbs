@@ -425,6 +425,10 @@ struct DispatchOutcome {
     // `Begin`'s cap before it wrote anything. `DispatchAsync` parks on a
     // slot and runs the statement again.
     bool slot_wait = false;
+    // **The statement was refused a buffer-pool frame and wrote nothing**
+    // (DX-S2), on a dispatcher that can park: `DispatchAsync` drains the
+    // pool's dirty queue holding nothing and runs the statement again.
+    bool pool_wait = false;
     // `RESET SESSION` ran (DJ-S2): the engine's half of the session is at
     // its defaults, and the protocol's half - named statements and portals,
     // which the dispatcher cannot reach - is the caller's to drop.
@@ -3182,6 +3186,15 @@ private:
 
     bool StructuralRerunDue(const DispatchOutcome& out, Session* session,
                             sched::MonoTimeNs& deadline_ns);
+    // DX-S2's: a statement refused a frame (`DispatchOutcome::pool_wait`) is
+    // re-run once a drain holding nothing has written something back,
+    // inside the statement's deadline. `attempt` is the wait's `p1`.
+    bool PoolRerunDue(const DispatchOutcome& out, Session* session,
+                      sched::MonoTimeNs& deadline_ns, std::uint64_t attempt);
+    // What both re-runs ask before they run again: no row has left, and the
+    // statement's one deadline (set here on its first ask) is not past.
+    // Admitted, it rewinds the session's sink: a re-run starts with no rows.
+    bool RerunAdmitted(Session* session, sched::MonoTimeNs& deadline_ns);
     // The `DispatchAsync` call whose synchronous window is running, and the
     // last one issued (`MayParkScope`, `DeferredCommit::statement`).
     std::uint64_t parking_statement_ = 0;
@@ -3543,6 +3556,10 @@ private:
     // DJ-S3: this statement's `Begin` was refused for want of a slot; read
     // into `DispatchOutcome::slot_wait` by `StageStatement`, cleared there.
     bool slot_refused_ = false;
+    // DX-S2: `EndWrite` found this statement refused a frame before it wrote
+    // anything, under `may_park_`; read into `DispatchOutcome::pool_wait` by
+    // `StageStatement`, cleared there.
+    bool pool_refused_ = false;
     BackupControl* backup_ = nullptr;          // BR-S2, set_backup()
     const WalArchiver* archiver_ = nullptr;    // BR-S4, set_archiver()
 

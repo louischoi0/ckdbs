@@ -198,12 +198,15 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **Kind:** timed
 - **In DB time:** yes
 - **p1:** retry_count
-- **p2:** pool_use
+- **p2:** (unused)
 - **p3:** (unused)
-- **Meaning:** A statement retried a buffer pool reservation after eviction.
-- **Usual causes:** A pool at its ceiling with every frame pinned or dirty.
+- **Meaning:** A statement refused a buffer pool frame, having written
+  nothing, writes back the pool's dirty queue before it runs again (DX-S2).
+  p1 is the re-run's ordinal within the statement.
+- **Usual causes:** A pool at its ceiling whose unpinned frames are dirty.
 - **Remedies:** Raise `buffer_pool_frames`.
-- **Sites:** None yet: registered, never booked.
+- **Sites:** `CommandDispatcher::PoolRerunDue`, around
+  `PageStore::DrainForPressure` (`eviction.md` §3.3).
 
 ### res.txn_slot
 

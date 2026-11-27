@@ -417,6 +417,8 @@ public:
     // `kSkip` on the tick and `kSkipPinned` in a reservation's drain; never
     // `kWait`.
     StatusOr<std::size_t> DrainDirtyEvictionQueue(HeldFrames held = HeldFrames::kSkip);
+    // `PageStore`'s pressure drain: the queue, in `kSkip` (DX-S2).
+    StatusOr<std::size_t> DrainForPressure() override;
 
     // §4's watermark loop, on the writeback tick (BE-R2). When the pool's
     // free count - the capacity less the slots in use and the open windows'

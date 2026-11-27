@@ -868,6 +868,11 @@ void AssertionEnforcer::CommitTxn(std::uint64_t txn_id) {
     pending_.erase(txn_id);
 }
 
+bool AssertionEnforcer::HasPending(std::uint64_t txn_id) const {
+    const LatchGuard guard(latch_.get());
+    return pending_.count(txn_id) != 0;
+}
+
 Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* wal,
                                    std::uint64_t txn_id) {
     storage::RequireNoPinsHeld("AssertionEnforcer::AbortTxn");  // DX-R2

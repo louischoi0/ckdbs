@@ -300,32 +300,87 @@ there. Every `path:line` below was read on the worktree's tree.
   build.
 - Overhead not measured; measured at the milestone's close.
 
-### DX-S2: the design carried from DX-S0 §4
+### DX-S2 (2026-11-27): the wait, on `dx-pool-under-pressure` from `7271241e4`
 
-- A pool-refusal note at both refusal returns (`ReserveFrame` outside a
-  window and outside drain mode; `BeginNoRefuseWindow`).
-- `EndWrite` marks a re-run due only under `may_park_` (a synchronous
-  dispatcher keeps the refusal, §2.3) and only for a statement that wrote
-  nothing. The flag is carried on `DispatchOutcome`, as `poison_withheld`
-  is.
-- `DispatchAsync`'s BA-S14 loop (`command_dispatcher.cpp:1177`), for a pool
-  refusal, drains the queue holding nothing, under
-  `WaitScope(kResEvictionRetry)`, then re-runs under the fault-net
-  deadline. Re-run only if the drain cleaned something.
-  `res.eviction_retry` is registered and never booked; `wait-events.md`
-  gets its site.
-- A `PageStore` virtual for the drain.
-- The scratch-copy stamp: `StampIfHeadered` on the scratch slice after the
-  `memcpy` in `WriteBack`.
-- Cells:
-  - a `TwoCoreRig` (`buffer_pool_frames` option) point-update loop with no
-    client refusal and `pool_refused > 0`;
-  - DX-R1, a multi-row `UPDATE` refused after writing rows, still refused;
-  - a `tsan` cell over the stamp;
-  - the dirty-pool cell re-run on a Release build of the S2 commit
-    (`tools/dm_s1_check.py`, the cold base in
-    `build-dx-base/run/cold_base`, port 15781).
-- The S1 fixture `PoolOfDirtyFramesTest` runs on the synchronous
-  dispatcher, so S2 leaves its refusal in place.
-
-Overhead not measured; measured at the milestone's close.
+- **Built** `[source-read]`, as DX-S0 §4 designed it:
+  - the pool notes its two refusals on the thread
+    (`storage::NotePoolRefusal`, `page_store.hpp`): a reservation refused
+    and a window's open refused;
+  - `EndWrite` turns the note into `pool_refused_`, and `StageStatement`
+    into `DispatchOutcome::pool_wait`, only under `may_park_`, only for a
+    statement whose trail did not grow (DX-R1), and - in an explicit
+    transaction - only where the transaction holds no assertion
+    reservation (below);
+  - `DispatchAsync`'s BA-S14 loop asks `PoolRerunDue` after
+    `StructuralRerunDue`. It drains the dirty queue holding nothing
+    (`PageStore::DrainForPressure`, `kSkip`, every build asking
+    `RequireNoPinsHeld`) under `res.eviction_retry`, and re-runs only if
+    the drain wrote something, the outcome's code is `ResourceExhausted`,
+    and the statement's one deadline (DX-Q3 (a)) is not past - before and
+    after the drain;
+  - a re-run due withholds an explicit transaction's poison as a
+    structural one does, and an autocommit scope is aborted as one that
+    waits;
+  - **the stamp** (§2.4): writeback stamps the checksum into the scratch
+    copy after the `memcpy`, never the frame.
+  - Docs: `eviction.md` §3.3 and EV8, `page.md` §8 (the durability-wait
+    clause DX-S1 made false) and §10, `wait-events.md`'s
+    `res.eviction_retry` (its site; `p2` unused, as it is booked),
+    `known-gaps.md` (the dirty-pool entry rewritten as what is still
+    refused; the stamp's entry deleted).
+- **The golden log is re-pinned** (`wal_golden_log_test.cpp`): a page image
+  logged from a frame after a writeback now carries the frame's checksum
+  field, not the last write's CRC. `[measured]` The old pin passes with the
+  frame stamp put back, so the stamp move alone moved the bytes. Redo never
+  verifies an image's checksum, and an image reaches the device only
+  through a writeback, which stamps it.
+- **Cells**, each killed by the mutation named `[measured]`:
+  - `DxPoolRerunRigTest.PointUpdatesIntoAPoolOfDirtyFramesAreNeverRefused`
+    (1,200 point updates, 320 frames, no writeback tick; `pool_refused`
+    rises, no client refusal, `SUM` exact): by `EndWrite` never marking the
+    re-run;
+  - `...AnUpdateRefusedAfterItWroteRowsKeepsTheRefusal` (DX-R1): by
+    dropping the trail test - which first passed anyway, because the
+    re-runs end at the deadline and the rollback hides them, so the cell
+    reads the pool's counters per line;
+  - `...ADeleteRefusedAfterItsAssertionReservationKeepsTheRefusal`: by
+    dropping the reservation test;
+  - `...AStatementFailingForAnotherReasonAfterARecoveredRefusalIsNotRunAgain`:
+    by dropping the code test;
+  - `EvictionWritebackTest.AWritebackStampsItsCopyAndLeavesTheFramesChecksumAlone`:
+    by stamping the frame again;
+  - `...AReaderOfTheChecksumFieldBesideAWritebackIsNoRace`, the `tsan`
+    cell: a reader of the field under a shared hold beside a writer that
+    dirties and flushes, on two cores. **Not run under TSan**: no TSan
+    build exists on the host, and the nightly's `tsan` step is what runs
+    it. In this build it checks only that the device's page verifies.
+- **Reviewed** (`critics-developer`). Two correctness bugs, both fixed by the
+  review and kept:
+  - **B1 `[quiet-wrong]`**: a `DELETE` reserves its row's assertion
+    departure outside any no-refuse window and before its trail entry. A
+    refusal at its undo append, inside `BEGIN`, was re-run and reserved
+    the departure twice, and the `COMMIT` kept both, so the assertion's
+    total understated the group by one. Fixed by
+    `AssertionEnforcer::HasPending`: an explicit transaction holding a
+    reservation keeps the refusal, its earlier statements' reservations
+    included, as it did before DX-S2.
+  - **B2**: a refusal a caller recovered from left the note set, and a
+    statement that then failed for another reason was re-run. Fixed by
+    the code test.
+  - Applied: `RewindForRerun` folded into `RerunAdmitted`, the
+    end-of-statement clear removed, a stale comment on the headerless
+    mark, `RequireNoPinsHeld` in place of an `assert`, the deadline asked
+    again after the drain, and cells for B1 and B2.
+  - Rejected: a counter for pool re-runs. `res.eviction_retry` in
+    `sys.wait_stats` counts each re-run's drain already, and a second name
+    for that quantity is what the project's rules forbid.
+- **The suite** `[measured]`: 5,353 of 5,354 (`ctest -LE bs-nightly -j4`,
+  189 s, on the tree committed); `BsAllocSweep.*` 14 of 14. The failure is
+  `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+  the host's recorded two-core flake. A run before the golden's re-pin also
+  failed `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, which
+  then failed 54 of 200 runs alone on this tree against 45 of 200 at
+  `481d101aa`, interleaved (the last 120: 33 and 33) - the flake, not this
+  change.
+- **The dirty-pool cell in Release**: measured at this commit, recorded in the commit after it.
+- Overhead not measured; measured at the milestone's close.

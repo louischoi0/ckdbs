@@ -496,10 +496,10 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
     // already and costs the one read.
     //
     // **And before the frame exists.** A writeback stamps a checksum into
-    // any frame it does not yet see as headerless - in place, at byte 4,
-    // which is child 1 - so a frame inserted ahead of the mark could be
-    // written out stamped while this read, write and sync run, and read
-    // back after a crash as a directory whose child 1 is a checksum.
+    // the copy of any frame it does not yet see as headerless - at byte 4,
+    // which is child 1 - so a frame inserted ahead of the mark could reach
+    // the device stamped while this read, write and sync run, and read back
+    // after a crash as a directory whose child 1 is a checksum.
     if (!DeviceHoldsNoPage(headerless_page, /*torn_is_none=*/false)) {
         const Page zeros{};
         if (Status s = device_.WritePage(headerless_page,
@@ -902,7 +902,13 @@ thread_local FillMode t_fill;
 // (`RequireNoPinsHeld`). `CountPin` and `UncountPin` move it, and a
 // pin is taken and dropped on the thread that holds the handle.
 thread_local std::size_t t_pins_here = 0;
+// This thread's statement was refused a frame (`NotePoolRefusal`).
+thread_local bool t_pool_refused = false;
 }  // namespace
+
+void NotePoolRefusal() noexcept { t_pool_refused = true; }
+bool PoolRefusalNoted() noexcept { return t_pool_refused; }
+void ClearPoolRefusal() noexcept { t_pool_refused = false; }
 
 bool NoRefuseWindowOpenOnThisThread() noexcept { return t_fill.window_depth > 0; }
 std::size_t PinsHeldOnThisThread() noexcept { return t_pins_here; }
@@ -969,6 +975,7 @@ StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
         if (++attempt < kRefuseRetries) continue;
         if (in_window) FailStop();
         refused_.Add();
+        NotePoolRefusal();
         std::size_t pinned = 0;
         std::size_t dirty = 0;
         std::size_t resident = 0;
@@ -1070,6 +1077,7 @@ Status DevicePageStore::BeginNoRefuseWindow(std::size_t frames) {
         }
         if (++attempt < kRefuseRetries) continue;
         refused_.Add();
+        NotePoolRefusal();
         return Status::ResourceExhausted(
             "buffer pool full: buffer_pool_frames " + std::to_string(capacity_) +
             " cannot hold another mutation's " + std::to_string(frames) +
@@ -2247,11 +2255,6 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // generation's case above - pays it too.
                 page.frame->owes_image = true;
 
-                // (2) checksum, the last thing that touches a page before it
-                // goes out (page.md section 8) - skipped for a headerless
-                // page, which has no field to put one in.
-                StampIfHeadered(page_id, std::span<std::byte, kPageSize>(*page.frame->bytes));
-
                 // **Copied under the hold, always, and that is what makes the
                 // gate below mean anything** (AM-S3): a stamper on another
                 // core can raise a page's `page_lsn` after the batch gate, so
@@ -2260,6 +2263,14 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // (`EvictionWritebackTest.FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage`).
                 std::memcpy(scratch.data() + k * kPageSize, page.frame->bytes->data(), kPageSize);
             }
+            // (2) checksum, the last thing that touches a page before it goes
+            // out (page.md section 8) - **into the copy, never the frame**
+            // (DX-S2): the frame is held shared, so a stamp there raced every
+            // other share's read of the field. Skipped for a headerless page,
+            // which has no field to put one in.
+            StampIfHeadered(page_id,
+                            std::span<std::byte, kPageSize>(scratch.data() + k * kPageSize,
+                                                            kPageSize));
             UnpinFrame(page_id);  // the share and the pin, one page at a time
             if (after_writeback_copy_for_test_) after_writeback_copy_for_test_(page_id);
 
@@ -2367,6 +2378,14 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         i += run;
     }
     return written;
+}
+
+StatusOr<std::size_t> DevicePageStore::DrainForPressure() {
+    // Between two runs of a refused statement, so this thread holds no pin
+    // and no latch - checked in every build - and `kSkip` is the tick's own
+    // drain (DX-S2).
+    RequireNoPinsHeld("DevicePageStore::DrainForPressure");  // DX-R3, as DX-R2
+    return DrainDirtyEvictionQueue(HeldFrames::kSkip);
 }
 
 StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue(HeldFrames held) {
