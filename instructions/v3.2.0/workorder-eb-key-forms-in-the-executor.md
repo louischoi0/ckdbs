@@ -242,14 +242,27 @@ returning the same rows through an arm that exists:
   at 1,286x and 20,422x; an embedded key at 4,554x, and **refused** by the
   row-touch budget at 1,000,000 rows.
 - **S3** (order) passes: 263x and 2,546x.
-- **The literal-prefix join is 2.77x and 1.54x**: the planner already
-  reorders it to one range and a build. Under the bar at 1,000,000 rows,
-  its item is recorded and left, and S2 does not change its rank.
+- **The literal-prefix join is 2.77x and, as measured, 1.54x**: the
+  planner already reorders it to one range and a build. The S0 review
+  found the 1,000,000-row cell carrying about 95 us added to every arm
+  alike (bimodal latencies, a T - B gap unchanged at 81 us and 78 us), so
+  the estimate is about 2.6x. **It is built with S2**: its key is the
+  embedded key pinned whole, a literal and an outer column, and S2's
+  computed id outranks the literal prefix's window there.
 - **S4** is a refusal family, which the bar cannot price. CLA reads it as
   built: what an operator writes instead is a transaction that reads and
   then writes.
 
-These readings are CLA's, on the go-ahead.
+These readings are CLA's, on the go-ahead. **The S0 review**
+(`critics-developer`, at `1192c47ce`) corrected the results file in place:
+J1's entry counts (1,000,000 and 10,000,000 resolved a statement, linear
+in `n` with the outer side fixed), the T2 bound (1.31 %), the budget's
+cuts at 100,000 rows, a refusal quoted short, units in the ratio cells,
+and the run-time `df -T` and per-arm `pgrep` the driver did not record.
+Its J3 finding is applied above. **Rejected**: "S4 read as built is the
+operator's call" - the go-ahead makes CLA's proposal the mark, and the
+reading is recorded as CLA's; a re-run of J3 on a quiet host - S2 builds
+it either way.
 
 ### Written 2026-11-26
 
