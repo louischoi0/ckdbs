@@ -8,7 +8,7 @@ the close (`raft-marks-2026-11-27.md` §11). **EA-Q0..Q5 are marked (a) on
 that word, each as CLA proposed it** (§4); EA-Q0 (a) is the word BN-Q13's
 standing waited for, and EA-Q3 (a) leaves CX-Q37 (a) standing. **EA-S0 done**
 (`bench/v3.4.17/results-ea-s0-premise-v3.4.17-202-g481d101aa.md`): the parse
-is 12.2 - 20.9 % of a prepared statement's server CPU on every shape, so
+is 11.9 - 20.9 % of a prepared statement's server CPU on every shape, so
 EA-Q1's bar is not met and §2.1-§2.3 are built. Written 2026-11-26 on worktree
 `known-gaps-milestone-orders` (branch `worktree-known-gaps-milestone-orders`)
 from `8274c951` (`v3.4.17-148-g8274c951e`) on the operator's word of

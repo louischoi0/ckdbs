@@ -1026,8 +1026,16 @@ private:
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
     // first one's deadline instead of starting a fresh one.
-    // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5).
-    StatusOr<parser::Statement> ParseKeepingShape(std::string_view line);
+    // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5),
+    // or the session's kept parse where it was bound for `line` (`KeptFor`).
+    StatusOr<parser::Statement> ParseKeepingShape(std::string_view line, const Session* session);
+    // **The kept parse of the statement `line` is** (EA-S1,
+    // `parser/kept_parse.hpp`): the session's bound statement when `line` is
+    // the text it was bound for, else null - a statement not prepared, and
+    // every text a statement reads again that is not its whole own (a SET
+    // value's subquery, an `ANALYZE`'s stripped write), which parse as before.
+    static const parser::BoundStatement* KeptFor(const Session* session,
+                                                 std::string_view line) noexcept;
     // **A statement's head, for what its end subtracts** (DF-Q6 (a),
     // DF-Q12 (a)): the session's cost sample, and whether the statement runs
     // inside a task of its own session - the only case in which the

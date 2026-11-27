@@ -134,6 +134,7 @@ add_library(kds
     src/parser/fingerprint.cpp
     src/parser/ast.cpp
     src/parser/parser.cpp
+    src/parser/kept_parse.cpp
     src/wire/frame_codec.cpp
     src/wire/kwp_types.cpp
     src/wire/handshake.cpp

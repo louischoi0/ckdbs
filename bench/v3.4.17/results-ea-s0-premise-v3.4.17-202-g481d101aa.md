@@ -1,7 +1,7 @@
 # EA-S0: what the parse of a prepared statement costs the server
 
 **Finding.** On worktree `ea-prepared-statement-reuse` at `481d101aa`
-(`v3.4.17-202-g481d101aa`, the spike below applied), **the parse is 12.2 % to
+(`v3.4.17-202-g481d101aa`, the spike below applied), **the parse is 11.9 % to
 20.9 % of a prepared statement's server CPU on every shape**: 0.77 us of
 6.07 us on a point `SELECT`, 0.76 us of 6.37 us on a point `UPDATE` and
 1.93 us of 9.38 us on a three-relation join by key (medians of 8 rounds; the

@@ -217,6 +217,7 @@ add_executable(kds_tests
     set_expr_two_core_rig_test.cpp
     set_expr_typing_test.cpp
     parser_golden_test.cpp
+    kept_parse_test.cpp
     parser_join_test.cpp
     parser_projection_test.cpp
     parser_aggregate_test.cpp

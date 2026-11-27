@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,6 +63,14 @@ struct StatementArgument {
     std::string_view text;
 };
 std::vector<StatementArgument> ArgumentsOf(std::string_view sql);
+
+// The `Fingerprint::arg_hash` of an argument stream given whole: for the
+// arguments `ArgumentsOf(sql)` answers, the `arg_hash` the lexer folds while
+// it reads `sql` (`fingerprint_test.cpp` pins the two equal over the golden
+// corpus). A `kUnbound` argument folds nothing, as a `?` does. What a kept
+// parse's bind computes its hash with, its holes' values in place
+// (`kept_parse.hpp`), so a bound statement's key is its substituted text's.
+std::uint64_t ArgumentHashOf(std::span<const StatementArgument> args) noexcept;
 
 class Lexer {
 public:

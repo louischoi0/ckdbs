@@ -19,7 +19,7 @@ and the latencies are taken.
                      [--n 10000] [--port 15881] [--server-cpu 2] [--client-cpu 5]
                      [--heartbeat F]
 """
-import argparse, hashlib, json, os, random, re, sys, time
+import argparse, hashlib, json, os, random, re, sys, time, zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kwp  # noqa: E402
@@ -144,7 +144,7 @@ def main():
                 for path in order:
                     beat(f"round {r} {s} {path}")
                     results[s][path].append(cell(c, srv.proc.pid, s, path, a.k, a.n,
-                                                 1000 * r + hash(s) % 997))
+                                                 1000 * r + zlib.crc32(s.encode()) % 997))
         c.close()
     finally:
         srv.stop()

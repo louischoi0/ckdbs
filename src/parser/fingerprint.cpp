@@ -422,4 +422,18 @@ std::optional<Fingerprint> FingerprintOf(std::string_view sql) {
     return accumulator.Result();
 }
 
+std::uint64_t ArgumentHashOf(std::span<const StatementArgument> args) noexcept {
+    // `Feed`'s argument arms, one argument at a time: the tag the token's
+    // kind gives and the token's text as one field.
+    Fnv1a hash;
+    for (const StatementArgument& arg : args) {
+        if (arg.kind == StatementArgument::Kind::kUnbound) continue;
+        hash.Byte(static_cast<std::uint8_t>(arg.kind == StatementArgument::Kind::kInt
+                                                ? ArgTag::kInt
+                                                : ArgTag::kStr));
+        hash.Field(arg.text);
+    }
+    return hash.value();
+}
+
 }  // namespace kds::parser
