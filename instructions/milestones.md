@@ -69,14 +69,14 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
 | DV | closed-narrow | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | - | - | pages no root reaches: counted, then reclaimed | v3.2.0/workorder-dv-unreachable-page-reclaim.md |
-| DW | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | - | - | what a btree relation's deletes leave, purged unasked: index entries first | v3.2.0/workorder-dw-btree-purge-driver.md |
+| DW | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 9a229dbb | - | what a btree relation's deletes leave, purged unasked: index entries first | v3.2.0/workorder-dw-btree-purge-driver.md |
 | EE | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | the decide slot: one wake behind every wait for a transaction's decide | v3.2.0/workorder-ee-decide-slot.md |
 | ED | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | backup, a second pass: recovery to a time, incremental, compressed and encrypted, a snapshot's torn page healed | v3.2.0/workorder-ed-backup-second-pass.md |
 | EC | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | a multi-core instance crashed and mounted under a seed: the simulator given cores | v3.2.0/workorder-ec-multi-core-crash-harness.md |
 | EB | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | the key forms in the executor: ranges, joins by a whole key, an elided order, an upsert by any key | v3.2.0/workorder-eb-key-forms-in-the-executor.md |
 | EA | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | a prepared statement parsed once, and the compile's reuse put before the operator again | v3.2.0/workorder-ea-prepared-statement-reuse.md |
 | DZ | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | what a checkpoint still does on its reactor: the dirty-table walk, the page writes, the map barrier | v3.2.0/workorder-dz-checkpoint-reactor-residue.md |
-| DY | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | a WAL segment roll that does not hold the append latch across its I/O, a proof before any code | v3.2.0/workorder-dy-segment-roll-off-the-latch.md |
+| DY | open | 2026-11-27 | 2026-11-26 | 2026-11-27 | - | n/a | - | a WAL segment roll that does not hold the append latch across its I/O, a proof before any code | v3.2.0/workorder-dy-segment-roll-off-the-latch.md |
 | DX | written | 2026-11-26 | 2026-11-26 | - | - | n/a | - | the buffer pool under pressure: a full pool that waits for its writeback, an abort never refused a frame | v3.2.0/workorder-dx-pool-under-pressure.md |
 | DT | closed-narrow | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | 6e43ec8c | - | a write that gives its core back: the write path's page miss off the reactor, a write walk that yields | v3.2.0/workorder-dt-write-path-yield.md |
 | DU | closed | 2026-11-26 | 2026-11-26 | 2026-11-26 | 2026-11-26 | `5f9b6546` | - | a write that finds its rows by a key: a bound on the tuple key, an index | v3.2.0/workorder-du-keyed-write.md |

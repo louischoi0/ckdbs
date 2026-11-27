@@ -1,0 +1,20 @@
+== relaxed-mixed-r1 2026-11-27T10:15:17Z load 2.21 2.19 2.52 1/1252 1057328
+1057318 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795752323678-kk4l6v.sh 2>/dev/null || true && \builtin shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'which'; \builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'S=/tmp/claude-1000/-home-ukjin-workspaces-ckdbs/bcac8a80-2a72-4c38-a65b-52f2e69e8fc8/scratchpad/dy-s0; chmod +x $S/run.sh; uptime; pgrep -a -f "cc1plus|ninja|ctest"; date +%s > /home/ukjin/bench-runs/dy-s0/meas.start; nohup $S/run.sh > /home/ukjin/bench-runs/dy-s0/run.out 2>&1 & sleep 45; cat /home/ukjin/bench-runs/dy-s0/beat; tail -5 /home/ukjin/bench-runs/dy-s0/relaxed-mixed-r1.console' < /dev/null && pwd -P >| /tmp/claude-ba0f-cwd
+end relaxed-mixed-r1 rc=0
+== relaxed-iso-r1 2026-11-27T10:15:56Z load 3.09 2.39 2.58 1/1248 1057990
+1057318 /bin/bash -c source /home/ukjin/.claude/shell-snapshots/snapshot-bash-1795752323678-kk4l6v.sh 2>/dev/null || true && \builtin shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'which'; \builtin unset -f -- 'which'; } >/dev/null 2>&1 || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'S=/tmp/claude-1000/-home-ukjin-workspaces-ckdbs/bcac8a80-2a72-4c38-a65b-52f2e69e8fc8/scratchpad/dy-s0; chmod +x $S/run.sh; uptime; pgrep -a -f "cc1plus|ninja|ctest"; date +%s > /home/ukjin/bench-runs/dy-s0/meas.start; nohup $S/run.sh > /home/ukjin/bench-runs/dy-s0/run.out 2>&1 & sleep 45; cat /home/ukjin/bench-runs/dy-s0/beat; tail -5 /home/ukjin/bench-runs/dy-s0/relaxed-mixed-r1.console' < /dev/null && pwd -P >| /tmp/claude-ba0f-cwd
+end relaxed-iso-r1 rc=0
+== relaxed-mixed-r2 2026-11-27T10:16:35Z load 1.90 2.17 2.50 1/1238 1058506
+end relaxed-mixed-r2 rc=0
+== group-mixed-r1 2026-11-27T10:17:14Z load 2.53 2.31 2.53 1/1264 1059169
+end group-mixed-r1 rc=0
+== group-iso-r1 2026-11-27T10:17:54Z load 2.45 2.29 2.51 1/1259 1059723
+end group-iso-r1 rc=0
+== strict-mixed-r1 2026-11-27T10:18:32Z load 1.64 2.10 2.44 1/1245 1060377
+end strict-mixed-r1 rc=0
+== strict-iso-r1 2026-11-27T10:19:11Z load 2.05 2.15 2.44 1/1255 1060963
+end strict-iso-r1 rc=0
+== relaxed-iso-r2 2026-11-27T10:19:49Z load 1.61 2.02 2.39 1/1243 1061550
+end relaxed-iso-r2 rc=0
+== group-mixed-r2 2026-11-27T10:20:27Z load 0.99 1.80 2.30 1/1240 1062137
+end group-mixed-r2 rc=0

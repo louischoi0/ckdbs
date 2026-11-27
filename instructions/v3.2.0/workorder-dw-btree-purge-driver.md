@@ -5,8 +5,10 @@ the driver built behind `index_purge_driver`, off by default, for a
 btree's deleted rows and a moved key on either kind; the row itself is
 left to `PURGE` (DW-Q4 (a), DW-S3 with no subject). **Closed on CLA's
 reading of the close measurement** (§7, "DW-S4"), adopted on the standing
-go-ahead and not the operator's mark, **and not landed**: the merge to
-`main` and the push wait for the operator's word. Opened 2026-11-27 on
+go-ahead and not the operator's mark, **and landed on `main` at
+`9a229dbbb` on the operator's word**, *"push no verify"*
+(`raft-marks-2026-11-27.md` §2): the hook skipped, the suite 5,327 of
+5,327 at `539cb0589`. Opened 2026-11-27 on
 worktree `dw-btree-purge-driver` (branch
 `worktree-dw-btree-purge-driver`) from `630ecc359`
 (`v3.4.17-178-g630ecc359`), under the operator's standing go-ahead of
@@ -647,3 +649,15 @@ test cell, and no statement of engine code.
 **The merge of `origin/main`**: nothing to merge. `origin/main` stood at
 `630ecc359`, the commit DW opened from, at every fetch through the
 close.
+
+### Landed (2026-11-27)
+
+On the operator's word, *"push no verify"*, given to the close's report:
+`worktree-dw-btree-purge-driver` (`539cb0589`) merged into `main`
+`--no-ff` at `9a229dbbb` and pushed with the pre-push hook skipped.
+**Skipped: the hook, and with it its run of the suite.** The suite had
+run on the tree pushed - 5,327 of 5,327 at `539cb0589`, `ctest -LE
+bs-nightly -j4` - and the merge brought nothing else, `origin/main`
+having stood at `630ecc359` throughout. The two costs the close read as
+the mechanism's price went to `main` as read; the operator's word was
+the push, and said nothing of the reading.
