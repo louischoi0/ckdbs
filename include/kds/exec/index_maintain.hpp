@@ -135,12 +135,23 @@ using IndexWriteLog = std::function<Status(const IndexWrite&)>;
 //
 // `rowid` is the row's `heap::EncodeRowid` word on a heap (DN, IX1) - every
 // entry of a heap's index carries it - and ignored on a btree relation.
+//
+// `appended`, when given, is set where the write put a new entry into some
+// index, and left alone where it put none - it moved nothing an index
+// carries, or the entry it would append was already there (an UPDATE back
+// to a value the row held, whose entry no purge has taken). A row is owed
+// one entry an index, so for an UPDATE "an entry was appended" is exactly
+// "the tree holds one dead entry more", which is what the unasked purge
+// counts (DW): the append that finds its entry there kills the row's
+// current one and brings the earlier one back, and the dead are as many as
+// before.
 Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        const catalog::TableAccess& access,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t tuple_key,
                        std::span<const parser::AstValue> previous = {},
-                       const IndexWriteLog* log = nullptr, std::uint64_t rowid = 0);
+                       const IndexWriteLog* log = nullptr, std::uint64_t rowid = 0,
+                       bool* appended = nullptr);
 
 // The same append, for **one** index and with no catalog.
 //
@@ -173,7 +184,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::span<const parser::AstValue> previous = {},
                                   const IndexWriteLog* log = nullptr,
                                   catalog::Catalog* publish = nullptr,
-                                  std::uint64_t rowid = 0);
+                                  std::uint64_t rowid = 0, bool* appended = nullptr);
 
 // `ix`'s layout: the widths its pages are checked against.
 inline index::IndexLayout IndexLayoutOf(const catalog::TableAccess::IndexRef& ix) {

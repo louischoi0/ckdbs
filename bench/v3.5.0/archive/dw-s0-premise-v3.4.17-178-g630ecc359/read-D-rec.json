@@ -1,0 +1,410 @@
+{
+ "cell": "D-rec",
+ "host_before": {
+  "loadavg": "5.93 5.29 3.46 1/1286 797738",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "entries_before": {
+  "a": 3134200,
+  "b": 3134200,
+  "c": 3134200
+ },
+ "height_before": {
+  "a": 3,
+  "b": 3,
+  "c": 3
+ },
+ "relation_stats": {
+  "a": {
+   "leaves": 18881,
+   "est_rows": null,
+   "deletes": 3084200,
+   "updates": 0,
+   "inserts": 3134200,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 3
+  },
+  "b": {
+   "leaves": 18881,
+   "est_rows": null,
+   "deletes": 3084200,
+   "updates": 0,
+   "inserts": 3134200,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 3
+  },
+  "c": {
+   "leaves": 18881,
+   "est_rows": null,
+   "deletes": 3084200,
+   "updates": 0,
+   "inserts": 3134200,
+   "est_delete_marked": null,
+   "leaf_divisions": 0,
+   "leaf_compactions": 0,
+   "height": 3
+  }
+ },
+ "live_distinct_keys": 5000,
+ "live_rows_per_key_mean": 10.0,
+ "analyze": {
+  "a": [
+   "analyze rows=7 class=JoinSelect steps=1 examined=7 pages=615 opens=1 pattern_id=0x7e14502db67374d2 fetch_id=0x3dedd655714e225",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_a",
+   "  filter 0:0.1 = 642",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_a opens=1 examined=7 matched=7 sel=100% pages=615 index_scanned=614 index_resolved=614",
+   "DB time 0.57 ms = CPU 0.57"
+  ],
+  "b": [
+   "analyze rows=7 class=JoinSelect steps=1 examined=7 pages=615 opens=1 pattern_id=0xea8de818ce3e0b93 fetch_id=0xa8a89c94e2039f00",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_b",
+   "  filter 0:0.1 = 642",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_b opens=1 examined=7 matched=7 sel=100% pages=615 index_scanned=614 index_resolved=614",
+   "DB time 0.53 ms = CPU 0.53"
+  ],
+  "c": [
+   "analyze rows=7 class=JoinSelect steps=1 examined=7 pages=615 opens=1 pattern_id=0xc83f821d169e27b4 fetch_id=0x53b4efbf2eac7ecf",
+   "class=JoinSelect steps=1 hoisted=0",
+   "step 0 IndexProbe x_c",
+   "  filter 0:0.1 = 642",
+   "project * (3 column(s) of step 0)",
+   "step 0 IndexProbe x_c opens=1 examined=7 matched=7 sel=100% pages=615 index_scanned=614 index_resolved=614",
+   "DB time 0.46 ms = CPU 0.46"
+  ]
+ },
+ "reindex": {
+  "tag": "REINDEXED INDEX name=ix_a index_oid=4 replaced=1 root=88174",
+  "wall_ms": 1973.2
+ },
+ "entries_after_reindex": {
+  "a": 3134200,
+  "b": 3134200,
+  "c": 3134200
+ },
+ "height_after_reindex": {
+  "a": 3,
+  "b": 3,
+  "c": 3
+ },
+ "pages_allocated_delta_reindex": 10304,
+ "key_pool": 500,
+ "rows_per_probe_mean": 10.096,
+ "after_reindex": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 455.598,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 516.045,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 458.331,
+      "wait_us_per_stmt": 0.002,
+      "wall_us_per_stmt": 517.265,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 461.427,
+      "wait_us_per_stmt": 0.002,
+      "wall_us_per_stmt": 522.342,
+      "rows_per_stmt": 10.096
+     }
+    ],
+    "cpu_us_per_stmt": 458.452,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 389.0,
+     "p25": 501.9,
+     "p50": 517.0,
+     "p95": 558.5,
+     "p99": 601.5,
+     "mean": 518.6
+    },
+    "block_cpu": [
+     452.05,
+     462.56,
+     451.96,
+     455.83,
+     471.04,
+     452.48,
+     456.14,
+     453.66,
+     454.72,
+     460.94,
+     462.56,
+     467.48
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 453.521,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 514.524,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 456.602,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 517.781,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 467.694,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 529.195,
+      "rows_per_stmt": 10.096
+     }
+    ],
+    "cpu_us_per_stmt": 459.272,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 387.1,
+     "p25": 504.4,
+     "p50": 518.6,
+     "p95": 560.7,
+     "p99": 608.3,
+     "mean": 520.5
+    },
+    "block_cpu": [
+     451.99,
+     452.71,
+     452.64,
+     456.74,
+     455.09,
+     455.37,
+     458.03,
+     457.92,
+     464.64,
+     465.5,
+     459.87,
+     480.77
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 455.254,
+      "wait_us_per_stmt": 0.006,
+      "wall_us_per_stmt": 514.247,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 458.77,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 515.004,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 459.88,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 523.374,
+      "rows_per_stmt": 10.096
+     }
+    ],
+    "cpu_us_per_stmt": 457.968,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 358.0,
+     "p25": 502.7,
+     "p50": 517.5,
+     "p95": 556.3,
+     "p99": 583.4,
+     "mean": 517.5
+    },
+    "block_cpu": [
+     453.39,
+     451.2,
+     453.44,
+     462.99,
+     455.97,
+     466.73,
+     458.92,
+     453.46,
+     452.84,
+     461.7,
+     462.45,
+     462.53
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ },
+ "host_after_timed": {
+  "loadavg": "4.38 4.98 3.41 1/1273 798163",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "refused_during_read": {},
+ "purge": {
+  "tag": "PURGED INDEX name=ix_b entries=3073929 skipped_rows=0 attempts=642",
+  "wall_ms": 3275.2
+ },
+ "entries_after_purge": {
+  "a": 3134200,
+  "b": 60271,
+  "c": 3134200
+ },
+ "height_after_purge": {
+  "a": 3,
+  "b": 3,
+  "c": 3
+ },
+ "pages_allocated_delta_purge": -2753,
+ "after_purge": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 468.714,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 531.715,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 474.364,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 536.538,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 470.577,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 533.624,
+      "rows_per_stmt": 10.096
+     }
+    ],
+    "cpu_us_per_stmt": 471.218,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 402.3,
+     "p25": 518.0,
+     "p50": 532.2,
+     "p95": 570.6,
+     "p99": 610.4,
+     "mean": 534.0
+    },
+    "block_cpu": [
+     467.55,
+     469.51,
+     470.64,
+     467.16,
+     469.41,
+     486.93,
+     473.76,
+     467.36,
+     467.81,
+     473.03,
+     471.46,
+     470.01
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 14.108,
+      "wait_us_per_stmt": 0.002,
+      "wall_us_per_stmt": 39.236,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 15.155,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 39.918,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 14.143,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 40.0,
+      "rows_per_stmt": 10.096
+     }
+    ],
+    "cpu_us_per_stmt": 14.469,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 27.4,
+     "p25": 33.8,
+     "p50": 35.9,
+     "p95": 74.1,
+     "p99": 87.5,
+     "mean": 39.7
+    },
+    "block_cpu": [
+     14.08,
+     14.07,
+     14.12,
+     14.17,
+     14.15,
+     18.23,
+     14.12,
+     14.13,
+     14.18,
+     14.16,
+     14.17,
+     14.07
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 474.808,
+      "wait_us_per_stmt": 0.018,
+      "wall_us_per_stmt": 530.673,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 465.751,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 522.489,
+      "rows_per_stmt": 10.096
+     },
+     {
+      "cpu_us_per_stmt": 466.676,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 525.806,
+      "rows_per_stmt": 10.096
+     }
+    ],
+    "cpu_us_per_stmt": 469.078,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 363.7,
+     "p25": 509.1,
+     "p50": 524.5,
+     "p95": 566.3,
+     "p99": 641.8,
+     "mean": 526.3
+    },
+    "block_cpu": [
+     463.5,
+     506.51,
+     464.88,
+     464.35,
+     462.11,
+     465.31,
+     469.08,
+     466.5,
+     464.37,
+     463.56,
+     463.02,
+     475.76
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ }
+}

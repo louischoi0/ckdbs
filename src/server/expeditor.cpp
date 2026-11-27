@@ -90,6 +90,7 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "txn_lifetime_ceiling_ms",
             "max_connections", "reserved_admin_connections", "idle_session_timeout_s",
             "decay_half_life",
+            "index_purge_driver",
             "cabin_optimizer",       "cabin_optimizer_page_budget",
             "cabin_optimizer_theta_create_pct", "cabin_optimizer_theta_drop_pct",
             "cabin_optimizer_theta_swap_pct",   "cabin_optimizer_theta_extend_pct",
@@ -571,6 +572,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
         }
         decay_half_life_ns = v.value() * 1'000'000'000ULL;
     }
+    if (Status s = flag("index_purge_driver", index_purge_driver); !s.ok()) return s;
     if (Status s = flag("cabin_optimizer", cabin_optimizer); !s.ok()) return s;
     if (file.Has("cabin_optimizer_page_budget")) {
         auto v = file.GetUint("cabin_optimizer_page_budget");
@@ -1423,6 +1425,8 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // epoch, and a committed drop is queued from whichever core committed it.
     expeditor->statement_epochs_.emplace(expeditor->config_.cores);
     expeditor->WireInstanceServices(*expeditor->dispatcher_);
+    // DW-R3: with the key off no driver exists, and `Start` submits no tick.
+    if (expeditor->config_.index_purge_driver) expeditor->dispatcher_->EnableIndexPurgeDriver();
 
     // PHY01's collector, wired to both feeders: every core's dispatcher
     // notes S1/S2 per successful SELECT, the one Cabin store forwards S3
@@ -2308,6 +2312,24 @@ Status Expeditor::Start() {
         }
     });
 
+    // **The unasked index purge** (DW; `exec/index_purge_driver.hpp`,
+    // `index.md` §2.3), only where `index_purge_driver` built the driver:
+    // the relations' write counts offered once a second, and one slice of
+    // the queued relation's pass a tick - `analytic`'s leaves, as the heap
+    // release's - a predicate and a return when none is owed.
+    if (dispatcher_->index_purge_driver() != nullptr) {
+        constexpr sched::MonoTimeNs kIndexPurgeOfferNs = 1'000'000'000;  // 1 s
+        constexpr sched::MonoTimeNs kIndexPurgeStepNs = 50'000'000;      // 50 ms, the release's
+        scheduler.SubmitEvery(kIndexPurgeOfferNs, [this] { dispatcher_->QueueIndexPurges(); });
+        scheduler.SubmitEvery(kIndexPurgeStepNs, [this] {
+            auto stepped = dispatcher_->StepIndexPurge(PagesPerSlice(Priority::kAnalytic));
+            if (!stepped.ok() && logger_->enabled(LogLevel::kWarn)) {
+                logger_->Warn("index_purge",
+                              "index purge step failed: " + stepped.status().message());
+            }
+        });
+    }
+
     // **The join planner's steward** (docs/spec/plan-stats.md PS4): one
     // bounded step a second on core 0's `system` group - merge the cores'
     // parts, fold, seed priors within a 16-page budget, publish on a change.
@@ -2413,6 +2435,8 @@ void Expeditor::WireInstanceServices(CommandDispatcher& dispatcher) {
     dispatcher.SetStatementEpochs(&*statement_epochs_);
     dispatcher.SetReclaimQueue(&*reclaimer_);
     dispatcher.SetHeapSpace(&heap_space_);
+    // DW-R3: an instance with no driver counts nothing for one.
+    dispatcher.CountKeyUpdates(config_.index_purge_driver);
 }
 
 void Expeditor::StopDataSync() {

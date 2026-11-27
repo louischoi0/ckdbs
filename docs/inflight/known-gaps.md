@@ -3855,10 +3855,12 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
 Verified on worktree `dd-index-entry-purge` at `b8880f9b` (DD-S2,
 2026-11-20); re-read at `bf289a82`, after DN-S2's slot release.
 
-- **Nothing drives it on a btree**: there `PURGE INDEX` runs when an
-  administrator runs it (DD-Q4 (a)). A heap's indexes are purged unasked by
-  its slot release (DD-S4 option (b), `raft-marks-2026-11-21.md` §6; built
-  in DN-S2, verified at `bc8c9d97`, `heap-and-tuple.md` §3.1b).
+- **Nothing drives it on a btree unless `index_purge_driver` is on, and
+  the key is off by default** (DW, below): with it off `PURGE INDEX` runs
+  when an administrator runs it (DD-Q4 (a)). A heap's indexes are purged
+  unasked by its slot release for the rows it deleted (DD-S4 option (b),
+  `raft-marks-2026-11-21.md` §6; built in DN-S2, verified at `bc8c9d97`,
+  `heap-and-tuple.md` §3.1b).
 - **A purge of a row `PURGE`'s window is about eight times dearer an
   entry** (DD's close, `bench/v3.4.17/dd-close-v3.4.17-3-gb8880f9b.md`:
   about 20 us against 2.4 us): the judge's lookup of a purged key lands
@@ -3882,6 +3884,102 @@ Verified on worktree `dd-index-entry-purge` at `b8880f9b` (DD-S2,
 - **The simulator draws it on one seed in four with a lock table**; the
   other three answer it with the refusal by name.
 
+
+## The unasked index purge (DW)
+
+Verified on worktree `dw-btree-purge-driver` at `f85aa3042` (DW-S4,
+2026-11-27). The contract is `docs/spec/index.md` §2.3; the figures are
+`bench/v3.5.0/results-dw-close-v3.4.17-185-gf85aa3042.md`, measured on a
+host other tenants shared, each comparison interleaved with its control.
+
+- **It is off by default** (`index_purge_driver`, DW-Q3 (a)), and whether
+  it should be on is the operator's: with it off every entry above this
+  section about a btree's dead entries and a moved key's stands as it
+  did.
+- **What it costs where it works** `[measured]`: 10 % to 12 % of server
+  CPU a statement on a delete-heavy and a key-moving mix at about 45,000
+  statements a second over 50,000 rows (3.2 % to 3.9 % of one core by the
+  CPU difference, which the first close,
+  `bench/v3.5.0/results-dw-close-v3.4.17-183-g0c2092df8.md` §4.3, read as
+  a lower bound beside an estimate by entries read about twice it), for
+  an index held at 59,001 and 64,366 entries where off it reached 2.8 and
+  5.3 million, and a point read at 1.05 and 1.21 of a clean index's cost
+  against 28 and 5.2 times (the probe's own floor in that run is about
+  1.4). Per statement, with no pass running, the key costs nothing this
+  harness resolves (on over off 0.999, the control's spread 1 % to 2 %).
+  **Throughput is not resolved**: on over off read 0.965 to 1.034 with no
+  repeated cell, and the first close's two stall-free pairs read a 5 % to
+  6 % loss at a client-bound 40,000 to 47,000 statements a second.
+- **A row that goes back and forth between a few values pays for
+  nothing** `[measured]`: off, such an index stands at one entry a value
+  a row (100,000 for 50,000 rows flipping between two) and a probe of a
+  live key costs the same; on, the driver removes the entry the next
+  flip appends again - 60 passes in 120 s, 2.47 million entries removed,
+  7.2 % of server CPU a statement, 81,634 entries at the end. The count
+  cannot know an entry will be wanted back. Where the values recur
+  across rows - a status - the purge does shorten the value's run, by at
+  most the rows not holding it; that case was not measured.
+- **A slice is 16 leaves on core 0's reactor, and a statement of that
+  core waits it out** (DW-R2's bound, not less): statements over 1 ms
+  rose by 15 to 21 a pass at `cores = 1` (1,973 against 129 in 120 s on
+  the delete-heavy mix), p99 not at all. The p99.9 rose too, by 12 us to
+  50 us, and neither close attributes it: the slices' statements are
+  under 0.1 % of the total. The remedy named and not built: fewer leaves
+  a slice on a faster tick. The heap's slot release has the same slice.
+- **One pass at a time, first queued first walked, 320 leaves a second
+  at most**: a relation's pass waits for every pass queued before it, and
+  a churn that kills more entries than that walks is outrun. A relation
+  is offered again only at the first 1 s offer after its pass ends, so a
+  pass that outlasts one offer leaves up to a second unwalked before the
+  next (`index.md` §2.3, `[source-read]`). None of it was
+  measured; the mixes above killed 23,000 to 42,000 entries a second on
+  one index and were held.
+- **An older view makes a pass fruitless, and nothing backs off**: a
+  reader held for an hour over a churning relation is a pass every
+  threshold of writes that removes nothing, each threshold a fifth of
+  what the last such pass kept - the entries the view holds included - so
+  each comes once the tree has grown by about a fifth, and walks all of
+  it.
+- **Its state is memory's, and so is its signal's**: after a restart the
+  dead entries a relation already holds buy nothing, and wait for new
+  writes to reach the threshold - **which a restart resets to the floor**:
+  a relation's first pass of a boot is bought by 4,096 writes whatever its
+  size, and walks every entry of every index.
+- **A rolled-back `INSERT`'s dead entries are in no count** (they go with
+  the next pass something else buys), **and one dead entry is counted and
+  never purged** (`index.md` IX2a): a spilled covered value changed to
+  another of the same length.
+- **A heap's first pass may be bought by its deletes**, which its slot
+  release purges for anyway: the driver reads a relation's kind at that
+  pass and counts no heap delete after it.
+- **The row is not purged** (DW-Q4 (a)): a btree's delete-marked row
+  stays in its leaf, its Keystone id bound, until an operator's `PURGE`
+  ("Keystone ids", above). The next proposal, not built: a delete-marked
+  row's spilled values released once every reader is past its deleter,
+  the tombstone kept.
+- **A leaf's first entry stays** (`index.md` IX2c, DW-Q5 (a)): one dead
+  entry a leaf survives every pass, so a tree a churn widened keeps more
+  of them than its rebuild would have leaves.
+- **`sys.meta`'s `index_purge` section is core 0's**: a session the
+  placer moved to another core reads none, and `key_updates` is no
+  column of any view, so nothing shows what a relation has counted
+  toward its next pass.
+- **Not explained** `[measured]`: at `cores = 2` the pass rate fell from
+  one a second to one every two after the first 20 s to 40 s, in both
+  closes. A candidate, not verified: a relation is not offered while its
+  own pass runs, so a pass that takes more than the 1 s between offers
+  waits for the offer after next, and the two-core passes read more
+  entries (107,814 to 123,304 against 73,005 to 92,292). And stalls of
+  0.29 s to 1.03 s met six of ten cells, the driver's arm and the other
+  alike, on a host this session did not have to itself.
+- **Not tested**: a pass ended by a refusal part-way (it would take a
+  fault harness); the driver under TSan; a pass against a writer at
+  saturation (the close's client bound every cell, the server 29 % to
+  38 % busy); a heap in the close's mixes, a reader holding an old view
+  across one, `strict` durability, and any size but 50,000 rows. **The
+  simulator draws it on
+  seeds 7 mod 8, and no committed seed is one**: the sweep that ran it -
+  108 runs on six such seeds, all passing - was by hand.
 
 ## Views (DP)
 
@@ -3953,16 +4051,18 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   and on any index (5.8 ms to 9.0 ms), because a one-sided bound is a range
   to no arm of the ladder. Served only behind an equality prefix (CV). Not
   a primary key's gap, and its own order.
-- **A moved key's old entry is purged only beside a retired slot**
-  (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
+- **A moved key's old entry is purged only beside a retired slot, unless
+  `index_purge_driver` is on** (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
   one, which a reader's residual drops and the unique check passes over.
   The heap's slot release purges its indexes only when it collected a
   retired slot, so a relation whose keys move and whose rows are never
   deleted keeps every old entry: space, and a longer run for the value's
   next holder. `PURGE INDEX $pkey_<oid>` takes them out when asked
-  (DR-Q21; its cell is the btree form's, `btree_primary_key_test.cpp`) and
-  nothing runs it unasked. The remedy named and not built: the release's
-  index purge run with no retired slot.
+  (DR-Q21; its cell is the btree form's, `btree_primary_key_test.cpp`).
+  **Unasked, only where `index_purge_driver` is on** (DW-S2, verified at
+  `0c2092df8`; at `f85aa3042` the driver counts the updates that appended
+  an entry, `key_updates`, and walks a heap, `index.md` §2.3); the key is
+  off by default, and with it off nothing runs it.
 - **A join key enters an index by its leading column only**
   (`CorrelatedIndexProbeOf`): a join on every column of a composite key
   probes the first and filters the rest, so its cost follows the first
@@ -4030,11 +4130,13 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
 - **`PURGE` on an embedded key names a live key by its id**: the refusal
   of a one-key window over a live row says `tuple key N is live`, not the
   key the statement wrote.
-- **A btree's indexed key keeps its dead entries until a statement purges
-  them.** A heap's slot release purges its indexes; nothing releases a
-  btree's slots, so `$pkey_<oid>`'s entries of deleted and moved rows wait
-  for `PURGE INDEX $pkey_<oid>`, and its delete-marked rows for `PURGE
-  FROM t WHERE keyidentity ...`.
+- **A btree's indexed key keeps its dead entries until a purge, and its
+  delete-marked rows until a statement.** A heap's slot release purges its
+  indexes; nothing releases a btree's slots, so `$pkey_<oid>`'s entries of
+  deleted and moved rows wait for `PURGE INDEX $pkey_<oid>` - or for the
+  unasked driver where `index_purge_driver` is on (DW, off by default) -
+  and its delete-marked rows for `PURGE FROM t WHERE keyidentity ...`,
+  which nothing runs unasked (DW-Q4 (a)).
 - **An embedded relation's `next_id` is its highest key's id plus one**,
   and `SHOW BUDGET` reads it as ids issued: a named key moves the mark, as
   on any btree, and here every row names its key.

@@ -199,11 +199,15 @@ CREATE TABLE [<namespace>.]<name>
     names the whole key. The place is tried first by an autocommit
     `SELECT` and inside a `READ ONLY` transaction; inside a read-write
     transaction the same plan reads the index.
-    **Where rows are deleted or keys change often, prefer `HEAP`**: a
-    deleted row's space and its key's dead index entries are reclaimed in
-    the background there, while a `BTREE` keeps both until `PURGE FROM t
-    WHERE keyidentity >= 1` and `PURGE INDEX $pkey_<oid>` (the name
-    `sys.indexes` shows).
+    **Where rows are deleted often, prefer `HEAP`**: a deleted row's space
+    and its key's dead index entries are reclaimed in the background
+    there, while a `BTREE` keeps the row until `PURGE FROM t WHERE
+    keyidentity >= 1` and the entries until `PURGE INDEX $pkey_<oid>` (the
+    name `sys.indexes` shows). The entries of key values a row moved off
+    stay on either kind until a `PURGE INDEX`. A server started with
+    `index_purge_driver = on` purges the index entries of both kinds by
+    itself (`manual/server/server.md`); the deleted rows of a `BTREE`
+    still wait for the `PURGE`.
   - **An embedded key** never changes (`UPDATE` of a key column is
     `UNSUPPORTED`, and the column cannot be dropped), and a deleted key
     cannot be inserted again until a `PURGE` frees it (`PURGE FROM t WHERE
@@ -634,8 +638,12 @@ other statements on its core run between two batches.
   `skipped_rows=`; running it again later takes them.
 - **A primary key's index is named as `sys.indexes` shows it**: `PURGE
   INDEX $pkey_4012`. The engine made it and no other statement names it.
-  On a `BTREE` this is what takes out the entries of deleted rows and of
-  key values a row moved off; a `HEAP` purges its own.
+  It is what takes out the entries of key values a row moved off, and on a
+  `BTREE` those of deleted rows too; a `HEAP` purges its deleted rows' own.
+- **A server started with `index_purge_driver = on` runs the same purge by
+  itself** over a relation's indexes once enough of its rows were deleted,
+  or updated in a value an index carries (`manual/server/server.md`); the
+  statement is then for the moment an administrator wants it done now.
 - Queries answer exactly as before. The tree keeps its pages: a leaf left
   thin is refilled by later inserts, and only `REINDEX` returns pages.
 - **Each leaf keeps its first entry**, so at most one dead entry a leaf

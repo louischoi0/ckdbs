@@ -19,24 +19,6 @@ namespace kds::exec {
 
 namespace {
 
-// The first index of `access` with an oid above `after`, or none: creation
-// order (`TableAccess::indexes` is sorted by oid).
-const catalog::TableAccess::IndexRef* IndexAfter(const catalog::TableAccess& access,
-                                                 std::uint64_t after) {
-    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
-        if (ix.index_oid > after) return &ix;
-    }
-    return nullptr;
-}
-
-const catalog::TableAccess::IndexRef* IndexById(const catalog::TableAccess& access,
-                                                std::uint64_t oid) {
-    for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
-        if (ix.index_oid == oid) return &ix;
-    }
-    return nullptr;
-}
-
 bool IsDataPageOf(std::span<const std::byte, kPageSize> page, catalog::Oid oid) {
     const storage::PageHeaderFields header = storage::ReadPageHeader(page);
     return header.page_type == static_cast<std::uint8_t>(PageType::kHeapData) &&
@@ -175,33 +157,12 @@ Status HeapSlotRelease::Collect(HeapReleaseContext& cx, const catalog::TableAcce
 
 Status HeapSlotRelease::Purge(HeapReleaseContext& cx, const catalog::TableAccess& access,
                               std::uint32_t budget) {
-    if (index_oid_ == 0) {
-        const catalog::TableAccess::IndexRef* next = IndexAfter(access, done_oid_);
-        if (next == nullptr) {
-            phase_ = Phase::kVerify;
-            done_oid_ = 0;
-            return Status::OK();
-        }
-        index_oid_ = next->index_oid;
-        resume_.clear();
-    }
-    const catalog::TableAccess::IndexRef* ix = IndexById(access, index_oid_);
-    // Dropped, or still being built (DD-R8): not purged; the verify reads it.
-    if (ix == nullptr || ix->building) {
-        done_oid_ = index_oid_;
-        index_oid_ = 0;
-        return Status::OK();
-    }
     IndexPurgeAttempt attempt;
-    const Status ran = PurgeIndexLeaves(cx.store, cx.catalog, access, cx.txns, cx.wal, cx.locks,
-                                        cx.holder, cx.holdings, *ix, resume_, budget, attempt);
+    const Status ran = purge_.Step(cx.store, cx.catalog, access, cx.txns, cx.wal, cx.locks,
+                                   cx.holder, cx.holdings, budget, attempt);
     counts_.removed += attempt.removed;
     if (!ran.ok()) return ran;
-    resume_ = std::move(attempt.resume);
-    if (resume_.empty()) {
-        done_oid_ = index_oid_;
-        index_oid_ = 0;
-    }
+    if (purge_.done()) phase_ = Phase::kVerify;
     return Status::OK();
 }
 
