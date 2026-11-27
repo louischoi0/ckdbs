@@ -1,6 +1,13 @@
 # Work order DW - what a btree relation's deletes leave, purged unasked: index entries first, the row's own space on the operator's word
 
-Status: **OPENED 2026-11-27** on worktree `dw-btree-purge-driver` (branch
+Status: **CLOSED 2026-11-27** at `f85aa3042` (`v3.4.17-185-gf85aa3042`),
+the driver built behind `index_purge_driver`, off by default, for a
+btree's deleted rows and a moved key on either kind; the row itself is
+left to `PURGE` (DW-Q4 (a), DW-S3 with no subject). **Closed on CLA's
+reading of the close measurement** (§7, "DW-S4"), adopted on the standing
+go-ahead and not the operator's mark, **and not landed**: the merge to
+`main` and the push wait for the operator's word. Opened 2026-11-27 on
+worktree `dw-btree-purge-driver` (branch
 `worktree-dw-btree-purge-driver`) from `630ecc359`
 (`v3.4.17-178-g630ecc359`), under the operator's standing go-ahead of
 2026-11-27 (`raft-marks-2026-11-27.md` §1): every DW-Q item is **adopted
@@ -481,3 +488,107 @@ six seeds of DW-S1's sweep, `unasked_purged_entries` 447 to 611 on three
 `clean` runs.
 
 **Overhead not measured; measured at the milestone's close.**
+
+### DW-S3: no subject
+
+DW-Q4 was adopted at (a): the row and its key are left to `PURGE`, as
+built. Nothing was designed and nothing was built. (b) - a delete-marked
+row's spills released unasked, the tombstone kept - stays CLA's next
+proposal, and (c), the keyed tombstone, needs the operator's own word.
+
+### DW-S4: the close (2026-11-27)
+
+**The first close**, `[measured]` at `0c2092df8`
+(`v3.4.17-183-g0c2092df8`) against the opening commit `630ecc359`,
+Release, pinned, interleaved
+(`bench/v3.5.0/results-dw-close-v3.4.17-183-g0c2092df8.md`, committed at
+`95fd6a9e7`):
+
+- **Off, the milestone costs nothing**: server CPU a statement at 0.984
+  of the opening commit's over 39 cells (btree and heap, six shapes,
+  three sizes), the A-against-A control at 1.0006. The 1.6 % on the
+  cheaper side is on every shape and is not explained.
+- **On, an index is held at its rows**: 57,515 to 99,800 entries for
+  50,000 live rows where off it reached 2.6 to 5.3 million, a point read
+  at 1.06 to 1.08 of a clean index's cost against 26 and 4.9 times; at a
+  cost of 9 % to 12 % of server CPU a statement on the churn cells.
+- **And it wasted a pass every 2 s on updates that move no key**: 61
+  passes in 120 s, 3.05 million entries read, none removed, 4.8 % of
+  server CPU a statement for one index. DW-S2's learned weight halves a
+  relation's updates to an eighth and no further, which at 46,000
+  updates a second over 50,000 rows is a pass every 80,000.
+
+**The remedy** (`f85aa3042`): DW-Q7 revised from (a) to (b) (§4,
+"Marks"). The driver's second signal is `key_updates`, the rows an
+`UPDATE` wrote with a new entry appended to some index: counted on the
+write path at the row (`MaintainIndexes`' `appended`), on every core's
+dispatcher, and only where the key is on. The learned weight, its
+horizon mark and `TransactionManager::CommitCeiling` are deleted. **The
+review** (`critics-developer`, on the uncommitted tree) found the count
+complete - every `UPDATE` path writes its row through one function - and
+the record within the statistics' protocol under the leaf's hold;
+**applied**: CLA's first form counted every row that moved what an index
+carries, so a row flipping between two values was counted at every flip
+for one dead entry, and the count now is the append itself; a row is
+counted before a later index's refusal, not after; the clamp to the
+floor is made once. **Left**: a spilled covered value changed to another
+of the same length is counted and never purged (IX2a) - narrow, and in
+`known-gaps.md`.
+
+**The second close**, `[measured]` at `f85aa3042`
+(`v3.4.17-185-gf85aa3042`)
+(`bench/v3.5.0/results-dw-close-v3.4.17-185-gf85aa3042.md`):
+
+- **Off against the opening commit**: 0.981 (control 1.0007), 39 cells,
+  eight rounds. No regression.
+- **On against off, a statement at a time, no pass running**: 0.999 over
+  36 cells, the indexed-column `UPDATE` at 0.994 to 1.004 against a
+  control of 0.996 to 1.004. The count on the write path is below the
+  harness's 1 % to 2 %.
+- **Updates that move no key: 0 passes** (61), server CPU on over off
+  1.006 (1.048).
+- **The churn cells as before**: on over off 1.102 (delete-heavy), 1.117
+  (key-moving), 1.045 (delete-heavy, two cores); entries held at 59,001,
+  64,366 and 88,856 against 2.8, 5.3 and 4.9 million; the point read at
+  1.05, 1.21 and 1.50 of a clean index's against 28, 5.2 and 52 times
+  (the probe's own floor in this run is about 1.4: an index that never
+  held a dead entry read 1.33 and 1.40).
+- **A row flipping between two values, a cell added here**: off, the
+  index stands at 100,000 entries and a probe costs 1.06 of clean; on,
+  the driver removed 2.47 million entries in 60 passes that the next
+  flips appended again, for 7.2 % of server CPU a statement and nothing
+  a read gains.
+- **A slice costs its core**: statements over 1 ms rose 15 to 21 a pass
+  with the key on, p99.9 by 12 us to 50 us, p99 not at all.
+
+**CLA's reading, adopted on the standing go-ahead and not the operator's
+mark.** DW closes: the default engine is not slower (off against the
+opening commit, twice), the key costs a statement nothing measurable
+until a pass runs, and where dead entries grow without bound the driver
+holds them at the rows for about a tenth of a statement's server CPU.
+**Two costs are read as the mechanism's price and not as a regression,
+and an operator may read either the other way**: the flipping row's
+7.2 % for no gain - the count cannot know an entry will be wanted back,
+and with the key off that relation needs no purge - and a slice's 1 ms
+to 5 ms on core 0, which is DW-R2's own bound and the heap release's
+slice. Both are in `known-gaps.md` ("The unasked index purge (DW)"),
+with what was not explained (the pass rate halving at two cores; stalls
+of 0.29 s to 1.03 s in both arms). **Whether the key should be on by
+default is not read here**: DW-Q3 (a) leaves it off.
+
+**The host was shared** through both closes and the suites: another
+user's `llama-server`, a SQL Server and an Oracle instance. Every
+comparison is interleaved and carries its control; the absolute figures
+are that host's.
+
+**Budget**: the first close 29 min 53 s of measurement, the second
+28 min 37 s; no quiet-gate hold in either. **Cut**, both: 120 s a mix,
+one size (50,000 rows) in the mixes, one run a cell and arm in the
+second, `relaxed` only, a client that bound every cell (the server 29 %
+to 38 % busy), no heap in the mixes, no reader holding an old view.
+
+**The durable content, moved**: `docs/spec/index.md` §2, §2.3 and §13;
+`docs/spec/sys-views.md` §7; `docs/spec/heap-and-tuple.md` §3.1c;
+`docs/inflight/known-gaps.md` ("The unasked index purge (DW)", and three
+entries above it corrected); `CLAUDE.md`'s "Secondary indexes" row;
+`kds.conf.sample`; `manual/server/server.md`, `manual/sql/sql.md`.

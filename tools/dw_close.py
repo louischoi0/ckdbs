@@ -41,6 +41,9 @@ statements.
     D-rec     per iteration INSERT a new id (k uniform in n/10 values) and DELETE
               the oldest live id; `cores = 1`, one writer
     M-rec     UPDATE x SET k = ? WHERE id = ?  (k uniform in n values); `cores = 1`
+    M-flip    UPDATE x SET k = ? WHERE id = ?  on a random live row, alternating that row's k
+              between id and id + 1,000,000 (rows load with k = id), so after a row's first
+              two updates no new index entry is appended; `cores = 1`
     U-nokey   UPDATE x SET w = ? WHERE id = ?  (no index entry is left); `cores = 1`
     D-rec-2c  D-rec with `cores = 2` and two writer connections, one placed on each
               core (a connection is re-opened until `SHOW META`'s `core` says so)
@@ -52,7 +55,7 @@ server CPU from schedstat, client wall), then lets them go. Throughput counts a
 writer's active time only. At the end: the same probe, `PURGE INDEX ix` (reply,
 wall), the entries after and the probe again (the clean reference).
 
-    tools/dw_close.py part1 --run-dir DIR --bin-a A --bin-a2 A2 --bin-b B
+    tools/dw_close.py part1 --run-dir DIR --bin-a A --bin-a2 A2 --bin-b B [--with-on]
     tools/dw_close.py part2 --run-dir DIR --bin-b B
 
 `writer` is the per-connection process part2 starts; it is not run by hand.
@@ -190,7 +193,7 @@ KINDS = ("bt", "hp")
 SHAPES = ("sel_pk", "sel_ix", "ins", "upd_nk", "upd_ix", "del")
 
 
-def p1_phase(c, pid, name, plist, want_rows, want_affected, batch):
+def p1_phase(c, pid, name, plist, want_rows, want_affected, batch, ipc=False):
     cpus, lat = [], []
     t_all = time.perf_counter()
     for at in range(0, len(plist), batch):
@@ -210,14 +213,18 @@ def p1_phase(c, pid, name, plist, want_rows, want_affected, batch):
         c1 = settled_cpu_ns(pid)
         cpus.append((c1 - c0) / len(part) / 1e3)
     wall = time.perf_counter() - t_all
-    return {"cpu_us_med": round(median(cpus), 3), "cpu_us_min": round(min(cpus), 3),
-            "cpu_us_max": round(max(cpus), 3), "lat": pcts(lat),
-            "qps_client": round(len(plist) / (sum(lat)), 1), "wall_s": round(wall, 3)}
+    res = {"cpu_us_med": round(median(cpus), 3), "cpu_us_min": round(min(cpus), 3),
+           "cpu_us_max": round(max(cpus), 3), "lat": pcts(lat),
+           "qps_client": round(len(plist) / (sum(lat)), 1), "wall_s": round(wall, 3)}
+    if ipc:   # the driver's counters after the phase (key on): a pass inside a block shows here
+        res["ip"] = {k: int(v) for k, v in meta(c).items() if k.startswith("index_purge")}
+    return res
 
 
 def p1_arm(args, label, binpath, rnd, port):
     wd = os.path.join(args.run_dir, "p1", f"r{rnd}-{label}")
-    srv = Server(binpath, wd, port, 1, False, args.frames)
+    on = label == "B-on"
+    srv = Server(binpath, wd, port, 1, on, args.frames)
     c = srv.connect()
     out = {"arm": label, "round": rnd, "bin_sha": sha(binpath), "cells": {}}
     for kind in KINDS:
@@ -242,14 +249,14 @@ def p1_arm(args, label, binpath, rnd, port):
             cell = {}
             ids = [(q % size) + 1 for q in range(S)]
             newids = [size + 1 + q for q in range(S)]
-            cell["sel_pk"] = p1_phase(c, srv.pid, f"{t}_sel_pk", [[i64(i)] for i in ids], 1, None, args.batch)
-            cell["sel_ix"] = p1_phase(c, srv.pid, f"{t}_sel_ix", [[i64(i * 7)] for i in ids], 1, None, args.batch)
-            cell["ins"] = p1_phase(c, srv.pid, f"{t}_ins", [[i64(i), i64(i * 7)] for i in newids], 0, 1, args.batch)
+            cell["sel_pk"] = p1_phase(c, srv.pid, f"{t}_sel_pk", [[i64(i)] for i in ids], 1, None, args.batch, on)
+            cell["sel_ix"] = p1_phase(c, srv.pid, f"{t}_sel_ix", [[i64(i * 7)] for i in ids], 1, None, args.batch, on)
+            cell["ins"] = p1_phase(c, srv.pid, f"{t}_ins", [[i64(i), i64(i * 7)] for i in newids], 0, 1, args.batch, on)
             cell["upd_nk"] = p1_phase(c, srv.pid, f"{t}_upd_nk", [[i64(q), i64(i)] for q, i in enumerate(ids)],
-                                      0, 1, args.batch)
+                                      0, 1, args.batch, on)
             cell["upd_ix"] = p1_phase(c, srv.pid, f"{t}_upd_ix",
-                                      [[i64(10 ** 7 + q), i64(i)] for q, i in enumerate(ids)], 0, 1, args.batch)
-            cell["del"] = p1_phase(c, srv.pid, f"{t}_del", [[i64(i)] for i in newids], 0, 1, args.batch)
+                                      [[i64(10 ** 7 + q), i64(i)] for q, i in enumerate(ids)], 0, 1, args.batch, on)
+            cell["del"] = p1_phase(c, srv.pid, f"{t}_del", [[i64(i)] for i in newids], 0, 1, args.batch, on)
             c0 = cpu_now(srv.pid)
             time.sleep(args.tail_s)
             cell["tail_cpu_us_per_deleted_row"] = round((cpu_now(srv.pid) - c0) / 1e3 / S, 3)
@@ -262,11 +269,17 @@ def p1_arm(args, label, binpath, rnd, port):
 def part1(args):
     os.makedirs(args.run_dir, exist_ok=True)
     arms = {"A": args.bin_a, "A2": args.bin_a2, "B-off": args.bin_b}
+    if args.with_on:
+        arms["B-on"] = args.bin_b
     shas = {k: sha(v) for k, v in arms.items()}
     held = quiet_gate(lambda *a, **k: None)
     json.dump({"started": time.time(), "shas": shas, "gate_hold_s": held, "host": host_state()},
               open(os.path.join(args.run_dir, "part1-meta.json"), "w"))
-    perms = list(permutations(("A", "A2", "B-off")))
+    if args.with_on:    # the four cyclic rotations: every arm in every position once in four rounds
+        base = ("A", "B-off", "A2", "B-on")
+        perms = [base[i:] + base[:i] for i in range(4)]
+    else:
+        perms = list(permutations(("A", "A2", "B-off")))
     results = []
     port = args.base_port
     for rnd in range(args.rounds):
@@ -282,7 +295,7 @@ def part1(args):
 
 
 # ============================================================================= part 2
-MIXES = {"D-rec": 1, "M-rec": 1, "U-nokey": 1, "D-rec-2c": 2}
+MIXES = {"D-rec": 1, "M-rec": 1, "U-nokey": 1, "M-flip": 1, "D-rec-2c": 2}
 
 
 def load_x(c, mix, n, seed):
@@ -291,7 +304,10 @@ def load_x(c, mix, n, seed):
     must(c, "CREATE INDEX ix ON x (k)")
     dom = max(1, n // 10) if mix.startswith("D") else n
     for at in range(1, n + 1, 500):
-        vals = ", ".join(f"({i},{rng.randint(1, dom)},0)" for i in range(at, min(at + 500, n + 1)))
+        if mix == "M-flip":
+            vals = ", ".join(f"({i},{i},0)" for i in range(at, min(at + 500, n + 1)))
+        else:
+            vals = ", ".join(f"({i},{rng.randint(1, dom)},0)" for i in range(at, min(at + 500, n + 1)))
         must(c, f"INSERT INTO x VALUES {vals}")
     return dom
 
@@ -326,7 +342,7 @@ def writer(args):
     if kind == "D":
         c.prepare("ins", "INSERT INTO x VALUES (?, ?, 0)")
         c.prepare("del", "DELETE FROM x WHERE id = ?")
-    elif mix == "M-rec":
+    elif mix in ("M-rec", "M-flip"):
         c.prepare("upd", "UPDATE x SET k = ? WHERE id = ?")
     else:
         c.prepare("upd", "UPDATE x SET w = ? WHERE id = ?")
@@ -337,6 +353,7 @@ def writer(args):
     top = []
     own = [i for i in range(1, n + 1) if i % W == wid]          # D: this writer's oldest-first live ids
     qi = 0
+    flip = bytearray(n + 1)
     nid = n + wid + 1
     counter = 0
 
@@ -399,7 +416,11 @@ def writer(args):
             else:
                 i = rng.randint(1, n)
                 counter += 1
-                v = rng.randint(1, n) if mix == "M-rec" else counter
+                if mix == "M-flip":
+                    flip[i] ^= 1
+                    v = i + 1000000 if flip[i] else i
+                else:
+                    v = rng.randint(1, n) if mix == "M-rec" else counter
                 a = pc()
                 aff = stmt("upd", [i64(v), i64(i)])
                 b = pc()
@@ -600,6 +621,7 @@ def main():
     p.add_argument("--stmts", type=int, default=2000, help="part1: statements a shape")
     p.add_argument("--batch", type=int, default=100, help="part1: statements a CPU batch")
     p.add_argument("--rounds", type=int, default=6)
+    p.add_argument("--with-on", action="store_true", help="part1: a fourth arm, B-on (the key on), and four rotations of the four arms")
     p.add_argument("--tail-s", type=float, default=1.5)
     p.add_argument("--n", type=int, default=50000)
     p.add_argument("--mix-seconds", type=int, default=120)

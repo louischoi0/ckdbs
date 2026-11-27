@@ -3885,6 +3885,82 @@ Verified on worktree `dd-index-entry-purge` at `b8880f9b` (DD-S2,
   other three answer it with the refusal by name.
 
 
+## The unasked index purge (DW)
+
+Verified on worktree `dw-btree-purge-driver` at `f85aa3042` (DW-S4,
+2026-11-27). The contract is `docs/spec/index.md` §2.3; the figures are
+`bench/v3.5.0/results-dw-close-v3.4.17-185-gf85aa3042.md`, measured on a
+host other tenants shared, each comparison interleaved with its control.
+
+- **It is off by default** (`index_purge_driver`, DW-Q3 (a)), and whether
+  it should be on is the operator's: with it off every entry above this
+  section about a btree's dead entries and a moved key's stands as it
+  did.
+- **What it costs where it works** `[measured]`: 10 % to 12 % of server
+  CPU a statement on a delete-heavy and a key-moving mix at about 45,000
+  statements a second over 50,000 rows (3.2 % to 3.9 % of one core), for
+  an index held at 59,001 and 64,366 entries where off it reached 2.8 and
+  5.3 million, and a point read at 1.05 and 1.21 of a clean index's cost
+  against 28 and 5.2 times. Per statement, with no pass running, the key
+  costs nothing this harness resolves (on over off 0.999, the control's
+  spread 1 % to 2 %).
+- **A row that goes back and forth between a few values pays for
+  nothing** `[measured]`: off, such an index stands at one entry a value
+  a row (100,000 for 50,000 rows flipping between two) and a probe of a
+  live key costs the same; on, the driver removes the entry the next
+  flip appends again - 60 passes in 120 s, 2.47 million entries removed,
+  7.2 % of server CPU a statement, 81,634 entries at the end. The count
+  cannot know an entry will be wanted back. Where the values recur
+  across rows - a status - the purge does shorten the value's run, by at
+  most the rows not holding it; that case was not measured.
+- **A slice is 16 leaves on core 0's reactor, and a statement of that
+  core waits it out** (DW-R2's bound, not less): statements over 1 ms
+  rose by 15 to 21 a pass at `cores = 1` (1,973 against 129 in 120 s on
+  the delete-heavy mix), p99.9 by 12 us to 50 us, p99 not at all. The
+  remedy named and not built: fewer leaves a slice on a faster tick. The
+  heap's slot release has the same slice.
+- **One pass at a time, first queued first walked, 320 leaves a second
+  at most**: a relation's pass waits for every pass queued before it, and
+  a churn that kills more entries than that walks is outrun. Neither was
+  measured; the mixes above killed 23,000 to 42,000 entries a second on
+  one index and were held.
+- **An older view makes a pass fruitless, and the next is bought at the
+  same price**: a reader held for an hour over a churning relation is a
+  pass every threshold of writes that removes nothing. `PostgreSQL`'s
+  autovacuum has the same shape.
+- **Its state is memory's, and so is its signal's**: after a restart the
+  dead entries a relation already holds buy nothing, and wait for new
+  writes to reach the threshold.
+- **Two kinds of dead entry are in no count**: a rolled-back `INSERT`'s
+  (it goes with the next pass something else buys), and - counted but
+  never purged (`index.md` IX2a) - a spilled covered value changed to
+  another of the same length.
+- **A heap's first pass may be bought by its deletes**, which its slot
+  release purges for anyway: the driver reads a relation's kind at that
+  pass and counts no heap delete after it.
+- **The row is not purged** (DW-Q4 (a)): a btree's delete-marked row
+  stays in its leaf, its Keystone id bound, until an operator's `PURGE`
+  ("Keystone ids", above). The next proposal, not built: a delete-marked
+  row's spilled values released once every reader is past its deleter,
+  the tombstone kept.
+- **A leaf's first entry stays** (`index.md` IX2c, DW-Q5 (a)): one dead
+  entry a leaf survives every pass, so a tree a churn widened keeps more
+  of them than its rebuild would have leaves.
+- **`sys.meta`'s `index_purge` section is core 0's**: a session the
+  placer moved to another core reads none, and `key_updates` is no
+  column of any view, so nothing shows what a relation has counted
+  toward its next pass.
+- **Not explained** `[measured]`: at `cores = 2` the pass rate fell from
+  one a second to one every two after the first 20 s, in both closes;
+  and stalls of 0.29 s to 1.03 s met six of ten cells, the driver's arm
+  and the other alike, on a host this session did not have to itself.
+- **Not tested**: a pass ended by a refusal part-way (it would take a
+  fault harness); the driver under TSan; a pass against a writer at
+  saturation (the close's client bound every cell, the server 29 % to
+  38 % busy); a heap in the close's mixes. **The simulator draws it on
+  seeds 7 mod 8, and no committed seed is one**: the sweep that ran it -
+  108 runs on six such seeds, all passing - was by hand.
+
 ## Views (DP)
 
 Verified on worktree `sync-stale-records`, branch `worktree-dp-view`, at

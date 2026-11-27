@@ -13,8 +13,21 @@ SIZES = (200, 1000, 10000)
 SHAPES = ("sel_pk", "sel_ix", "ins", "upd_nk", "upd_ix", "del")
 
 
+def load_p1(rds):
+    """part1.json of each run directory; rounds renumbered so repeat directories add rounds."""
+    res, off = [], 0
+    for rd in rds.split(","):
+        part = json.load(open(os.path.join(rd, "part1.json")))
+        for r in part:
+            r = dict(r)
+            r["round"] += off
+            res.append(r)
+        off = max(r["round"] for r in res) + 1
+    return res
+
+
 def part1(rd):
-    res = json.load(open(os.path.join(rd, "part1.json")))
+    res = load_p1(rd)
     rounds = sorted({r["round"] for r in res})
     by = {(r["round"], r["arm"]): r for r in res}
     print(f"rounds: {len(rounds)}; arms per round: {sorted({r['arm'] for r in res})}\n")
@@ -53,8 +66,52 @@ def part1(rd):
                 sh = "heap release tail (cpu us per deleted row, idle 1.5 s)" if shape == "tail" else shape
                 print(f"| {name} | {size} | {sh} | {qa} | {qb} | {mA:.2f} | {mB:.2f} | {med:.3f} [{min(ra):.3f}-{max(ra):.3f}] "
                       f"| {median(rc):.3f} [{lo:.3f}-{hi:.3f}] | {'YES' if out else 'no'} |")
+    if any(r["arm"] == "B-on" for r in res):
+        part1_on(res, rounds, by)
     print(f"\ncells: {rows_out}; B-off/A median over cells: {median(allB):.4f}; A2/A median over cells: {median(allC):.4f}; "
           f"cells whose median ratio lies outside the control's range: {beyond}")
+
+
+def part1_on(res, rounds, by):
+    """B-on against B-off, the key on beside the key absent, on the same binary."""
+    print("\n### B-on against B-off (same binary), per-statement server CPU\n")
+    print("| relation | rows | shape | B-off cpu us/stmt | B-on cpu us/stmt | B-on / B-off, median [min-max over rounds] | "
+          "control A2 / A, median [min-max] | B-on beyond control | passes seen after the phase (max over rounds) |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    allr, beyond, n = [], 0, 0
+    for kind in ("bt", "hp"):
+        for size in SIZES:
+            for shape in SHAPES:
+                def val(arm, r):
+                    return by[(r, arm)]["cells"][f"{kind}{size}"][shape]["cpu_us_med"]
+                ro = [val("B-on", r) / val("B-off", r) for r in rounds]
+                rc = [val("A2", r) / val("A", r) for r in rounds]
+                med, lo, hi = median(ro), min(rc), max(rc)
+                out = not (lo <= med <= hi)
+                beyond += out
+                n += 1
+                allr.append(med)
+                passes = max(by[(r, "B-on")]["cells"][f"{kind}{size}"][shape].get("ip", {}).get("index_purge_passes", -1) for r in rounds)
+                print(f"| {'BTREE' if kind == 'bt' else 'HEAP'} | {size} | {shape} | {median([val('B-off', r) for r in rounds]):.2f} | "
+                      f"{median([val('B-on', r) for r in rounds]):.2f} | {med:.3f} [{min(ro):.3f}-{max(ro):.3f}] | "
+                      f"{median(rc):.3f} [{lo:.3f}-{hi:.3f}] | {'YES' if out else 'no'} | {passes} |")
+    print(f"\nB-on/B-off median over cells: {median(allr):.4f}; cells outside the control's range: {beyond} of {n}")
+    shapes_ratio = {}
+    for shape in SHAPES:
+        v = []
+        for kind in ("bt", "hp"):
+            for size in SIZES:
+                v += [by[(r, "B-on")]["cells"][f"{kind}{size}"][shape]["cpu_us_med"] / by[(r, "B-off")]["cells"][f"{kind}{size}"][shape]["cpu_us_med"] for r in rounds]
+        shapes_ratio[shape] = median(v)
+    print("B-on/B-off median per shape over all relations and rounds: " + ", ".join(f"{k} {v:.3f}" for k, v in shapes_ratio.items()))
+    ctl = {}
+    for shape in SHAPES:
+        v = []
+        for kind in ("bt", "hp"):
+            for size in SIZES:
+                v += [by[(r, "A2")]["cells"][f"{kind}{size}"][shape]["cpu_us_med"] / by[(r, "A")]["cells"][f"{kind}{size}"][shape]["cpu_us_med"] for r in rounds]
+        ctl[shape] = median(v)
+    print("control A2/A median per shape over all relations and rounds: " + ", ".join(f"{k} {v:.3f}" for k, v in ctl.items()))
 
 
 def lat_row(w):

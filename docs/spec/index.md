@@ -213,6 +213,11 @@ enough - and no page is read to choose.
   entry it appended is dead. Not counted, and buying nothing: an `UPDATE`
   that moves nothing an index carries, and one back to a value whose
   entry is still in the tree, which kills one entry and revives another.
+  **Only while that entry is in the tree, and a pass takes it**: where a
+  row goes back and forth between a few values the driver removes the
+  entry the next write appends again, so every such write is counted and
+  the passes go on, where with the driver off the index would stand at
+  one entry a value a row and no more (`known-gaps.md`).
   **One count that no pass can answer**: a spilled covered value changed
   to another of the same length appends an entry IX2a keeps.
 
