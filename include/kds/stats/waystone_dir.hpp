@@ -128,6 +128,12 @@ PageId LoadDirChild(std::span<const std::byte, kPageSize> page, std::size_t inde
 // the same shape serves at every level. Headerless, for the reason above.
 StatusOr<PageId> CreateDirPage(storage::PageStore& store);
 
+// Formats an interior page that already exists - every slot kEmptyDirSlot -
+// for reuse as a fresh root (DV-S2: the mount's renewal hands a stale
+// directory's validated page to a row instead of creating one). The caller
+// owns the proof that no live root names `page_id`.
+Status ReformatDirPage(storage::PageStore& store, PageId page_id);
+
 // Resolves `key` to the page that would hold its trail, walking `depth`
 // levels from `root`.
 //

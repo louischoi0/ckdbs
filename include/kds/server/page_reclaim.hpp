@@ -62,6 +62,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <span>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -108,7 +109,28 @@ public:
 
     // Queues every tombstone the catalog holds pending, gated on `D`
     // reaching `gate_lsn` - the end of the mount's recovery scan.
-    Status CollectAtMount(wal::Lsn gate_lsn);
+    //
+    // **And every create the mount's undo retired** (`undone`; DV-S2,
+    // `instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`): a
+    // crash loser's relation, whose `sys.tables` row is gone, so nothing
+    // else names its pages. Gated on `undone_gate`, the log's end after
+    // undo: unlike a drop's, a loser's own rows were compensated on the
+    // relation's pages, and those records must lie below the redo start
+    // before a page is freed.
+    Status CollectAtMount(wal::Lsn gate_lsn,
+                          std::span<const catalog::Catalog::PendingReclaim> undone = {},
+                          wal::Lsn undone_gate = 0);
+
+    // **A create rolled back during the run** (DV-S2), queued at its
+    // transaction's end as a rolled-back `CREATE INDEX`'s tree is (BY-R2):
+    // gated on `D` reaching `gate` - the log's end at the rollback, past
+    // every record the create and its rows wrote - and on every statement
+    // epoch reaching `word`. Walked as a dropped relation's pages are, every
+    // page checked for the relation's oid; it owes no row, so its clear
+    // writes nothing. A crash loses it, and the pages stay leaked
+    // (`known-gaps.md`).
+    void EnqueueUndoneCreate(catalog::Oid oid, catalog::PendingRoots roots, wal::Lsn gate,
+                             std::uint64_t word);
 
     // **A drop committed during the run** (BF-R9), queued by its commit arm
     // from whichever core committed it: gated on `D` past the commit and on
@@ -202,6 +224,8 @@ private:
         catalog::Oid oid = 0;
         catalog::Oid index_oid = 0;
         catalog::PendingRoots roots;
+        // A create that never committed (DV-S2): no tombstone to clear.
+        bool undone_create = false;
         wal::Lsn gate = 0;
         // The schema word every running statement must have revalidated at
         // (BF-R9); 0 for a tombstone a mount found, which no statement of

@@ -1117,27 +1117,57 @@ pages and the cases it does not reach.
     owed and an index job reclaims it (BY-R1, BY-R2) - unless the slot's
     best-effort seed itself failed, which leaves the tree no slot names.
     Verified on `reindex-drop-index-reclaim` at `4f55b8a2`;
-  - a failed or rolled-back `CREATE TABLE`'s pages, which no tombstone
-    names;
+  - a `CREATE TABLE` that did not stand, in two cases only since DV-S2
+    (`instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`): one
+    that failed before its anchor existed (its root or var-heap page hangs
+    from nothing), and one rolled back in the run whose queued reclaim a
+    crash lost - the transaction is decided, so the next mount's undo does
+    not see it (DV-Q8 (a)). Every other one is reclaimed: queued at its
+    transaction's end, or found by the mount's undo (`drop-table.md` DT1).
+    Three narrower windows stay: **a crash loser's own index root whose
+    image reached the log and whose anchor slot did not** - a heap's
+    Keystone index or a primary key's, made by `exec::CreateEmptyIndex`,
+    which logs the root's image before `Catalog::CreateIndex` seeds the
+    slot, so a log cut between the two leaves one `kIndexLeaf` page the
+    anchor does not name (18 pages over 357,716 simulated ops, every one
+    under `io` faults, 0.05 a 1,000 ops: under DV-Q1's bar, recorded and
+    left); a crash during a mount after its undo retired the `sys.tables`
+    row and before its reclaim ran, since the next mount reads the row as
+    already undone; and a create whose anchor the walk refuses;
   - a refused catalog report's page (WAL, above);
   - a previous run's undo pages (UP4, `txn.md` §4.1);
   - a dropped assertion's Bound Cabin chain;
-  - Waystone pages.
-- **Every restart, and every `WAYSTONE OFF`, leaves Waystone pages
-  allocated.** Narrowed by CF-S1b; verified on `cf-waystone-premise` at
-  `46c632aa` (first verified on `fix-sync-publish-and-waystone-crash` at
-  `ec440c2d`). Every mount clears every directory root and gives each opted
-  pattern a fresh one (`server::DiscardAdvisoryState`,
-  `waystone-concpets.md` §4c), because
-  after a crash a directory page can name a child whose allocation bit never
-  reached the device. Only opted patterns have directories now, but the leak
-  is not bounded per mount: each mount strands every opted row's previous
-  directory (a root and up to 2048 trail pages), and each `OFF` strands that
-  row's, so the volume grows with mounts and with toggles, clean or not. A
-  page `WAYSTONE ON` made and did not use (a concurrent `ON` rooted the row
-  first, the row was found opted with a root, or the write failed) is
-  logged `leaked by WAYSTONE ON`, and a page the renewal's second pass did
-  not use `leaked by the mount's renewal`; neither is freed.
+  - the Waystone pages below.
+
+  **Counted, not swept** (DV, closed narrow): the volume census
+  (`sys.volume_census`, `sys-views.md` §6.4a) reports every class above at
+  a mount that asks, and nothing frees a page for being unreached - no
+  sweep is built (DV-Q7 (a)). DV-S0 measured which classes leak
+  (`bench/v3.5.0/results-dv-s0-census-v3.4.17-180-gdb21cbffc.md`): a failed
+  growth or split and a refused unique index build leaked 0 pages; **a
+  refused catalog report's page, a dropped assertion's chain and an online
+  build's root between H2 and H3 were produced by no run**, so their rates
+  are unmeasured.
+- **Every `WAYSTONE OFF`, and every committed `DROP TABLE` that ends an
+  opt-in, leaves that row's Waystone pages allocated; a mount no longer
+  does.** Since DV-S2 a mount takes its stale directories back before it
+  renews them - trail pages freed, interior pages reused as the fresh
+  roots (`waystone-concpets.md` §4c) - so a volume no longer grows with
+  mounts: 100 mounts of two opted shapes strand 0 pages
+  (`VolumeCensusTest.WaystoneMountsStrandNothing`; 900 before). What stays:
+  the directory an `OFF` or a drop's end clears (a root and its trails:
+  about 8 pages an `OFF` in DV-S0's cell, 9 pages a drop in
+  `VolumeCensusTest.ADropTablesEndOfAnOptInStrandsItsDirectory`), freed by
+  nothing, because the
+  clear runs beside recorders that may hold the old root and a headerless
+  id is never freed (DV-Q4'); an interior page a mount took and no row
+  needed; and a stale trail page a mount could not free (deferred, or its
+  bytes no longer `kWaystone`). A page `WAYSTONE ON` made and did not use
+  (a concurrent `ON` rooted the row first, the row was found opted with a
+  root, or the write failed) is logged `leaked by WAYSTONE ON`, and a page
+  the renewal's second pass did not use `leaked by the mount's renewal`;
+  neither is freed. Verified on `dv-unreachable-page-reclaim` at the commit
+  that lands DV-S2.
 - **At `cores > 1`, a reclaim waits for every core's first checkpoint.**
   The durable redo start does not move until every core has published, so
   with `checkpoint_interval_ms = 0` nothing a mount found is freed until a
@@ -1885,9 +1915,11 @@ the procedures are `manual/server/backup-restore.md`.
   path D needs a freezing snapshot.
 - **A restore leaks**: a page the source freed after the copier read its
   map region stays allocated in the restore, as after a crash; Waystone
-  pages, made unreachable at the restore's mount (`DiscardAdvisoryState`),
-  stay allocated where they were written, and so do the growth pages a
-  pre-DA build gave `sys.access_stats`' chain, which nothing reaches since DA.
+  pages the restored rows' directories no longer reach stay allocated where
+  they were written (the restore's mount takes back what those directories
+  do reach, as any mount, DV-S2), and so do the growth pages a pre-DA build
+  gave `sys.access_stats`' chain, which nothing reaches since DA. Neither
+  was produced by DV-S0's restores, so neither is measured.
 - **PITR targets an LSN, not a time**: the commit record carries no time
   (BR-Q5 (b)). An operator notes `SHOW META`'s `wal_durable_lsn`.
 - **The reference client's SCRAM and TLS have no cell in the suite** (DS-S1,

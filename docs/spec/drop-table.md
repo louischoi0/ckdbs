@@ -58,11 +58,27 @@ idempotent (BF-R7). A freed id comes back through the store's free list
   index job reaches it - a failed build's pages its free does not walk to,
   and a tree logged before a refusal whose slot seed failed (`index.md`
   §12);
-- a failed or rolled-back `CREATE TABLE`'s pages;
+- a `CREATE TABLE` that failed before its anchor existed, and one rolled
+  back in the run whose queued job a crash lost (DV-Q8). A create that does
+  not stand is otherwise reclaimed as a dropped relation is (DV-S2,
+  `instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`): one
+  rolled back or failed in the run is queued at its transaction's end with
+  the roots its anchor names, gated as a rolled-back `CREATE INDEX`'s tree
+  is (BY-R2), and a crash loser's is found by the mount's undo, which hands
+  every `sys.tables` row it retires to the reclaim
+  (`txn::RecoveryUndo::SetInsertRetired`, `PageReclaimer::CollectAtMount`);
+  the job's clear writes nothing, since no row owes the pages, and its
+  gate at a mount is the log's end after undo, since a loser's own rows
+  were compensated on the relation's pages;
 - a refused catalog report's page;
 - a previous run's undo pages (UP4);
 - a dropped assertion's Bound Cabin chain;
-- Waystone pages.
+- the Waystone directory an `OFF`, or a committed `DROP TABLE`'s end of an
+  opt-in, clears (a mount's stale directories are taken back:
+  `waystone-concpets.md` §4c).
+
+The volume census counts every class of this list (`sys-views.md` §6.4a,
+`server/volume_census.hpp`).
 
 `docs/inflight/known-gaps.md` names each. A drop never frees Bound Cabin
 pages: DT3 refuses it while an assertion exists.

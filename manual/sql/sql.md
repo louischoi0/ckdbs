@@ -2511,8 +2511,16 @@ newline protocol.
 - `sys.checkpoints`: one row per checkpoint run - `duration_us`, `steps`,
   `pages_flushed`, the waits on the log and on the data file, `resumed`, and
   `outcome` (`completed`, `failed`).
+- `sys.volume_census`: what the startup count found, where the server was
+  started with `volume_census_at_mount = on` (`manual/server/server.md`):
+  a first row `allocated` with the data file's allocated pages, then one
+  row per `page_class` and `owner_oid` of the pages allocated and reached
+  by nothing, with `pages` and `complete` (0: a structure could not be
+  walked, and the count proves nothing). Empty where the key is off; the
+  one `allocated` row where nothing is unreached. It is the count taken at
+  startup, not at the read.
 
-These seven are kept in memory: a restart or a restore empties them. Each is
+The first seven are kept in memory: a restart or a restore empties them. Each is
 bounded per core, and the rows it gives up are counted in `sys.meta`
 (`statement_stats_dropped`, `relation_stats_dropped`, `index_stats_dropped`,
 `leaf_stats_dropped`, `lock_waits_*`,

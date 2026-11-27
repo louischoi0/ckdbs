@@ -2,6 +2,7 @@
 #include "kds/sched/ash_sampler.hpp"
 
 #include "kds/server/restore.hpp"
+#include "kds/server/volume_census.hpp"
 
 
 #include <pthread.h>
@@ -96,7 +97,8 @@ std::vector<std::string> Expeditor::Config::KnownConfigKeys() {
             "cabin_optimizer_theta_heal_pct",   "cabin_optimizer_confirm_snapshots",
             "cabin_optimizer_amort_windows", "cabin_optimizer_cooldown_half_lives",
             "cabin_optimizer_snapshot_interval_ms",
-            "ash_enabled", "ash_interval_ms", "ash_ring_bytes_per_core", "ash_capture_arg_hash"};
+            "ash_enabled", "ash_interval_ms", "ash_ring_bytes_per_core", "ash_capture_arg_hash",
+            "volume_census_at_mount"};
 }
 
 stats::CabinOptimizerConfig Expeditor::Config::CabinOptimizerSettings() const {
@@ -389,6 +391,7 @@ Status Expeditor::Config::ApplyFile(const ConfigFile& file) {
                                         ": auth = scram requires users_file");
     }
     if (Status s = flag("waystone_recording", waystone_recording); !s.ok()) return s;
+    if (Status s = flag("volume_census_at_mount", volume_census_at_mount); !s.ok()) return s;
     if (Status s = flag("ash_enabled", ash_enabled); !s.ok()) return s;
     if (Status s = flag("ash_capture_arg_hash", ash_capture_arg_hash); !s.ok()) return s;
     if (file.Has("ash_interval_ms")) {
@@ -1118,10 +1121,19 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // **An opted pattern's directory is renewed here** (CF-S1b): a fresh,
     // empty root for each row `WAYSTONE ON` set, under the
     // `waystone_recording` ceiling, before the listener binds.
+    AdvisoryDiscard discard;
     if (Status s = DiscardAdvisoryState(expeditor->database_->catalog,
-                                        expeditor->config_.waystone_recording);
+                                        expeditor->config_.waystone_recording,
+                                        &*expeditor->store_, &discard);
         !s.ok()) {
         return s;
+    }
+    if (discard.trail_pages_freed + discard.dir_pages_reused + discard.dir_pages_left != 0) {
+        expeditor->logger_->Info(
+            "waystone", "the stale directories: " + std::to_string(discard.trail_pages_freed) +
+                            " trail page(s) freed, " + std::to_string(discard.dir_pages_reused) +
+                            " directory page(s) reused, " +
+                            std::to_string(discard.dir_pages_left) + " left");
     }
     // **The one unlogged state a mount may keep** (CY-S1, `plan-stats.md`
     // PS16): the relation priors a completed shutdown wrote, believed on
@@ -1403,9 +1415,33 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     // mount can replay one. Not the append point after undo - a
     // compensation's recLSN holds the completion checkpoint's redo start
     // below that, and no compensation names a dropped relation's page.
-    if (Status s = expeditor->reclaimer_->CollectAtMount(expeditor->recovery_.scan_end);
+    // **A create this mount's undo retired is gated on that append point**
+    // (DV-S2): a loser's own rows were compensated on its relation's pages.
+    if (Status s = expeditor->reclaimer_->CollectAtMount(expeditor->recovery_.scan_end,
+                                                         expeditor->recovery_.undone_creates,
+                                                         expeditor->recovery_.undo_end);
         !s.ok()) {
         return s;
+    }
+    // **The volume census, where a boot key asks** (DV-S1, DV-Q3 (a)): here
+    // the volume is quiescent - recovered, renewed, no peer and no listener
+    // (DV-R2) - and the reclaim's jobs still hold their roots, so a page they
+    // owe is marked through them. Its report is the mount log line and
+    // `sys.volume_census`; it frees nothing.
+    if (expeditor->config_.volume_census_at_mount) {
+        std::vector<PageId> undo;
+        expeditor->undo_log_->AppendOwnedPages(undo);
+        auto census = RunVolumeCensus(*expeditor->store_, expeditor->database_->catalog,
+                                      *expeditor->reclaimer_,
+                                      expeditor->device_->page_capacity(), undo);
+        // A report, never a reason to refuse the mount (DV-Q3): a census
+        // that could not name its roots is logged and leaves the view empty.
+        if (census.ok()) {
+            expeditor->logger_->Info("census", DescribeVolumeCensus(census.value()));
+            expeditor->mount_census_.emplace(std::move(census.value()));
+        } else {
+            expeditor->logger_->Warn("census", "not taken: " + census.status().message());
+        }
     }
     // **Every heap is queued for its slot release once** (DN-R2): the queue
     // and the free-slot hints are memory only, so the slots a crash loser's
@@ -2413,6 +2449,7 @@ void Expeditor::WireInstanceServices(CommandDispatcher& dispatcher) {
     dispatcher.SetStatementEpochs(&*statement_epochs_);
     dispatcher.SetReclaimQueue(&*reclaimer_);
     dispatcher.SetHeapSpace(&heap_space_);
+    dispatcher.SetMountCensus(mount_census_.has_value() ? &*mount_census_ : nullptr);
 }
 
 void Expeditor::StopDataSync() {

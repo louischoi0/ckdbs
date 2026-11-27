@@ -5,12 +5,15 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+#include <unordered_set>
 #include <vector>
 
 #include <fcntl.h>
 #include <unistd.h>
 
 #include "kds/catalog/catalog.hpp"
+#include "kds/stats/waystone_dir.hpp"
+#include "kds/storage/device_page_store.hpp"
 #include "kds/server/backup_manifest.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/storage/file_page_device.hpp"
@@ -293,16 +296,77 @@ Status PrepareRestoredVolume(storage::PageDevice& device, const RestoreWindow& w
     return ForgetUnwrittenPages(device);
 }
 
-Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording) {
+namespace {
+
+// One stale directory's pages, by `AdvisoryDiscard`'s two checks: interior
+// pages onto `interiors`, trail pages freed.
+void HarvestStaleDirectory(storage::DevicePageStore& store, PageId root, int depth,
+                           std::unordered_set<PageId>& seen, std::vector<PageId>& interiors,
+                           AdvisoryDiscard& out) {
+    std::vector<PageId> level{root};
+    for (int at = 0; at < depth && !level.empty(); ++at) {
+        std::vector<PageId> below;
+        for (const PageId page : level) {
+            if (!seen.insert(page).second || !store.IsHeaderless(page)) continue;
+            auto bytes = store.GetForRead(page);
+            if (!bytes.ok()) continue;
+            interiors.push_back(page);
+            for (std::size_t i = 0; i < stats::kDirFanout; ++i) {
+                const PageId child = stats::LoadDirChild(bytes.value().bytes(), i);
+                if (child != stats::kEmptyDirSlot) below.push_back(child);
+            }
+        }
+        level = std::move(below);
+    }
+    for (const PageId page : level) {
+        if (!seen.insert(page).second || !store.IsAllocated(page) || store.IsHeaderless(page)) {
+            continue;
+        }
+        {
+            auto bytes = store.GetForRead(page);
+            if (!bytes.ok() || storage::RawPageType(bytes.value().bytes()) !=
+                                   static_cast<std::uint8_t>(PageType::kWaystone)) {
+                continue;
+            }
+        }
+        auto freed = store.FreePage(page);
+        if (freed.ok() && freed.value() == storage::PageStore::FreeOutcome::kFreed) {
+            ++out.trail_pages_freed;
+        }
+    }
+}
+
+}  // namespace
+
+Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording,
+                            storage::DevicePageStore* store, AdvisoryDiscard* out) {
     // Every previous Waystone directory is unreachable from here on: its
     // pages are unlogged, so the copy holds them as of some instant of the
     // window and their children may be pages `ForgetUnwrittenPages` gave
     // back. An opted pattern gets a fresh, empty one, which names no stale
-    // child (CF-S1b). Two walks of `sys.patterns`, whatever its length; the
+    // child (CF-S1b) - one of the stale directories' own pages where there
+    // is one (DV-S2). Two walks of `sys.patterns`, whatever its length; the
     // second sets the instance's opted count (CF-S1c).
     // `sys.access_stats` is no longer on pages (DA): nothing here empties it.
-    auto opted = catalog.RenewPatternDirectories(waystone_recording);
-    return opted.ok() ? Status::OK() : opted.status();
+    AdvisoryDiscard discard;
+    std::vector<PageId> interiors;
+    if (store != nullptr) {
+        auto rows = catalog.ListPatterns();
+        if (!rows.ok()) return rows.status();
+        std::unordered_set<PageId> seen;
+        for (const catalog::SysPatternRow& row : rows.value()) {
+            if (!catalog::HasWaystoneDirectory(row)) continue;
+            HarvestStaleDirectory(*store, row.waystone_root, row.dir_depth, seen, interiors,
+                                  discard);
+        }
+    }
+    const std::size_t pooled = interiors.size();
+    auto opted = catalog.RenewPatternDirectories(waystone_recording, &interiors);
+    if (!opted.ok()) return opted.status();
+    discard.dir_pages_reused = pooled - interiors.size();
+    discard.dir_pages_left = interiors.size();
+    if (out != nullptr) *out = discard;
+    return Status::OK();
 }
 
 Status LayOutRestore(const RestoreRequest& request, RestoreLayout* out) {

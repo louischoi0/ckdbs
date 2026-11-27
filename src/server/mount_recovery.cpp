@@ -25,6 +25,19 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     start.anchor_durable_lsn = anchor.durable_lsn;
 
     txn::RecoveryUndo undo(undo_log, wal);
+    // DV-S2: a retired `sys.tables` row is a create that never committed.
+    // The chain's root carries owner 0 and its growth the relation's oid
+    // (`well_known.hpp`'s `kCatalogRoots`).
+    std::vector<catalog::Catalog::PendingReclaim> undone_creates;
+    undo.SetInsertRetired([&undone_creates](PageId page_id, std::uint64_t owner,
+                                            std::span<const std::byte> payload) {
+        if (page_id != catalog::kCatalogPageTables && owner != catalog::kSysTablesTable) return;
+        auto row = catalog::SysTableRow::Decode(payload);
+        if (!row.ok() || row.value().anchor_page_id == kInvalidPageId) return;
+        undone_creates.push_back(catalog::Catalog::PendingReclaim{
+            row.value().oid,
+            catalog::PendingRoots{row.value().anchor_page_id, row.value().varheap_page_id}});
+    });
 
     auto report = wal::RecoverCore(device, core_id, store, start, &undo, clock);
     if (!report.ok()) {
@@ -57,6 +70,8 @@ StatusOr<MountRecovery> RecoverCoreAtMount(std::uint32_t core_id, const WalAncho
     out.scan_end = report.value().analysis.end_lsn;
     out.transactions_rolled_back = undo.transactions();
     out.compensations = undo.compensations();
+    out.undone_creates = std::move(undone_creates);
+    out.undo_end = wal != nullptr ? wal->appended_lsn() : out.scan_end;
     out.page_floor = report.value().high_water.page_floor;
     out.page_floor_raised = report.value().high_water.page_floor_raised;
     out.next_trx_id = report.value().high_water.next_trx_id;

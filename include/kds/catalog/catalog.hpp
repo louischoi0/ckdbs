@@ -449,10 +449,22 @@ public:
     // Keystone index is the caller's to create in the same transaction
     // (`exec::CreateKeystoneIndex`), since the catalog does not know the
     // index page format.
+    //
+    // `made`, when given, is set once the relation's anchor exists - before
+    // any row names it - to the oid and the roots its pages hang from, and
+    // kept on a failure after that (DV-S2): a create that does not commit,
+    // or that fails, owes those pages, and no row will name them.
+    // A relation and the roots its pages hang from: a tombstone's owed
+    // word (`PendingReclaims`, BF-R2) and a create that may not stand.
+    struct PendingReclaim {
+        Oid oid = 0;
+        PendingRoots roots;
+    };
     StatusOr<Oid> CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                std::uint64_t trx_id = kBootstrapXid,
                                std::vector<CatalogRowRef>* written = nullptr,
-                               ClusteredType clustered = ClusteredType::kBtree);
+                               ClusteredType clustered = ClusteredType::kBtree,
+                               PendingReclaim* made = nullptr);
 
     // ---- Namespaces (AF-T1) ---------------------------------------------
     //
@@ -731,10 +743,6 @@ public:
     // whose pages a reclaim still owes. One scan of `sys.objects`. Read at
     // mount, after recovery, where every drop is decided - a loser's retype
     // was undone with its word - so no stamp is consulted.
-    struct PendingReclaim {
-        Oid oid = 0;
-        PendingRoots roots;
-    };
     StatusOr<std::vector<PendingReclaim>> PendingReclaims();
 
     // ---- Owed index trees (BY-R1,
@@ -1028,7 +1036,14 @@ public:
     // before the walk would keep the previous run's root, whose children can
     // be ids the cursor has since handed to logged pages, so a trail written
     // through it would overwrite them with no record.
-    StatusOr<std::uint64_t> RenewPatternDirectories(bool waystone_recording);
+    //
+    // `reusable`, when given, is a stack of interior pages from the stale
+    // directories the caller proved no live root names (DV-S2,
+    // `server::DiscardAdvisoryState`): each fresh root is taken from it,
+    // formatted empty, before any page is created. What is left on it was
+    // not needed, or could not be formatted.
+    StatusOr<std::uint64_t> RenewPatternDirectories(bool waystone_recording,
+                                                    std::vector<PageId>* reusable = nullptr);
 
     // **The counting walk of a boot that runs no renewal** (CF-S1c): the
     // sim's `skip_recovery` boot skips `DiscardAdvisoryState`, and with it

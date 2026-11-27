@@ -19,3 +19,12 @@ The operator's words of 2026-11-27, recorded in English.
 | **Mark** | CLA's proposals, written into the order's §4 at DV-S0 and DV-S2 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not per-item marks by the operator: **DV-Q4' (a)** - DV-Q4 (a) revised against the tree: Waystone's stale directories are taken back at the mount's renewal only, trail pages freed, interior pages reused as fresh roots, `OFF` left (a headerless id is never freed, `device_page_store.cpp:1785`; an `OFF` would need a statement-epoch fence against a recorder holding the old root); **DV-Q7 (a)** - the sweep (DV-S3) is not reached: S0 measured no class without a source over DV-Q1's bar, so DV closes narrow; **DV-Q8 (a)** - a rolled-back create whose in-run job a crash loses is a stated known gap; **DV-Q9 (a)** - `sys.volume_census` reads the mount's census, never one taken at a read (DV-R2). None is `[quiet-wrong]`; DV-Q4' and DV-Q7 each stand beside DV-R1, which is. |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 and §7 |
+
+## 3. DV-Q10 added and adopted on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §1 - no new word from the operator |
+| **Mark** | **DV-Q10 (a)**, CLA's proposal written into the order's §4 at the review of DV-S2 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: DV-R6 is built narrower than written - the simulator fails a seed whose census mark is not whole and reports the unreached count, and the zero per closed source is each source's cell - because a page's class does not name the source that leaked it. Not `[quiet-wrong]`. |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 |

@@ -105,6 +105,13 @@ struct MountRecovery {
     // ---- What undo rolled back ----
     std::uint64_t transactions_rolled_back = 0;
     std::uint64_t compensations = 0;
+    // Relations a crash loser created, their `sys.tables` rows retired by
+    // this pass (DV-S2): no row names their pages again, so the mount hands
+    // them to the reclaim (`PageReclaimer::CollectAtMount`).
+    std::vector<catalog::Catalog::PendingReclaim> undone_creates;
+    // The log's end once undo had appended its compensations: the gate of
+    // an undone create's reclaim, whose pages those compensations name.
+    wal::Lsn undo_end = 0;
 
     // ---- The caller's two obligations ----
     PageId page_floor = kInvalidPageId;

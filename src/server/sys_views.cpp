@@ -22,6 +22,7 @@
 #include "kds/parser/fingerprint.hpp"
 #include "kds/sched/ash_sampler.hpp"
 #include "kds/server/command_dispatcher.hpp"
+#include "kds/server/volume_census.hpp"
 #include "kds/storage/anchor_page.hpp"
 #include "kds/storage/btree/btree.hpp"
 #include "kds/storage/index/index_tree.hpp"
@@ -93,6 +94,7 @@ constexpr SysViewSpec kViews[] = {
     {"statement_histogram"},
     {"refusal_stats"},
     {"checkpoints"},
+    {"volume_census"},
     {"wait_event_names"},
     {"wait_stats"},
     {"wait_histogram"},
@@ -333,6 +335,7 @@ StatusOr<exec::CatalogView> CommandDispatcher::ReadSysView(const SysViewSpec& sp
     if (n == "statement_histogram") return StatementHistogramView();
     if (n == "refusal_stats") return RefusalStatsView();
     if (n == "checkpoints") return CheckpointsView();
+    if (n == "volume_census") return VolumeCensusView();
     if (n == "wait_event_names") return WaitEventNamesView();
     if (n == "wait_stats") return WaitStatsView();
     if (n == "wait_histogram") return WaitHistogramView();
@@ -1619,6 +1622,28 @@ StatusOr<exec::CatalogView> CommandDispatcher::CheckpointsView() {
                              Int(r.duration_us), Int(r.steps), Int(r.pages_flushed),
                              Int(r.dirty_at_start), Int(r.log_wait_us), Int(r.data_wait_us),
                              Bool(r.resumed), Str(r.completed ? "completed" : "failed")});
+    }
+    return view;
+}
+
+StatusOr<exec::CatalogView> CommandDispatcher::VolumeCensusView() {
+    exec::CatalogView view;
+    // The mount's volume census (DV-S1, `server/volume_census.hpp`), as the
+    // mount counted it where `volume_census_at_mount` asked - never counted
+    // again at a read, since a mark is only whole with no writer (DV-R2).
+    // **The first row is the census itself**, `page_class` `allocated` with
+    // the volume's allocated pages, so a census that found nothing unreached
+    // is one row and a census not taken is none; then one row per class and
+    // owner of the pages allocated and reached by no root. Every row carries
+    // the mark's `complete`: a 0 says the count proves nothing. An
+    // engine-state view.
+    Define(view, {{"page_class", kStr}, {"owner_oid", kInt}, {"pages", kInt}, {"complete", kInt}});
+    if (mount_census_ == nullptr) return view;
+    view.rows.push_back({Str("allocated"), Null(), Int(mount_census_->allocated),
+                         Bool(mount_census_->complete)});
+    for (const auto& [key, n] : mount_census_->unmarked_by_class) {
+        view.rows.push_back(
+            {Str(key.page_class), Int(key.owner), Int(n), Bool(mount_census_->complete)});
     }
     return view;
 }

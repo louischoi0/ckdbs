@@ -122,7 +122,6 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
         }
         out += " undo_unprovable=" + std::to_string(volume_unprovable) +
                " census_incomplete=" + std::to_string(volume_incomplete);
-        if (!volume_first_refusal.empty()) out += " first_refusal=[" + volume_first_refusal + "]";
     }
     if (derived_reads != 0 || indexes_created != 0) {
         out += " derived_reads=" + std::to_string(derived_reads) +
@@ -1570,20 +1569,27 @@ void CutPower(Iteration& it, std::string_view at = {}) {
     }
 }
 
-// **DV-S0's volume census** of a settled instance: every allocated page no
-// root reaches, by class, into the verdict. Reported, never failed.
-void CountUnreached(SimInstance& instance, SimVerdict& verdict) {
+// **DV's volume census** of a settled instance: every allocated page no root
+// reaches, by class, into the verdict. **A mark that is not whole fails the
+// seed** (DV-R6 as DV-S2 narrowed it): a page class does not say which source
+// left a page - an `OFF`'s or a drop's directory is Waystone's as a mount's
+// was - so the per-source zero is the cells' (`volume_census_test.cpp`,
+// `in_run_reclaim_test.cpp`), and the count here is reported.
+void CountUnreached(Iteration& it, SimInstance& instance) {
+    SimVerdict& verdict = it.verdict;
     auto census = instance.RunCensus();
     ++verdict.volume_censuses;
-    std::string refusal;
-    if (!census.ok()) {
-        refusal = census.status().message();
-    } else if (!census.value().complete && !census.value().refusals.empty()) {
-        refusal = census.value().refusals.front();
+    if (!census.ok() || !census.value().complete) {
+        ++verdict.volume_incomplete;
+        std::string reason = "no reason";
+        if (!census.ok()) {
+            reason = census.status().message();
+        } else if (!census.value().refusals.empty()) {
+            reason = census.value().refusals.front();
+        }
+        Fail(it, "census: the mark is not whole: " + reason);
+        return;
     }
-    if (!census.ok() || !census.value().complete) ++verdict.volume_incomplete;
-    if (verdict.volume_first_refusal.empty()) verdict.volume_first_refusal = refusal;
-    if (!census.ok()) return;
     verdict.volume_unreached += census.value().unmarked;
     verdict.volume_unprovable += census.value().unprovable;
     for (const auto& [key, n] : census.value().unmarked_by_class) {
@@ -1895,7 +1901,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     Reconcile(it);
     ReconcileDrops(it);
     ReconcileAssertion(it);
-    if (verdict.ok) CountUnreached(it.instance, verdict);
+    if (verdict.ok) CountUnreached(it, it.instance);
     if (it.tear_healable && verdict.ok) ++verdict.tears_healed;
     record_recycling();
     if (!verdict.ok || !backup.has_value()) return verdict.ok;
@@ -1934,7 +1940,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
                                  "', dropped before the stop, is back");
         }
     }
-    if (verdict.ok) CountUnreached(*restored.value(), verdict);
+    if (verdict.ok) CountUnreached(restore_it, *restored.value());
     if (verdict.ok) ++verdict.backups_restored;
     return verdict.ok;
 }
@@ -1996,7 +2002,6 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     for (const auto& [name, n] : other.volume_unreached_by_class) {
         volume_unreached_by_class[name] += n;
     }
-    if (volume_first_refusal.empty()) volume_first_refusal = other.volume_first_refusal;
     if (ok && !other.ok) {
         ok = false;
         detail = other.detail;

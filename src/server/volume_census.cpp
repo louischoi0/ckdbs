@@ -312,4 +312,25 @@ StatusOr<VolumeCensus> RunVolumeCensus(storage::DevicePageStore& store, catalog:
     return out;
 }
 
+std::string DescribeVolumeCensus(const VolumeCensus& c) {
+    std::string out = std::to_string(c.allocated) + " page(s) allocated, " +
+                      std::to_string(c.marked) + " reached, " + std::to_string(c.unmarked) +
+                      " reached by no root";
+    if (!c.unmarked_by_class.empty()) {
+        out += " (";
+        bool first = true;
+        for (const auto& [key, n] : c.unmarked_by_class) {
+            out += std::string(first ? "" : ", ") + key.page_class + " owner " +
+                   std::to_string(key.owner) + ": " + std::to_string(n);
+            first = false;
+        }
+        out += ")";
+    }
+    out += ", " + std::to_string(c.unprovable) + " previous-run undo page(s)";
+    out += c.complete ? "; the mark is whole"
+                      : "; the mark is not whole, so the count proves nothing: " +
+                            (c.refusals.empty() ? std::string("no reason") : c.refusals.front());
+    return out;
+}
+
 }  // namespace kds::server

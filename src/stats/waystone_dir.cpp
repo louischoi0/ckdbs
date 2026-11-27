@@ -46,6 +46,13 @@ StatusOr<PageId> CreateDirPage(storage::PageStore& store) {
     return page_id;
 }
 
+Status ReformatDirPage(storage::PageStore& store, PageId page_id) {
+    auto bytes = store.Get(page_id);
+    if (!bytes.ok()) return bytes.status();
+    FormatDirPage(bytes.value().bytes());
+    return Status::OK();
+}
+
 StatusOr<PageId> LookupWaystonePage(storage::PageStore& store, PageId root, int depth,
                                     const InstanceKey& key) {
     if (Status s = CheckDepth(depth); !s.ok()) return s;

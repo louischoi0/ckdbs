@@ -119,6 +119,7 @@ further.
 | DV-Q4' | DV-Q4 (a) revised against the tree at DV-S2 | (a) at the mount's renewal only: a stale directory's trail pages freed where each still reads `kWaystone`, its interior pages - allocated and headerless - reused as the renewal's fresh roots, the rest counted and left; `OFF` left; (b) DV-Q4 (a) as written, `OFF` included, interior pages freed | (a): `FreePage` refuses a headerless id (`device_page_store.cpp:1785`) because a reused one would read its dead image after a crash, so freeing one needs a durable zero first - a new primitive - while reuse needs none; and an `OFF` runs while another core's recorder may hold the old root in its memo, so freeing there needs a statement-epoch fence against a trail write into a reused logged page (`[quiet-wrong]`), for an operator act whose rate is far under DV-Q1's bar | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q7 | Is the sweep (DV-S3) reached? DV-Q0 (a) left it to S0's numbers | (a) no: S0 measured no class without a source over DV-Q1's bar, so S3 is not built and DV closes narrow; (b) build S3 regardless | (a): every class over the bar has a source fix (DV-S2); a failed growth or split leaked 0 pages over 50,102 `grow`-fault ops; a sweep is the one stage that can free a reachable page (DV-R1, `[quiet-wrong]`) and has nothing measured to free | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q8 | A create rolled back in the run whose queued job a crash loses | (a) a stated known gap: the transaction is decided, so the next mount's undo does not see it, and its pages stay leaked; (b) a durable owed record written at the rollback | (a): the window is a crash between a rollback and its job's gate; a durable record is a new record kind or catalog row, which DV-R4's spirit (no logged free state) argues against | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q10 | DV-R6 as built | (a) the simulator fails a seed whose census mark is not whole, and reports the unreached count; the zero per closed source is each source's cell (`VolumeCensusTest.WaystoneMountsStrandNothing`, `ACrashLosersCreateIsFreedAtTheMount`, `InRunReclaimTest.ARolledBackCreateIsFreedInTheRun`); (b) DV-R6 as written - the simulator fails a seed that ends with an unreachable page of a closed class | (a): a page's class does not name its source - a directory an `OFF` or a drop's end of an opt-in strands is `waystone` as a mount's was, and a rolled-back create's page whose queued job the seed's crash lost is `anchor` as any other - so (b) would fail seeds on the leaks DV-Q4' and DV-Q8 leave | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q9 | What `sys.volume_census` reads | (a) the census the mount took, memory only, empty where `volume_census_at_mount` is off; (b) a census taken at every read | (a): DV-R2 - a mark is only whole with no writer, and a read runs beside writers | (a), adopted on the standing go-ahead of 2026-11-27 |
 
 ## 5. Stages
@@ -140,6 +141,75 @@ further.
 - No reclaim of a retired slot's space inside a live leaf.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### DV-S1 and DV-S2 - the report, and the two sources closed (2026-11-27)
+
+On `dv-unreachable-page-reclaim`, landed together in the commit after
+`5666265fa`.
+
+**DV-S1.** The boot key `volume_census_at_mount` (default `off`, DV-Q3 (a)):
+the mount runs the census after recovery, the renewal and the reclaim's
+collection, before any listener, logs it (`INFO [census] ...`) and keeps it
+for `sys.volume_census` (DV-Q9 (a)), whose first row is the census itself. A
+census that cannot name its roots is logged and the mount still opens.
+`VolumeCensusMountTest.TheBootKeyAsksTheMountForItsCensus`.
+
+**DV-S2, a `CREATE TABLE` that does not stand.** `Catalog::CreateTable`
+reports the relation's roots once its anchor exists; the dispatcher queues
+them at the transaction's end unless a create that stood commits
+(`PageReclaimer::EnqueueUndoneCreate`, gated as BY-R2's rolled-back index
+tree), and the mount's undo hands every `sys.tables` row it retires to
+`CollectAtMount`, gated on the log's end after undo. The walk and its owner
+checks are the dropped relation's. Cells:
+`InRunReclaimTest.ARolledBackCreateIsFreedInTheRun`,
+`ARolledBackHeapCreateFreesItsKeystoneIndex`, `ACommittedCreateOwesNothing`,
+`VolumeCensusTest.ACrashLosersCreateIsFreedAtTheMount`.
+
+**DV-S2, Waystone (DV-Q4').** `server::DiscardAdvisoryState` takes the stale
+directories back before the renewal: trail pages freed where they still
+read `kWaystone`, interior pages reused as the fresh roots. 100 mounts of
+two opted shapes strand 0 pages (900 before);
+`VolumeCensusTest.WaystoneMountsStrandNothing`,
+`AStaleDirectoryNamingLivePagesLeavesThem` (the review's, DV-R1: it fails
+with the class check removed). `OFF` is left.
+
+**The online build's root between H2 and H3** was produced by no S0 run
+and is not closed: its rate is unmeasured, so DV-Q1's bar gives it no
+stage.
+
+**The sim matrix again**, the same 240 runs on this build: 240 `SIM ok`,
+528 censuses whole; unreached pages 1,684 before, 41 after - 13 trail and
+10 directory pages, in one seed's clean runs (a `DROP TABLE`'s end of an
+opt-in strands as an `OFF` does: 9 pages in
+`VolumeCensusTest.ADropTablesEndOfAnOptInStrandsItsDirectory`; that the
+seed's 23 are all a drop's is CLA's reading, not traced) and 18
+`kIndexLeaf` pages, each a crash loser's own index root
+whose image reached the log and whose anchor slot did not (0.05 a 1,000
+ops, under the bar; `known-gaps.md`). **DV-R6 is built as DV-Q10 (a)**: the
+sim fails a seed whose mark is not whole.
+
+Review (`critics-developer`): no defect in the change; the harvest's
+premise checked against crashes, restores, shared roots and the catalog
+cache, and pinned by a cell it added. Applied: the undone create's mount
+gate moved to the log's end after undo (risk 1); the view's census row
+(risk 2); a census that fails no longer refuses the mount (risk 3); the
+failed-abort dependency stated at the queueing site (risk 4); DV-R6's
+narrowing recorded as DV-Q10 (risk 5); a page whose reformat failed counted
+as left, and the leak windows written to `known-gaps.md` (risk 6); the
+three `{oid, roots}` structs made one (S1); the header comment merged (S3);
+the nested ternary unfolded (S4); the mount cell made to record by running
+each instance twice. Rejected: S2, one shared directory walker - the three
+walks differ in what a failed check means (skip, refuse, count), and a
+walker with two callbacks is as long as the two loops it replaces; S5, the
+hook's payload copy - a mount-only cost with no profile behind it.
+
+**The suite** at this stage's build: 5,310 of 5,312 passed; the two
+failures are the two two-core cells that fail alone at the base commit too
+(`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, 4 of 15 alone
+here; `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`, 9
+of 60 alone here), neither on a path DV changes. Run again at the close.
+
+Overhead not measured; measured at the milestone's close.
 
 ### DV-S0 - the census, measured (2026-11-27)
 

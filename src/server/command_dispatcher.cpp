@@ -7018,10 +7018,16 @@ DispatchOutcome CommandDispatcher::HandleCreateTableSql(std::string_view line,
         // form above, a fact of the declaration.
 
         DdlScope ddl = DdlScopeFor(scope);
+        catalog::Catalog::PendingReclaim made;
         auto oid = catalog_.CreateTable(create_ns.value(), stmt.table_name, schema, ddl.trx_id,
                                         ddl.sink(),
                                         stmt.heap ? catalog::ClusteredType::kHeap
-                                                  : catalog::ClusteredType::kBtree);
+                                                  : catalog::ClusteredType::kBtree,
+                                        &made);
+        // DV-S2: owed at the decide unless it commits a create that stood.
+        if (reclaim_queue_ != nullptr && scope.txn != nullptr && made.oid != 0) {
+            owed_creates_.push_back(OwedCreate{scope.txn->id(), made, !oid.ok()});
+        }
         // Registered before the status is read: a create that failed partway
         // still left rows on the page, and those are exactly the rows a
         // rollback has to retire.
@@ -10227,6 +10233,24 @@ void CommandDispatcher::EndDdlScopeById(std::uint64_t txn_id, wal::Lsn committed
     const bool committed = committed_lsn != wal::kNoLsn;
     const wal::Lsn gate =
         committed ? committed_lsn + 1 : (wal_ != nullptr ? wal_->appended_lsn() : 0);
+    // DV-S2: a create that did not stand - rolled back, or failed and
+    // committed anyway - is walked from its anchor as a dropped relation is,
+    // past the same gate. Before the index jobs below, which its relation
+    // job then supersedes (BY-R3).
+    for (auto owed = owed_creates_.begin(); owed != owed_creates_.end();) {
+        if (owed->txn_id != txn_id) {
+            ++owed;
+            continue;
+        }
+        if (!committed || owed->failed) {
+            // Queued whether or not the abort itself succeeded: a failed
+            // abort is a failed log write, which fail-stops the log, so the
+            // redo start never reaches this gate and the job never runs.
+            reclaim_queue_->EnqueueUndoneCreate(owed->made.oid, owed->made.roots, gate,
+                                                catalog_.schema_word_now());
+        }
+        owed = owed_creates_.erase(owed);
+    }
     for (auto owed = owed_indexes_.begin(); owed != owed_indexes_.end();) {
         if (owed->txn_id != txn_id) {
             ++owed;

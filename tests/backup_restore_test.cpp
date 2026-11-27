@@ -494,7 +494,10 @@ TEST(BackupControlTest, ARestoreKeepsAWaystoneOptInAndNotItsTrail) {
     ASSERT_TRUE(row.ok()) << "the opt-in was not restored: " << row.status().message();
     EXPECT_NE(row.value().flags & catalog::kPatternWaystone, 0);
     EXPECT_TRUE(catalog::HasWaystoneDirectory(row.value()));
-    EXPECT_NE(row.value().waystone_root, recorded) << "the backup's directory was kept";
+    // The same id reused empty is a renewal (DV-S2); a child kept is not.
+    (void)recorded;
+    EXPECT_EQ(kds::testing_patterns::DirChildren(db.store(), row.value().waystone_root), 0)
+        << "the backup's directory was kept";
     EXPECT_EQ(Reply(db, "ANALYZE " + sql).find("replays="), std::string::npos)
         << "a trail survived the restore";
 }

@@ -1100,7 +1100,10 @@ TEST(WaystoneMountTest, ACrashAtGroupKeepsTheBitRenewsTheDirectoryAndLosesTheTra
     const AfterMount after = Inspect(*mounted.value(), kMounted);
     EXPECT_TRUE(after.opted) << "the opt-in did not survive the crash";
     EXPECT_NE(after.root, kInvalidPageId) << "the opted row was given no directory";
-    EXPECT_NE(after.root, recorded) << "the previous run's directory survived the mount";
+    // The same id reused empty is a renewal (DV-S2); a child kept is not.
+    (void)recorded;
+    EXPECT_EQ(kds::testing_patterns::DirChildren(mounted.value()->store(), after.root), 0)
+        << "the previous run's directory survived the mount";
     EXPECT_EQ(after.cached_root, after.root);
     EXPECT_FALSE(after.replayed) << "a trail survived the crash";
 }

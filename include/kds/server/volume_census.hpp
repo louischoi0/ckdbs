@@ -82,4 +82,8 @@ StatusOr<VolumeCensus> RunVolumeCensus(storage::DevicePageStore& store, catalog:
                                        PageReclaimer& reclaimer, std::uint32_t page_limit,
                                        std::span<const PageId> live_undo_pages);
 
+// The report as one line, for the mount's log (DV-S1): the counts, the
+// unmarked pages by class, and the first refusal of a mark that is not whole.
+std::string DescribeVolumeCensus(const VolumeCensus& census);
+
 }  // namespace kds::server
