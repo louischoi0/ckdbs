@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -43,8 +44,8 @@
 // thread reads the latest ticket before it syncs and completes exactly up
 // to it, so every byte written before `Request` returned is covered.
 //
-// Lock protocol: `mu_` guards the queue state and `failure_`, and is never
-// held across the device call; `sync_mu_` serializes the device call and is
+// Lock protocol: `mu_` guards the queue state, the posted jobs and
+// `failure_`, and is never held across the device call or a job; `sync_mu_` serializes the device call and is
 // the innermost lock any caller of this class takes. Neither is held across
 // a reactor park: a caller parks on `Done`, which reads atomics.
 namespace kds::storage {
@@ -56,8 +57,8 @@ public:
     DataSyncer(const DataSyncer&) = delete;
     DataSyncer& operator=(const DataSyncer&) = delete;
 
-    // Starts the thread; a no-op when it runs. One thread at startup, which
-    // `sched.md` invariant 1 allows.
+    // Starts the threads - the sync's and the writer's (DZ-S2) - a no-op
+    // when they run. Both at startup, which `sched.md` invariant 1 allows.
     void Start();
     // Joins the thread after the sync in flight, if any. Requests left
     // behind are not synced; a caller that needs them syncs with `SyncNow`,
@@ -77,6 +78,20 @@ public:
     // Request and wait: the synchronous callers' shape.
     Status SyncNow();
 
+    // **A write handed off the caller** (DZ-S2): a checkpoint run's page
+    // writes, so their `pwrite`s - DZ-S0 measured one step's at up to 1.26 s
+    // in the kernel's writeback throttle at 1 Mi dirty frames - are not on
+    // its reactor. **On a writer thread of their own** (DZ-Q2 (b)), started
+    // and stopped with the sync's: on the sync's thread a write would queue
+    // behind a whole `fsync`, which BI-Q13 says no step waits for
+    // (`CheckpointDataSyncTest.TheRunParksWhileItsDataSyncIsHeld`). Jobs run
+    // in order, one at a time. A job runs after a failed sync too: it is the
+    // one that gives back the claims its pages carry, and the store refuses
+    // its writes itself. Without the thread, or once `Stop` has begun, the
+    // job runs inline on the caller; `Stop` runs every queued job before it
+    // joins.
+    void Post(std::function<void()> job);
+
     bool failed() const noexcept { return failed_.load(std::memory_order_acquire); }
     // The thread runs: after `Start`, until `Stop` has joined it.
     bool running() const {
@@ -95,12 +110,16 @@ private:
     // failure is recorded and handed to the handler.
     Status SyncOnce();
     void Run();
+    void RunWriter();
 
     PageDevice& device_;
     mutable std::mutex mu_;
     std::condition_variable cv_;
     std::mutex sync_mu_;
     std::thread thread_;
+    std::thread writer_;                      // DZ-S2: the posted jobs'
+    std::deque<std::function<void()>> jobs_;  // under mu_
+    std::condition_variable jobs_cv_;
     bool running_ = false;   // under mu_
     bool stopping_ = false;  // under mu_
     std::atomic<std::uint64_t> requested_{0};

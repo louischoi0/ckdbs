@@ -1,0 +1,6 @@
+frames=1048576 readers=3 pages_per_step=64 completed=1 run_s=63.21 pages=1048576 steps=16384
+longest_system_poll_ms=42.01 system_polls_over_10ms=1327 system_polls_over_100ms=0 fg_gap_max_ms=42.02 fg_polls=123255880
+start_max_ms=42.00 step_max_ms=14.63 step_write_max_ms=14.44 publish_batch_max_ms=0.05 publish_batches=2 data_park_ms=17947.5
+h1_call_max_ms=24.47 h2_call_max_ms=16.66 reader_fetches=147709485
+dirty_table_max_ms=37.83 write_pages_max_ms=14.63 dirty_pages_max_ms=10.47 headerless_maps_max_ms=0.04 free_maps_max_ms=0.05 request_sync_max_ms=0.00
+longest_turn_ms=42.01 at: steps 0->0 pages 0->0 publish_n 0->0 end_ns 0 in_progress 1

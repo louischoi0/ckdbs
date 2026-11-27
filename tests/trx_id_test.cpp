@@ -138,6 +138,117 @@ TEST(TrxIdSequenceTest, TheNextBlockIsCarvedAheadAtThreeQuartersAndInstalledWith
     EXPECT_EQ(p.writes(), writes_after_first + 1) << "draining the window carved on Begin's path";
 }
 
+// DZ-S3: the early carve with its persist in halves. The raise and the page
+// write at the carve, the sync asked and not waited for; the block becomes
+// ahead only once the sync is done, and nothing issues from it before. A
+// window drained with the block still pending persists it whole on the
+// drain's path; a failed sync drops it.
+TEST(TrxIdSequenceTest, AStagedEarlyCarveIsAheadOnlyOnceItsSyncIsDone) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    std::uint64_t staged = 0;
+    bool done = false;
+    Status result;
+    seq.SetStagedPersist({[&]() -> StatusOr<std::uint64_t> { return ++staged; },
+                          [&](std::uint64_t) { return done; },
+                          [&](std::uint64_t) { return result; }});
+    ASSERT_TRUE(seq.Next().ok());
+    const int writes_after_first = p.writes();
+    while (seq.remaining() > kTrxIdBlockSize / 4) ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    EXPECT_EQ(staged, 1u);
+    EXPECT_TRUE(seq.has_block_pending());
+    EXPECT_FALSE(seq.has_block_ahead()) << "a block ahead before its sync was done";
+    EXPECT_EQ(p.writes(), writes_after_first) << "the early carve persisted whole";
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    EXPECT_EQ(staged, 1u) << "a second block staged while one is pending";
+    done = true;
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    EXPECT_TRUE(seq.has_block_ahead());
+    EXPECT_FALSE(seq.has_block_pending());
+    std::uint64_t last = 0;
+    while (seq.remaining() > 0) last = seq.Next().value();
+    auto next = seq.Next();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GT(next.value(), last);
+    EXPECT_EQ(p.writes(), writes_after_first) << "the drain carved on Begin's path";
+}
+
+TEST(TrxIdSequenceTest, AWindowDrainedWithAStagedBlockPendingPersistsItWhole) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    seq.SetStagedPersist({[]() -> StatusOr<std::uint64_t> { return std::uint64_t{1}; },
+                          [](std::uint64_t) { return false; },
+                          [](std::uint64_t) { return Status::OK(); }});
+    ASSERT_TRUE(seq.Next().ok());
+    while (seq.remaining() > kTrxIdBlockSize / 4) ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_pending());
+    const std::uint64_t pending_ceiling = p.superblock().next_trx_id();
+    const int writes_before = p.writes();
+    std::uint64_t last = 0;
+    while (seq.remaining() > 0) last = seq.Next().value();
+    auto next = seq.Next();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GT(next.value(), last);
+    EXPECT_LT(next.value(), pending_ceiling) << "the pending block was not the one installed";
+    EXPECT_EQ(p.writes(), writes_before + 1) << "the pending block issued without a persist";
+    EXPECT_FALSE(seq.has_block_pending());
+}
+
+TEST(TrxIdSequenceTest, AFailedStagedSyncDropsThePendingBlock) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    seq.SetStagedPersist({[]() -> StatusOr<std::uint64_t> { return std::uint64_t{1}; },
+                          [](std::uint64_t) { return true; },
+                          [](std::uint64_t) { return Status::IoError("injected: sync failed"); }});
+    ASSERT_TRUE(seq.Next().ok());
+    while (seq.remaining() > kTrxIdBlockSize / 4) ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    EXPECT_FALSE(seq.CarveAheadIfLow().ok()) << "a failed sync was not reported";
+    EXPECT_FALSE(seq.has_block_pending());
+    EXPECT_FALSE(seq.has_block_ahead()) << "a block whose sync failed is ahead";
+}
+
+TEST(TrxIdSequenceTest, AWindowDrainedOverAFailedStagedSyncIssuesNothingFromThePendingBlock) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    seq.SetStagedPersist({[]() -> StatusOr<std::uint64_t> { return std::uint64_t{1}; },
+                          [](std::uint64_t) { return true; },
+                          [](std::uint64_t) { return Status::IoError("injected: sync failed"); }});
+    ASSERT_TRUE(seq.Next().ok());
+    while (seq.remaining() > kTrxIdBlockSize / 4) ASSERT_TRUE(seq.Next().ok());
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_pending());
+    const std::uint64_t pending_ceiling = p.superblock().next_trx_id();
+    while (seq.remaining() > 0) ASSERT_TRUE(seq.Next().ok());
+    EXPECT_FALSE(seq.Next().ok()) << "an id issued from a block whose sync failed";
+    EXPECT_FALSE(seq.has_block_pending());
+    auto next = seq.Next();  // a fresh carve, above the dropped block
+    ASSERT_TRUE(next.ok());
+    EXPECT_GE(next.value(), pending_ceiling);
+}
+
+TEST(TrxIdSequenceTest, ABurnDropsAStagedPendingBlockAndCarvesAboveIt) {
+    Persisted p;
+    TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });
+    seq.SetStagedPersist({[]() -> StatusOr<std::uint64_t> { return std::uint64_t{1}; },
+                          [](std::uint64_t) { return false; },
+                          [](std::uint64_t) { return Status::OK(); }});
+    std::uint64_t last = seq.Next().value();
+    while (seq.remaining() > kTrxIdBlockSize / 4) last = seq.Next().value();
+    ASSERT_TRUE(seq.CarveAheadIfLow().ok());
+    ASSERT_TRUE(seq.has_block_pending());
+    const std::uint64_t pending_ceiling = p.superblock().next_trx_id();
+    ASSERT_TRUE(seq.BurnWindow().ok());
+    EXPECT_FALSE(seq.has_block_pending());
+    EXPECT_FALSE(seq.has_block_ahead());
+    auto next = seq.Next();
+    ASSERT_TRUE(next.ok());
+    EXPECT_GE(next.value(), pending_ceiling);
+    EXPECT_GT(next.value(), last);
+}
+
 TEST(TrxIdSequenceTest, ABurnDropsTheBlockAheadAndCarvesAboveIt) {
     Persisted p;
     TrxIdSequence seq(p.superblock(), [&] { return p.Write(); });

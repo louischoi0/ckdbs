@@ -69,6 +69,20 @@ struct TrxIdRange {
     std::uint64_t count = 0;
 };
 
+// **The early carve's persist in halves** (DZ-S3): `stage` writes the
+// superblock page with the raised ceiling and asks the data file's sync,
+// answering its ticket (`storage::DataSyncer`); `done` and `result` answer
+// it. DZ-S3 measured the early carve's whole persist on its reactor at
+// 437-511 ms at `relaxed` - the data-file `fsync` BA's diagnosis read - and
+// the reactor's longest hold outside a checkpoint run equal to it. Empty
+// where the owner has no such thread to hand the sync to: the early carve
+// then persists whole, as before.
+struct StagedCeilingPersist {
+    std::function<StatusOr<std::uint64_t>()> stage;
+    std::function<bool(std::uint64_t)> done;
+    std::function<Status(std::uint64_t)> result;
+};
+
 class TrxIdSequence {
 public:
     // `persist` makes the superblock's raised ceiling durable. It is a
@@ -152,8 +166,19 @@ public:
     // ahead is durable when carved, like every carve; a burn drops it,
     // because a burn's fresh block sits above it and issuing it afterwards
     // would move this core's ids backwards.
+    //
+    // **With a staged persist** (DZ-S3, `SetStagedPersist`) the carve does
+    // not wait for its sync: the raise and the page write are made, the sync
+    // asked, and the block is held pending; a later call that finds the sync
+    // done makes it the block ahead. Until then nothing issues from it, so
+    // "durable before issued" stands. The `Begin` that drains the window with
+    // a block still pending persists it whole on its own path, as a carve
+    // there always has, and installs it. A failed sync drops the pending
+    // block - its ids burned - and returns the failure.
     Status CarveAheadIfLow();
     bool has_block_ahead() const noexcept { return ahead_.has_value(); }
+    bool has_block_pending() const noexcept { return pending_.has_value(); }
+    void SetStagedPersist(StagedCeilingPersist staged) { staged_ = std::move(staged); }
 
 private:
     Status ReserveBlock();
@@ -166,6 +191,16 @@ private:
     std::uint64_t ceiling_;
     Latch* superblock_latch_ = nullptr;  // SetLatch; off the hot offsets
     std::optional<TrxIdRange> ahead_;    // CarveAheadIfLow; after the latch, off them too
+    // DZ-S3: the early carve's block whose sync is asked and not yet done,
+    // and the ticket that answers it.
+    struct Pending {
+        TrxIdRange block;
+        std::uint64_t ticket = 0;
+    };
+    std::optional<Pending> pending_;
+    StagedCeilingPersist staged_;
+    // `Carve`'s raise under the superblock latch, alone.
+    StatusOr<TrxIdRange> Raise(std::uint64_t count);
 };
 
 }  // namespace kds::txn

@@ -4,7 +4,7 @@ Status: **CLOSED 2026-11-27** on worktree `ea-prepared-statement-reuse` (§7): S
 (branch `worktree-ea-prepared-statement-reuse`) from `481d101aa`
 (`v3.4.17-202-g481d101aa`), on the operator's word of 2026-11-27, a standing
 go-ahead scheduled four hours ahead with "mark as proposed" and the push at
-the close (`raft-marks-2026-11-27.md` §11). **EA-Q0..Q5 are marked (a) on
+the close (`raft-marks-2026-11-27.md` §15). **EA-Q0..Q5 are marked (a) on
 that word, each as CLA proposed it** (§4); EA-Q0 (a) is the word BN-Q13's
 standing waited for, and EA-Q3 (a) leaves CX-Q37 (a) standing. **EA-S0 done**
 (`bench/v3.4.17/results-ea-s0-premise-v3.4.17-202-g481d101aa.md`): the parse
@@ -156,7 +156,7 @@ it.
 ### Opened 2026-11-27
 
 On worktree `ea-prepared-statement-reuse` from `481d101aa`, on the operator's
-word (`raft-marks-2026-11-27.md` §11); EA-Q0..Q5 marked (a) on it (§4).
+word (`raft-marks-2026-11-27.md` §15); EA-Q0..Q5 marked (a) on it (§4).
 
 ### EA-S0 - done 2026-11-27
 
@@ -284,4 +284,4 @@ runs of 24 and 48 rounds, driver `tools/ea_close.py`.
 
 On `ea-prepared-statement-reuse`, every stage landed on the work branch:
 S0 `52c226c69`, S1 `ea0592074`, S2 `2c5c195f7`, S3 not run (EA-Q3 (a)),
-S4 the close. The landing is recorded in `raft-marks-2026-11-27.md` §12.
+S4 the close. The landing is recorded in `raft-marks-2026-11-27.md` §16.

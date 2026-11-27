@@ -181,6 +181,24 @@ public:
     virtual Status VisitSnapshots(std::size_t record_budget, const SnapshotVisitor& visit) = 0;
 };
 
+// **A dirty table taken in slices** (DZ-S1): the run task advances it one
+// slice a poll and yields between, so the walk DZ-S0 measured at 28-73 ms on
+// the reactor at 1 Mi dirty frames is never one hold. `Advance` does one
+// bounded piece and answers true once `Table()` is whole: sorted by page,
+// one entry a page with its lowest non-zero recLSN. Holds no latch, pin or
+// claim between two calls. The storage target's is
+// `storage::DirtyTableCollector`.
+class DirtyCollection {
+public:
+    virtual ~DirtyCollection() = default;
+    virtual bool Advance() = 0;
+    virtual std::vector<CheckpointDirtyPage>& Table() = 0;
+};
+
+// What a collection is for: the start's table (`DirtyTable`'s, recLSNs and
+// all) or the publish's pages (`DirtyPages`', recLSNs unread).
+enum class DirtyCollectionFor : std::uint8_t { kStart, kPublish };
+
 // The pages a checkpoint has to get on disk, and the way to do it. The
 // storage layer implements it (`storage/page_store_checkpoint_target.hpp`,
 // `storage/page_mgr/checkpoint_target.hpp`); the seam lets the crash tests
@@ -215,13 +233,46 @@ public:
     virtual bool SyncDone(std::uint64_t /*ticket*/) { return true; }
     virtual Status SyncResult(std::uint64_t /*ticket*/) { return Status::OK(); }
 
+    // ---- The run task's writes, off its reactor (DZ-S2) ------------------
+    //
+    // `WritePages` in halves: `StageWrite` takes the gate, the claims and
+    // the copies on the calling thread and hands the device writes to
+    // another, the task parks until `Done`, and `Finish` answers the pages
+    // written or the write's failure. `defer` is `WritePages`'. DZ-S0
+    // measured a step's writes on the reactor at up to 1.26 s at 1 Mi dirty
+    // frames, all of it the kernel's writeback throttle. The default writes
+    // at `StageWrite`, done at once: a scripted target's.
+    class StagedPages {
+    public:
+        virtual ~StagedPages() = default;
+        virtual bool Done() const = 0;
+        // After `Done`, on the thread that staged it.
+        virtual StatusOr<std::size_t> Finish() = 0;
+    };
+    virtual StatusOr<std::shared_ptr<StagedPages>> StageWrite(std::span<const PageId> page_ids,
+                                                               Lsn* defer);
+
     // The paced publish (BI-Q5 (a)): every page dirty now, for the task to
     // write in batches, and the maps after all of them, in two halves the
     // task parks between on the ticket the first answers (`page.md`
     // section 5, the map write order). A scripted target has neither.
     virtual std::vector<PageId> DirtyPages() { return {}; }
-    virtual StatusOr<std::uint64_t> WriteHeaderlessMaps() { return std::uint64_t{0}; }
-    virtual Status WriteFreeMaps() { return Status::OK(); }
+    // **Tried with `busy`** (DZ-Q6 (a)): a busy map write barrier - a
+    // blocking flush holding it across a data-file `fsync` - sets `*busy`
+    // and writes nothing, and the task parks and tries again; null blocks.
+    // The defaults write nothing and are never busy.
+    virtual StatusOr<std::uint64_t> WriteHeaderlessMaps(bool* busy) {
+        if (busy != nullptr) *busy = false;
+        return std::uint64_t{0};
+    }
+    virtual Status WriteFreeMaps(bool* busy) {
+        if (busy != nullptr) *busy = false;
+        return Status::OK();
+    }
+
+    // Either table in slices (DZ-S1). The default is one slice: `DirtyTable`
+    // or `DirtyPages` whole, at the first `Advance` - a scripted target's.
+    virtual std::unique_ptr<DirtyCollection> CollectDirty(DirtyCollectionFor use);
 };
 
 // What a completed checkpoint publishes. `redo_start_lsn` is where
@@ -478,7 +529,9 @@ public:
     Lsn redo_start_lsn() const noexcept { return redo_start_lsn_; }
     Lsn last_checkpoint_lsn() const noexcept { return last_checkpoint_lsn_; }
 
-    // Logs CHECKPOINT_BEGIN and takes the snapshot. Fails with
+    // Takes the snapshot and logs CHECKPOINT_BEGIN: the dirty table, collected
+    // whole (`CollectDirty`'s slices run back to back), then the active
+    // transactions with the append. Fails with
     // AlreadyExists if one is already running - checkpoints do not nest,
     // and a second one would publish an anchor built from the first one's
     // half-flushed state.
@@ -490,15 +543,14 @@ public:
     // assertion bases behind the record stay blocking (CZ-Q16 (a)).
     Status Start(bool* busy);
 
-    // Flushes up to `pages_per_step` of the snapshot. Returns true once
-    // every page in it has been written back, at which point Complete()
-    // is the next call. A failed step leaves the checkpoint in progress
-    // and its remaining pages unflushed, so the next Step() retries them.
-    // The run task's step writes and does not sync (`write_only`): the
-    // publish's sync covers it (BI-Q13). With `defer`, a step that needs the
-    // log further stores the LSN there and returns false with its cursor
-    // unmoved.
-    StatusOr<bool> Step(Lsn* defer = nullptr, bool write_only = false);
+    // Flushes up to `pages_per_step` of the snapshot, written and synced on
+    // this thread (`FlushPages`). Returns true once every page in it has
+    // been written back, at which point Complete() is the next call. A
+    // failed step leaves the checkpoint in progress and its remaining pages
+    // unflushed, so the next Step() retries them. The synchronous callers'
+    // step; the run task's writes and does not sync, off its reactor
+    // (`WriteOffReactor`, DZ-S2), and the publish's sync covers it (BI-Q13).
+    StatusOr<bool> Step();
 
     // Logs CHECKPOINT_END, makes it durable, and publishes the anchor -
     // in that order. Fails with OutOfRange if the flush phase has not
@@ -564,6 +616,13 @@ public:
     void Abandon() noexcept;
 
 private:
+    // `Start`'s body over a dirty table already collected (DZ-S1): the active
+    // transactions snapshotted **here, after the table and with no suspension
+    // before the append** (DZ-R1) - taken before a table collected across
+    // yields, they would miss a transaction this core began meanwhile, whose
+    // change the publish then writes and no begin record lists.
+    Status BeginWith(std::span<const CheckpointDirtyPage> dirty, bool* busy);
+
     // `busy` given: the tried append (`Start(bool*)`).
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                     std::span<const CheckpointDirtyPage> dirty_pages, bool* busy = nullptr);
@@ -636,8 +695,29 @@ private:
     // step does (BI-Q5 (a)).
     sched::Coro WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,
                                 std::uint64_t generation);
+    // Advances `collection` to whole, one slice a poll with a yield between
+    // (DZ-S1), a start's slices timed as its phase. Cancelled when the run
+    // was abandoned meanwhile (`generation`).
+    sched::Coro CollectSliced(DirtyCollection& collection, std::uint64_t generation, bool start);
+    // **A batch written off the reactor** (DZ-S2): staged here, parked on
+    // while another thread writes it, finished here; `*wrote` the pages
+    // written, `defer` as `WritePages`'. The stage and the finish are the
+    // reactor's holds, counted in `step_max_ns`. An abandoned run returns OK
+    // with nothing written; `Abandon` drained the write.
+    sched::Coro WriteOffReactor(std::span<const PageId> pages, Lsn* defer, std::size_t* wrote,
+                                std::uint64_t generation);
+    // One park of `kBusyParkNs` on the clock, no kick: the map barrier's.
+    sched::Coro ParkBriefly();
+    // A map half tried (DZ-Q6 (a)): `write(busy)` to `kLatchTries` busy
+    // answers, a park between, then `write(nullptr)`, which blocks.
+    template <typename Write>
+    sched::Coro TryMapHalf(Write write, std::uint64_t* ticket, std::uint64_t generation);
+    // A failed step's log line, `Step`'s and the task's.
+    void LogStepFailure(std::size_t batch, const Status& s) const;
     void LogSkip(std::uint32_t core_id) const;
     bool task_in_flight_ = false;
+    // The run task's batch in flight off the reactor (DZ-S2), for `Abandon`.
+    std::shared_ptr<CheckpointTarget::StagedPages> staged_;
     // Moved by `Abandon`, so a frame of an abandoned run that is ever polled
     // returns without touching this checkpointer.
     std::uint64_t task_generation_ = 0;

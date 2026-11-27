@@ -216,6 +216,13 @@ public:
     // previous anchor.
     Status AbandonCheckpointMidSteps();
 
+    // **A checkpoint whose begin record lists the live transactions** (DZ-S1),
+    // as a cadence or shutdown run's does: `RunCheckpoint` is the mount's,
+    // which lists none because none is live after recovery. Run whole, on
+    // this thread: `Start`'s collection and then `BeginWith`, the order the
+    // cadence's task takes them in across its yields.
+    Status RunLiveCheckpoint();
+
     // Recycling's counts over the instance's life (BC-S4): advances of the
     // durable redo start the recycler was handed, and segments the log
     // device removed. Both survive a reboot; the device does.
@@ -276,6 +283,8 @@ public:
     StatusOr<server::VolumeCensus> RunCensus();
 
 private:
+    // Builds `anchor_` at the boot's first checkpoint.
+    void EnsureAnchor();
     SimInstance() = default;
 
     // Engine bring-up over the current device contents; shared by Create()

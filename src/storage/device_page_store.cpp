@@ -698,9 +698,16 @@ StatusOr<std::size_t> DevicePageStore::FlushMaps() {
     return WriteStagedFreeMapsLocked();
 }
 
-StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps() {
+StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps(bool* busy) {
     AssertNotUnderMapHold("WriteHeaderlessMaps");
-    LatchGuard barrier(map_flush_latch());
+    std::optional<LatchGuard> barrier;
+    if (busy != nullptr) {
+        barrier.emplace(map_flush_latch(), std::try_to_lock);
+        *busy = !barrier->owns();
+        if (*busy) return std::uint64_t{0};
+    } else {
+        barrier.emplace(map_flush_latch());
+    }
     stage_lost_ = Status::OK();
     auto wrote_headerless = StageMapsLocked();
     if (!wrote_headerless.ok()) return wrote_headerless.status();
@@ -711,9 +718,16 @@ StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps() {
     return staged_ticket_;
 }
 
-StatusOr<std::size_t> DevicePageStore::WriteFreeMaps() {
+StatusOr<std::size_t> DevicePageStore::WriteFreeMaps(bool* busy) {
     AssertNotUnderMapHold("WriteFreeMaps");
-    LatchGuard barrier(map_flush_latch());
+    std::optional<LatchGuard> barrier;
+    if (busy != nullptr) {
+        barrier.emplace(map_flush_latch(), std::try_to_lock);
+        *busy = !barrier->owns();
+        if (*busy) return std::size_t{0};
+    } else {
+        barrier.emplace(map_flush_latch());
+    }
     // A flush that adopted the first half's stage and failed gave it back to
     // the regions: the free maps this run copied are not on the device.
     if (!stage_lost_.ok()) return std::exchange(stage_lost_, Status::OK());
@@ -1878,6 +1892,7 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
         return Status::InvalidArgument(
             "DevicePageStore: page_lsn 0 means 'never logged' and cannot be stamped");
     }
+    wal::NoteStamp(page_id, lsn);  // DZ-S1's premise check (`wal/stamp_audit.hpp`)
     // **Under the structure latch** (AM-S2 step 3e): the `find` walks a
     // table another core may be growing, and a miss on a rehash would lose
     // the stamp of a resident page (`tests/frame_table_race_test.cpp`). The
@@ -1999,39 +2014,7 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalD
     return Status::OK();
 }
 
-void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
-    const PhaseTimer timed(CheckpointPhase::kClaimWait);  // BI-S1
-    // A writeback's claim spans a device write and, at worst, a WAL sync -
-    // milliseconds, not the nanoseconds a page latch is held for - so the
-    // spin is brief and the rest of the wait sleeps rather than yields
-    // (`base/latch.hpp` says what a yield loop costs against an fsync).
-    for (std::uint32_t turn = 0;; ++turn) {
-        {
-            LatchGuard structure(structure_latch());
-            auto it = frames_.find(page_id);
-            if (it == frames_.end() || !it->second.writing) return;
-        }
-        if (turn < 64) {
-            std::this_thread::yield();
-        } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(50));
-        }
-    }
-}
-
-StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids,
-                                                  HeldFrames held, wal::Lsn* defer) {
-    // Ascending and unique: id order is file order (page.md section 13),
-    // and the queue this drains may name a page twice across sweeps.
-    std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
-    std::sort(ordered.begin(), ordered.end());
-    ordered.erase(std::unique(ordered.begin(), ordered.end()), ordered.end());
-
-    // (1) durable: one gate call for the batch maximum, before any byte
-    // moves - the whole of flush-before-evict. **One gate for the whole
-    // writeback** (BA-S1): the calling core's, chosen once, so the batch's
-    // call and every run's below ask the same manager.
-    wal::WalDurability* const gate = GateForCaller();
+Status DevicePageStore::WriteBackRefusal(const wal::WalDurability* gate) const {
     // **Nothing at all once the log fail-stopped** (`wal/durability.hpp`).
     // The page_lsn gate cannot catch it: a page whose record was refused
     // keeps its old, durable page_lsn - a split's leaf, a new page at
@@ -2048,6 +2031,49 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         return Status::IoError("pagestore: no page is written back after a failed data-file "
                                "sync; restart the instance to recover");
     }
+    return Status::OK();
+}
+
+void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
+    const PhaseTimer timed(CheckpointPhase::kClaimWait);  // BI-S1
+    // A writeback's claim spans a device write and, at worst, a WAL sync -
+    // milliseconds, not the nanoseconds a page latch is held for - so the
+    // spin is brief and the rest of the wait sleeps rather than yields
+    // (`base/latch.hpp` says what a yield loop costs against an fsync).
+    for (std::uint32_t turn = 0;; ++turn) {
+        {
+            LatchGuard structure(structure_latch());
+            auto it = frames_.find(page_id);
+            if (it == frames_.end() || !it->second.writing) return;
+        }
+        // **Unarmed, a staged claim is this thread's to clean** (DZ-S2): the
+        // run that staged it is parked on this same thread, so waiting for it
+        // would wait forever. The data-sync thread writes on its own; once it
+        // has, the clean is done here.
+        if (structure_latch() == nullptr) CleanWrittenStagedUnarmed();
+        if (turn < 64) {
+            std::this_thread::yield();
+        } else {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    }
+}
+
+StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids,
+                                                  HeldFrames held, wal::Lsn* defer,
+                                                  StagedWrite* stage) {
+    // Ascending and unique: id order is file order (page.md section 13),
+    // and the queue this drains may name a page twice across sweeps.
+    std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
+    std::sort(ordered.begin(), ordered.end());
+    ordered.erase(std::unique(ordered.begin(), ordered.end()), ordered.end());
+
+    // (1) durable: one gate call for the batch maximum, before any byte
+    // moves - the whole of flush-before-evict. **One gate for the whole
+    // writeback** (BA-S1): the calling core's, chosen once, so the batch's
+    // call and every run's below ask the same manager.
+    wal::WalDurability* const gate = GateForCaller();
+    if (Status s = WriteBackRefusal(gate); !s.ok()) return s;
     if (Status s = AwaitWalGate(ordered, gate, defer); !s.ok()) return s;
     if (defer != nullptr && *defer != wal::kNoLsn) return std::size_t{0};
 
@@ -2088,11 +2114,10 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // clean; `kWait` waits for that and looks again, `kSkip` leaves it. The
     // wait holds no claim of this call's own - a run is claimed, written
     // and released before the next is looked at - so two writebacks cannot
-    // wait on each other.
-    struct CopiedPage {
-        Frame* frame = nullptr;
-        std::uint32_t dirty_gen = 0;  // the frame's generation at the copy
-    };
+    // wait on each other. **A staged call is the exception** (DZ-S2): it
+    // holds its earlier runs' claims while it waits on a later page. No
+    // cycle follows, because one checkpoint stages at a time in the
+    // instance (DZ-R3) and no other writeback waits holding a claim.
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     std::vector<CopiedPage> copied;
@@ -2282,6 +2307,25 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
             }
         }
 
+        // **Staged** (DZ-S2): the run's copy and its claims go to `stage`,
+        // whose writer writes and whose clean cleans; `claims` gives back
+        // nothing now. The scratch and the claim list are replaced, each
+        // reserved again outside any hold.
+        if (stage != nullptr) {
+            // The slot first: a throwing push then leaves the claims on
+            // `copied`, where `claims` gives them back.
+            StagedWrite::Run& staged_run = stage->runs_.emplace_back();
+            staged_run.first = ordered[i];
+            staged_run.bytes = std::move(scratch);
+            staged_run.copied = std::move(copied);
+            scratch = {};
+            copied = {};
+            copied.reserve(kWritebackRunPages);
+            written += run;
+            i += run;
+            continue;
+        }
+
         // (3) write: one device call for a run, per page otherwise, and
         // best-effort by spec §4 - a device without a real scatter write
         // still sees the pages land in file order.
@@ -2321,21 +2365,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // waiter that sees it gone sees the clean with it.
         {
             LatchGuard structure(structure_latch());
-            for (std::size_t k = 0; k < run; ++k) {
-                Frame& frame = *copied[k].frame;  // resident: claimed, so dirty
-                frame.writing = false;
-                if (frame.dirty_gen != copied[k].dirty_gen) {
-                    if (frame.stamped_since_copy != wal::kNoLsn) {
-                        frame.rec_lsn = frame.stamped_since_copy;
-                    }
-                    continue;
-                }
-                frame.dirty = false;
-                frame.rec_lsn = wal::kNoLsn;  // nothing to replay into it
-                if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
-                    log_->Trace("pagestore", "wrote page=" + std::to_string(ordered[i + k]));
-                }
-            }
+            CleanCopiedLocked(copied);
             copied.clear();  // given back here, so `claims` has nothing to do
         }
         written += run;
@@ -2343,6 +2373,129 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     }
     return written;
 }
+
+void DevicePageStore::CleanCopiedLocked(std::span<CopiedPage> copied) {
+    for (CopiedPage& page : copied) {
+        Frame& frame = *page.frame;  // resident: claimed, so dirty
+        frame.writing = false;
+        if (frame.dirty_gen != page.dirty_gen) {
+            if (frame.stamped_since_copy != wal::kNoLsn) frame.rec_lsn = frame.stamped_since_copy;
+            continue;
+        }
+        frame.dirty = false;
+        frame.rec_lsn = wal::kNoLsn;  // nothing to replay into it
+        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("pagestore", "wrote page=" + std::to_string(frame.page_id));
+        }
+    }
+}
+
+StatusOr<std::shared_ptr<DevicePageStore::StagedWrite>> DevicePageStore::StageWriteBack(
+    std::span<const PageId> page_ids, wal::Lsn* defer) {
+    auto staged = std::make_shared<StagedWrite>();
+    staged->armed_ = structure_latch() != nullptr;
+    staged->gate_ = GateForCaller();  // the one `WriteBack` asks below
+    try {
+        auto copied = WriteBack(page_ids, HeldFrames::kWait, defer, staged.get());
+        if (!copied.ok()) {
+            // Runs staged before the refusal are claimed: given back dirty,
+            // with no write on this thread; the next writeback carries them.
+            CleanStaged(*staged);
+            return copied.status();
+        }
+        if (staged->runs_.empty()) {
+            staged->state_.store(StagedWrite::kCleaned, std::memory_order_release);
+            return staged;
+        }
+        if (!staged->armed_) staged_unarmed_.push_back(staged);
+        // The job owns a reference, so the stage outlives whichever of it and
+        // the run's task lets go first.
+        data_sync_.Post([this, staged] {
+            WriteStagedRuns(*staged);
+            if (staged->armed_) {
+                CleanStaged(*staged);
+            } else {
+                staged->state_.store(StagedWrite::kWritten, std::memory_order_release);
+            }
+        });
+    } catch (...) {
+        // A thrown allocation before the job was queued - in the staging, the
+        // list push or the post: no thread will clean, so the staged claims
+        // go back here, their frames dirty, as `ClaimRelease` gives back an
+        // unstaged run's.
+        if (staged->state_.load(std::memory_order_acquire) == StagedWrite::kStaged) {
+            CleanStaged(*staged);
+        }
+        throw;
+    }
+    return staged;
+}
+
+void DevicePageStore::WriteStagedRuns(StagedWrite& staged) {
+    for (StagedWrite::Run& r : staged.runs_) {
+        const std::size_t pages = r.copied.size();
+        // The log fail-stopped or a data-file sync failed since the copy:
+        // nothing more goes out, as `WriteBack` refuses.
+        Status wrote = WriteBackRefusal(staged.gate_);
+        if (wrote.ok()) {
+            wrote = pages > 1 ? device_.WritePageRun(r.first, static_cast<std::uint32_t>(pages),
+                                                     std::span<const std::byte>(r.bytes))
+                              : device_.WritePage(r.first, std::span<const std::byte, kPageSize>(
+                                                               r.bytes.data(), kPageSize));
+        }
+        if (!wrote.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "staged write failed for page " + std::to_string(r.first) +
+                                             " (run of " + std::to_string(pages) +
+                                             "): " + wrote.message());
+            }
+            staged.status_ = std::move(wrote);
+            return;
+        }
+        ++staged.written_runs_;
+    }
+}
+
+void DevicePageStore::CleanStaged(StagedWrite& staged) {
+    std::size_t cleaned = 0;
+    {
+        LatchGuard structure(structure_latch());
+        for (std::size_t r = 0; r < staged.runs_.size(); ++r) {
+            std::vector<CopiedPage>& copied = staged.runs_[r].copied;
+            if (r < staged.written_runs_) {
+                CleanCopiedLocked(copied);
+                cleaned += copied.size();
+            } else {
+                for (CopiedPage& page : copied) page.frame->writing = false;  // dirty still
+            }
+            copied.clear();
+        }
+    }
+    staged.cleaned_pages_ = cleaned;
+    staged.state_.store(StagedWrite::kCleaned, std::memory_order_release);
+}
+
+void DevicePageStore::CleanWrittenStagedUnarmed() {
+    std::erase_if(staged_unarmed_, [this](const std::shared_ptr<StagedWrite>& staged) {
+        const int state = staged->state_.load(std::memory_order_acquire);
+        if (state == StagedWrite::kWritten) CleanStaged(*staged);
+        return state != StagedWrite::kStaged;
+    });
+}
+
+StatusOr<std::size_t> DevicePageStore::FinishStaged(StagedWrite& staged) {
+    if (!staged.armed_) {
+        // The store's one thread: clean it if no waiter has, and forget it.
+        if (staged.state_.load(std::memory_order_acquire) == StagedWrite::kWritten) {
+            CleanStaged(staged);
+        }
+        std::erase_if(staged_unarmed_,
+                      [&](const std::shared_ptr<StagedWrite>& s) { return s.get() == &staged; });
+    }
+    if (!staged.status_.ok()) return staged.status_;
+    return staged.cleaned_pages_;
+}
+
 
 StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {
     const std::vector<PageId> queued = TakeDirtyEvictionQueue();
@@ -2445,9 +2598,47 @@ Status DevicePageStore::Sync() {
 constexpr std::chrono::microseconds kChunkHandover{20};
 
 template <typename Emit>
-void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
+bool DevicePageStore::EmitDirtyChunk(std::size_t base, bool* last, Emit&& emit) const {
+    const WalkHold structure(structure_latch());
+    if (base >= slot_count_) return false;
+    const std::size_t end = std::min(base + kFrameChunk, slot_count_);
+    *last = end == slot_count_;  // a slot added after this is §5a's case 4
+    const FrameChunk& chunk = chunks_[base / kFrameChunk];
+    for (std::size_t slot = base; slot < end; ++slot) {
+        const PageId owner = chunk.owners[slot - base];
+        if (owner == kInvalidPageId) continue;  // free, or reserved and unpublished
+        // A slot's owner and its frame's slot are written in one
+        // hold (`InsertFrame`) and cleared in one (`ReleaseFrameLocked`).
+        const auto found = frames_.find(owner);
+        assert(found != frames_.end() && found->second.slot == slot &&
+               "a slot names a page whose frame is not in it");
+        if (found->second.dirty) emit(owner, found->second.rec_lsn);
+    }
+    return true;
+}
+
+void DevicePageStore::AfterDirtyChunk(std::size_t chunk, bool last) const {
+    if (after_dirty_table_chunk_for_test_) after_dirty_table_chunk_for_test_(chunk);
+    if (last) return;
+    // **The latch handed to one waiter** before the next chunk: a fetch
+    // woken by the release above would otherwise lose the re-take to
+    // this loop and wait out the whole walk (measured: 13 ms at 1 Mi
+    // frames, with no hold over 224 us). One waiter, not all - a steady
+    // stream of fetches is never empty - and bounded; a spin holds
+    // nothing and is no suspension (§5a).
     Latch* const latch = structure_latch();
-    if (latch == nullptr) {
+    if (latch != nullptr && latch->has_waiters()) {
+        const std::uint32_t seen = latch->handed();
+        const auto until = std::chrono::steady_clock::now() + kChunkHandover;
+        while (latch->handed() == seen && std::chrono::steady_clock::now() < until) {
+            std::this_thread::yield();
+        }
+    }
+}
+
+template <typename Emit>
+void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
+    if (structure_latch() == nullptr) {
         // **Unarmed: one walk of the table**, as before E2 (DO-R2): one
         // thread reaches this store, so nothing runs beside it to wait.
         for (const auto& [page_id, frame] : frames_) {
@@ -2465,44 +2656,33 @@ void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
     // suspension point (this is no coroutine, so none can enter it). A page
     // that moved from a walked slot to one not yet walked can be met twice,
     // which the callers merge; one that moved the other way was clean when
-    // it left, and anything stamped on it since is §5a's case 4.
+    // it left, and anything stamped on it since is §5a's case 4. The
+    // checkpoint run's walks are this one taken in slices with a yield
+    // between (`WalkDirtySlice`), for which DZ-S0 re-read §5a.
     for (std::size_t base = 0;; base += kFrameChunk) {
         bool last = false;
-        {
-            const WalkHold structure(latch);
-            if (base >= slot_count_) return;
-            const std::size_t end = std::min(base + kFrameChunk, slot_count_);
-            last = end == slot_count_;  // a slot added after this is §5a's case 4
-            const FrameChunk& chunk = chunks_[base / kFrameChunk];
-            for (std::size_t slot = base; slot < end; ++slot) {
-                const PageId owner = chunk.owners[slot - base];
-                if (owner == kInvalidPageId) continue;  // free, or reserved and unpublished
-                // A slot's owner and its frame's slot are written in one
-                // hold (`InsertFrame`) and cleared in one (`ReleaseFrameLocked`).
-                const auto found = frames_.find(owner);
-                assert(found != frames_.end() && found->second.slot == slot &&
-                       "a slot names a page whose frame is not in it");
-                if (found->second.dirty) emit(owner, found->second.rec_lsn);
-            }
-        }
-        if (after_dirty_table_chunk_for_test_) {
-            after_dirty_table_chunk_for_test_(base / kFrameChunk);
-        }
+        if (!EmitDirtyChunk(base, &last, emit)) return;
+        AfterDirtyChunk(base / kFrameChunk, last);
         if (last) return;
-        // **The latch handed to one waiter** before the next chunk: a fetch
-        // woken by the release above would otherwise lose the re-take to
-        // this loop and wait out the whole walk (measured: 13 ms at 1 Mi
-        // frames, with no hold over 224 us). One waiter, not all - a steady
-        // stream of fetches is never empty - and bounded; a spin holds
-        // nothing and is no suspension (§5a).
-        if (latch->has_waiters()) {
-            const std::uint32_t seen = latch->handed();
-            const auto until = std::chrono::steady_clock::now() + kChunkHandover;
-            while (latch->handed() == seen && std::chrono::steady_clock::now() < until) {
-                std::this_thread::yield();
-            }
-        }
     }
+}
+
+bool DevicePageStore::WalkDirtySlice(std::size_t* next_slot, std::size_t chunks,
+                                     std::vector<wal::CheckpointDirtyPage>* out) const {
+    const auto emit = [out](PageId page_id, wal::Lsn rec_lsn) {
+        out->push_back(wal::CheckpointDirtyPage{page_id, rec_lsn});
+    };
+    for (std::size_t n = 0; n < chunks; ++n) {
+        const std::size_t base = *next_slot;
+        bool last = false;
+        if (!EmitDirtyChunk(base, &last, emit)) return true;
+        *next_slot = base + kFrameChunk;
+        // No handover after a slice's last chunk: the task yields next,
+        // holding nothing.
+        AfterDirtyChunk(base / kFrameChunk, last || n + 1 == chunks);
+        if (last) return true;
+    }
+    return false;
 }
 
 void DevicePageStore::MergeDirtyTable(std::vector<std::pair<PageId, wal::Lsn>>& table) {

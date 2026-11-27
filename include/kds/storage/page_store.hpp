@@ -30,6 +30,10 @@
 // The `*Unpinned` accessors are the implementation seam only: protected
 // since MG06, so engine code cannot name them.
 
+namespace kds::wal {
+void NoteStamp(PageId page, std::uint64_t lsn) noexcept;  // `wal/stamp_audit.hpp` (DZ-S1)
+}  // namespace kds::wal
+
 namespace kds::storage {
 
 // Which of PageStore::Get()/GetForRead() a page walk should fetch through.
@@ -768,6 +772,7 @@ public:
     // hold the gate (DevicePageStore). No store stamps a stream: a page
     // carries none since BP-S3 (one log for the instance).
     virtual Status StampPageLsn(PageId page_id, std::uint64_t lsn) {
+        wal::NoteStamp(page_id, lsn);  // DZ-S1's premise check (`wal/stamp_audit.hpp`)
         auto page = Get(page_id);
         if (!page.ok()) return page.status();
         SetPageLsn(page.value().bytes(), lsn);

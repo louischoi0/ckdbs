@@ -1807,39 +1807,64 @@ Verified at `e5a7e1b7` (BA's close,
 `results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
 `results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
 §11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`,
-closed 2026-10-11 at `ec827a19`).
+closed 2026-10-11 at `ec827a19`) and DZ
+(`workorder-dz-checkpoint-reactor-residue.md`, closed 2026-11-27 at
+`27e85e848`). The entries below DZ rewrote were verified at `27e85e848`,
+each saying so.
 
-- **A `relaxed` carve's longest stall is 226-258 ms per server life**
-  (median), against 20-46 ms at BA-S4; under `group` and `strict` it fell
-  to 3.6-5.9 ms. At `cores = 1` it is not BA-S13's, and at B it reads a
-  data-file `fsync` stall BA-S4's binary also meets; maxima above 300 ms,
-  `cores` 2 and 4, and carves inside the measured span are unexplained or
-  unmeasured (the diagnosis file). BA-S13's exit, a carve under 10 ms, is
-  not met.
-- **The checkpoint still holds its reactor past 10 ms, for writes** -
-  restated at BI's close (`ec827a19`,
-  `results-bi-s5-checkpoint-stall-v2.7.0-784-gec827a19.md`). Since BI a run
-  is a `system` task that parks for every sync, and its reactor time fell
-  about tenfold; what remains on the reactor is a step's and a publish
-  batch's `pwrite`s (single writes up to about 300 ms in the kernel's
-  writeback throttle) and the inline log gate after 16 deferrals at
-  `relaxed`. Under `relaxed` a run is 4-8x longer than before at `cores = 1`.
-  `bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
-  (closed unreproduced at `d83bd502`) carried the numbers and what a fix
-  needs.
-- **A run's map halves can wait on its reactor for another caller's
-  data-file sync** (`[source-read]`, on `fix-map-flush-order` over
-  `27e9d03a`). The map write order (`page.md` §5) puts a sync between the
-  headerless and free maps whenever a headerless map changed. A blocking
-  flush - `SYNC`, a reclaim's `PersistMaps`, the synchronous anchor publish
-  - takes that sync inside `FlushMaps` under the map write barrier
-  (`map_flush_latch_`), a plain mutex, and the run task's
-  `WriteHeaderlessMaps` and `WriteFreeMaps` take the same barrier on the
-  reactor, so a run that meets one waits out its `fsync` there. Before the
-  map write order the barrier covered `pwrite`s only. It needs a pending
-  headerless change and a concurrent blocking flush at once; not measured.
-  Releasing the barrier across the wait would keep BF-R5 only with the run
-  re-parking on a newer ticket, a change to the halves' contract.
+- **A `relaxed` carve's longest stall is still a data-file `fsync` at
+  `cores = 1`** (re-verified at DZ's close, `27e85e848`,
+  `bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`): 86-610 ms
+  under BA's `insert1` shape, against 50-459 ms at DZ's base, and the
+  reactor's longest hold outside a checkpoint run equal to it. Since DZ-S3
+  the early carve's sync is off the reactor (`txn.md` §4.2), but at that
+  rate the window's last quarter - 1,024 ids, about 10 ms - drains before
+  the sync is done, and the `BEGIN` that drains it persists the pending
+  block whole on its path. At `group`, `cores = 2` the split is not shown to
+  help either: over 12 pairs the longest carve was 0.8-273 ms against
+  1.7-440 ms at DZ's base, medians 10.4 and 11.0 ms (9-12 ms in B's first
+  three pairs, 273 ms in its fourth). A block or a trigger sized to the sync
+  is not built; BA-S13's exit, a carve under 10 ms, is met at neither
+  shape.
+- **The early carve's page-0 write can wait out a staged checkpoint batch**
+  (DZ-S3's review, `[source-read]`, verified at `27e85e848`): when page 0
+  is in a step's staged batch, the carve's `WriteBack(kWait)` waits for that
+  batch's write (armed) on the tick's reactor; `kSkip` would be unsound, the
+  claimed copy possibly predating the raise. Not measured beside a run. A staged block drained
+  before its sync is done counts as two carves in `contention_carves`, and
+  no cell drives the expeditor's staged persist through a crash.
+- **What a cadence checkpoint still does on its reactor, since DZ** (verified
+  at `27e85e848` on `dz-checkpoint-reactor-residue`,
+  `bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`): no poll over
+  10 ms at 64 Ki, 256 Ki or 1 Mi dirty frames, `cores` 1 and 4 - the walks
+  in slices, the writes on the data-sync writer thread, the map halves tried
+  on a busy barrier (`wal.md` §11). What is left: a poll of up to 9.6 ms at
+  1 Mi between the last step and the publish's first batch that the census's
+  pieces do not name; the begin record's O(n) pieces over the walked table
+  (the redo start, the cursor's copy, the record's cut) in one poll, not
+  timed apart - the start phase's longest occurrence was 3.2-3.6 ms at 1 Mi,
+  equal to the longest walk slice in three of four cells; the inline log
+  gate after 16 deferrals at `relaxed`, and each tried site's blocking call
+  after 16 busy answers (the begin and end appends, the log flush, a map
+  half); the anchor page's write, which the census bench does not exercise,
+  and the begin and end appends and the assertion visit, which it does not
+  time apart. A synchronous run (mount, shutdown) still writes, walks and
+  waits on the map barrier on its thread.
+- **The collector's slice is sized and not measured apart** (DZ's close
+  review, verified at `27e85e848`): `dirty_table_collector.hpp` sizes a
+  slice at 0.3-0.7 ms from DZ-S0's per-chunk cost, and the close measured
+  the start's longest slice at 3.2-3.5 ms at 1 Mi; the slice that ends the
+  walk also sizes the sort's buffer and spends a sort slice, and no field
+  times it apart. Under the bar, by a margin the comment overstates.
+- **A claim staged across a park is longer than a write's** (DZ-S2's review,
+  `[source-read]`, verified at `27e85e848`): a step's pages
+  stay claimed from the copy until the writer thread has written the batch,
+  so a `kWait` writeback of one of them - `SYNC`, the carve's page 0, a
+  shutdown flush - waits out the batch (armed), or cleans it on its own
+  thread once written (unarmed), and `FreePage` answers `kDeferred` for that
+  long; a batch can take the kernel's writeback throttle's full time (DZ-S0:
+  up to 1.26 s a step). Not measured beside a run. `FreeUnbuiltTree`'s
+  documented leak on a deferred frame is likelier for it.
 - **A paced publish's map write can carry the bit of a page another core
   created unlogged after the collection** (BI-S4, `[source-read]`). The
   publish collects the dirty pages, writes them, then writes the maps; a
@@ -1855,23 +1880,26 @@ Verified at DO-S3's commit on the worktree `dg-wal-segment-body` (the
 order's §7 names it). Owned by `docs/spec/page.md` §8 and §12 and
 `instructions/v3.2.0/workorder-do-frame-table-long-holds.md`.
 
-- **The walking core is stalled for the whole of a checkpoint's dirty-table
-  walk**, longer since E2: about 49 ms for H1 at 1 Mi dirty frames under
-  three readers on DO's host (26 ms before E2), and the publish's walk
-  again - the sort, a table lookup a slot and a handover a chunk, all off
-  the latch but on the walker's reactor. No other core waits for it (no
-  hold over about 0.3 ms). A walk budget, or a handover every few chunks,
-  is not built.
+- **A synchronous dirty-table walk stalls its caller for the whole walk**
+  (`Flush`, `SYNC`, a mount's or shutdown's checkpoint): about 49 ms for H1
+  at 1 Mi dirty frames under three readers on DO's host. **A cadence run's
+  walks are sliced since DZ-S1** (`storage/dirty_table_collector.hpp`): its
+  longest walk slice at 1 Mi was 3.2-3.5 ms at DZ's close (`27e85e848`).
 - **A fetch can still wait milliseconds with no long hold**: up to 4.4 ms
   at 1 Mi frames and 2.3 ms at 64 Ki under three readers - the one mutex's
   unfairness between fetches (and against the walker's re-take, which the
   handover bounds but does not remove). CW's C1, not built: CW closed at
   V0.
-- **The fuzzy table rests on a premise the code states and does not
-  enforce**: no core yields between an append and its stamp (the one-hold
-  table rested on it too). The crash cells run the window's write on the
-  walking thread, so the fold - the cover across runs - is not exercised
-  by any cell.
+- **The fuzzy table's premise is checked in debug builds only, and
+  recorded, not fatal** (DZ-S1, DZ-Q8 (a); verified at `27e85e848`): the
+  suspend audit records a
+  suspension between a record's append and its page's stamp
+  (`wal/stamp_audit.hpp`), and only where the audit is installed - the
+  server's reactors and the rigs that install it, not the simulator.
+  Release builds check nothing. The crash cells run the window's write on
+  the walking thread of the one-core simulator, so the fold - the cover
+  across runs - is not exercised by any cell, and DZ-R1's two-core cell
+  waits for a simulator with cores (EC; DZ-Q7 (a)).
 - **The per-fetch holds are still the instance's one latch**: two a read
   hit, three a write hit, each a cache line moving between cores above one
   core. CW-S0 priced them against DO's tree at `6ddcae43`

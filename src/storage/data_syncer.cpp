@@ -9,6 +9,7 @@ void DataSyncer::Start() {
     stopping_ = false;
     running_ = true;
     thread_ = std::thread([this] { Run(); });
+    writer_ = std::thread([this] { RunWriter(); });
 }
 
 void DataSyncer::Stop() noexcept {
@@ -18,7 +19,9 @@ void DataSyncer::Stop() noexcept {
         stopping_ = true;
     }
     cv_.notify_all();
+    jobs_cv_.notify_all();
     thread_.join();
+    writer_.join();  // after the queued jobs, which `RunWriter` drains
     {
         std::lock_guard lock(mu_);
         running_ = false;
@@ -91,6 +94,33 @@ Status DataSyncer::SyncOnce() {
     cv_.notify_all();
     if (handler) handler(failure);
     return failure;
+}
+
+void DataSyncer::Post(std::function<void()> job) {
+    {
+        std::lock_guard lock(mu_);
+        if (running_ && !stopping_) {
+            jobs_.push_back(std::move(job));
+            jobs_cv_.notify_one();
+            return;
+        }
+    }
+    // No thread, or one stopping whose drain may be past its last look at
+    // the queue: the job is the caller's.
+    job();
+}
+
+void DataSyncer::RunWriter() {
+    std::unique_lock lock(mu_);
+    while (true) {
+        jobs_cv_.wait(lock, [this] { return stopping_ || !jobs_.empty(); });
+        if (jobs_.empty()) return;  // stopping, and every queued job has run
+        std::function<void()> job = std::move(jobs_.front());
+        jobs_.pop_front();
+        lock.unlock();
+        job();
+        lock.lock();
+    }
 }
 
 void DataSyncer::Run() {

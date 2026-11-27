@@ -80,6 +80,7 @@ add_library(kds
     src/storage/data_syncer.cpp
     src/storage/page_reader.cpp
     src/storage/device_page_store.cpp
+    src/storage/dirty_table_collector.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
     src/server/superblock_checkpoint_anchor.cpp
@@ -150,6 +151,7 @@ add_library(kds
     src/wal/recovery.cpp
     src/wal/manager.cpp
     src/wal/checkpointer.cpp
+    src/wal/stamp_audit.cpp
     src/wal/log_device.cpp
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp
@@ -276,6 +278,8 @@ if(KDS_BUILD_BENCH)
     target_link_libraries(kds_compile_split_bench PRIVATE kds)
     add_executable(kds_frame_table_hold_bench bench/frame_table_hold_bench.cpp)
     target_link_libraries(kds_frame_table_hold_bench PRIVATE kds)
+    add_executable(kds_checkpoint_reactor_hold_bench bench/checkpoint_reactor_hold_bench.cpp)
+    target_link_libraries(kds_checkpoint_reactor_hold_bench PRIVATE kds)
 endif()
 
 # The simulation harness (bench/workplan-teststrategy SIM01-SIM14): the

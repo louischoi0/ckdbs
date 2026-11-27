@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <string>
 #include <utility>
 
@@ -185,6 +186,56 @@ Status Checkpointer::LogAssertionSnapshots() {
         });
 }
 
+namespace {
+
+// `CheckpointTarget::CollectDirty`'s default: the whole table at once.
+class WholeCollection final : public DirtyCollection {
+public:
+    WholeCollection(CheckpointTarget& target, DirtyCollectionFor use) : target_(target), use_(use) {}
+    bool Advance() override {
+        if (use_ == DirtyCollectionFor::kStart) {
+            table_ = target_.DirtyTable();
+        } else {
+            for (const PageId id : target_.DirtyPages()) table_.push_back({id, kNoLsn});
+        }
+        return true;
+    }
+    std::vector<CheckpointDirtyPage>& Table() override { return table_; }
+
+private:
+    CheckpointTarget& target_;
+    DirtyCollectionFor use_;
+    std::vector<CheckpointDirtyPage> table_;
+};
+
+}  // namespace
+
+std::unique_ptr<DirtyCollection> CheckpointTarget::CollectDirty(DirtyCollectionFor use) {
+    return std::make_unique<WholeCollection>(*this, use);
+}
+
+namespace {
+
+// `CheckpointTarget::StageWrite`'s default: written at the stage.
+class WrittenAtOnce final : public CheckpointTarget::StagedPages {
+public:
+    explicit WrittenAtOnce(std::size_t wrote) noexcept : wrote_(wrote) {}
+    bool Done() const override { return true; }
+    StatusOr<std::size_t> Finish() override { return wrote_; }
+
+private:
+    std::size_t wrote_;
+};
+
+}  // namespace
+
+StatusOr<std::shared_ptr<CheckpointTarget::StagedPages>> CheckpointTarget::StageWrite(
+    std::span<const PageId> page_ids, Lsn* defer) {
+    auto wrote = WritePages(page_ids, defer);
+    if (!wrote.ok()) return wrote.status();
+    return std::shared_ptr<StagedPages>(std::make_shared<WrittenAtOnce>(wrote.value()));
+}
+
 Status Checkpointer::Start() { return Start(nullptr); }
 
 Status Checkpointer::Start(bool* busy) {
@@ -192,17 +243,35 @@ Status Checkpointer::Start(bool* busy) {
     if (in_progress_) {
         return Status::AlreadyExists("checkpointer: a checkpoint is already in progress");
     }
+    const std::unique_ptr<DirtyCollection> collection = target_.CollectDirty(DirtyCollectionFor::kStart);
+    {
+        // The walk is the start's (`CheckpointPhase::kStart`): its own
+        // occurrence, beside `BeginWith`'s, since one scope may not nest
+        // another's timer.
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+        const PhaseTimer timed(CheckpointPhase::kStart);
+        while (!collection->Advance()) {
+        }
+    }
+    return BeginWith(collection->Table(), busy);
+}
+
+Status Checkpointer::BeginWith(std::span<const CheckpointDirtyPage> dirty, bool* busy) {
+    if (busy != nullptr) *busy = false;
     const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     const PhaseTimer timed(CheckpointPhase::kStart);
 
     // Both tables are snapshotted before the record is written, so what
-    // BEGIN carries is exactly what recovery's analysis phase will see.
-    // **No suspension lies between them and the append** (CZ-R3): a tried
-    // append that answers busy appends nothing, and the task's next call
-    // takes both again, so the record describes the instant it is appended
-    // at in every attempt.
+    // BEGIN carries is what recovery's analysis phase will see. **No
+    // suspension lies between the active transactions and the append**
+    // (CZ-R3, DZ-R1): a tried append that answers busy appends nothing, and
+    // the task collects both again. The dirty table may have been collected
+    // across yields (DZ-S1): it is then each frame's as of its slot's visit,
+    // which DO's §5a, re-read at DZ-S0, proves enough for the redo start.
+    // The transactions may not be, so they are taken last: one this core
+    // began during a yield of the walk is listed if it is still undecided
+    // now.
     const std::vector<CheckpointActiveTxn> active_txns = txns_.Snapshot();
-    const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
 
     if (Status s = LogBegin(active_txns, dirty, busy); !s.ok()) {
         // BI-S1 counts it: the BEGIN ceiling refuses here, at the append.
@@ -273,7 +342,7 @@ Status Checkpointer::Start(bool* busy) {
     return Status::OK();
 }
 
-StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
+StatusOr<bool> Checkpointer::Step() {
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -294,19 +363,8 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
         const sched::MonoTimeNs step_start = wal_.clock().Now();
         const std::size_t write = static_cast<std::size_t>(CheckpointPhase::kPageWrite);
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
-        if (!write_only) {
-            flushed = target_.FlushPages(pages);
-            if (flushed.ok()) Contention::Add(Tally::kCheckpointPagesWritten, pages.size());
-        } else if (auto wrote = target_.WritePages(pages, defer); !wrote.ok()) {
-            flushed = wrote.status();
-        } else if (wrote.value() > 0) {
-            Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
-            // Asked for and not waited on (BI-Q13): the data-sync thread
-            // keeps the unsynced backlog near one step, so a synchronous sync
-            // landing mid-run - a carve's page 0, the reclaimer's maps - does
-            // not inherit a run's worth of writeback; only the publish parks.
-            (void)target_.RequestSync();
-        }
+        flushed = target_.FlushPages(pages);
+        if (flushed.ok()) Contention::Add(Tally::kCheckpointPagesWritten, pages.size());
         if (run_report_ != nullptr) {
             const std::uint64_t held = wal_.clock().Now() - step_start;
             run_report_->step_max_ns = std::max(run_report_->step_max_ns, held);
@@ -317,20 +375,9 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
     if (Status s = std::move(flushed); !s.ok()) {
         // The cursor does not move: these pages are still the
         // checkpoint's responsibility, and the next Step() retries them.
-        // Logged because the retry makes this survivable and therefore
-        // silent - a checkpoint that fails every step forever looks
-        // exactly like one that is merely slow.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("checkpoint", "flush of " + std::to_string(batch) +
-                                          " page(s) failed at offset " +
-                                          std::to_string(next_page_) + ", will retry: " +
-                                          s.message());
-        }
+        LogStepFailure(batch, s);
         return s;
     }
-    // Deferred: the pages before the deferred run are clean now and the
-    // next call skips them; the cursor stays on this batch.
-    if (defer != nullptr && *defer != kNoLsn) return false;
     next_page_ += batch;
     stats_.pages_flushed += batch;
     if (run_report_ != nullptr) run_report_->pages += batch;
@@ -340,6 +387,16 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
                                       " remaining");
     }
     return next_page_ >= pending_pages_.size();
+}
+
+void Checkpointer::LogStepFailure(std::size_t batch, const Status& s) const {
+    // Logged because the retry makes this survivable and therefore silent -
+    // a checkpoint that fails every step forever looks exactly like one that
+    // is merely slow.
+    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("checkpoint", "flush of " + std::to_string(batch) + " page(s) failed at offset " +
+                                      std::to_string(next_page_) + ", will retry: " + s.message());
+    }
 }
 
 StatusOr<Lsn> Checkpointer::AppendEnd(bool* busy) {
@@ -499,11 +556,12 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // `Complete`, a yield after each. A failed one ends the task with the
     // run left in progress; the next tick's task resumes it.
     //
-    // **The begin record is tried** (CZ-S3, C1b): on a roll the task parks
-    // before it snapshots anything, so no snapshot is taken to be thrown
-    // away; a tried `Start` that finds the latch held appends nothing and is
-    // called again after the park, snapshots and all (CZ-R3). Each busy
-    // answer, the roll flag's included, counts against `kLatchTries`.
+    // **The begin record is tried** (CZ-S3, C1b): on a roll already begun
+    // the task parks before it collects anything; a roll that begins during
+    // the sliced walk (DZ-S1) is met by the tried append, which appends
+    // nothing, and the task collects both tables again after the park
+    // (CZ-R3). Each busy answer, the roll flag's included, counts against
+    // `kLatchTries`.
     if (!in_progress_) {
         CheckpointRunReport::LatchSite& site = Site(CheckpointLatchSite::kBegin);
         for (int answers = 0;; ++answers) {
@@ -511,7 +569,17 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             if (answers < kLatchTries) {
                 busy = wal_.rolling();
                 if (!busy) {
-                    if (Status s = Start(&busy); !s.ok()) co_return FinishTask(core_id, s);
+                    // **The table in slices, a yield between** (DZ-S1); the
+                    // transactions and the tried append in the one call after
+                    // it (`BeginWith`). A busy answer collects both again.
+                    const std::unique_ptr<DirtyCollection> collection =
+                        target_.CollectDirty(DirtyCollectionFor::kStart);
+                    if (!(co_await CollectSliced(*collection, generation, /*start=*/true)).ok()) {
+                        co_return Status::OK();
+                    }
+                    if (Status s = BeginWith(collection->Table(), &busy); !s.ok()) {
+                        co_return FinishTask(core_id, s);
+                    }
                 }
             } else {
                 ++site.bound;
@@ -550,11 +618,32 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // its collection follows every step's writes and precedes the anchor's
     // page, which is the order the anchor needs, and a sync per step cost
     // each step a park. The reactor polls everything else meanwhile.
+    // **And every write is off the reactor** (DZ-S2): a step's batch is
+    // staged here and written by the data-sync thread while the task parks.
     int parks = 0;
-    while (true) {
+    while (next_page_ < pending_pages_.size()) {
+        ++stats_.steps;
+        ++task_report_.steps;
+        const std::size_t batch =
+            std::min(config_.pages_per_step, pending_pages_.size() - next_page_);
+        const std::span<const PageId> pages(pending_pages_.data() + next_page_, batch);
         Lsn deferred = kNoLsn;
-        auto done = Step(parks < kGateParks ? &deferred : nullptr, /*write_only=*/true);
-        if (!done.ok()) co_return FinishTask(core_id, done.status());
+        std::size_t wrote = 0;
+        const Status written = co_await WriteOffReactor(
+            pages, parks < kGateParks ? &deferred : nullptr, &wrote, generation);
+        if (generation != task_generation_) co_return Status::OK();
+        if (!written.ok()) {
+            LogStepFailure(batch, written);
+            co_return FinishTask(core_id, written);
+        }
+        if (wrote > 0) {
+            Contention::Add(Tally::kCheckpointPagesWritten, wrote);
+            // Asked for and not waited on (BI-Q13): the data-sync thread
+            // keeps the unsynced backlog near one step, so a synchronous sync
+            // landing mid-run - a carve's page 0, the reclaimer's maps - does
+            // not inherit a run's worth of writeback; only the publish parks.
+            (void)target_.RequestSync();
+        }
         if (deferred != kNoLsn) {
             // A page_lsn at or past the append point names no record, and no
             // sync satisfies a park on it: the next step's inline gate
@@ -572,10 +661,14 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             if (generation != task_generation_) co_return Status::OK();
             continue;
         }
+        // The pages before a deferred run were written and the next stage
+        // skips them; the cursor moves only past a whole batch.
+        next_page_ += batch;
+        stats_.pages_flushed += batch;
+        task_report_.pages += batch;
         parks = 0;
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
-        if (done.value()) break;
     }
 
     // `CHECKPOINT_END`, durable before anything points at it. **Tried**
@@ -624,10 +717,18 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // which no step of this run synced, among them.
     // The maps go in two halves with a park between (`page.md` section 5,
     // the map write order), owed only when a headerless map changed.
-    const std::vector<PageId> dirty = target_.DirtyPages();
+    // The collection in slices, a yield between (DZ-S1): DZ-S0 measured it
+    // whole at about 10 ms on the reactor at 1 Mi dirty frames.
+    const std::unique_ptr<DirtyCollection> collection =
+        target_.CollectDirty(DirtyCollectionFor::kPublish);
+    if (!(co_await CollectSliced(*collection, generation, /*start=*/false)).ok()) co_return Status::OK();
+    const std::vector<CheckpointDirtyPage>& dirty = collection->Table();
+    std::vector<PageId> batch;
+    batch.reserve(config_.pages_per_step);
     for (std::size_t at = 0; at < dirty.size(); at += config_.pages_per_step) {
-        const std::span<const PageId> batch(
-            dirty.data() + at, std::min(config_.pages_per_step, dirty.size() - at));
+        batch.clear();
+        const std::size_t end = std::min(dirty.size(), at + config_.pages_per_step);
+        for (std::size_t i = at; i < end; ++i) batch.push_back(dirty[i].page_id);
         if (Status s = co_await WriteForPublish(batch, core_id, generation); !s.ok()) {
             co_return FinishTask(core_id, s);
         }
@@ -635,23 +736,31 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
+    // **Each half tried** (DZ-Q6 (a)): a busy map write barrier is a
+    // blocking flush holding it across a data-file `fsync`, which the task
+    // parks out instead of waiting on its reactor, to `kLatchTries` busy
+    // answers a half and then the blocking call.
     std::uint64_t map_ticket = 0;
-    {
-        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-        auto staged = target_.WriteHeaderlessMaps();
-        if (!staged.ok()) co_return FinishTask(core_id, staged.status());
-        map_ticket = staged.value();
+    if (Status s = co_await TryMapHalf(
+            [this](bool* busy) { return target_.WriteHeaderlessMaps(busy); }, &map_ticket, generation);
+        !s.ok()) {
+        co_return FinishTask(core_id, s);
     }
+    if (generation != task_generation_) co_return Status::OK();
     if (Status s = co_await ParkOnDataSyncTicket(map_ticket); !s.ok()) {
         co_return FinishTask(core_id, s);
     }
     if (generation != task_generation_) co_return Status::OK();
-    {
-        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-        if (Status s = target_.WriteFreeMaps(); !s.ok()) co_return FinishTask(core_id, s);
+    if (Status s = co_await TryMapHalf(
+            [this](bool* busy) -> StatusOr<std::uint64_t> {
+                if (Status w = target_.WriteFreeMaps(busy); !w.ok()) return w;
+                return std::uint64_t{0};
+            },
+            nullptr, generation);
+        !s.ok()) {
+        co_return FinishTask(core_id, s);
     }
+    if (generation != task_generation_) co_return Status::OK();
     if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
     if (generation != task_generation_) co_return Status::OK();
 
@@ -689,6 +798,93 @@ Status LogStopped() {
 
 }  // namespace
 
+sched::Coro Checkpointer::CollectSliced(DirtyCollection& collection, std::uint64_t generation,
+                                        bool start) {
+    // A start's slices are each an occurrence of its phase (the census's
+    // `start`), timed one poll at a time: no scope spans a yield.
+    const auto advance = [&] {
+        const CheckpointPhaseScope scope(&wal_.clock(), start ? run_report_ : nullptr);
+        const PhaseTimer timed(CheckpointPhase::kStart);
+        return collection.Advance();
+    };
+    while (!advance()) {
+        co_await sched::Yield{};
+        // Abandoned meanwhile: nothing of this checkpointer is the task's.
+        if (generation != task_generation_) co_return Status::Cancelled("checkpoint run abandoned");
+    }
+    co_return Status::OK();
+}
+
+sched::Coro Checkpointer::WriteOffReactor(std::span<const PageId> pages, Lsn* defer,
+                                          std::size_t* wrote, std::uint64_t generation) {
+    *wrote = 0;
+    const auto hold = [this](sched::MonoTimeNs since) {
+        task_report_.step_max_ns = std::max(task_report_.step_max_ns, wal_.clock().Now() - since);
+    };
+    {
+        // Under the run's scope, so the gate and claim timers inside the
+        // stage record into its report as a step's did (BI-S1).
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+        const sched::MonoTimeNs since = wal_.clock().Now();
+        auto staged = target_.StageWrite(pages, defer);
+        hold(since);
+        if (!staged.ok()) co_return staged.status();
+        staged_ = std::move(staged.value());
+    }
+    if (!staged_->Done()) {
+        // The predicate holds its own reference: a frame of an abandoned run
+        // asks it after `Abandon` let `staged_` go.
+        const std::shared_ptr<CheckpointTarget::StagedPages> in_flight = staged_;
+        const std::function<bool()> done = [in_flight] { return in_flight->Done(); };
+        const sched::MonoTimeNs parked = wal_.clock().Now();
+        {
+            sched::WaitScope wait(stats::WaitEvent::kSysioCheckpoint);
+            co_await sched::WaitUntil{&done};
+        }
+        if (generation != task_generation_) co_return Status::OK();
+        task_report_.write_park_ns += wal_.clock().Now() - parked;
+    }
+    const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+    const sched::MonoTimeNs since = wal_.clock().Now();
+    auto finished = staged_->Finish();
+    staged_.reset();
+    hold(since);
+    if (!finished.ok()) co_return finished.status();
+    *wrote = finished.value();
+    co_return Status::OK();
+}
+
+template <typename Write>
+sched::Coro Checkpointer::TryMapHalf(Write write, std::uint64_t* ticket, std::uint64_t generation) {
+    for (int answers = 0;; ++answers) {
+        bool busy = false;
+        StatusOr<std::uint64_t> wrote = std::uint64_t{0};
+        {
+            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+            wrote = write(answers < kLatchTries ? &busy : nullptr);
+        }
+        if (!wrote.ok()) co_return wrote.status();
+        if (!busy) {
+            if (ticket != nullptr) *ticket = wrote.value();
+            co_return Status::OK();
+        }
+        ++task_report_.map_busy;
+        co_await ParkBriefly();
+        if (generation != task_generation_) co_return Status::OK();
+    }
+}
+
+sched::Coro Checkpointer::ParkBriefly() {
+    const sched::MonoTimeNs deadline = wal_.clock().Now() + kBusyParkNs;
+    const std::function<bool()> ended = [this, deadline] { return wal_.clock().Now() >= deadline; };
+    {
+        sched::WaitScope wait(stats::WaitEvent::kSysioCheckpoint);
+        co_await sched::WaitUntil{&ended};
+    }
+    co_return Status::OK();
+}
+
 sched::Coro Checkpointer::ParkOnDataSync() {
     co_return co_await ParkOnDataSyncTicket(target_.RequestSync());
 }
@@ -709,15 +905,12 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
                                           std::uint64_t generation) {
     for (int parks = 0;; ++parks) {
         Lsn deferred = kNoLsn;
-        StatusOr<std::size_t> wrote = std::size_t{0};
-        {
-            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-            wrote = target_.WritePages(pages,
-                                       parks < kGateParks && !pages.empty() ? &deferred : nullptr);
-        }
-        if (!wrote.ok()) co_return wrote.status();
-        Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
+        std::size_t wrote = 0;
+        const Status written = co_await WriteOffReactor(
+            pages, parks < kGateParks && !pages.empty() ? &deferred : nullptr, &wrote, generation);
+        if (generation != task_generation_) co_return Status::OK();
+        if (!written.ok()) co_return written;
+        Contention::Add(Tally::kCheckpointPagesWritten, wrote);
         if (deferred == kNoLsn) co_return Status::OK();
         if (deferred >= wal_.appended_lsn()) {
             parks = kGateParks - 1;  // the next attempt's inline gate refuses it
@@ -827,6 +1020,15 @@ Status Checkpointer::FinishTask(std::uint32_t core_id, const Status& ran) {
 }
 
 void Checkpointer::Abandon() noexcept {
+    // A batch off the reactor is written and cleaned before anything else:
+    // its claims would keep the shutdown checkpoint's writes waiting.
+    if (staged_ != nullptr) {
+        // On the thread acting as the core, which an unarmed store's clean
+        // needs; the write is the writer thread's and ends on its own.
+        while (!staged_->Done()) std::this_thread::sleep_for(std::chrono::microseconds(50));
+        (void)staged_->Finish();
+        staged_.reset();
+    }
     if (run_report_ == &task_report_) {
         // The run's census edge is closed as a run's end would close it, and
         // its record is not published: it did not finish.

@@ -263,17 +263,28 @@ Status SimInstance::SettleReclaim() {
     return Status::OK();
 }
 
+void SimInstance::EnsureAnchor() {
+    // The boot's one anchor, built at its first checkpoint (BF-R12).
+    if (anchor_.has_value()) return;
+    anchor_.emplace(boot_->superblock, *store_);
+    // Its publishes are synchronous, so it is never asked to try (CZ-Q20).
+    anchor_->SetRecycler([this](wal::Lsn d, bool /*tried*/) {
+        Recycle(d);
+        return true;
+    });
+}
+
+Status SimInstance::RunLiveCheckpoint() {
+    EnsureAnchor();
+    storage::PageStoreCheckpointTarget target(*store_);
+    wal::Checkpointer checkpointer(*wal_, target, *txn_, *anchor_);
+    checkpointer.SetAssertionSource(&dispatcher_->assertions());
+    return checkpointer.RunToCompletion();
+}
+
 Status SimInstance::RunCheckpoint(bool at_mount) {
     storage::PageStoreCheckpointTarget target(*store_);
-    // The boot's one anchor, built at its first checkpoint (BF-R12).
-    if (!anchor_.has_value()) {
-        anchor_.emplace(boot_->superblock, *store_);
-        // Its publishes are synchronous, so it is never asked to try (CZ-Q20).
-        anchor_->SetRecycler([this](wal::Lsn d, bool /*tried*/) {
-            Recycle(d);
-            return true;
-        });
-    }
+    EnsureAnchor();
     return server::CheckpointAfterRecovery(/*core_id=*/0, *wal_, target, *anchor_,
                                            /*log=*/nullptr, /*clock=*/nullptr,
                                            /*elapsed_ns=*/nullptr, &dispatcher_->assertions(),
