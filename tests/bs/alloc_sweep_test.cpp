@@ -262,5 +262,41 @@ TEST(BsAllocSweep, AJoinWithAnAggregate) {
            {"SELECT * FROM t", "SELECT * FROM c"}});
 }
 
+// ---- DX-S1: the sweep over rollbacks ---------------------------------------
+//
+// The counted statement is the `ROLLBACK` itself, its transaction's writes
+// in the setup. "Before" is the transaction's own reading of its writes,
+// which no mount can show; a stop anywhere in the unwind must mount as
+// "after", the committed rows, recovery finishing what the rollback began.
+
+TEST(BsAllocSweep, ARollbackOfUpdates) {
+    Sweep({"rollback of updates",
+           With(kRows, {"BEGIN", "UPDATE t SET v = v + 100 WHERE id <= 3",
+                        "UPDATE t SET s = 'q' WHERE id = 4"}),
+           "ROLLBACK", {"SELECT * FROM t"}});
+}
+
+TEST(BsAllocSweep, ARollbackOfASpillingUpdate) {
+    // The var-heap release the rollback owes for the spill.
+    Sweep({"rollback of a spilling update",
+           With(kRows, {"BEGIN", "UPDATE t SET s = '" + std::string(600, 'x') + "' WHERE id = 3"}),
+           "ROLLBACK", {"SELECT * FROM t"}});
+}
+
+TEST(BsAllocSweep, ARollbackOfInsertsUnderAnAssertion) {
+    // `AssertionEnforcer::AbortTxn`'s unwind, before the trail's.
+    Sweep({"rollback of inserts under an assertion",
+           With(kRows, {"CREATE ASSERTION few ON t GROUP BY (v) CHECK COUNT(*) <= 3", "BEGIN",
+                        "INSERT INTO t VALUES (5, 10, 'e')", "INSERT INTO t VALUES (6, 20, 'f')"}),
+           "ROLLBACK", {"SELECT * FROM t"}});
+}
+
+TEST(BsAllocSweep, ARollbackOfAnInsertAndADeleteUnderAnIndex) {
+    Sweep({"rollback of an insert and a delete under an index",
+           With(kRows, {"CREATE INDEX tv ON t (v)", "BEGIN", "INSERT INTO t VALUES (5, 25, 'e')",
+                        "DELETE FROM t WHERE id = 1"}),
+           "ROLLBACK", {"SELECT * FROM t", "SELECT id FROM t WHERE v BETWEEN 10 AND 30"}});
+}
+
 }  // namespace
 }  // namespace kds::server

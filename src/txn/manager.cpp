@@ -532,6 +532,9 @@ Status TransactionManager::Compensate(const TrailEntry& entry, std::uint64_t trx
 
 Status TransactionManager::Abort(Transaction& txn, const RowLocator& locate_row) {
     if (!txn.active_) return Status::OK();  // aborting twice is not an error
+    // **Entered holding no pin, in every build** (DX-R2): every caller is at
+    // a statement's or a transaction's boundary (DX-S0).
+    storage::RequireNoPinsHeld("TransactionManager::Abort");
 
     // **Drain mode** (BE-Q11): a compensation refused for a full pool would
     // leave its write un-undone for good, and a rollback holds no page latch

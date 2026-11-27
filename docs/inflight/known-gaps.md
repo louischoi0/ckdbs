@@ -96,27 +96,35 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   scan's residency bounded to its slots rather than to the pool - is not
   measured. Owned by `docs/spec/eviction.md` (EV6, §5, §7).
 
-- **Three of BE's rules are argued, not tested.** Verified at `2f08b71c`:
+- **Two of BE's rules are argued, not tested.** Verified at `2f08b71c`:
   - **The reclaim walk's total bound** of `kClockUsageCap + 1` laps, which
     ends a reservation that other cores' hits keep warm. A two-core cell
     could not form the spin, and forcing it needs a seam between batches.
   - **`FailStop`**: a window that outgrows its share in a full pool.
-  - **Drain mode under recovery and `Abort` at the cap.** It is reached
-    only through `BoundedPoolTest.AnInsertRefusedForAFullPoolLeavesNoRowBehind`'s
-    rollback and reboot, which may not fill the pool while they run.
 
-  The `UPDATE` and carved-fill windows also have no cell of their own. Owned
-  by `docs/spec/eviction.md` (§3.2, §3.3).
+  The third, drain mode under recovery and `Abort` at the cap, has had its
+  cells since DX-S1 (`PoolOfDirtyFramesTest`). The `UPDATE` and carved-fill
+  windows also have no cell of their own. Owned by `docs/spec/eviction.md`
+  (§3.2, §3.3).
 
-- **A rollback compensation that meets a full pool while its thread holds
-  a pin is refused, and that leaves the write un-undone.** Verified at
-  `2f08b71c`: drain mode writes back only when the thread holds no pin
-  (`DevicePageStore::ReserveFrame`), because a writeback's shared try
-  re-enters the thread's own exclusive hold. No path into
-  `TransactionManager::Abort` holding a pin was found, and nothing
-  enforces that either. The damage is Census B's #11
-  (`bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`,
-  closed unreproduced at `d83bd502`).
+- **A rollback compensation is refused a frame where drain mode cleans
+  nothing, and that leaves the write un-undone.** Verified at DX-S1
+  (`dx-pool-under-pressure`).
+  - A thread holding a pin now drains too (`HeldFrames::kSkipPinned`).
+    The rollback locator's write descent is such a thread: it holds the
+    leaf while it fetches the right sibling.
+  - What stays: a drain that writes nothing falls through to the retries
+    and the refusal. Examples are a pool whose unreclaimable frames are
+    all pinned or of a resident class, and a queue whose every frame is
+    claimed elsewhere for all 8 retries.
+  - `TransactionManager::Abort` then keeps unwinding and logs
+    `TXN_ABORT`, so that one write stays un-undone. The damage is Census
+    B's #11 (`bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`,
+    closed unreproduced at `d83bd502`).
+  - No cell drives a rollback into a pool that drain mode cannot clean,
+    and none drives the locator's pinned fetch (a rollback of a row a leaf
+    division moved, at a full pool, with the right sibling not resident).
+
   Owned by `docs/spec/eviction.md` (§3.3) and `docs/spec/txn.md`.
 
 - **Writers outside a statement meet the ordinary refusal.** Verified at

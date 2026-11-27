@@ -228,3 +228,104 @@ over the suite and reverted. Every `path:line` below was read at
   - Rejected: H2's probe of the pins at each refusal site. The wait is
     not taken there, so what the sites hold does not decide the design.
 - Overhead not measured; measured at the milestone's close.
+
+### DX-S1 (2026-11-27): the abort, on `dx-pool-under-pressure` from `8167fa139`
+
+Begun in one session, carried by its handoff into the next, and closed
+there. Every `path:line` below was read on the worktree's tree.
+
+- **Built** `[source-read]`:
+  - `HeldFrames::kSkipPinned` (`include/kds/storage/device_page_store.hpp`):
+    a writeback that claims no frame pinned at claim time. One file-local
+    test, `LeftPinned` (`src/storage/device_page_store.cpp`), serves the
+    claim, the run extension and the batch's log gate
+    (`HighestDirtyPageLsn`), so the gate leaves out exactly what no run
+    claims.
+  - `ReserveFrame`'s drain in drain mode runs with pins held, in
+    `kSkipPinned` (DX-Q2 (a)). The rollback locator's write descent is the
+    path DX-S0 found holding one: it keeps the leaf while
+    `LeafStillCoversKey` fetches the right sibling. No reorder was needed.
+  - `storage::RequireNoPinsHeld(site)` fail-stops, in every build, at the
+    entry of `TransactionManager::Abort`, `AssertionEnforcer::AbortTxn` and
+    `RecoveryUndo::RollBackOne` (DX-R2).
+  - Docs: `eviction.md` §3.3, the header's durability-wait bullet,
+    `known-gaps.md` (the refused-compensation entry narrowed, not deleted;
+    the BE-rules entry down to two).
+- **Cells**, each killed by the mutation named `[measured]`:
+  - `BoundedPoolTest.ADrainHoldingPinsWritesBackTheQueueButNeverAPinnedFrame`:
+    by the old `t_pins_here == 0` gate, by `kSkip` at the drain, by the
+    claim's pinned test dropped (page 16 written) and by the run's (page
+    21 written inside a run);
+  - `EvictionWritebackTest.ADrainLeavingAPinnedFrameAsksTheLogOnlyForWhatItWrites`:
+    by the gate's pinned test dropped;
+  - `BoundedPoolDeathTest.ARollbackEnteredHoldingAPinStopsTheInstance`
+    (a `ROLLBACK` reaches `AbortTxn` first) and
+    `...ATransactionAbortEnteredHoldingAPinStopsTheInstance`: each by
+    dropping its site's call;
+  - `PoolOfDirtyFramesTest.ARollbackFaultingIntoItUndoesEveryRow`: by
+    dropping `Abort`'s drain mode (refused 77 against 1);
+    `...AMountUndoingTheLoserInItUndoesEveryRow`: by dropping the sim
+    mount's drain (before the handoff);
+  - `BsAllocSweep.ARollback*`, four kinds, the assertion's included.
+- **"The sim's allocation-failure sweep"** of §5 is BS's sweep
+  (`tests/bs/alloc_sweep_test.cpp`, label `bs-nightly`): `sim/` has no
+  allocation fault injection.
+- **Not built: a cell for the locator's pinned fetch.** It needs the
+  trail's page resident, the moved row's leaf and its sibling not, and no
+  clean frame when the sibling is fetched. A rollback's earlier drains
+  leave clean frames behind, so the SQL surface cannot form it
+  deterministically. `known-gaps.md` records it.
+- **Reviewed twice** (`critics-developer`).
+  - The first review: H1, the gate leaving pinned frames out, and H2, a
+    stronger store cell and a `ROLLBACK` death cell, applied. Rejected:
+    folding the pinned test into `kSkip`, because it changes the tick's
+    drain, which is unmeasured; `CountOld`'s -1, because a refused read
+    already fails the cell.
+  - The re-review found no correctness bug. Applied: a cell that kills
+    H1, one predicate in place of two, the claim's skip merged, a rewrap,
+    §3.3's opening. Rejected: `kRows` cut from 3,000 to about 1,800. Both
+    dirty-pool kills were measured at 3,000, and 26 s of Debug time does
+    not pay for measuring them again.
+  - The re-review named one effect a release build now has: a pin count
+    left too high on a reactor, which used to switch drain mode off
+    silently, now stops the process at the next abort there. DX-S0 counted
+    zero pins at all 41,376 entries.
+- **The suite** `[measured]`: 5,346 of 5,348 (`ctest -LE bs-nightly -j4`,
+  190 s, on the tree committed). The two failures are the host's recorded
+  two-core flakes. `ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+  then failed 1 of 5 alone, at its 60 s expiry, which is its rate at base.
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter` passed 5 of 5
+  alone. Neither cell runs in drain mode or an abort holding a pin. The
+  four `BsAllocSweep.ARollback*` kinds (`bs-nightly`) passed on the same
+  build.
+- Overhead not measured; measured at the milestone's close.
+
+### DX-S2: the design carried from DX-S0 §4
+
+- A pool-refusal note at both refusal returns (`ReserveFrame` outside a
+  window and outside drain mode; `BeginNoRefuseWindow`).
+- `EndWrite` marks a re-run due only under `may_park_` (a synchronous
+  dispatcher keeps the refusal, §2.3) and only for a statement that wrote
+  nothing. The flag is carried on `DispatchOutcome`, as `poison_withheld`
+  is.
+- `DispatchAsync`'s BA-S14 loop (`command_dispatcher.cpp:1177`), for a pool
+  refusal, drains the queue holding nothing, under
+  `WaitScope(kResEvictionRetry)`, then re-runs under the fault-net
+  deadline. Re-run only if the drain cleaned something.
+  `res.eviction_retry` is registered and never booked; `wait-events.md`
+  gets its site.
+- A `PageStore` virtual for the drain.
+- The scratch-copy stamp: `StampIfHeadered` on the scratch slice after the
+  `memcpy` in `WriteBack`.
+- Cells:
+  - a `TwoCoreRig` (`buffer_pool_frames` option) point-update loop with no
+    client refusal and `pool_refused > 0`;
+  - DX-R1, a multi-row `UPDATE` refused after writing rows, still refused;
+  - a `tsan` cell over the stamp;
+  - the dirty-pool cell re-run on a Release build of the S2 commit
+    (`tools/dm_s1_check.py`, the cold base in
+    `build-dx-base/run/cold_base`, port 15781).
+- The S1 fixture `PoolOfDirtyFramesTest` runs on the synchronous
+  dispatcher, so S2 leaves its refusal in place.
+
+Overhead not measured; measured at the milestone's close.

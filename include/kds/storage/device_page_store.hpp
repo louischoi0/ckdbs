@@ -155,21 +155,29 @@
 //     latch held and no second thread alive. The cost accepted: a page
 //     latch can be held across an append's section, a segment roll
 //     included; a reader of that page elsewhere spins, then yields.
-//   - **Held across a durability wait by no path in the tree** (BB-S1's
-//     census). WriteBack takes the WAL gate (EnsureDurable: a wait on the
-//     writer thread for a peer, an inline sync for core 0) before it writes
-//     any byte. It takes each page's latch shared for the copy (AT-S8 step
-//     1b), one page at a time and released before the gate, so no frame of
+//   - **Held across a durability wait by one path only** (BB-S1's census;
+//     DX-S1's exception below). WriteBack takes the WAL gate
+//     (EnsureDurable: a wait on the writer thread for a peer, an inline
+//     sync for core 0) before it writes any byte. It takes each page's
+//     latch shared for the copy (AT-S8 step 1b), one page at a time and
+//     released before the gate, so no frame of
 //     its own is latched across the wait - waiting for a foreign exclusive
 //     holder on a flush, trying once and skipping in the background drain
 //     (`WriteBack`'s `HeldFrames`). An ordinary fault does not reach
 //     WriteBack: its sweep (`SweepLocked`, at a fill's reservation) only
 //     queues a dirty frame, and every WriteBack caller holds no page latch.
 //     **Drain mode is the one fault path that does** (BE-Q11: recovery, a
-//     rollback, the assertion loops), in `kSkip` and only on a thread
-//     holding no pin: a shared try re-enters this core's own exclusive
-//     hold (`page_latch.hpp`'s `Next`), so a writeback from a thread
-//     holding one could copy a page mid-write.
+//     rollback, the assertion loops), in `kSkipPinned`: a shared try
+//     re-enters this core's own exclusive hold (`page_latch.hpp`'s `Next`),
+//     so only a frame nobody pins is claimed, and a page this thread is
+//     writing is never copied. **The exception** (DX-S1): such a thread may
+//     hold pins - a rollback's row locator holds its leaf exclusive while it
+//     fetches the right sibling - and then waits on the log holding that
+//     latch. No deadlock: neither the writer thread nor core 0's inline
+//     sync takes a page latch or the structure latch. The cost is a
+//     peer spinning on that leaf for one sync, on a rollback at a full
+//     pool. The batch gate leaves the pinned frames out, so their own
+//     records never force it.
 //     `HighestDirtyPageLsn` reads the batch's page_lsns under the structure
 //     latch and drops it before EnsureDurable, so that scan holds nothing
 //     across the wait either.
@@ -383,7 +391,14 @@ public:
     // its claims with the frames still dirty, stores the LSN in `*defer` and
     // returns what it wrote before. A checkpoint task parks on that LSN and
     // asks again; nothing is written ahead of its record either way.
-    enum class HeldFrames : std::uint8_t { kWait, kSkip };
+    //
+    // **`kSkipPinned`** is `kSkip` that also leaves alone every frame
+    // pinned when the writeback claims it (DX-Q2 (a)): a reservation's
+    // drain in drain mode, which may run on a thread that holds pins of its
+    // own, so it must need no page of the caller's. The shared try cannot
+    // promise that - it re-enters this core's own hold, and is no test with
+    // the latch unarmed - but a frame being written is pinned by its writer.
+    enum class HeldFrames : std::uint8_t { kWait, kSkip, kSkipPinned };
     StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids,
                                     HeldFrames held = HeldFrames::kWait,
                                     wal::Lsn* defer = nullptr);
@@ -398,8 +413,10 @@ public:
     // dirty at usage zero and queued them instead of reclaiming (§3.2's
     // fourth branch); once written clean here, the sweep's next visit may
     // reclaim them - "keeping the page cached until frames are actually
-    // needed", exactly as §4 words it. Returns how many it wrote.
-    StatusOr<std::size_t> DrainDirtyEvictionQueue();
+    // needed", exactly as §4 words it. Returns how many it wrote. `held` is
+    // `kSkip` on the tick and `kSkipPinned` in a reservation's drain; never
+    // `kWait`.
+    StatusOr<std::size_t> DrainDirtyEvictionQueue(HeldFrames held = HeldFrames::kSkip);
 
     // §4's watermark loop, on the writeback tick (BE-R2). When the pool's
     // free count - the capacity less the slots in use and the open windows'
@@ -410,9 +427,9 @@ public:
     // them, so queued dirt becomes reclaimable on the hand's next visit. It
     // stops early as `ReclaimWalk` says. Returns frames reclaimed.
     //
-    // **Its caller holds no page latch**, which is what makes the drain's
-    // `WriteBack(kSkip)` sound here and nowhere on the fault path (the
-    // header's "Held across a durability wait" bullet).
+    // **Its caller holds no page latch**: the tick's drain (`kSkip`) waits on
+    // the log holding nothing (the header's "Held across a durability wait"
+    // bullet).
     std::size_t MaintainFreeReserve();
 
     // BE-R2's numbers, each a function of the budget so none is a second
@@ -1291,11 +1308,13 @@ private:
     // page in the batch. With `defer`, an LSN not yet durable is stored
     // there instead of waited for (`WriteBack`'s `defer`).
     Status AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate,
-                        wal::Lsn* defer);
+                        wal::Lsn* defer, HeldFrames held);
     // The highest `page_lsn` among `page_ids` that are resident and dirty,
-    // headerless pages skipped; `wal::kNoLsn` when none is logged. Under the
-    // structure latch, released before it returns.
-    wal::Lsn HighestDirtyPageLsn(std::span<const PageId> page_ids);
+    // headerless pages skipped, and the frames `held` leaves out too
+    // (`kSkipPinned` will not write them, so their records owe no sync);
+    // `wal::kNoLsn` when none is logged. Under the structure latch,
+    // released before it returns.
+    wal::Lsn HighestDirtyPageLsn(std::span<const PageId> page_ids, HeldFrames held);
 
     // The gate a writeback on this thread asks: the calling core's own
     // (SetCoreWalGate), or the default.

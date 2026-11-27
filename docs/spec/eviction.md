@@ -163,12 +163,26 @@ nothing that undoes it. So a mutation that writes and then fetches opens a
   committed change.
 
 **Drain mode** covers the passes that are not a row's mutation and hold no
-page latch between their steps: mount recovery, a rollback, and an
-assertion's commit and abort loops. At the limit, a fill on such a thread,
-holding no pin, writes the dirty queue back and walks again; a drain that
-cleaned something does not count as a retry. A drain that cleans nothing,
-or a thread holding a pin, falls through to step 1's retries and the
-refusal.
+page latch between their steps (within one, a rollback's row locator may,
+below): mount recovery, a rollback, and an assertion's commit and abort
+loops. At the limit, a fill on such a thread
+writes the dirty queue back and walks again. A drain that cleaned
+something does not count as a retry. A drain that cleans nothing falls
+through to step 1's retries and the refusal.
+- **The drain needs no page of the caller's** (DX-Q2 (a)). It claims only
+  frames nobody pins (`HeldFrames::kSkipPinned`), so it runs with pins held
+  and never copies a page its own thread is writing.
+- A rollback's row locator reaches it holding one pin: its write descent
+  keeps the leaf while it fetches the right sibling.
+- Such a drain then waits on the log with the caller's pin and latch held.
+  This is the one durability wait in the tree that holds a page latch. It
+  cannot deadlock, because the log's writer takes no page latch. It costs
+  a peer spinning on that leaf for one sync.
+- The drain's log gate leaves out the pinned frames it will not write, so
+  their own records never force that sync.
+- **Every abort, and every loser's undo at a mount, is entered holding no
+  pin, checked in every build** (`RequireNoPinsHeld`, DX-R2). One that
+  holds a pin stops the process.
 
 **The refusal's scope is `txn.md`'s** (BE-Q10, `txn.md` §6). A refused
 write in autocommit aborts its transaction. Inside `BEGIN` it puts the

@@ -870,6 +870,7 @@ void AssertionEnforcer::CommitTxn(std::uint64_t txn_id) {
 
 Status AssertionEnforcer::AbortTxn(storage::PageStore& store, wal::WalManager* wal,
                                    std::uint64_t txn_id) {
+    storage::RequireNoPinsHeld("AssertionEnforcer::AbortTxn");  // DX-R2
     // Drain mode (BE-Q11): the pending list is taken before the loop, so an
     // unwind refused for a full pool part-way would drift the totals.
     const storage::DrainOnPressure drain(store);

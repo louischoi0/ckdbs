@@ -532,6 +532,46 @@ TEST(EvictionWritebackTest, NoPageWritePrecedesItsWalDurabilityPoint) {
         << "a page write reached the device before its WAL durability point";
 }
 
+// **A drain that leaves a pinned frame owes its records no sync** (DX-S1,
+// `HighestDirtyPageLsn`). Two queued dirty pages, the second pinned after
+// it was queued with a page_lsn far above the first's: `kSkipPinned` writes
+// the first only, and the batch's gate asks the log for the first's LSN,
+// never the pinned one's. Killed by dropping the pinned test in the gate:
+// the probe is then asked for 500.
+TEST(EvictionWritebackTest, ADrainLeavingAPinnedFrameAsksTheLogOnlyForWhatItWrites) {
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok());
+    GateProbe gate;
+    ProbedDevice probed(*device.value(), &gate);
+    auto opened = DevicePageStore::Open(probed, ::kds::storage::FrameCapacity{4096},
+                                        /*first_new_page_id=*/16);
+    ASSERT_TRUE(opened.ok());
+    auto& store = *opened.value();
+    store.SetWalGate(&gate);
+
+    PageId pages[2]{};
+    const wal::Lsn lsns[2] = {50, 500};
+    for (int i = 0; i < 2; ++i) {
+        auto created = store.CreateNew();
+        ASSERT_TRUE(created.ok());
+        pages[i] = created.value().first;
+        FormatPage(created.value().second.bytes(), PageType::kHeap);
+        ASSERT_TRUE(store.StampPageLsn(pages[i], lsns[i]).ok());
+        created.value().second.Release();
+    }
+    EXPECT_EQ(store.EvictColdFrames(8), 0u);  // both dirty at zero: queued
+    auto held = store.GetForRead(pages[1]);   // pinned after it was queued
+    ASSERT_TRUE(held.ok());
+
+    auto drained = store.DrainDirtyEvictionQueue(DevicePageStore::HeldFrames::kSkipPinned);
+    ASSERT_TRUE(drained.ok()) << drained.status().message();
+    EXPECT_EQ(drained.value(), 1u);
+    EXPECT_EQ(gate.durable_lsn(), lsns[0] + 1) << "the gate was asked for a frame left unwritten";
+    const std::vector<PageId> dirty = store.DirtyPageIds();
+    EXPECT_EQ(dirty, std::vector<PageId>{pages[1]});
+    EXPECT_EQ(probed.writes_before_gate(), 0u);
+}
+
 // **A fail-stopped log writes nothing back** (`wal/durability.hpp`, BC-S4).
 // The page below is the shape the page_lsn gate passes: a mutation whose
 // record was refused leaves the page dirty at an old, durable page_lsn.

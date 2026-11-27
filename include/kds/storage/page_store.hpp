@@ -551,9 +551,9 @@ public:
     // **Drain mode** is for the passes that are not a row's mutation and
     // hold no page latch between their steps - recovery's redo and undo, a
     // rollback, an assertion's commit and abort loops. At the cap, a fill on
-    // such a thread holding no pin writes the dirty queue back and retries,
-    // which is sound there and nowhere else (`device_page_store.hpp`'s
-    // durability-wait bullet), instead of being refused.
+    // such a thread writes the dirty queue back and retries instead of being
+    // refused - pinned frames left alone, so with pins held too (DX-Q2 (a),
+    // `device_page_store.hpp`'s durability-wait bullet).
     //
     // A store with no pool does nothing for either.
     virtual Status BeginNoRefuseWindow(std::size_t frames) {
@@ -941,6 +941,13 @@ bool NoRefuseWindowOpenOnThisThread() noexcept;
 // one pool is never counted as this thread's. A store whose PinFrame is a
 // no-op counts nothing here either.
 std::size_t PinsHeldOnThisThread() noexcept;
+
+// **Stops the process if this thread holds a pin** (DX-S1, DX-R2), in
+// every build. Called at the entry of every abort and of every loser's undo
+// at a mount: those run between statements, and one entered holding a pin
+// is a caller mid-mutation, which no abort may unwind under. `site` names
+// the caller in the stop's line.
+void RequireNoPinsHeld(const char* site) noexcept;
 
 // Drain mode for the life of the guard (`PageStore`'s note).
 class DrainOnPressure {

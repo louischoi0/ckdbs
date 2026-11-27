@@ -262,6 +262,7 @@ Status RecoveryUndo::Apply(storage::PageStore& store, std::uint64_t txn_id,
 
 Status RecoveryUndo::RollBackOne(storage::PageStore& store, std::uint64_t txn_id,
                                  std::uint64_t head) {
+    storage::RequireNoPinsHeld("RecoveryUndo::RollBackOne");  // DX-R2
     // The chain is fixed under the walk: a compensation writes the page its
     // record targets - a heap page, a leaf or a var-heap page - and never an
     // undo page, so the step from a pointer to the next is a function of the
