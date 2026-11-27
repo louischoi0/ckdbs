@@ -310,6 +310,54 @@ an open bound). **Rejected**: none.
 
 Overhead not measured; measured at the milestone's close.
 
+### EB-S2 - joins by a whole key, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `cf3f5bb87`.
+
+- **A correlated index probe takes every prefix column an equality pins**
+  (`docs/spec/index.md` IX17): a literal's, encoded at compile, or an outer
+  row's, encoded per outer row at its offset (`IndexProbe::key_from`, now
+  one entry a column). Of the indexes the longest prefix, ties to the
+  lowest oid; a literal probe yields to a correlated one only where the
+  correlated prefix is longer. EB-S0's J1 - a join on both columns of
+  `(a, b)` - descends by the whole key.
+- **An embedded primary key pinned whole by literals and an outer row is a
+  `kProbe` by the computed id** (`heap-and-tuple.md` §3.1c,
+  `Step::EmbeddedProbe`): the executor calls `exec::EmbeddedKeyId`, the
+  encoder every insert placed its row by (EB-R3); a NULL, a value past its
+  column's width and the one key 48 bits cannot name match nothing; any
+  other refusal is `Corruption`, never an empty answer. It ranks with the
+  key's window and above it, which serves EB-S0's J2 and J3. It records
+  and replays no trail (EB-Q10 (a); `IsTrailReplayable`).
+
+The cells: `tests/ordered_walk_test.cpp`'s `WholeKeyJoinTest` against a twin
+with no index or key, each column's type bounds, NULLs on either side, the
+2^48 key, a literal past its column, and `EmbeddedProbeTrailTest`; the
+index contract suite's whole-key join block (EB-R1).
+
+**The review** (`critics-developer`, report only) found no `[quiet-wrong]`
+defect: the `key_from` order, the templates, a NULL outer value, the stale
+chain's guard, every reader of the probe (Waystone, the pins, the ordered
+walk, the write paths, the hashed home), the residual's coverage of every
+operand, and the literals' coercion each read as sound. **Applied**: F1 -
+every `EmbeddedKeyId` refusal was read as "no match", where only a NULL and
+`OutOfRange` are known to match nothing (CU-Q11's rule); F2 - the join
+planner priced an embedded key bound whole as many rows, now at most one,
+as a unique index bound whole is; S1 - one source search,
+`EqualitySourceOn`, for both arms; S2 - a second coercion of a literal the
+lowering already coerced, removed. **Rejected**: S3 (the correlated search
+run twice at compile) - a compile-only cost, and returning the probe from
+the literal arm would widen that arm's contract for it; F3 (an embedded
+probe filed under column 0 in the access statistics) - a literal embedded
+lookup is already filed so, and the filing is the tuple key's.
+
+The full suite after the change, before the review's edits: 5,394 of 5,395,
+the one failure `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`,
+which failed 11 of 60 repeated alone on this tree - the rate memory records
+for it at base, on a two-core path S2 does not touch.
+
+Overhead not measured; measured at the milestone's close.
+
 ### Written 2026-11-26
 
 On `known-gaps-milestone-orders` from `8274c951`, on the operator's word.

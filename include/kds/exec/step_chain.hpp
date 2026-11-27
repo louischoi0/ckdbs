@@ -374,17 +374,25 @@ struct IndexProbe {
     std::vector<std::uint16_t> key_cols;
     std::vector<std::uint16_t> covered_cols;
 
-    // The correlated form (docs/spec/index.md §8a): the leading key
-    // column's value comes from an *earlier step's row* - a join key - so
-    // it cannot be encoded at compile time. When set, `eq_prefix == 1`,
-    // `ranged == false`, and `low`/`high` above are pure padding templates
-    // (all 0x00 / all 0xFF): the executor copies them and encodes this
-    // column's frame value into the leading width per outer row, which is
-    // the one exception to "no per-row key building" - priced at one
-    // fixed-width encode against the full inner walk it replaces. The
-    // single authority for the key source: the plan printer renders it,
+    // The correlated form (docs/spec/index.md §8a): some of the prefix's
+    // columns take their value from an *earlier step's row* - a join key -
+    // so they cannot be encoded at compile time. Non-empty, the prefix is
+    // `eq_prefix` columns each pinned by an equality, with a literal (encoded
+    // into `low`/`high` here, as any probe's) or with an earlier step's
+    // column (one entry here, in key order), `ranged == false`, and every
+    // byte past the prefix padding: the executor copies the templates and
+    // encodes each entry's frame value into its column's width per outer
+    // row, which is the one exception to "no per-row key building" - priced
+    // at a fixed-width encode a column against the inner walk it replaces.
+    // A join on every column of a composite key descends by the whole key
+    // (EB-S2), where it once descended by the first and filtered the run.
+    // The single authority for the key source: the plan printer renders it,
     // and `Step::key` keeps its two-kind contract.
-    std::optional<ColumnRef> key_from;
+    struct KeyFrom {
+        std::uint8_t at = 0;  // the key column's position in the index
+        ColumnRef from;
+    };
+    std::vector<KeyFrom> key_from;
 
     // **A hashed primary key's home** (DR-S3f, `exec/hashed_key.hpp`): set
     // on a literal `kIndexProbe` over a hashed relation whose residual pins
@@ -826,6 +834,20 @@ struct Step {
     // (see KeySet). Cold, with `build`.
     std::optional<KeySet> key_set;
 
+    // **An embedded primary key's id, computed per outer row** (EB-S2), on
+    // `kProbe` with no `key`: one operand a key column, in key order, each a
+    // literal (as the residual's lowering coerced it) or an earlier step's or
+    // an enclosing chain's column of the same descriptor. The executor computes
+    // the id by `exec::EmbeddedKeyId`, the encoder `CREATE TABLE`'s form
+    // fixed and every insert calls (EB-R3), and descends by it; a key that
+    // does not encode - a NULL, the one key 48 bits cannot name - is no
+    // match. The equalities stay in the residual. Cold, with `key_set`.
+    // A step carrying one records and replays no trail (EB-Q10 (a)).
+    struct EmbeddedProbe {
+        std::vector<Operand> key;
+    };
+    std::optional<EmbeddedProbe> embedded_probe;
+
     // The order this step emits in where a statement's `ORDER BY` rests on
     // it (CV, `parser-v2.md` I11): set by the compiler on the driving step
     // only, and only where it dropped the chain's `sort_keys` for it.
@@ -838,7 +860,8 @@ struct Step {
 // values, so a step carrying one records and replays no trail whatever its
 // kind (CU-Q4, invariant 9). **The one form a reader of a step may ask.**
 inline bool IsTrailReplayable(const Step& step) noexcept {
-    return IsTrailReplayableKind(step.kind) && !step.key_set.has_value();
+    return IsTrailReplayableKind(step.kind) && !step.key_set.has_value() &&
+           !step.embedded_probe.has_value();
 }
 
 // Execution shape, dispatched on by a `switch` - there is no plan

@@ -323,6 +323,19 @@ const std::vector<std::string>& Queries() {
         "SELECT id FROM b WHERE id > 30 ORDER BY id LIMIT 3",
         "SELECT id FROM b WHERE id < 10 ORDER BY id DESC LIMIT 4",
         "SELECT id FROM b WHERE id >= 10 AND owner > 0 AND owner < 2",
+
+        // ---- A join by a whole key (EB-S2) -----------------------------------
+        //
+        // The composite index entered per outer row by both its columns, by
+        // the outer row alone and by a literal with the outer row; the moved
+        // key, the covered column's move and the deleted row are each where
+        // a whole-key descent must not find more or fewer rows than the walk.
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.owner = a.owner WHERE c.qty = a.qty "
+        "AND a.id BETWEEN 1 AND 12 ORDER BY a.id, c.id",
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.qty = a.qty WHERE c.owner = 2 "
+        "AND a.id BETWEEN 1 AND 12 ORDER BY a.id, c.id",
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.qty = a.owner WHERE c.owner = a.qty "
+        "ORDER BY a.id, c.id",
     };
     return kQueries;
 }

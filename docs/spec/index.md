@@ -631,11 +631,14 @@ every key column still returns a set, and no index step is lookup-class.
 ### 8a. The correlated probe
 
 > **IX17 — a `kIndexProbe` may be keyed by an earlier step's row.** When an
-> index's **leading** key column is bound by equality to a column of an
-> earlier step or an enclosing chain — a join key — the step compiles to a
-> `kIndexProbe` whose leading key value is encoded **per outer row** from
-> the chain frame (`IndexProbe::key_from`), instead of the relation being
-> walked once per outer row.
+> index's key prefix is bound by equalities, at least one of them to a
+> column of an earlier step or an enclosing chain — a join key — and the
+> rest to literals, the step compiles to a `kIndexProbe` whose correlated
+> columns are encoded **per outer row** from the chain frame
+> (`IndexProbe::key_from`, one entry a column, in key order) and whose
+> literal columns are encoded at compile, instead of the relation being
+> walked once per outer row. A join on every column of a composite key
+> descends by the whole key (EB-S2).
 
 This is what an index-served inner join side is, and it serves the shape
 equality propagation cannot reach: a join with **no literal** to propagate
@@ -648,15 +651,18 @@ What it deliberately does not change:
   comes from.
 - **The per-row-encoding rule, by one priced exception.** §9's "no per-row
   key building" stands for every literal-keyed step; the correlated form
-  encodes exactly one fixed-width column per outer row, priced against the
-  full inner walk it replaces. The compile-time `low`/`high` stay as pure
-  padding templates the executor copies and fills.
-- **Selection purity.** First index in oid order whose leading column
-  carries such an equality, first qualifying conjunct in residual order —
-  no score, since the pinned prefix is always exactly 1. A literal equality
-  that `IndexProbeOf` can encode at compile time always wins over the
-  deferred form. Deeper prefixes mixing deferred and literal columns are
-  out of scope by decision.
+  encodes one fixed-width column per correlated key column per outer row,
+  priced against the inner walk it replaces. The compile-time `low`/`high`
+  carry the literal columns and pad the rest; the executor copies them and
+  fills the correlated widths.
+- **Selection purity.** The longest prefix, ties to the lowest `index_oid`,
+  each column pinned by a literal equality or by the first qualifying
+  correlated equality in residual order — the literal arm's rule (§9), so
+  it is still `f(shape, catalog)`. **A literal probe yields to a correlated
+  one only where the correlated prefix is longer** (EB-S2): at equal length
+  the literal probe, encoded once, wins as it always did; a longer prefix
+  descends by more of the key for every outer row, where the literal probe
+  would filter its run. No range follows a correlated prefix.
 - **The decline rule.** The outer column must share the key column's exact
   type descriptor (`type_val`, `len`) — the executor encodes the outer
   row's decoded value into this column's key format, and only an identical

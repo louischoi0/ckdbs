@@ -713,5 +713,154 @@ TEST_F(KeyBoundTest, AHeapsKeystoneIsWalkedInKeyOrderFromItsBound) {
     EXPECT_FALSE(Has(plan, "IndexRange")) << plan;
 }
 
+
+// ---- EB-S2: a join by a whole key ------------------------------------------
+//
+// `instructions/v3.2.0/workorder-eb-key-forms-in-the-executor.md` S2: a
+// correlated index probe descends by every prefix column an equality pins -
+// a literal's or an outer row's - and a join on every column of an embedded
+// primary key descends by the id the outer row's values encode to (EB-R3).
+// Each reply is checked against the same statement over a twin with no
+// index and no primary key, which walks.
+
+class WholeKeyJoinTest : public OrderedIndexWalkTest {
+protected:
+    std::string Plan(const std::string& sql) { return Run("ANALYZE " + sql); }
+    static bool Has(const std::string& plan, const std::string& what) {
+        return plan.find(what) != std::string::npos;
+    }
+    // `c (id, a, b, v)` and its twin `cp`, `a = id % 4`, `b = id`, with an
+    // index on (a, b) on `c` alone; `o` the outer side, its rows naming hits,
+    // a row whose `b` matches under another `a`, and a miss.
+    void LoadComposite() {
+        Run("CREATE TABLE c (id int64, a int64, b int64, v int64)");
+        Run("CREATE TABLE cp (id int64, a int64, b int64, v int64)");
+        for (int i = 1; i <= 200; ++i) {
+            const std::string row = "(" + std::to_string(i) + ", " + std::to_string(i % 4) +
+                                    ", " + std::to_string(i) + ", " + std::to_string(i * 10) +
+                                    ")";
+            Run("INSERT INTO c VALUES " + row);
+            Run("INSERT INTO cp VALUES " + row);
+        }
+        Run("CREATE INDEX c_ab ON c (a, b)");
+        Run("CREATE TABLE o (id int64, a int64, b int64)");
+        for (const char* row : {"(1, 1, 5)", "(2, 2, 6)", "(3, 3, 6)", "(4, 0, 200)",
+                                "(5, 1, 999)", "(6, 1, 5)"}) {
+            Run(std::string("INSERT INTO o VALUES ") + row);
+        }
+    }
+    // `e (a int32, b int16, v)` with its primary key embedded, and its twin
+    // `ep` with none; rows at each column's bounds, the one key 48 bits
+    // cannot name left out (it is refused).
+    void LoadEmbedded() {
+        Run("CREATE TABLE e (a int32, b int16, v int64, PRIMARY KEY (a, b))");
+        Run("CREATE TABLE ep (id int64, a int32, b int16, v int64)");
+        const std::vector<std::pair<std::string, std::string>> keys = {
+            {"0", "0"},           {"0", "1"},          {"1", "0"},
+            {"5", "7"},           {"5", "8"},          {"-1", "-1"},
+            {"-2147483648", "-32768"}, {"2147483647", "32766"}, {"2147483646", "32767"},
+            {"7", "-32768"},      {"7", "32767"}};
+        int id = 1;
+        for (const auto& [a, b] : keys) {
+            const std::string v = std::to_string(id * 100);
+            Run("INSERT INTO e VALUES (" + a + ", " + b + ", " + v + ")");
+            Run("INSERT INTO ep VALUES (" + std::to_string(id) + ", " + a + ", " + b + ", " + v +
+                ")");
+            ++id;
+        }
+        Run("CREATE TABLE q (id int64, ea int32 NULL, eb int16 NULL)");
+        for (const char* row :
+             {"(1, 0, 1)", "(2, 5, 8)", "(3, -2147483648, -32768)", "(4, 2147483647, 32766)",
+              "(5, 2147483646, 32767)", "(6, 2147483647, 32767)", "(7, 7, -32768)",
+              "(8, NULL, 0)", "(9, 0, NULL)", "(10, 5, 9)", "(11, -1, -1)", "(12, 5, 7)"}) {
+            Run(std::string("INSERT INTO q VALUES ") + row);
+        }
+    }
+};
+
+TEST_F(WholeKeyJoinTest, AJoinOnEveryColumnOfACompositeIndexDescendsByTheWholeKey) {
+    LoadComposite();
+    const std::string sql =
+        "SELECT o.id, c.id, c.v FROM o JOIN c ON c.a = o.a WHERE c.b = o.b ORDER BY o.id";
+    const std::string plan = Plan(sql);
+    EXPECT_TRUE(Has(plan, "IndexProbe c key=0:0.1,0:0.2")) << plan;
+    // One entry a matching outer row, where the leading column alone ran 50.
+    EXPECT_TRUE(Has(plan, "index_scanned=4 ")) << plan;
+    EXPECT_EQ(Rows(sql), Rows("SELECT o.id, cp.id, cp.v FROM o JOIN cp ON cp.a = o.a "
+                              "WHERE cp.b = o.b ORDER BY o.id"));
+    // Written the other way round, and with the equalities swapped.
+    EXPECT_EQ(Rows("SELECT o.id, c.id FROM o JOIN c ON o.b = c.b WHERE o.a = c.a ORDER BY o.id"),
+              Rows("SELECT o.id, cp.id FROM o JOIN cp ON cp.a = o.a WHERE cp.b = o.b "
+                   "ORDER BY o.id"));
+}
+
+TEST_F(WholeKeyJoinTest, ALiteralAndAJoinKeyTogetherAreTheProbesPrefix) {
+    LoadComposite();
+    const std::string sql = "SELECT o.id, c.id FROM o JOIN c ON c.b = o.b WHERE c.a = 1 "
+                            "ORDER BY o.id";
+    const std::string plan = Plan(sql);
+    EXPECT_TRUE(Has(plan, "IndexProbe c key=0:0.2")) << plan;
+    EXPECT_TRUE(Has(plan, "index_scanned=2 ")) << plan;
+    EXPECT_EQ(Rows(sql), Rows("SELECT o.id, cp.id FROM o JOIN cp ON cp.b = o.b WHERE cp.a = 1 "
+                              "ORDER BY o.id"));
+    // The leading column alone by the outer row is still a probe, as before.
+    const std::string lead = "SELECT o.id, c.id FROM o JOIN c ON c.a = o.a WHERE o.id = 1 "
+                             "ORDER BY c.id";
+    EXPECT_TRUE(Has(Plan(lead), "IndexProbe c key=0:0.1")) << Plan(lead);
+    EXPECT_EQ(Rows(lead), Rows("SELECT o.id, cp.id FROM o JOIN cp ON cp.a = o.a WHERE o.id = 1 "
+                               "ORDER BY cp.id"));
+}
+
+TEST_F(WholeKeyJoinTest, AJoinOnAnEmbeddedKeyDescendsByTheIdItsValuesEncodeTo) {
+    LoadEmbedded();
+    const std::string sql =
+        "SELECT q.id, e.a, e.b, e.v FROM q JOIN e ON e.a = q.ea WHERE e.b = q.eb ORDER BY q.id";
+    const std::string plan = Plan(sql);
+    EXPECT_TRUE(Has(plan, "Probe e key=embedded(0:0.1,0:0.2)")) << plan;
+    // Each column's bounds, a NULL on either side, a miss, and the one key
+    // 48 bits cannot name (q.id 6): the twin's walk is the answer.
+    EXPECT_EQ(Rows(sql), Rows("SELECT q.id, ep.a, ep.b, ep.v FROM q JOIN ep ON ep.a = q.ea "
+                              "WHERE ep.b = q.eb ORDER BY q.id"));
+    EXPECT_EQ(Rows(sql).size(), 8u);
+    // A literal and an outer column together (EB-S0's J3), ahead of the
+    // literal prefix's window.
+    const std::string mixed =
+        "SELECT q.id, e.v FROM q JOIN e ON e.b = q.eb WHERE e.a = 5 ORDER BY q.id";
+    EXPECT_TRUE(Has(Plan(mixed), "key=embedded(5,0:0.2)")) << Plan(mixed);
+    EXPECT_EQ(Rows(mixed), Rows("SELECT q.id, ep.v FROM q JOIN ep ON ep.b = q.eb WHERE ep.a = 5 "
+                                "ORDER BY q.id"));
+    // A literal that does not fit its column matches no row, as the walk's
+    // residual says.
+    EXPECT_TRUE(Rows("SELECT q.id FROM q JOIN e ON e.b = q.eb WHERE e.a = 9999999999").empty());
+}
+
+// EB-S1's review: an open end on another index's `ORDER BY` column does not
+// move a step the ladder put on a narrower index range with no prefix.
+TEST_F(KeyBoundTest, AnOpenEndDoesNotMoveAStepOffAnotherIndexsRange) {
+    LoadEvents();
+    Run("CREATE INDEX ev_at ON ev (created_at)");
+    Run("CREATE INDEX ev_kind ON ev (kind)");
+    const std::string sql =
+        "SELECT id, kind FROM ev WHERE created_at BETWEEN 1 AND 2 AND kind > 0 ORDER BY kind, id "
+        "LIMIT 10";
+    const std::string plan = Plan(sql);
+    EXPECT_TRUE(Has(plan, "IndexRange ev")) << plan;
+    EXPECT_FALSE(Has(plan, "order=index")) << plan;
+    EXPECT_EQ(Rows(sql), Window("SELECT id, kind FROM ev WHERE created_at BETWEEN 1 AND 2 AND "
+                                "kind > 0 ORDER BY kind, id",
+                                10, 0));
+}
+
+// A probe whose key is computed from an outer row records and replays no
+// trail (EB-Q10 (a)): `kProbe` is a replayable kind, and the computed key is
+// what takes the step off the line, as a key set does.
+TEST(EmbeddedProbeTrailTest, AnEmbeddedKeyProbeIsNoTrailsStep) {
+    exec::Step step;
+    step.kind = exec::AccessKind::kProbe;
+    ASSERT_TRUE(exec::IsTrailReplayableKind(step.kind));
+    step.embedded_probe.emplace();
+    EXPECT_FALSE(exec::IsTrailReplayable(step));
+}
+
 }  // namespace
 }  // namespace kds::server

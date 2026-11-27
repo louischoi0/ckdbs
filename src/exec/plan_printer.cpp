@@ -161,8 +161,19 @@ void PrintStep(std::ostringstream& os, const Step& step, int depth) {
     // A correlated index probe's key source (docs/spec/index.md §8a),
     // rendered from the probe's own field - the executor's single
     // authority; nothing is mirrored into `Step::key` for it.
-    if (step.index.has_value() && step.index->key_from.has_value()) {
-        os << " key=" << FormatColumnRef(*step.index->key_from);
+    if (step.index.has_value() && !step.index->key_from.empty()) {
+        os << " key=";
+        for (std::size_t i = 0; i < step.index->key_from.size(); ++i) {
+            os << (i == 0 ? "" : ",") << FormatColumnRef(step.index->key_from[i].from);
+        }
+    }
+    // An embedded key's computed probe (EB-S2): its operands in key order.
+    if (step.embedded_probe.has_value()) {
+        os << " key=embedded(";
+        for (std::size_t i = 0; i < step.embedded_probe->key.size(); ++i) {
+            os << (i == 0 ? "" : ",") << FormatOperand(step.embedded_probe->key[i]);
+        }
+        os << ')';
     }
     if (step.index.has_value() && step.index->home != 0) {
         os << " home=" << step.index->home;

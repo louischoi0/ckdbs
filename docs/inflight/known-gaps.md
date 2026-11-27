@@ -4186,10 +4186,6 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   `0c2092df8`; at `f85aa3042` the driver counts the updates that appended
   an entry, `key_updates`, and walks a heap, `index.md` §2.3); the key is
   off by default, and with it off nothing runs it.
-- **A join key enters an index by its leading column only**
-  (`CorrelatedIndexProbeOf`): a join on every column of a composite key
-  probes the first and filters the rest, so its cost follows the first
-  column's run, not the key's.
 - **A multi-column `ON CONFLICT` target is refused by the parser**, so a
   composite primary key arbitrates no upsert (P2c, its own order,
   DR-Q5 (a)).
@@ -4230,11 +4226,6 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
 - **A row may name another key's home**: `INSERT ... (keyidentity, ...)`
   on a hashed relation places the row at the id it wrote. It costs the
   home's own key its place and no answer.
-- **An embedded key's join is not keyed.** A join whose key is every
-  column of an embedded primary key is no lookup: the id is computed from
-  literals at compile, and nothing computes it from an outer row. The step
-  takes the statement-local build or a walk. Answers are right
-  (`btree_primary_key_test.cpp`); the cost is not measured.
 - **`ORDER BY` an embedded key is sorted, not elided.** The rows of such a
   relation are in key order, and a range by the key reads them so, but the
   elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
@@ -4244,12 +4235,15 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   index included, which the insert path could serve: no arbiter computes
   the id the row's key encodes to, and the refusal is not narrowed to the
   targets that need it.
-- **An embedded key's literal prefix on a joined relation is a range per
-  outer row.** `... JOIN e ON e.b = o.x WHERE e.a = 1` takes the tuple key
-  range of `a = 1` on `e`'s step, ahead of a correlated index probe and
-  the statement-local build, and walks that range once per outer row. It
-  is the rank an inclusive tuple key range has always had; answers are
-  right, the cost is not measured.
+- **An embedded key's literal prefix with a join on a column past the key
+  is a range per outer row** (EB-S2 narrowed it; verified on
+  `eb-key-forms-in-the-executor` over `cf3f5bb87`). Where every key column
+  is pinned - by literals and the outer row together, `... JOIN e ON e.b =
+  o.x WHERE e.a = 1` on a key `(a, b)` - the step descends by the id the
+  outer row's values encode to. Where only a prefix is pinned, the tuple key
+  range of the literal prefix still ranks ahead of a correlated index probe
+  and the statement-local build, and is walked once per outer row; answers
+  are right, the cost is not measured.
 - **`PURGE` on an embedded key names a live key by its id**: the refusal
   of a one-key window over a live row says `tuple key N is live`, not the
   key the statement wrote.

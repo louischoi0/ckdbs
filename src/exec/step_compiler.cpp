@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1287,6 +1288,55 @@ std::optional<EmbeddedKeyWindow> EmbeddedKeyWindowOnStep(const catalog::TableAcc
     return window.ok() ? window.value() : std::nullopt;
 }
 
+// What pins `col_pos` by an equality (EB-S2): a literal - already coerced
+// to the column at lowering (`CoercePredicate`) - or, failing one, the first
+// correlated equality whose other side is an earlier step's or an enclosing
+// chain's column of the same descriptor. nullopt where neither does. The
+// one search both whole-key arms ask, so the index probe and the embedded
+// probe cannot disagree about what a column is pinned by.
+std::optional<Operand> EqualitySourceOn(const Scope& scope, const catalog::TableAccess& access,
+                                        const Step& step, std::uint16_t slot,
+                                        std::uint16_t col_pos) {
+    Operand operand;
+    if (const parser::AstValue* lit = EqualityOnColumn(step, slot, col_pos)) {
+        operand.kind = OperandKind::kLiteral;
+        operand.literal = *lit;
+        return operand;
+    }
+    for (const StepPredicate& pred : step.residual) {
+        auto corr = CorrelatedEqualityOf(pred, slot);
+        if (corr.has_value() && corr->own.col_pos == col_pos &&
+            SameDescriptor(access.schema.columns[col_pos], ColumnAt(scope, corr->other))) {
+            operand.kind = OperandKind::kColumn;
+            operand.column = corr->other;
+            return operand;
+        }
+    }
+    return std::nullopt;
+}
+
+// **An embedded primary key pinned whole, by an outer row** (EB-S2): one
+// operand a key column, in key order (`EqualitySourceOn`), at least one an
+// outer column, or nullopt. Every column pinned, the id is one key's
+// (`exec::EmbeddedKeyId`), computed per outer row by the executor
+// (`Step::EmbeddedProbe`).
+std::optional<Step::EmbeddedProbe> EmbeddedProbeOnStep(const Scope& scope,
+                                                       const catalog::TableAccess& access,
+                                                       const Step& step, std::uint16_t slot) {
+    const catalog::EmbeddedKeyColumns& key = access.schema.embedded_key;
+    if (key.empty()) return std::nullopt;
+    Step::EmbeddedProbe probe;
+    bool correlated = false;
+    for (const std::uint16_t col_pos : key) {
+        auto operand = EqualitySourceOn(scope, access, step, slot, col_pos);
+        if (!operand.has_value()) return std::nullopt;
+        correlated = correlated || operand->kind == OperandKind::kColumn;
+        probe.key.push_back(std::move(*operand));
+    }
+    if (!correlated) return std::nullopt;  // a literal key is the lookup's
+    return probe;
+}
+
 // Everything about a probe that comes from the index alone: the catalog
 // fields, the column lists, and the padding templates the bounds are built
 // on top of - `low` all 0x00 and `high` all 0xFF, the true tail bounds
@@ -1578,7 +1628,7 @@ std::optional<IndexProbe> OrderedIndexChoiceOf(const catalog::TableAccess& acces
     std::vector<std::uint16_t> prefix;
     const bool indexed = (step.kind == AccessKind::kIndexProbe ||
                           step.kind == AccessKind::kIndexRange) &&
-                         step.index.has_value() && !step.index->key_from.has_value() &&
+                         step.index.has_value() && step.index->key_from.empty() &&
                          !step.key_set.has_value();
     if (indexed) {
         prefix.assign(step.index->key_cols.begin(),
@@ -1746,32 +1796,48 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
                                                  std::string_view only = {}) {
     if (access.indexes.empty()) return std::nullopt;
 
+    // **Every prefix column an equality pins** (EB-S2): a key column is
+    // pinned by a literal - encoded into the templates now, as a literal
+    // probe's is - or by an earlier step's column of the same descriptor,
+    // encoded per outer row (`IndexProbe::KeyFrom`), and the prefix stops at
+    // the first column neither pins. A prefix with no correlated column is
+    // the literal arm's. Of the indexes, the longest prefix, ties to the
+    // lowest oid (`TableAccess::indexes` is in oid order): the literal
+    // arm's own rule, so a join on every column of a composite key descends
+    // by the whole key.
+    std::optional<IndexProbe> best;
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         if (ix.building || ix.nkeys == 0) continue;  // CI-R1
         if (!only.empty() && !SameName(ix.name, only)) continue;  // a plan's pin
-        const std::uint16_t k0 = ix.keys()[0];
-
-        // Index-level facts, settled once per index rather than once per
-        // conjunct: if the leading column's key width cannot fit, no
-        // conjunct can enter this index.
-        const catalog::SysColumnRow& own_col = access.schema.columns[k0];
-        auto width = IndexKeyColumnWidth(own_col);
-        if (!width.ok() || width.value() > ix.key_width) continue;
-
-        for (const StepPredicate& pred : step.residual) {
-            auto eq = CorrelatedEqualityOf(pred, slot);
-            if (!eq.has_value() || eq->own.col_pos != k0) continue;
-            if (!SameDescriptor(own_col, ColumnAt(scope, eq->other))) continue;
-
-            // The templates stay as pure padding - the leading width is
-            // encoded per outer row by the executor, from `key_from`.
-            IndexProbe probe = ProbeOverIndex(ix);
-            probe.eq_prefix = 1;
-            probe.key_from = eq->other;
-            return probe;
+        if (best.has_value() && ix.nkeys <= best->eq_prefix) continue;
+        IndexProbe probe = ProbeOverIndex(ix);
+        std::size_t at = 0;
+        std::uint8_t eq = 0;
+        for (; eq < ix.nkeys; ++eq) {
+            const std::uint16_t col_pos = ix.keys()[eq];
+            const catalog::SysColumnRow& col = access.schema.columns[col_pos];
+            auto width = IndexKeyColumnWidth(col);
+            if (!width.ok() || at + width.value() > ix.key_width) break;
+            const auto source = EqualitySourceOn(scope, access, step, slot, col_pos);
+            if (!source.has_value()) break;
+            if (source->kind == OperandKind::kColumn) {
+                probe.key_from.push_back({eq, source->column});
+            } else {
+                if (!EncodeIndexKeyColumn(col, source->literal,
+                                          std::span<std::byte>(probe.low).subspan(at, width.value()))
+                         .ok()) {
+                    break;
+                }
+                std::memcpy(probe.high.data() + at, probe.low.data() + at, width.value());
+            }
+            at += width.value();
         }
+        if (probe.key_from.empty()) continue;
+        if (best.has_value() && eq <= best->eq_prefix) continue;
+        probe.eq_prefix = eq;
+        best = std::move(probe);
     }
-    return std::nullopt;
+    return best;
 }
 
 // The Cabin this step can probe, or nullopt.
@@ -2037,11 +2103,22 @@ std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
                                                 const Step& step, std::uint16_t slot,
                                                 std::string_view only, const CabinGate* cabin) {
     auto choice = IndexProbeOf(access, step, slot, /*with_lists=*/true, only);
-    if (choice.has_value() && choice->set.has_value() &&
-        (CorrelatedIndexProbeOf(scope, access, step, slot, only).has_value() ||
+    if (!choice.has_value()) return choice;
+    const auto correlated = CorrelatedIndexProbeOf(scope, access, step, slot, only);
+    if (choice->set.has_value() &&
+        (correlated.has_value() ||
          (cabin != nullptr &&
           CorrelatedCabinProbeOf(scope, access, step, slot, *cabin).has_value()))) {
-        return IndexProbeOf(access, step, slot, /*with_lists=*/false, only);
+        choice = IndexProbeOf(access, step, slot, /*with_lists=*/false, only);
+        if (!choice.has_value()) return choice;
+    }
+    // A correlated probe whose prefix is longer - a literal and a join key
+    // together, say - is the better entry to the same class (EB-S2): the
+    // literal one would descend by its shorter prefix and filter the run
+    // for every outer row. Declined here, it is taken by the correlated arm
+    // just below.
+    if (correlated.has_value() && correlated->eq_prefix > choice->probe.eq_prefix) {
+        return std::nullopt;
     }
     return choice;
 }
@@ -3707,10 +3784,20 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             // downgraded to a walk answers the same rows. Asked only of a
             // step no Keystone arm took, so a relation with no such key pays
             // one test on a walk and none on a keyed read (DR-R9).
-            const auto embedded =
-                tuple_key && !inclusive_range ? EmbeddedKeyWindowOnStep(rel, step, slot)
-                                              : std::nullopt;
-            if (inclusive_range) {
+            // **The embedded key pinned whole by an outer row** (EB-S2), at
+            // the window's rank and above it: the whole key is one row's,
+            // where a literal prefix's window is every row of the prefix,
+            // walked once per outer row.
+            auto embedded_probe = tuple_key && !inclusive_range
+                                      ? EmbeddedProbeOnStep(scope, rel, step, slot)
+                                      : std::nullopt;
+            const auto embedded = tuple_key && !inclusive_range && !embedded_probe.has_value()
+                                      ? EmbeddedKeyWindowOnStep(rel, step, slot)
+                                      : std::nullopt;
+            if (embedded_probe.has_value()) {
+                step.kind = AccessKind::kProbe;
+                step.embedded_probe = std::move(embedded_probe);
+            } else if (inclusive_range) {
                 step.kind = AccessKind::kRange;
                 step.range = key_range->bounds;
             } else if (embedded.has_value() && embedded->lo == embedded->hi) {

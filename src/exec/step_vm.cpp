@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include "kds/exec/embedded_key.hpp"
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -634,8 +635,12 @@ private:
 
         ++stats_.For(step.step_id).relation_opens;
         if (step.kind == AccessKind::kLookup || step.kind == AccessKind::kProbe) {
-            // A key set is on `kLookup` and has no `key` (CU).
+            // A key set is on `kLookup` and has no `key` (CU); nor has an
+            // embedded key's computed probe, on `kProbe` (EB-S2).
             if (step.key_set.has_value()) co_return RunKeySetStep(steps, index, step, access);
+            if (step.embedded_probe.has_value()) {
+                co_return RunEmbeddedProbeStep(steps, index, step, access);
+            }
             co_return co_await RunPointStep(steps, index, step, access);
         }
         if (step.kind == AccessKind::kCabinProbe) {
@@ -689,6 +694,52 @@ private:
             if (Status s = AcceptByKey(steps, index, step, access, item.key); !s.ok()) return s;
         }
         return Status::OK();
+    }
+
+    // An embedded primary key's id computed from its operands - literals and
+    // the outer row's columns - and the one descent it names (EB-S2,
+    // `Step::EmbeddedProbe`). The id is `exec::EmbeddedKeyId`'s, the
+    // encoder every insert placed its row by (EB-R3), so the descent finds
+    // the row an insert of these values would have placed; a key that does
+    // not encode - a NULL, the one key 48 bits cannot name - names no row
+    // and emits nothing, never another row's id. Every row found is
+    // filtered by the residual, which still holds each equality. Not a
+    // coroutine, as a key set's runner is not.
+    Status RunEmbeddedProbeStep(const std::vector<Step>& steps, std::size_t index,
+                                const Step& step, const catalog::TableAccess& access) {
+        if (step.embedded_probe->key.size() != access.schema.embedded_key.size()) {
+            return Status::Corruption(
+                "an embedded key probe names another number of columns than the key has");
+        }
+        embedded_values_.clear();
+        for (const Operand& operand : step.embedded_probe->key) {
+            if (operand.kind == OperandKind::kLiteral) {
+                embedded_values_.push_back(operand.literal);
+                continue;
+            }
+            if (!frame_.CanResolve(operand.column)) {
+                return Status::Corruption(
+                    "an embedded key probe references a column the frame cannot resolve");
+            }
+            const parser::AstValue& value = frame_.Get(operand.column);
+            if (Status s = RefuseUnboundParam(value); !s.ok()) return s;
+            embedded_values_.push_back(value);
+        }
+        auto id = EmbeddedKeyId(access.schema, embedded_values_);
+        if (!id.ok()) {
+            // Known to match nothing: a NULL (`NotImplemented`), and a value
+            // past its column's width or the one key 48 bits cannot name
+            // (`OutOfRange`) - no row was ever placed with either. Any other
+            // refusal is not known to match no row (CU-Q11's rule), so it is
+            // said, never answered as an empty set.
+            const StatusCode code = id.status().code();
+            if (code == StatusCode::kNotImplemented || code == StatusCode::kOutOfRange) {
+                return Status::OK();
+            }
+            return Status::Corruption("an embedded key probe's values do not encode: " +
+                                      id.status().message());
+        }
+        return AcceptByKey(steps, index, step, access, id.value());
     }
 
     // One tuple key descent and the row it finds, through the memo, a
@@ -1557,43 +1608,60 @@ private:
         // the walk, per this function's opening rule.
         const std::vector<std::byte>* low = &probe.low;
         const std::vector<std::byte>* high = &probe.high;
-        if (probe.key_from.has_value()) {
-            // The live index's leading column must be the one the compiler
-            // chose: the value is encoded into *that* column's key format,
-            // and a different one would narrow the range to a column the
-            // residual never bound - a lost row, where the stale cases
-            // above merely walk. Unreachable while index oids are never
-            // reissued; guarded because this is the one decline whose
-            // absence would be a wrong answer rather than an error.
-            if (ix->nkeys == 0 || probe.key_cols.empty() ||
-                probe.key_cols[0] != ix->keys()[0]) {
-                co_return co_await RunWalkStep(steps, index, step, access);
-            }
-            if (!frame_.CanResolve(*probe.key_from)) {
-                co_return Status::Corruption(
-                    "a correlated index probe references a column the frame cannot resolve");
-            }
-            const parser::AstValue& value = frame_.Get(*probe.key_from);
-            // A frame never holds a param at execute; refused rather than
-            // encoded if one ever appears, per KeyFromOperand's discipline.
-            if (value.type == parser::ValueType::kParam) {
-                co_return co_await RunWalkStep(steps, index, step, access);
-            }
-            const catalog::SysColumnRow& col = access.schema.columns[ix->keys()[0]];
-            auto width = IndexKeyColumnWidth(col);
-            if (!width.ok() || width.value() > ix->key_width) {
+        if (!probe.key_from.empty()) {
+            // The live index's prefix columns must be the ones the compiler
+            // chose: each value is encoded into *that* column's key format
+            // at *that* column's offset, and a different column would narrow
+            // the range to one the residual never bound - a lost row, where
+            // the stale cases above merely walk. Unreachable while index
+            // oids are never reissued; guarded because this is the one
+            // decline whose absence would be a wrong answer rather than an
+            // error.
+            const std::size_t prefix = probe.eq_prefix;
+            if (ix->nkeys < prefix || probe.key_cols.size() < prefix ||
+                !std::equal(probe.key_cols.begin(),
+                            probe.key_cols.begin() + static_cast<std::ptrdiff_t>(prefix),
+                            ix->keys().begin())) {
                 co_return co_await RunWalkStep(steps, index, step, access);
             }
             corr_low_.assign(probe.low.begin(), probe.low.end());
             corr_high_.assign(probe.high.begin(), probe.high.end());
-            if (!EncodeIndexKeyColumn(col, value,
-                                      std::span<std::byte>(corr_low_).subspan(0, width.value()))
-                     .ok()) {
+            std::size_t offset = 0;
+            std::size_t next = 0;  // the next `key_from` entry, in key order
+            for (std::size_t i = 0; i < prefix; ++i) {
+                const catalog::SysColumnRow& col = access.schema.columns[ix->keys()[i]];
+                auto width = IndexKeyColumnWidth(col);
+                if (!width.ok() || offset + width.value() > ix->key_width) {
+                    co_return co_await RunWalkStep(steps, index, step, access);
+                }
+                if (next < probe.key_from.size() && probe.key_from[next].at == i) {
+                    const ColumnRef& from = probe.key_from[next++].from;
+                    if (!frame_.CanResolve(from)) {
+                        co_return Status::Corruption(
+                            "a correlated index probe references a column the frame cannot "
+                            "resolve");
+                    }
+                    const parser::AstValue& value = frame_.Get(from);
+                    // A frame never holds a param at execute; refused rather
+                    // than encoded if one ever appears, per KeyFromOperand's
+                    // discipline.
+                    if (value.type == parser::ValueType::kParam) {
+                        co_return co_await RunWalkStep(steps, index, step, access);
+                    }
+                    const std::span<std::byte> at =
+                        std::span<std::byte>(corr_low_).subspan(offset, width.value());
+                    if (!EncodeIndexKeyColumn(col, value, at).ok()) {
+                        co_return co_await RunWalkStep(steps, index, step, access);
+                    }
+                    // The equality's two bounds share these bytes; only the
+                    // padding tails differ, so the encode happens once.
+                    std::memcpy(corr_high_.data() + offset, at.data(), width.value());
+                }
+                offset += width.value();
+            }
+            if (next != probe.key_from.size()) {
                 co_return co_await RunWalkStep(steps, index, step, access);
             }
-            // The equality's two bounds share their leading bytes; only the
-            // padding tails differ, so the encode happens once.
-            std::memcpy(corr_high_.data(), corr_low_.data(), width.value());
             low = &corr_low_;
             high = &corr_high_;
         }
@@ -3499,6 +3567,11 @@ private:
     // re-enters RunStep - phase 2, which does, no longer touches them.
     std::vector<std::byte> corr_low_;
     std::vector<std::byte> corr_high_;
+
+    // An embedded key probe's values, one a key column (EB-S2,
+    // `RunEmbeddedProbeStep`): on the runner for `corr_low_`'s allocation
+    // reason, and read only before the descent re-enters `RunStep`.
+    std::vector<parser::AstValue> embedded_values_;
 
     // The ordered index run's key check (CV-R2): the entry key the row in
     // `AcceptTupleAt` was reached by, whether its visible version matched,

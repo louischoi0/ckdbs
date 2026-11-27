@@ -228,6 +228,13 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
             matches = std::min(matches, 1.0);
             break;
         }
+        // So does an embedded primary key bound whole (EB-S2): it is the
+        // Keystone id, unique as an id is.
+        const catalog::EmbeddedKeyColumns& embedded = access->schema.embedded_key;
+        if (!embedded.empty() && std::all_of(embedded.begin(), embedded.end(), is_bound)) {
+            if (std::all_of(embedded.begin(), embedded.end(), is_pinned)) own = std::min(own, 1.0);
+            matches = std::min(matches, 1.0);
+        }
     }
 
     StepEstimate e;
