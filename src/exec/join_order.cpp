@@ -149,7 +149,8 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
             own *= kOtherSelectivity;  // unreachable by placement; costed, not trusted
             continue;
         }
-        if (step.kind == AccessKind::kRange && pred.lhs.col_pos == 0 && IsRangeEnd(pred.op)) {
+        if (step.kind == AccessKind::kRange && step.range.has_value() && !step.range->open &&
+            pred.lhs.col_pos == 0 && IsRangeEnd(pred.op)) {
             continue;  // the walked span below is this bound's estimate
         }
         if (pred.op == parser::CompareOp::kEq) {
@@ -183,7 +184,11 @@ StepEstimate Estimate(const Block& block, std::size_t slot) {
     }
 
     double span = relation_rows;  // what a kRange walks
-    if (step.kind == AccessKind::kRange && step.range.has_value()) {
+    if (step.kind == AccessKind::kRange && step.range.has_value() && step.range->open) {
+        // An open end (EB-S1): the window's width is the key space's, so the
+        // walk is priced as its bound keeps, which the conjunct loop applied.
+        span = relation_rows * kRangeEndSelectivity;
+    } else if (step.kind == AccessKind::kRange && step.range.has_value()) {
         // The span's half-octave band (CC-Q12), dense keys assumed: exact
         // for issued keys before deletes.
         const double width = static_cast<double>(step.range->high - step.range->low) + 1.0;

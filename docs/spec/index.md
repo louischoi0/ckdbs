@@ -529,8 +529,12 @@ direction wrong is the difference between a lost row and a wasted descent.
 > search-class; `IsTrailReplayable` does not move.**
 
 - `kIndexProbe` — equalities covering a prefix of the index's key columns.
-- `kIndexRange` — equalities covering a prefix, plus an inclusive range on
-  the next key column; or a range on the first.
+- `kIndexRange` — equalities covering a prefix, plus a range on the next
+  key column; or a range on the first. The range is inclusive at both ends
+  wherever the ladder ranks it (IX9); a strict `>`/`<` end is read as the
+  inclusive end on its literal, the residual dropping the equal entries, and
+  an open end is the template's padding - each only at the ranks IX9's
+  "open or strict end" item names (EB-S1).
 
 > **IX8a — an index step emits its rows in tuple key order** - every index
 > step but one an elided `ORDER BY` rests on (IX8c).
@@ -750,6 +754,21 @@ Two rules that keep every existing proof standing:
   is undecided, and the two spellings rank apart until it is decided
   (`TupleKeyRangeOf`, `src/exec/step_compiler.cpp`).
 
+- **An open or strict end ranks where a strict tuple key range ranks**
+  (EB-S1, EB-Q2 (b) as adopted on the operator's standing go-ahead of
+  2026-11-27). Below that range, in this order, and each only on a step
+  still a bare walk with no build: **a window bounded at both ends on an
+  index with a strict end** - a heap's Keystone index included - is the
+  index's range; then **a btree's tuple key bounded at one end** is the
+  range from the bound to the key space's end (`1` or `2^48 - 1`), a subset
+  of the walk's leaves in the walk's order, which seeds the reverse walk
+  under `ORDER BY <tuple key> DESC LIMIT`. An index bounded at one end is no
+  range to the ladder: with no order to stop it, it would resolve entry
+  after entry at random where the walk reads in page order; it is taken by
+  the ordered walk alone (next item). **The write ladder reads none of this**
+  (EB-Q9 (a)): `WriteIndexArmOf` and `WriteRangeOutranksIndex` read the
+  inclusive two-sided bound they always read (§9a).
+
 - **An `ORDER BY` an index holds moves the driving step to that index**
   (CV-Q3 (a) as revised, CV-S2). After the ladder has chosen, on the
   driving step alone, under a LIMIT (CV-Q2 (a)) and where the plan's pin
@@ -761,7 +780,14 @@ Two rules that keep every existing proof standing:
   the high end down for a descending one. It never displaces a lookup, a key set, a
   correlated probe or a longer prefix, and it reads no statistic. Over a
   bare walk the prefix is empty, and the index is taken only where the step
-  carries no conjunct at all. **A string order key keeps its sort**
+  carries no conjunct at all, or none but bounds on the first order key by
+  literals (EB-S1): then a strict or an open end seeds the walk, which
+  resolves only rows the reply wants but a strict end's equal entries, and
+  the LIMIT stops it. After a prefix the range on the next key may be open
+  or strict too. **A heap's tuple key alone is an order key** (EB-S1): its
+  Keystone index holds the tuple key as its one, unique key, so `ORDER BY
+  keyidentity [DESC] LIMIT n` walks that index, from a bound where one is
+  written; a heap's walk itself is in no key's order. **A string order key keeps its sort**
   (CV-Q7 (a)): IX6 truncates it, and values sharing the prefix sit in tuple
   key order. A key the prefix also binds by equality keeps the sort too.
   Because the keys after the prefix are exactly the `ORDER BY`'s, ties come

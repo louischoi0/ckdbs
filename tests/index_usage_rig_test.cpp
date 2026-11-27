@@ -131,11 +131,6 @@ TEST_F(IndexUsageRig, AnIndexNoReadNamesStaysAtZeroAndOneItNamesMoves) {
 }
 
 TEST_F(IndexUsageRig, ARangeIsCountedApartFromAProbe) {
-    // A strict bound is no index range (`index.md`): the relation is walked,
-    // and the index it could have named is not used.
-    ASSERT_EQ(Run(1, "SELECT id FROM t WHERE w > 2 AND w < 6 ORDER BY id"), "id\\n3\\n4\\n5");
-    EXPECT_EQ(UsageOf(0, "t_w").last_used, "NULL");
-
     ASSERT_EQ(Run(1, "SELECT id FROM t WHERE w >= 3 AND w <= 5 ORDER BY id"), "id\\n3\\n4\\n5");
     Usage w = UsageOf(0, "t_w");
     EXPECT_EQ(w.probes, 0u);
@@ -145,11 +140,20 @@ TEST_F(IndexUsageRig, ARangeIsCountedApartFromAProbe) {
     EXPECT_NE(w.last_used, "NULL");
     EXPECT_EQ(UsageOf(0, "t_v").ranges, 0u);
 
+    // A strict window is a range too, at the last rank (`index.md` IX9,
+    // EB-S1): each strict end is read inclusively, so the entries at 2 and 6
+    // are scanned and resolved and the residual drops their rows.
+    ASSERT_EQ(Run(1, "SELECT id FROM t WHERE w > 2 AND w < 6 ORDER BY id"), "id\\n3\\n4\\n5");
+    w = UsageOf(0, "t_w");
+    EXPECT_EQ(w.ranges, 2u);
+    EXPECT_EQ(w.entries_scanned, 8u);
+    EXPECT_EQ(w.rows_resolved, 8u);
+
     // `ANALYZE` runs the statement, and its run is a use like any other.
     ASSERT_FALSE(StartsWith(Run(0, "ANALYZE SELECT id FROM t WHERE w >= 3 AND w <= 5"), "ERR"));
     w = UsageOf(0, "t_w");
-    EXPECT_EQ(w.ranges, 2u);
-    EXPECT_EQ(w.entries_scanned, 6u);
+    EXPECT_EQ(w.ranges, 3u);
+    EXPECT_EQ(w.entries_scanned, 11u);
 }
 
 TEST_F(IndexUsageRig, AWriteUsesTheIndexItsWhereEntersAndNoOther) {

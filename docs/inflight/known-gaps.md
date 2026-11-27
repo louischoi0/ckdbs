@@ -3531,11 +3531,6 @@ Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
   the subtree's right part, per step. Correct (the rig cell grows a level
   under the walk), not measured; a LIMIT keeps it short, and a filter that
   matches nothing walks it whole.
-- **A one-sided bound does not seed the reverse walk**: `WHERE id < ?
-  ORDER BY id DESC LIMIT 20` - keyset pagination - starts at the relation's
-  top and filters every row above the bound, because a one-sided bound is
-  no tuple key range (`TupleKeyRangeOf`). `BETWEEN` seeds it.
-
 - **A reverse walk's leaf miss is a blocking read on its reactor.** DE
   gives the forward walk's leaf fetch a read off the reactor and a park
   (`page.md` §12); the reverse walk (O2) fetches each leaf, and makes each
@@ -3924,11 +3919,14 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
   UPDATE by key 4 %. The 20-50 us btree cells' control spread (-20 % to
   +45 %) leaves a few percent there unresolved.
 
-- **A Keystone range is a full scan.** `WHERE keyidentity > 2` (or a range on
-  a declared Keystone) is answered by the walk with the range in the
-  residual; the Keystone index is not chosen for it, so a heap's key range
-  costs the relation, where `heap-and-tuple.md` §3.1b's index range walk
-  would cost the range.
+- **A heap's Keystone bounded at one end, with no order to stop it, is a
+  walk** (EB-S1, verified on `eb-key-forms-in-the-executor` over
+  `e2dec50f7`): `WHERE keyidentity > 2`
+  alone resolves no entry through the Keystone index, because a range open
+  at one end would resolve entry after entry where the walk reads in page
+  order. A window bounded at both ends, strict or inclusive, is the index's
+  range, and `ORDER BY keyidentity [DESC] LIMIT n` walks the index from the
+  bound (`index.md` IX9).
 - **A heap has no sampled planner prior.** `plan_stats`' descent-sampled
   prior reads no data page, so a heap is priced at constant fill and a join
   block holding one is not captured under `join_order = fixed`; `GATHER
@@ -4164,12 +4162,18 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   host).
 - **The btree's walked `UPDATE` reads 5.9 % cheaper than at the commit DR
   opened from**, in 15 of 15 rounds, and nothing in DR accounts for it.
-- **A page by key is a walk on every structure** (DR-Q17): `WHERE key >= x
-  ORDER BY key LIMIT n` is a filtered scan from the head on a btree's tuple
-  key (1.0 ms at 100,000 rows) and a scan and a sort on a heap's Keystone
-  and on any index (5.8 ms to 9.0 ms), because a one-sided bound is a range
-  to no arm of the ladder. Served only behind an equality prefix (CV). Not
-  a primary key's gap, and its own order.
+- **A page by key keeps its cost beside a conjunct on another column**
+  (EB-S1, verified on `eb-key-forms-in-the-executor` over `e2dec50f7`):
+  `WHERE k >= x ORDER BY k LIMIT n` is a range of the tuple key's leaves
+  from `x` on a btree, and the Keystone index or any index walked from `x`
+  on a heap or an index key (DR-Q17's shapes,
+  `bench/v3.5.0/results-eb-s0-premise-v3.4.17-225-gb761306e0.md`). Beside
+  another conjunct it is not: on an index key the sort stays, because the
+  walk would resolve entry after entry at random to find its rows
+  (`index.md` IX9, CV-Q3 (a)); on a btree's tuple key an equality on an
+  unindexed column is a filter scan from the head, which the open range,
+  at the last rank, does not displace (the operator's ruling (a) of
+  2026-10-15). An index bounded at one end with no `ORDER BY` is no range.
 - **A moved key's old entry is purged only beside a retired slot, unless
   `index_purge_driver` is on** (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
   one, which a reader's residual drops and the unique check passes over.

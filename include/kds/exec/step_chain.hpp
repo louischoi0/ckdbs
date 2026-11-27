@@ -249,6 +249,11 @@ constexpr bool IsIndexOrder(EmitOrder order) noexcept {
 struct RangeBounds {
     std::uint64_t low = 0;
     std::uint64_t high = 0;
+    // One end is the key space's own, not the statement's (EB-S1): the
+    // range a bound written at one end alone stands for. The join planner
+    // prices such a bound as a bound, not the window's width, which says
+    // nothing (`join_order.cpp`).
+    bool open = false;
 };
 
 // What a kCabinProbe step probes: which Cabin, and with which value.

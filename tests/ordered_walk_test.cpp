@@ -512,5 +512,206 @@ TEST_F(OrderedIndexWalkTest, AnOrderedWalkReachesItsEndAtOnePageASlice) {
     }
 }
 
+
+// ---- EB-S1: a bound with an open or a strict end ----------------------------
+//
+// `instructions/v3.2.0/workorder-eb-key-forms-in-the-executor.md` S1,
+// EB-Q2 (b) as adopted: an open or strict end ranks where a strict tuple key
+// range ranks - it replaces a bare walk and nothing else - and an index
+// takes one where its walk in key order seeds an elided `ORDER BY ...
+// LIMIT`. Every reply is checked against a twin the engine answered before
+// EB, so the arm changes the cost and never the rows (EB-R1).
+
+class KeyBoundTest : public OrderedIndexWalkTest {
+protected:
+    std::string Plan(const std::string& sql) { return Run("ANALYZE " + sql); }
+    static bool Has(const std::string& plan, const std::string& what) {
+        return plan.find(what) != std::string::npos;
+    }
+    static std::uint64_t Examined(const std::string& plan) {
+        const auto at = plan.find("examined=");
+        return at == std::string::npos ? ~std::uint64_t{0} : std::stoull(plan.substr(at + 9));
+    }
+};
+
+TEST_F(KeyBoundTest, AnOpenTupleKeyBoundIsARangeOfTheWalksOwnLeaves) {
+    LoadWide("t", 300);
+    // Forward: from the bound to the top, elided, the LIMIT stopping it.
+    std::string plan = Plan("SELECT id, k FROM t WHERE id >= 120 ORDER BY id LIMIT 10");
+    EXPECT_TRUE(Has(plan, "Range t range=[120, 281474976710655]")) << plan;
+    EXPECT_FALSE(Has(plan, "sorted=")) << plan;
+    EXPECT_LE(Examined(plan), 16u) << plan;
+    EXPECT_EQ(Rows("SELECT id, k FROM t WHERE id >= 120 ORDER BY id LIMIT 10"),
+              Window("SELECT id, k FROM t WHERE id >= 120 AND id <= 300 ORDER BY id", 10, 0));
+    EXPECT_EQ(Rows("SELECT id FROM t WHERE id > 119 ORDER BY id LIMIT 10"),
+              Rows("SELECT id FROM t WHERE id >= 120 ORDER BY id LIMIT 10"));
+    // Backward: keyset pagination, seeded at the bound (known-gaps "A
+    // one-sided bound does not seed the reverse walk").
+    ExpectElidedWindow("SELECT id, k FROM t WHERE id < 200 ORDER BY id DESC", 20, 0,
+                       "tuple_key_desc");
+    ExpectElidedWindow("SELECT id FROM t WHERE id <= 37 ORDER BY id DESC", 5, 3,
+                       "tuple_key_desc");
+    plan = Plan("SELECT id FROM t WHERE id < 200 ORDER BY id DESC LIMIT 20");
+    EXPECT_TRUE(Has(plan, "Range t range=[1, 199]")) << plan;
+    EXPECT_LE(Examined(plan), 28u) << plan;
+    // Without an order, the rows the walk with the residual gave.
+    EXPECT_EQ(Rows("SELECT id FROM t WHERE id >= 290"),
+              Rows("SELECT id FROM t WHERE id BETWEEN 290 AND 300"));
+    // The bounds that hold for no key: an inverted range and a bound above
+    // the key space each stay the walk, and answer nothing.
+    EXPECT_TRUE(Rows("SELECT id FROM t WHERE id < 1").empty());
+    EXPECT_TRUE(Rows("SELECT id FROM t WHERE id >= 281474976710656").empty());
+    plan = Plan("SELECT id FROM t WHERE id >= 281474976710656");
+    EXPECT_FALSE(Has(plan, "Range t")) << plan;
+}
+
+TEST_F(KeyBoundTest, AnOpenTupleKeyBoundDisplacesNoOtherArm) {
+    LoadWide("t", 120);
+    Run("CREATE INDEX t_k ON t (k)");
+    // An index equality outranks it.
+    std::string plan = Plan("SELECT id FROM t WHERE k = 3 AND id >= 10");
+    EXPECT_TRUE(Has(plan, "IndexProbe t")) << plan;
+    EXPECT_EQ(Rows("SELECT id FROM t WHERE k = 3 AND id >= 10"),
+              Rows("SELECT id FROM t WHERE k = 3 AND id BETWEEN 10 AND 120"));
+    // A window bounded at both ends on an index, strict or not, is taken
+    // before a tuple key range bounded at one.
+    plan = Plan("SELECT id FROM t WHERE id >= 10 AND k > 2 AND k < 4");
+    EXPECT_TRUE(Has(plan, "IndexRange t")) << plan;
+    EXPECT_EQ(Rows("SELECT id FROM t WHERE id >= 10 AND k > 2 AND k < 4"),
+              Rows("SELECT id FROM t WHERE id BETWEEN 10 AND 120 AND k = 3"));
+    // A strict two-sided tuple key range still ranks before the index window.
+    plan = Plan("SELECT id FROM t WHERE id > 9 AND id < 30 AND k > 2 AND k < 4");
+    EXPECT_TRUE(Has(plan, "Range t range=[10, 29]")) << plan;
+}
+
+TEST_F(KeyBoundTest, AStrictWindowOnAnIndexIsTheInclusiveWindowsRows) {
+    LoadEvents();
+    Run("CREATE INDEX ev_at ON ev (created_at)");
+    const std::string strict = "SELECT id FROM ev WHERE created_at > 20 AND created_at < 31";
+    std::string plan = Plan(strict);
+    EXPECT_TRUE(Has(plan, "IndexRange ev")) << plan;
+    EXPECT_EQ(Rows(strict),
+              Rows("SELECT id FROM ev WHERE created_at >= 21 AND created_at <= 30"));
+    // One end strict, the other inclusive; an inclusive end written beside a
+    // strict one on the same side wins.
+    EXPECT_EQ(Rows("SELECT id FROM ev WHERE created_at > 20 AND created_at <= 30"),
+              Rows("SELECT id FROM ev WHERE created_at >= 21 AND created_at <= 30"));
+    EXPECT_EQ(Rows("SELECT id FROM ev WHERE created_at > 20 AND created_at >= 20 AND "
+                   "created_at < 31"),
+              Rows("SELECT id FROM ev WHERE created_at >= 21 AND created_at <= 30"));
+    // An empty window and an inverted one.
+    EXPECT_TRUE(Rows("SELECT id FROM ev WHERE created_at > 30 AND created_at < 31").empty());
+    EXPECT_TRUE(Rows("SELECT id FROM ev WHERE created_at > 40 AND created_at < 10").empty());
+    // One end alone, with no order to stop it, is no range to the ladder.
+    plan = Plan("SELECT id FROM ev WHERE created_at > 100");
+    EXPECT_FALSE(Has(plan, "IndexRange")) << plan;
+}
+
+TEST_F(KeyBoundTest, AnOpenIndexBoundSeedsTheOrderedWalk) {
+    LoadEvents();
+    Run("CREATE INDEX ev_at ON ev (created_at)");
+    ExpectElidedWindow("SELECT id, created_at FROM ev WHERE created_at >= 50 ORDER BY created_at",
+                       20, 0, "index_asc");
+    ExpectElidedWindow("SELECT id, created_at FROM ev WHERE created_at > 50 ORDER BY created_at",
+                       15, 4, "index_asc");
+    ExpectElidedWindowAgainst(
+        "SELECT id, created_at FROM ev WHERE created_at < 90 ORDER BY created_at DESC",
+        "SELECT id, created_at FROM ev WHERE created_at < 90 ORDER BY created_at DESC, id DESC",
+        12, 0, "index_desc");
+    // Seeded: the walk resolves the rows it returns, not the rows below x.
+    std::string plan =
+        Plan("SELECT id FROM ev WHERE created_at >= 130 ORDER BY created_at LIMIT 5");
+    EXPECT_LE(Examined(plan), 5u) << plan;
+    // A conjunct on another column keeps the sort: the walk would resolve
+    // entry after entry at random to find its rows.
+    plan = Plan("SELECT id FROM ev WHERE kind = 1 AND created_at >= 50 ORDER BY created_at "
+                "LIMIT 5");
+    EXPECT_FALSE(Has(plan, "order=index")) << plan;
+    // After an equality prefix, the open end seeds the range on the next key.
+    Run("CREATE INDEX ev_user_at ON ev (user_id, created_at)");
+    ExpectElidedWindow(
+        "SELECT id FROM ev WHERE user_id = 3 AND created_at > 70 ORDER BY created_at, id", 10, 0,
+        "index_asc");
+    // A NULL bound holds for no row.
+    EXPECT_TRUE(Rows("SELECT id FROM ev WHERE created_at >= NULL ORDER BY created_at LIMIT 3")
+                    .empty());
+}
+
+TEST_F(KeyBoundTest, AStrictEndOnAStringLongerThanItsStoredPrefix) {
+    // Values sharing the first 32 bytes the index stores (IX6): the strict
+    // window holds every entry of the prefix, and the residual decides.
+    Run("CREATE TABLE s (id int64, name varchar(64))");
+    Run("CREATE TABLE sp (id int64, name varchar(64))");
+    const std::string stem(32, 'p');
+    for (int i = 1; i <= 30; ++i) {
+        const std::string name = "'" + stem + std::string(1, static_cast<char>('a' + i % 26)) +
+                                 std::to_string(i) + "'";
+        Run("INSERT INTO s VALUES (" + std::to_string(i) + ", " + name + ")");
+        Run("INSERT INTO sp VALUES (" + std::to_string(i) + ", " + name + ")");
+    }
+    Run("CREATE INDEX s_name ON s (name)");
+    const std::string where = " WHERE name > '" + stem + "c' AND name < '" + stem + "k3'";
+    EXPECT_TRUE(Has(Plan("SELECT id FROM s" + where), "IndexRange s"))
+        << Plan("SELECT id FROM s" + where);
+    EXPECT_EQ(Rows("SELECT id FROM s" + where + " ORDER BY id"),
+              Rows("SELECT id FROM sp" + where + " ORDER BY id"));
+    EXPECT_FALSE(Rows("SELECT id FROM sp" + where).empty());
+}
+
+TEST_F(KeyBoundTest, AnOpenTupleKeyBoundInAJoinIsPricedAsABound) {
+    // The planner prices an open range by its bound, not by a window as
+    // wide as the key space (`join_order.cpp`), and the rows are the
+    // two-sided twin's.
+    LoadWide("t", 120);
+    Run("CREATE TABLE u (id int64, t_id int64)");
+    for (int i = 1; i <= 40; ++i) {
+        Run("INSERT INTO u VALUES (" + std::to_string(i) + ", " + std::to_string(i * 3) + ")");
+    }
+    EXPECT_EQ(Rows("SELECT u.id, t.id FROM t JOIN u ON u.t_id = t.id WHERE t.id >= 60 "
+                   "ORDER BY u.id"),
+              Rows("SELECT u.id, t.id FROM t JOIN u ON u.t_id = t.id WHERE t.id >= 60 "
+                   "AND t.id <= 120 ORDER BY u.id"));
+}
+
+TEST_F(KeyBoundTest, AHeapsKeystoneUnderAValueListKeepsItsSort) {
+    Run("CREATE TABLE h (k int64, v int64) HEAP");
+    for (int i = 1; i <= 40; ++i) {
+        Run("INSERT INTO h (k, v) VALUES (" + std::to_string(i % 3) + ", " + std::to_string(i) +
+            ")");
+    }
+    const std::string sql =
+        "SELECT keyidentity FROM h WHERE keyidentity IN (30, 4, 17) ORDER BY keyidentity DESC "
+        "LIMIT 2";
+    EXPECT_FALSE(Has(Plan(sql), "order=index")) << Plan(sql);
+    EXPECT_EQ(Rows(sql), (std::vector<std::string>{"30", "17"}));
+}
+
+TEST_F(KeyBoundTest, AHeapsKeystoneIsWalkedInKeyOrderFromItsBound) {
+    Run("CREATE TABLE h (k int64, v int64) HEAP");
+    for (int i = 1; i <= 300; ++i) {
+        Run("INSERT INTO h (k, v) VALUES (" + std::to_string(i % 7) + ", " + std::to_string(i) +
+            ")");
+    }
+    Run("DELETE FROM h WHERE keyidentity = 125");
+    Run("UPDATE h SET v = 0 WHERE keyidentity = 126");
+    const std::string page =
+        "SELECT keyidentity, v FROM h WHERE keyidentity >= 120 ORDER BY keyidentity";
+    ExpectElidedWindow(page, 10, 0, "index_asc");
+    EXPECT_EQ(Rows(page + " LIMIT 3 OFFSET 4"),
+              (std::vector<std::string>{"124,124", "126,0", "127,127"}));
+    ExpectElidedWindow("SELECT keyidentity FROM h WHERE keyidentity < 50 ORDER BY keyidentity DESC",
+                       5, 0, "index_desc");
+    ExpectElidedWindow("SELECT keyidentity, v FROM h ORDER BY keyidentity", 4, 0, "index_asc");
+    // A strict window is the Keystone index's range.
+    const std::string strict =
+        "SELECT keyidentity FROM h WHERE keyidentity > 10 AND keyidentity < 15";
+    std::string plan = Plan(strict);
+    EXPECT_TRUE(Has(plan, "IndexRange h")) << plan;
+    EXPECT_EQ(Rows(strict), (std::vector<std::string>{"11", "12", "13", "14"}));
+    // An open end with no order to stop it stays the walk.
+    plan = Plan("SELECT keyidentity FROM h WHERE keyidentity > 290");
+    EXPECT_FALSE(Has(plan, "IndexRange")) << plan;
+}
+
 }  // namespace
 }  // namespace kds::server

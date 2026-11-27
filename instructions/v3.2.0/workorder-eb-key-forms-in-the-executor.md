@@ -264,6 +264,52 @@ operator's call" - the go-ahead makes CLA's proposal the mark, and the
 reading is recorded as CLA's; a re-run of J3 on a quiet host - S2 builds
 it either way.
 
+### EB-S1 - ranges, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `e2dec50f7`. **A bound with an open
+or a strict end is served, at the rank EB-Q2 (b) as adopted gives it**
+(`docs/spec/index.md` IX8 and IX9's "open or strict end" item):
+
+- **a btree's tuple key bounded at one end** is a range to the key space's
+  end (`TupleKeyRangeOf`'s `open_ends`, `RangeBounds::open`), taken on a
+  bare walk only and last; it seeds the reverse walk, so keyset pagination
+  (`id < x ORDER BY id DESC LIMIT n`) reads its page;
+- **a window with a strict end on an index**, a heap's Keystone index
+  included, is the index's range on a bare walk (`BoundEnds::kStrict`), each
+  strict end read inclusively and the residual dropping its equal entries;
+- **an open end seeds CV's ordered walk** (`BoundEnds::kOpen`,
+  `OnlyBoundsOn`): with no prefix where every conjunct bounds the first
+  order key, after a prefix on the next key; and **a heap's `ORDER BY
+  keyidentity` walks its Keystone index** (`DriverOrderOf`).
+
+The write ladder reads the bounds it always read (EB-Q9 (a)); DU's tests
+pass unchanged. Two older cells pinned the behaviour S1 replaces and were
+rewritten to the new contract: `StepCompileTest.AStrictBoundThatAdmitsNoKeyIsNotARangeAndOneEndAloneIsAnOpenOne`
+and `IndexUsageRig.ARangeIsCountedApartFromAProbe` (a strict window now
+counts as a range). The index contract suite carries every new shape
+(EB-R1), and `tests/ordered_walk_test.cpp`'s `KeyBoundTest` the arms, the
+ranks, the heap and the string key past its stored prefix.
+
+**The review** (`critics-developer`, on the change over `1192c47ce`) found
+no correctness defect and read every `[quiet-wrong]` hazard put to it as
+safe - a strict end on a truncated string, the open end's padding against
+the `0x01` discriminator, a NULL or unencodable bound, the Cabin set's
+gate, the heap's elision, the pins, the embedded window, Waystone.
+**Applied**: an open range was priced by the join planner as a window as
+wide as the key space, so `t.id >= x` in a join block weighed the whole
+relation where a bound weighs `kRangeEndSelectivity` - `RangeBounds::open`
+now prices it as a bound (`join_order.cpp`); an open end could move a step
+the ladder put on another index's prefix-less range to the ordered walk,
+which that index's narrower range must keep - the ordered walk reads only
+inclusive bounds on any other index there; three cuts (`BoundsOnColumn`'s
+strictness flags, the last ranks as one chain, `OnlyBoundsOn` taking an
+empty residual); the `known-gaps.md` wording; four cells (a string past its
+prefix, a `TUPLE_KEY` pin on `id >= x` that now fits - a variant declined
+before is now met, EB-R4 - a heap's key set keeping its sort, a join with
+an open bound). **Rejected**: none.
+
+Overhead not measured; measured at the milestone's close.
+
 ### Written 2026-11-26
 
 On `known-gaps-milestone-orders` from `8274c951`, on the operator's word.
