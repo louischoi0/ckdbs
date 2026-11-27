@@ -24,8 +24,10 @@ by round:
   `PURGE` of that key waits for the deleter's decide
   (`DispatchOutcome::PurgeWait`, polled). The holder commits.
 
-A wait that is not woken ends when the waiter's reactor next polls: at its
-idle block's ceiling (`max_idle_block_ms`, 10 ms) when the core is idle.
+A wait that is not woken ends when the waiter's reactor next polls: at the
+core's WAL drain tick (`wal_drain_interval_us`, 1 ms by default), or with
+the drain off (`--drain-us 0`) at its idle block's ceiling
+(`max_idle_block_ms`, 10 ms) when the core is idle.
 
 ---- Cell `hot` -------------------------------------------------------------
 
@@ -207,7 +209,7 @@ def hot_cell(server, sessions, seconds, think_ms):
             conn.send_command("BEGIN")
             reply = conn.send_command("UPDATE ee_hot SET v = v + 1 WHERE id = 1")
             if reply.startswith("ERR"):
-                key = "refused: " + reply[:60]
+                key = ("refused at the fault net: " if "fault net" in reply else "refused: ") + reply[:60]
                 c[key] = c.get(key, 0) + 1
                 conn.send_command("ROLLBACK")
                 continue
@@ -225,8 +227,12 @@ def hot_cell(server, sessions, seconds, think_ms):
     for t in threads:
         t.join()
     rows = sys_meta.view_rows(setup.send_command("SELECT * FROM sys.lock_waits"))
-    seen = max((int(r["seq"]) for r in before), default=0)
-    fresh = [r for r in rows if int(r["seq"]) > seen]
+    # `seq` is each core's own count (`stats/lock_wait_log.hpp`), so the
+    # high-water mark is per core.
+    seen = {}
+    for r in before:
+        seen[r["core"]] = max(seen.get(r["core"], 0), int(r["seq"]))
+    fresh = [r for r in rows if int(r["seq"]) > seen.get(r["core"], 0)]
     outcomes, waited = {}, []
     for row in fresh:
         outcomes[row.get("outcome")] = outcomes.get(row.get("outcome"), 0) + 1

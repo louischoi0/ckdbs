@@ -10,7 +10,7 @@ asks for.
   `src/server/core_runtime.cpp:426-428`, `src/server/expeditor.cpp:2461`), and a timer
   caps the idle block (`Scheduler::IdleTimeoutMs`, `src/sched/scheduler.cpp:182-221`).
   Cross-core, an assertion reservation wait and a `PURGE`'s wait on a
-  deleter answer **+629 us and +572 us later at p50** than a row wait woken
+  deleter answer **+630 us and +573 us later at p50** than a row wait woken
   at its slot (§3). With the drain tick off (`wal_drain_interval_us = 0`)
   the ceiling is the idle block's 10 ms, and 15 of 30 assertion waits and
   11 of 30 `PURGE` waits ran past 2 ms (p95 9.8-10.5 ms).
@@ -49,16 +49,17 @@ a `sched::WaitUntil` predicate re-asked when the reactor next turns.
 | Wait | Site | Ends on | Reached, with a lock table |
 |---|---|---|---|
 | A row's unit refused (tuple, range, index key) | `AwaitWriteBlock` (`:503-552`), the ask's wake from `BorrowChain` | slot | every contended write |
-| A decided holder not yet released (AY-S3) | the same, `woken_at_release` (`:15867`) | slot | the decide-to-release window |
+| A decided holder not yet released (AY-S3) | the same, `woken_at_release` (`:15871`) | slot | the decide-to-release window |
 | A granted probe whose holder committed above the ceiling | the same, `on_ceiling` | the ceiling's lift, kicked | foreign key and unique probes |
 | A relation's lock (`IS`/`IX`/`X`) | `AwaitRelationLock` (`:930-1000`) | slot | DDL against open writers |
 | An online index build's drain | `IndexBuildRun` (`:3610-3650`) | slot | `CREATE INDEX` online |
 | **An assertion group's reserver** | `AdmitInsert` (`:9105`), `AdmitAndReserveUpdate` (`:14681`) → `NoteBlockingWriter` with no wake | **poll** of `IsInFlight` | an insert or update into a group at its bound while another transaction holds a reservation in it |
 | **A `PURGE`'s undecided deleter** | `PurgeWait` (`:1194-1215`), `wait.horizon` false | **poll** of `IsInFlight`, bounded by `kPurgeHorizonWaitNs` (1 s) | an administrator's `PURGE` over a key whose delete is undecided |
 | A `PURGE`'s read horizon | the same, `wait.horizon` true | poll of `ResolvedForEveryReader` | an older open snapshot; not a decide (EE-Q4 (a)) |
-| A header-only holder | `CheckWriteConflictBlocking` (`:16360-16408`), `blocker = cur` | poll | **no writer known**: every `UPDATE`/`DELETE` row is claimed under its tuple unit before the check (`Claim`, `:13597-13615`), every `INSERT` takes its tuple `X`, and the KWP load inserts through `ExecuteInsert`; only a dispatcher with no lock table reaches it |
+| A header-only holder | `CheckWriteConflictBlocking` (`:16360-16408`), `blocker = cur` | poll | **no writer known**: every `UPDATE`/`DELETE` row is claimed before the check (`Claim`, `:13597-13615`) under its tuple unit or under a declared range, which no tuple holder can share, every `INSERT` takes its tuple `X`, and the KWP load inserts through `ExecuteInsert`; only a dispatcher with no lock table reaches it |
 | A granted probe whose holder is still in flight | `WaitForRowWriter` (`:6530-6556`) | poll | no writer known (`known-gaps.md`, Locks) |
 | A foreign key's busy parent, no table | `:6262-6264` | poll | a dispatcher with no lock table |
+| A `BEGIN` or autocommit write past its core's 1,024 in-flight slots (DJ-S3) | `slot_wait` (`:1144-1160`), `res.txn_slot` | poll of `!InFlightFull()` | a core with 1,024 transactions in flight; it waits for some decide on its core, not one holder's |
 
 **Two of the polling waits are reachable by a statement an operator writes**:
 the assertion group's (the manual's own `CHECK COUNT(*) <= 180` at its 180th
@@ -84,8 +85,8 @@ the arms interleaved and reversed round by round.
 
 | Δ against `slot` | p25 | p50 | p75 | p95 | mean |
 |---|---|---|---|---|---|
-| `assertion` | +597 us | +629 us | +720 us | +832 us | +626 us |
-| `purge` | +461 us | +572 us | +652 us | +807 us | +507 us |
+| `assertion` | +597 us | +630 us | +720 us | +832 us | +627 us |
+| `purge` | +461 us | +573 us | +652 us | +807 us | +507 us |
 
 The deltas sit inside one tick: a wait settled at the decide is noticed at
 the waiter core's next drain tick, uniform over its 1 ms, plus the poll's
@@ -118,6 +119,10 @@ core).
 |---|---|---|---|---|---|---|---|
 | 0 ms | 599,178 | 1,001 `TXN_CONFLICT` (decided-newer, `txn.md` §5) | 3,596,623 | 59.7 s | 0 | **0** | 0 |
 | 2 ms | 5,885 | 0 | 41,166 | 100.7 s | 0 | **0** | 0 |
+
+`wait_aborts` is `sys.meta`'s, the setup session's core alone, and counts
+autocommit writes only (`stats/txn_stats.hpp`), so it is 0 by construction
+in this cell and is no evidence; the fault-net count is `relation_stats`'.
 
 | think | percentile of | p0 | p25 | p50 | p75 | p95 | p100 | mean |
 |---|---|---|---|---|---|---|---|---|
@@ -157,7 +162,11 @@ The client p50's delta (+8.0 us) is inside its block spread (35.4 us: two
 unfenced blocks ran at a 63 us p50 where the rest ran at 94-98 us); the
 max is one 272 ms stall in an unfenced block.
 
-**Server CPU, paired block by block** (`schedstat` ns, every thread):
+**Server CPU, paired block by block** (`schedstat` ns, every thread; the
+archived `fence8.out` and `first-pass/fence8-schedstat.out` C3 lines read
+`CLK_TCK 100 Hz` because the driver's label was corrected after they ran -
+their per-block values are not multiples of the 0.625 us a tick gives
+16,000 statements, as the ticks run's are):
 
 | Run | blocks | mean of (fenced − unfenced) | fenced higher | partition-latch waits, fenced / unfenced | unfenced CPU |
 |---|---|---|---|---|---|
@@ -169,7 +178,9 @@ max is one 272 ms stall in an unfenced block.
 The first pass broke bench/README rules 3 and 4 - it ran the build tree's
 binary, the same bytes by hash, and recorded the host's load once, not per
 cell - and is shown beside the final run because the three agree, not as a
-result of its own.
+result of its own. The pooled 22 blocks mix resolutions: the ticks run's six are
+quantized at 0.625 us a block, the order of the effect; the 16 schedstat
+blocks alone read +1.7 us.
 
 **Against this engine's own number**: at four cores CP-S0 read the walk at
 about 1 us a statement and could not resolve its CPU (100 Hz ticks, 10-50 us
@@ -184,12 +195,17 @@ see it at this concurrency; a server short of CPU would.
   every core arms makes the poll's interval the WAL drain's, so a wait
   that nothing kicks costs at most one tick after its decide - unless an
   operator turns the drain off, when it costs up to the idle ceiling. The
-  order's §0 presumed the ceiling.
-- **The polled waits an operator can reach mostly delay a refusal.** An
-  assertion admission refused by a reservation is admitted only if the
-  reserver rolls back or gives the room back; if it commits, the re-run is
-  refused as a violation. The poll adds up to a tick to that answer. A
-  `PURGE` is an administrator's statement bounded by its own 1 s wait.
+  order's §0 named no interval for the poll.
+- **Of the polled waits an operator can reach, one ends in a refusal
+  whenever its holder commits.** An assertion admission refused by a
+  reservation is admitted only if the reserver rolls back or gives the
+  room back; if it commits, the re-run is refused as a violation (how
+  often reservers commit was not measured; the cell ran the rollback
+  case). The poll adds up to a tick to that answer. A `PURGE`'s wait ends
+  in a success, and it is an administrator's statement bounded by its own
+  1 s wait. **With a holder that decides in under a millisecond the tick
+  is most of the wait**: the cell held each decide 20 ms, and a shorter
+  hold was not run.
 - **The hot row's cost is the wake's herd, not a lost wake.** Every flip
   wakes every waiter and all but one park again: 6-7 parks a commit. That
   is CPU spent, never the net, at eight sessions; a queueing grant (EE-Q2,
@@ -204,7 +220,14 @@ see it at this concurrency; a server short of CPU would.
   is mostly that, so the arms' difference is the finding, not their level.
 - **One hold time** (20 ms) and **one placement** (two cores, the sessions
   apart); a same-core waiter is woken by its own core's turn and was not
-  run.
+  run. With a hold under a millisecond the tick would be most of the wait;
+  that is the case EE-Q1 (a)'s first arm names, and it was not run.
+- **The cross-core check is a probe**: each ask reads both sessions'
+  cores by `SHOW META` before the waiter's statement, and the placer may
+  move an autocommit session at a statement's head, so "180 of 180"
+  describes the probe. The assertion arm runs second in every round, so
+  the arms' order is balanced for `slot` and `purge` only. Only the
+  reactors are pinned in the wake and hot cells.
 - **The drain-off cell's fast mode is unexplained** (§3).
 - **No header-only holder was driven**: the census found no writer that
   reaches it with a lock table, by reading; no cell confirms the absence.

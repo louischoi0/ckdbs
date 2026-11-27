@@ -1008,10 +1008,10 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     polled wait ends at the waiter core's next drain tick, every core
     arming the WAL drain at `wal_drain_interval_us` (1 ms by default), so
     cross-core it answers 0.6-0.7 ms later at p50 than a slot-woken wait -
-    +629 us for an assertion group's reserver, +572 us for a `PURGE`'s
+    +630 us for an assertion group's reserver, +573 us for a `PURGE`'s
     deleter. With the drain off (`wal_drain_interval_us = 0`) the idle
-    block's 10 ms ceiling bounds it, and half and a third of those waits
-    reached it. Of the polled arms only those two are reachable with a
+    block's 10 ms ceiling bounds it, and 15 and 11 of 30 of those waits
+    ran past 2 ms toward it (4 and 3 past 9 ms). Of the polled arms only those two are reachable with a
     lock table by any writer known. **Neither opens a `sys.lock_waits` row
     or counts in `relation_stats`' `lock_waits`**, which count waits on a
     slot only. On one hot row, eight sessions and 3.6 million waits, none
@@ -1042,8 +1042,10 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   own order. Read at `f5d310ec`; nothing of it is in the tree. **Its order,
   EE (`instructions/v3.2.0/workorder-ee-decide-slot.md`), was abandoned at
   EE-S0 on 2026-11-27 with nothing built**: the poll it would replace
-  costs one drain tick, under a millisecond at the default, on waits that
-  mostly end in a refusal, and no wait ended at the net (EE-Q1 (a)'s bar,
+  costs at most one drain tick, under a millisecond at the default, on
+  waits an operator reaches only at an assertion group's last unit of room
+  or by an administrator's `PURGE`, and no wait ended at the net (EE-Q1
+  (a)'s bar,
   CLA's reading on the operator's standing go-ahead; "What a poll costs"
   above).
 

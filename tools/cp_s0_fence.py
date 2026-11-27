@@ -134,7 +134,7 @@ def host_state(with_pgrep=True):
 # ---- The server's CPU, per arm (optional: --server-pid) --------------------
 
 class ServerCpu:
-    """`utime + stime` of every thread of the server, in seconds, keyed
+    """`utime + stime` (or, with `--cpu-schedstat`, on-CPU ns from `schedstat`) of every thread of the server, in seconds, keyed
     `reactor@cpu<k>` for a thread pinned to the one CPU `k` and `other` for
     the rest (the docstring above says why that tells a reactor). Read
     before and after each arm, off the timed path."""
@@ -356,7 +356,7 @@ def main():
     p.add_argument("--cpu-schedstat", action="store_true",
                    help="read on-CPU ns from /proc/<pid>/task/*/schedstat, not 100 Hz ticks (EE-S0)")
     p.add_argument("--server-pid", type=int, default=None,
-                   help="the kds_server pid: bracket each arm with its threads' utime+stime "
+                   help="the kds_server pid: bracket each arm with its threads' utime+stime, or schedstat with --cpu-schedstat "
                         "(/proc/<pid>/task/*/stat), reported per reactor and per statement")
     args = p.parse_args()
 

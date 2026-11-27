@@ -9,7 +9,7 @@ slot behind it ends 0.6-0.7 ms later than one woken at its slot (p50,
 cross-core), the tick bounding it; no wait ended at the fault net in
 3.6 million on one hot row. EE-Q1 (a)'s bar, CLA's reading: not met, so
 EE-S1..S3 do not run and no engine code lands. EE-Q5's eight-core cell
-put a standing fence at about +1.9 us of server CPU a point write, near
+put a standing fence at +1.78 us of server CPU a point write, near
 BP-H10's figure, and C3 stands re-proposed as its own item
 (`known-gaps.md`, Locks). Before that: **OPENED 2026-11-27 on the
 operator's standing go-ahead** (`/go-ahead-achieving-milestone EE`,
@@ -212,7 +212,8 @@ table with every site):
   `PURGE`'s horizon wait polls too, and is not a decide (EE-Q4 (a)).
 - **Polled, and reached by no writer known with a lock table**: a holder
   only the header names (every row an `UPDATE` or `DELETE` writes is claimed
-  under its tuple unit before the check, every `INSERT` takes its tuple
+  before the check, under its tuple unit or a declared range no tuple
+  holder can share, every `INSERT` takes its tuple
   `X`, and the KWP load inserts through `ExecuteInsert`), and a granted
   probe whose holder is still in flight. Without a table: a foreign key's
   busy parent and the header-only holder. By reading; no cell drives them.
@@ -225,12 +226,12 @@ table with every site):
 1. **What a poll costs a wait.** Every core arms the WAL drain timer at
    `wal_drain_interval_us` (1,000 by default), and a timer caps the idle
    block, so a polled wait ends at the waiter core's next drain tick, not
-   at the 10 ms ceiling §0 presumed. Cross-core, the assertion arm answered
-   +629 us and the `PURGE` arm +572 us later than a slot-woken row wait at
+   at the idle block's 10 ms ceiling (§0 named no interval). Cross-core, the assertion arm answered
+   +630 us and the `PURGE` arm +573 us later than a slot-woken row wait at
    p50 (+832 and +807 us at p95; 60 asks an arm). With the drain off
    (`wal_drain_interval_us = 0`, which the server warns about at boot),
-   half the assertion waits and a third of the `PURGE` waits ran to the
-   10 ms ceiling.
+   15 of 30 assertion waits and 11 of 30 `PURGE` waits ran past 2 ms,
+   toward the 10 ms ceiling (4 and 3 past 9 ms).
 2. **Waits at the fault net on one hot row.** Eight sessions, four cores,
    `BEGIN; UPDATE; COMMIT` for 15 s, with 0 and 2 ms held: 3,637,789 waits,
    **0 at the fault net**, 0 deadlocks. At 2 ms held a commit cost 7.0
@@ -249,15 +250,20 @@ not EE's to build (§6: no change to what any statement borrows).
 **EE-Q1 (a)'s bar, CLA's reading: not met.** Its first arm asks for a
 polling wait "whose latency is the poll's interval and not the decide's,
 in a workload an operator would run", and §0 sets the test as "a workload
-where that matters". The poll exists and is priced, but it is one drain
-tick added after the decide - under a millisecond at the default, the
-decide still setting the wait's length - and the polled waits an operator
-reaches mostly delay a refusal: an admission refused by a reservation is
-admitted only if the reserver rolls back, and is refused as a violation
-if it commits; a `PURGE` is an administrator's statement bounded by its
-own 1 s. The second arm is not met: no wait ended at the net. The reading
-is CLA's and recorded as such; the operator's EE-Q1 (b) is the word that
-builds EE-S1..S3 over it.
+where that matters". **The letter of the first arm is within reach**: the
+cell held each decide 20 ms, and with a holder that decides in under a
+millisecond - a short booking transaction - the one extra drain tick would
+be most of the wait (not run). CLA reads the arm as not met on what the
+wait is and what it costs, not on the decide being the larger term: the
+poll adds at most one drain tick after the decide, under a millisecond at
+the default; an operator reaches it only at an assertion group's last unit
+of room, where the wait ends in a refusal whenever the reserver commits
+(`:9089-9091`: "an abort admits the re-run, a commit makes the refusal
+true"; how often reservers commit was not measured, the cell ran the
+rollback case), and through `PURGE`, an administrator's statement bounded
+at its own 1 s, whose wait ends in a success. The second arm is not met:
+no wait ended at the net. The reading is CLA's and recorded as such; the
+operator's EE-Q1 (b) is the word that builds EE-S1..S3 over it.
 
 Tools: `tools/ee_s0_premise.py` (new), `tools/cp_s0_fence.py`
 `--cpu-schedstat` (on-CPU ns, where the 100 Hz ticks could not resolve
@@ -271,3 +277,33 @@ do not run, no engine code lands, and no close measurement is taken - there
 is no code change to measure (the overhead measurement CLAUDE.md's step 3
 owes a milestone's code change has nothing to compare). `known-gaps.md`'s
 Locks entries carry the prices EE-S0 measured and C3's re-proposal.
+
+### EE-S0's review (`critics-developer`, 2026-11-27)
+
+On `ee-decide-slot` at `ef190004a`. No finding changed a conclusion; every
+figure reproduced from the archive. **Applied**: a drain-off figure
+restated wrongly in two records ("reached the ceiling"; 15 and 11 of 30
+ran past 2 ms, 4 and 3 past 9 ms); the header's "+1.9 us" (+1.78); "§0
+presumed the 10 ms ceiling", which §0 does not say; a note that
+`wait_aborts` counts autocommit writes only, so its 0 in the hot cell is
+no evidence; a note that the archived fence text labels schedstat values
+"CLK_TCK"; the driver's `sys.lock_waits` filter keyed per core (`seq` is a
+core's; the runs were unaffected); the driver's docstring; **the bar
+reading restated** - it had leaned on the decide being the larger term,
+which the 20 ms hold chose, and on "mostly delay a refusal", which only
+the assertion arm supports and only when its reserver commits; the
+census's missing `res.txn_slot` wait (DJ-S3, polled, a wait for some
+decide on the core); "claimed under its tuple unit" made "under its tuple
+unit or a declared range"; the fault-net refusal classified by its text
+in the driver; p50 deltas rounded (+630, +573 us, not truncated); the
+pooled blocks' mixed resolution and the wake cell's placement probe and
+arm order stated as limits; `cp_s0_fence.py`'s stale docstrings.
+**Rejected**: cutting the figures from the index row, the raft marks and
+this log to a citation - the house records carry their figures (DX's,
+CW's), and the restated errors are corrected; a shared `bench_common`
+`Server` for the nine drivers that copy one - `dk_close.py`'s speaks
+`kwp.Connection` where this one needs `ServerConnection`'s transaction
+frames and text `SHOW META`, and the refactor is outside EE; the driver's
+percentile rule replaced by `bench_common.nearest_rank` - the published
+figures are the driver's rule (`pct`, round-half index), and changing it
+would move them by up to a rank with no re-run.
