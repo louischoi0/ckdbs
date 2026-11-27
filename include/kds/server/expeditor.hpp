@@ -34,6 +34,7 @@
 #include "kds/server/backup.hpp"
 #include "kds/server/wal_archive.hpp"
 #include "kds/server/page_reclaim.hpp"
+#include "kds/server/volume_census.hpp"
 #include "kds/server/statement_epoch.hpp"
 #include "kds/server/superblock_checkpoint_anchor.hpp"
 #include "kds/server/kwp_load_server.hpp"
@@ -279,6 +280,14 @@ public:
         // switch that makes "results are identical either way" a thing an
         // operator can check on their own data.
         bool waystone_recording = true;
+
+        // **The volume census at the mount** (`volume_census_at_mount`,
+        // default off; DV-S1, DV-Q3 (a)): a mark from every root the catalog
+        // names, then every allocated page none reaches counted by class,
+        // reported on the mount log line and in `sys.volume_census`. It reads
+        // every allocated page once, so a mount takes longer by the volume's
+        // size; nothing is freed (`server/volume_census.hpp`).
+        bool volume_census_at_mount = false;
 
         // CJ's WE09, `kds.ash.*` (workorder-cj-wait-events-ash.md §2.9): the
         // sampler's boot values, applied to the process before any scheduler is
@@ -1012,6 +1021,9 @@ private:
     // for every core's dispatcher (`WireInstanceServices`).
     exec::HeapSpace heap_space_;
     std::optional<PageReclaimer> reclaimer_;
+    // The mount's volume census, where `volume_census_at_mount` asked (DV-S1):
+    // written once before any listener, read by `sys.volume_census` after.
+    std::optional<VolumeCensus> mount_census_;
     // The instance's backup control (BR): its pin bounds the recycler and
     // the reclaim gate, and every core's dispatcher runs BACKUP through it.
     // After the anchor it reads `D` from, so it is destroyed - its log copy

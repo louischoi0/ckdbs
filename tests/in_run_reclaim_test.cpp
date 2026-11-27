@@ -357,5 +357,65 @@ TEST(InRunReclaimTest, ABindPastAGateDefectIsRefusedByTheRootCheck) {
     EXPECT_NE(reply.find("was reclaimed"), std::string::npos) << reply;
 }
 
+// DV-S2 (`instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`): a
+// `CREATE TABLE` rolled back owes its pages - anchor, root, var-heap and what
+// its rows grew - which no row will ever name. Queued at the rollback and
+// freed in the run, as a committed drop's are.
+TEST(InRunReclaimTest, ARolledBackCreateIsFreedInTheRun) {
+    InRunReclaimRig rig;
+    CurrentCoreGuard as(0);
+    Ok(rig.d(0), "BEGIN");
+    Ok(rig.d(0), "CREATE TABLE r (id int64, v varchar)");
+    Fill(rig.d(0), "r", 500);
+    const std::uint64_t oid = OidOf(rig.d(0), "r");
+    const std::set<PageId> pages = rig.PagesOf(oid);
+    ASSERT_GE(pages.size(), 3u);
+    Ok(rig.d(0), "ROLLBACK");
+    EXPECT_EQ(rig.counters().pending.load(), 1u) << "the rollback queued nothing";
+    rig.Settle();
+    EXPECT_EQ(rig.counters().pending.load(), 0u);
+    EXPECT_EQ(rig.counters().refused.load(), 0u);
+    for (const PageId id : pages) EXPECT_FALSE(rig.store().IsAllocated(id)) << "page " << id;
+}
+
+// A heap's create rolled back: its Keystone index's tree goes with it, by the
+// relation's job (BY-R3), and no index job is left to refuse.
+TEST(InRunReclaimTest, ARolledBackHeapCreateFreesItsKeystoneIndex) {
+    InRunReclaimRig rig;
+    CurrentCoreGuard as(0);
+    std::set<PageId> before;
+    for (const auto& [id, owner] : reclaim_census::AllocatedPages(rig.store())) before.insert(id);
+    Ok(rig.d(0), "BEGIN");
+    Ok(rig.d(0), "CREATE TABLE h (id int64 PRIMARY KEY, v varchar) HEAP");
+    Fill(rig.d(0), "h", 300);
+    const std::uint64_t oid = OidOf(rig.d(0), "h");
+    ASSERT_FALSE(rig.PagesOf(oid).empty());
+    Ok(rig.d(0), "ROLLBACK");
+    rig.Settle();
+    EXPECT_EQ(rig.counters().pending.load(), 0u);
+    EXPECT_EQ(rig.counters().refused.load(), 0u);
+    EXPECT_TRUE(rig.PagesOf(oid).empty());
+    // What the transaction left allocated is the catalog's and the undo
+    // log's own growth, never a page a user oid owns - the index's included.
+    for (const auto& [id, owner] : reclaim_census::AllocatedPages(rig.store())) {
+        if (before.count(id) == 0) {
+            EXPECT_LT(owner, catalog::kUserOidStart) << "page " << id << " owner " << owner;
+        }
+    }
+}
+
+// A create that commits keeps every page.
+TEST(InRunReclaimTest, ACommittedCreateOwesNothing) {
+    InRunReclaimRig rig;
+    CurrentCoreGuard as(0);
+    Ok(rig.d(0), "CREATE TABLE c (id int64, v varchar)");
+    Fill(rig.d(0), "c", 200);
+    EXPECT_EQ(rig.counters().pending.load(), 0u);
+    const std::uint64_t oid = OidOf(rig.d(0), "c");
+    const std::set<PageId> pages = rig.PagesOf(oid);
+    rig.Settle();
+    for (const PageId id : pages) EXPECT_TRUE(rig.store().IsAllocated(id)) << "page " << id;
+}
+
 }  // namespace
 }  // namespace kds::server

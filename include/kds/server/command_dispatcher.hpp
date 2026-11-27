@@ -134,6 +134,7 @@ struct ReclaimCounters;  // page_reclaim.hpp
 class BackupControl;     // backup.hpp
 class WalArchiver;       // wal_archive.hpp
 class PageReclaimer;     // page_reclaim.hpp
+struct VolumeCensus;     // volume_census.hpp
 class StatementEpochs;   // statement_epoch.hpp
 
 // What the mount's recovery did (`server/mount_recovery.hpp`), reported by
@@ -2233,6 +2234,9 @@ public:
     // drop is reclaimed at the next mount (BF-R8). Both must outlive this.
     void SetStatementEpochs(StatementEpochs* epochs) noexcept { epochs_ = epochs; }
     void SetReclaimQueue(PageReclaimer* reclaimer) noexcept { reclaim_queue_ = reclaimer; }
+    // The mount's volume census for `sys.volume_census` (DV-S1); null where
+    // the mount took none.
+    void SetMountCensus(const VolumeCensus* census) noexcept { mount_census_ = census; }
     // **The instance's heap placement hints** (DN, `exec::HeapSpace`): every
     // core's dispatcher is handed the one the instance owns; one never handed
     // any keeps its own, which is what a single-dispatcher test runs on.
@@ -2871,6 +2875,7 @@ private:
     StatusOr<exec::CatalogView> StatementHistogramView();
     StatusOr<exec::CatalogView> RefusalStatsView();
     StatusOr<exec::CatalogView> CheckpointsView();
+    StatusOr<exec::CatalogView> VolumeCensusView();
     StatusOr<exec::CatalogView> WaitEventNamesView();
     StatusOr<exec::CatalogView> WaitStatsView();
     StatusOr<exec::CatalogView> WaitHistogramView();
@@ -3328,6 +3333,7 @@ private:
     // BF-R9's two, null outside an assembled instance.
     StatementEpochs* epochs_ = nullptr;
     PageReclaimer* reclaim_queue_ = nullptr;
+    const VolumeCensus* mount_census_ = nullptr;
     exec::HeapSpace* heap_space_ = nullptr;
     exec::HeapSpace own_heap_space_;
     std::optional<exec::HeapSlotRelease> heap_release_;
@@ -3371,6 +3377,16 @@ private:
         bool created = false;  // queued at a rollback, not at a commit
     };
     std::vector<OwedIndex> owed_indexes_;
+    // **What an open transaction's `CREATE TABLE` owes if it does not
+    // stand** (DV-S2): the relation's roots, from the moment its anchor
+    // exists, queued by `EndDdlScopeById` at every ending but a commit - and
+    // at a commit too when the create itself failed, which no row names.
+    struct OwedCreate {
+        std::uint64_t txn_id = 0;
+        catalog::Catalog::PendingReclaim made;
+        bool failed = false;
+    };
+    std::vector<OwedCreate> owed_creates_;
 
     // The live assertions and their reservation bookkeeping (workplan
     // AST06/AST07): CREATE ASSERTION's build moves its LiveAssertion in

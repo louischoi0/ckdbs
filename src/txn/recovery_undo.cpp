@@ -158,7 +158,20 @@ Status RecoveryUndo::Compensate(storage::PageStore& store, std::uint64_t txn_id,
             "docs/spec/wal.md");
     }
 
-    return Apply(store, txn_id, rec, rec.target_page_id, view, rec.target_slot);
+    // DV-S2: the row's bytes, copied before its slot is retired, for the
+    // mount to read which relation an undone `sys.tables` row named.
+    std::vector<std::byte> retired;
+    std::uint64_t owner = 0;
+    if (insert_retired_ && rec.type == UndoRecordType::kInsert) {
+        owner = storage::GetOwnerOid(bytes.value().bytes());
+        auto tuple = view.ReadTuple(rec.target_slot);
+        if (tuple.ok()) retired.assign(tuple.value().payload.begin(), tuple.value().payload.end());
+    }
+    if (Status s = Apply(store, txn_id, rec, rec.target_page_id, view, rec.target_slot); !s.ok()) {
+        return s;
+    }
+    if (!retired.empty()) insert_retired_(rec.target_page_id, owner, retired);
+    return Status::OK();
 }
 
 Status RecoveryUndo::CompensateOnLeaf(storage::PageStore& store, std::uint64_t txn_id,

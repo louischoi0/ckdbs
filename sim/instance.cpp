@@ -112,7 +112,8 @@ Status SimInstance::Boot() {
         // Under the harness's own recording switch, as the expeditor passes
         // `waystone_recording`, so an opted pattern is renewed only where a
         // recorder will write into it (CF-S1b).
-        if (Status s = server::DiscardAdvisoryState(boot_->catalog, options_.waystone); !s.ok()) {
+        if (Status s = server::DiscardAdvisoryState(boot_->catalog, options_.waystone, &*store_);
+            !s.ok()) {
             return s;
         }
 
@@ -190,8 +191,16 @@ Status SimInstance::Boot() {
         // and what a later statement may find is a reclaimed volume. A
         // refused job is the harness's to report (`reclaim_refused`).
         reclaimer_.emplace(boot_->catalog, *store_, reclaim_counters_, /*log=*/nullptr);
-        if (Status s = reclaimer_->CollectAtMount(reclaim_gate); !s.ok()) return s;
-        reclaim_gate_ = reclaim_gate;
+        if (Status s = reclaimer_->CollectAtMount(reclaim_gate, recovery_.undone_creates,
+                                                  recovery_.undo_end);
+            !s.ok()) {
+            return s;
+        }
+        // The highest gate a job of this mount waits on: an undone create's
+        // is the log's end after undo (DV-S2).
+        reclaim_gate_ = recovery_.undone_creates.empty()
+                            ? reclaim_gate
+                            : std::max(reclaim_gate, recovery_.undo_end);
     }
     // The write fetch's image, on once the mount is done (DB-R2), where the
     // expeditor turns it on.
@@ -229,6 +238,14 @@ Status SimInstance::ReclaimStep() {
     }
     if (!reclaimer_.has_value() || reclaim_counters_.pending.load() == 0) return Status::OK();
     return reclaimer_->Step(Pinned(anchor_->durable_redo_start()));
+}
+
+StatusOr<server::VolumeCensus> SimInstance::RunCensus() {
+    if (!reclaimer_) return Status::NotFound("no reclaimer on this boot");
+    std::vector<PageId> undo;
+    if (undo_) undo_->AppendOwnedPages(undo);
+    return server::RunVolumeCensus(*store_, boot_->catalog, *reclaimer_,
+                                   page_device_->page_capacity(), undo);
 }
 
 Status SimInstance::SettleReclaim() {

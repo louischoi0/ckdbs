@@ -17,6 +17,8 @@
 #include "kds/catalog/rows.hpp"
 #include "kds/parser/fingerprint.hpp"
 #include "kds/stats/statement_binding.hpp"
+#include "kds/stats/waystone_dir.hpp"
+#include "kds/storage/page_store.hpp"
 
 namespace kds::testing_patterns {
 
@@ -55,6 +57,19 @@ inline StatusOr<const catalog::PatternAccess*> OptedPatternOf(catalog::Catalog& 
 inline catalog::Oid OptedRowOf(catalog::Catalog& catalog, std::uint64_t fetch_id) {
     auto row = PatternRowOf(catalog, fetch_id);
     return row.ok() ? row.value().oid : 0;
+}
+
+// Children an interior directory page names; -1 where it does not read. A
+// mount's renewed root names none, whether it is a new page or a stale
+// directory's page reused (DV-S2) - so "renewed" is this, not a new id.
+inline int DirChildren(storage::PageStore& store, PageId page) {
+    auto bytes = store.GetForRead(page);
+    if (!bytes.ok()) return -1;
+    int n = 0;
+    for (std::size_t i = 0; i < stats::kDirFanout; ++i) {
+        if (stats::LoadDirChild(bytes.value().bytes(), i) != stats::kEmptyDirSlot) ++n;
+    }
+    return n;
 }
 
 }  // namespace kds::testing_patterns

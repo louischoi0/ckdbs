@@ -20,11 +20,23 @@ constexpr std::uint8_t TypeByte(PageType type) noexcept { return static_cast<std
 
 }  // namespace
 
-Status PageReclaimer::CollectAtMount(wal::Lsn gate_lsn) {
+Status PageReclaimer::CollectAtMount(wal::Lsn gate_lsn,
+                                     std::span<const catalog::Catalog::PendingReclaim> undone,
+                                     wal::Lsn undone_gate) {
     auto pending = catalog_.PendingReclaims();
     if (!pending.ok()) return pending.status();
     for (const catalog::Catalog::PendingReclaim& owed : pending.value()) {
         jobs_.push_back(MakeJob(owed.oid, /*index_oid=*/0, owed.roots, gate_lsn, /*word=*/0));
+    }
+    // DV-S2: a crash loser's create, which this mount's undo retired. Its
+    // rows are gone, so no statement of this run can reach its pages; its
+    // oid can be issued again (`page_reclaim.hpp`), which is why the walk
+    // is by links from these roots.
+    for (const catalog::Catalog::PendingReclaim& create : undone) {
+        Job job = MakeJob(create.oid, /*index_oid=*/0, create.roots,
+                          std::max(gate_lsn, undone_gate), /*word=*/0);
+        job.undone_create = true;
+        jobs_.push_back(std::move(job));
     }
     // BY-R1: the trees live relations owe - dropped indexes, rolled-back
     // creates - read here, after recovery's undo, unfiltered. A dropped
@@ -46,6 +58,7 @@ Status PageReclaimer::CollectAtMount(wal::Lsn gate_lsn) {
 }
 
 Status PageReclaimer::Clear(const Job& job) {
+    if (job.undone_create) return Status::OK();  // no row owes the pages
     if (job.index_oid == 0) return catalog_.ClearPendingRoots(job.oid);
     // An index job's clear is its slot's removal (BY-R5); a slot already gone
     // is a re-drive finding the clear done. An anchor that is no longer the
@@ -56,6 +69,7 @@ Status PageReclaimer::Clear(const Job& job) {
 }
 
 std::string PageReclaimer::JobName(const Job& job) {
+    if (job.undone_create) return "uncommitted create oid=" + std::to_string(job.oid);
     if (job.index_oid == 0) return "dropped relation oid=" + std::to_string(job.oid);
     return "orphaned index oid=" + std::to_string(job.index_oid) + " of relation oid=" +
            std::to_string(job.oid);
@@ -88,6 +102,13 @@ void PageReclaimer::EnqueueCommittedDrop(catalog::Oid oid, catalog::PendingRoots
     // Every record that names the relation's pages precedes the commit, so
     // a redo start past the commit replays none of them (BF-R4).
     Enqueue(MakeJob(oid, /*index_oid=*/0, roots, commit_lsn + 1, word));
+}
+
+void PageReclaimer::EnqueueUndoneCreate(catalog::Oid oid, catalog::PendingRoots roots,
+                                        wal::Lsn gate, std::uint64_t word) {
+    Job job = MakeJob(oid, /*index_oid=*/0, roots, gate, word);
+    job.undone_create = true;
+    Enqueue(std::move(job));
 }
 
 void PageReclaimer::EnqueueOrphanedIndex(catalog::Oid rel_oid, PageId anchor,
@@ -452,6 +473,14 @@ bool PageReclaimer::FreeSome(Job& job, std::size_t& budget) {
         ++job.next;
     }
     return true;
+}
+
+std::vector<catalog::Catalog::PendingReclaim> PageReclaimer::UndoneCreates() const {
+    std::vector<catalog::Catalog::PendingReclaim> out;
+    for (const Job& job : jobs_) {
+        if (job.undone_create) out.push_back({job.oid, job.roots});
+    }
+    return out;
 }
 
 StatusOr<PageReclaimer::Reach> PageReclaimer::ReachFrom(catalog::Oid oid,

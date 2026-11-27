@@ -124,6 +124,7 @@ returns only what it names, so that conjunct is not compared again.
 | `statement_histogram` | engine | - | one non-empty log2 latency bucket of one statement shape (§6.1a) |
 | `refusal_stats` | engine | - | one error code a core has refused a statement with (§6.1b) |
 | `checkpoints` | engine | - | one checkpoint run (§6.4) |
+| `volume_census` | engine | - | the mount's census: one `allocated` row, then one class and owner of the pages it found allocated and reached by no root (§6.4a) |
 | `wait_event_names` | engine | - | one wait event of the registry (§6.5) |
 | `wait_stats` | engine | - | one event on one core, plus a NULL-core total row per event (§6.6) |
 | `wait_histogram` | engine | - | one non-empty log2 bucket of one event on one core (§6.6) |
@@ -569,6 +570,56 @@ neither column. An abandoned task writes no row. The runs before a crash
 are gone with the process; the mount's recovery block stays in `sys.meta`.
 A ring of 1024 per core; `checkpoints_recorded`, `_overwritten`,
 `_dropped`.
+
+### 6.4a `sys.volume_census` (`server/volume_census.hpp`)
+
+The mount's volume census, where the boot key `volume_census_at_mount`
+asked for one (default `off`; DV-S1,
+`instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`). The census
+marks every page a root the catalog names reaches - each catalog chain and
+its var-heap chain, every live relation and every pending tombstone by the
+reclaim's own walk (`PageReclaimer::ReachFrom`), each assertion's Bound
+Cabin chain, each pattern row's Waystone directory, the run's undo pages -
+and then counts every allocated id above the fixed range and outside the
+maps that nothing marked. **The first row is the census itself** -
+`page_class` `allocated`, `owner_oid` NULL, `pages` the volume's allocated
+pages - then one row per `page_class` (a page type's name, or
+`waystone_dir` for a headerless page, `unreadable`, `unformatted`) and
+`owner_oid`, with `pages` and `complete`.
+
+- **`complete = 0` says the count proves nothing**: a root did not walk
+  whole - an unreadable page, a link to a page of another class, a page
+  reached twice - and the mount's log line names the first reason.
+- **It is the mount's count and is never taken again at a read**: a mark is
+  whole only with no writer, which holds after recovery and the renewal and
+  before any listener, where the mount takes it. No rows where the key is
+  off or the census could not name its roots (logged `WARN [census] not
+  taken: ...`; the mount still opens); the one `allocated` row where
+  nothing is unreached.
+- **A page a queued reclaim job owes reads reached**, through the root
+  that names it: a tombstone's from the catalog (`PendingReclaims`), and a
+  crash loser's `CREATE TABLE` this mount's undo handed to the reclaim
+  (`drop-table.md` DT1) from the reclaim's own queue
+  (`PageReclaimer::UndoneCreates`), since no row names it. No job has run a
+  step when the mount counts. A job a crash cut after its first frees walks
+  short of what it once reached, and the mark then reads not whole.
+- **A previous run's undo page is counted apart**, on the log line only: a
+  tuple's `undo_ptr` may still name it, so no root list proves it
+  unreachable (`txn.md` §4.1).
+- **Nothing is freed by it**, and nothing reads it but a `SELECT`.
+- The mount logs `INFO [census] <n> page(s) allocated, <n> reached, <n>
+  reached by no root (<class> owner <oid>: <n>, ...), <n> previous-run undo
+  page(s); the mark is whole`, the parenthesis only where a page is
+  unreached; a mark that is not whole ends `; the mark is not whole, so the
+  count proves nothing: <the first refusal>` (`DescribeVolumeCensus`).
+- **Cost**: one read of every allocated page the roots reach, one of every
+  unmarked page, and one `sys.tables` scan per relation, on core 0 before
+  the listener binds. At `v3.4.17-182-g82235ad2c`, Release, warm page
+  cache, one relation holding nearly all of the volume: +179 ms at 0.25 GiB allocated,
+  +660 ms at 1 GiB, +1,878 ms at 4 GiB, about 0.5 to 0.7 s a GiB, over a
+  mount of 64 ms to 123 ms without it (medians 75.4 ms to 117.7 ms)
+  (`bench/v3.5.0/results-dv-close-v3.4.17-182-g82235ad2c.md`). A cold cache
+  and a volume of many relations were not measured.
 
 ### 6.5 `sys.wait_event_names` (`stats/wait_event.hpp`)
 

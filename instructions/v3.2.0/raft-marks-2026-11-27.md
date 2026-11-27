@@ -20,3 +20,66 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | `worktree-dw-btree-purge-driver` (`539cb0589`) merged into `main` `--no-ff` at `9a229dbbb` and pushed, **the pre-push hook skipped**. The suite had run on the tree pushed: 5,327 of 5,327 at `539cb0589` (`ctest -LE bs-nightly -j4`). `origin/main` had not moved from `630ecc359`, so the merge brought nothing the suite had not run on |
 | **Does not settle** | the two readings §1's "At the close" leaves to the operator - the word was the push and said nothing of them; whether `index_purge_driver` should be on by default; a tag or a version |
 | **Recorded at** | this file; `workorder-dw-btree-purge-driver.md` (header, §7 "Landed"); DW's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 3. DY opened for its proof only, on the standing go-ahead; DY-Q0 not marked
+
+| | |
+|---|---|
+| **Word** | *"In 6 hours, /go-ahead-achieving-milestone DY"* (given in Korean at about 04:05 UTC; recorded in English). The session scheduled the work and ran it at 10:07 UTC. The skill it names carries the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **DY is opened for DY-S0 only**, on worktree `dy-segment-roll-off-the-latch` (branch `worktree-dy-segment-roll-off-the-latch`) from `630ecc359` (`v3.4.17-178-g630ecc359`). **DY-Q0 is not marked, and CLA did not adopt its own proposal for it.** BQ-Q5 (b), the operator's mark, reserves rung 4's license to the operator's own word, and the DY order says in its header that a standing go-ahead is not that word. The word above names DY and is a standing go-ahead all the same. **What ran on it is CLA's reading**: the reservation is on building H6, DY-S0 writes a proof and takes a measurement and builds nothing, so DY-S0 ran and nothing after it started. **DY-Q1 (a), DY-Q3 (a) and DY-Q4 (a)** - the items DY-S0 itself turns on - are adopted as CLA proposed on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone); none is the operator's own per-item mark. **DY-Q2's proposal is revised by DY-S0 from (a) to (b)** and is not adopted; DY-Q5 is untouched |
+| **Does not settle** | DY-Q0 - whether rung 4 is licensed, which is the operator's own word to give; DY-Q2 and DY-Q5; any stage after DY-S0; a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dy-segment-roll-off-the-latch.md`'s header, §4 "Marks" and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 4. DY-S0 pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push noverify"*, to the report of DY-S0 and its stop at DY-Q0 |
+| **Mark** | `worktree-dy-segment-roll-off-the-latch` - DY-S0 at `ddc2df734`, then `origin/main` at `c5cceb6f7` (DW) merged into it on the work branch - pushed to `main`, **the pre-push hook skipped and no suite run**: DY-S0 brings documents and a results file with its archive, and no build input. The merge's one conflict was this file, both sessions having opened it; it is joined with DW's sections first |
+| **Does not settle** | DY-Q0, which the word did not speak to: DY stays open for DY-S0 only and nothing after it has started; DY-Q2, DY-Q5, DY-Q6 and DY-Q7; a tag or a version |
+| **Recorded at** | this file |
+
+## 5. DV opened on the standing go-ahead; DV-Q0..Q6 adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone DV`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **DV is opened** on worktree `dv-unreachable-page-reclaim` (branch `worktree-dv-unreachable-page-reclaim`) from `630ecc359` (`v3.4.17-178-g630ecc359`). **DV-Q0..Q6 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator: Q0 (a) census, source fixes, then the sweep, S0's numbers deciding whether the sweep is reached; Q1 (a) S0 gates, a class under one page per 1,000 operations recorded and left; Q2 (a) the sweep runs on an administrator's statement only; Q3 (a) a mount's census only when a boot key asks; Q4 (a) Waystone's stranded directories freed at the renewal and at `OFF`; Q5 (a) leaked spills outside DV; Q6 (a) a restore's mount runs the sweep when asked. No item is `[quiet-wrong]`; DV-R1 is, and is a rule, not an item. |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md`'s header and §4; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 6. DV-Q4 revised, DV-Q7..Q9 added and adopted on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §5 - no new word from the operator |
+| **Mark** | CLA's proposals, written into the order's §4 at DV-S0 and DV-S2 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not per-item marks by the operator: **DV-Q4' (a)** - DV-Q4 (a) revised against the tree: Waystone's stale directories are taken back at the mount's renewal only, trail pages freed, interior pages reused as fresh roots, `OFF` left (a headerless id is never freed, `device_page_store.cpp:1785`; an `OFF` would need a statement-epoch fence against a recorder holding the old root); **DV-Q7 (a)** - the sweep (DV-S3) is not reached: S0 measured no class without a source over DV-Q1's bar, so DV closes narrow; **DV-Q8 (a)** - a rolled-back create whose in-run job a crash loses is a stated known gap; **DV-Q9 (a)** - `sys.volume_census` reads the mount's census, never one taken at a read (DV-R2). None is `[quiet-wrong]`; DV-Q4' and DV-Q7 each stand beside DV-R1, which is. |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 and §7 |
+
+## 7. DV-Q10 added and adopted on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §5 - no new word from the operator |
+| **Mark** | **DV-Q10 (a)**, CLA's proposal written into the order's §4 at the review of DV-S2 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: DV-R6 is built narrower than written - the simulator fails a seed whose census mark is not whole and reports the unreached count, and the zero per closed source is each source's cell - because a page's class does not name the source that leaked it. Not `[quiet-wrong]`. |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 |
+
+## 8. DV closed narrow on the work branch
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §5 - no new word from the operator |
+| **Mark** | **DV is closed narrow on `worktree-dv-unreachable-page-reclaim`**, on CLA's reading of DV-S0 and of the close measurement, adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone) and not the operator's own word: the census and two source fixes built, the sweep not (DV-Q7 (a)). The order's §7 carries the close. |
+| **Does not settle** | **the landing**: no merge to `main`, no push, no tag and no version - each waits for the operator's word |
+| **Recorded at** | this file; the order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 9. DV-Q11 added and adopted on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §5 - no new word from the operator |
+| **Mark** | **DV-Q11 (a)**, CLA's proposal written into the order's §4 at the review of the close and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: DV-Q1's bar is read by what an operation leaks with no fault armed, so an uncommitted `CREATE TABLE` (3 pages a rollback) is closed and a crash loser's own index root (at most one page a crash landing between two adjacent records) is recorded and left, though both read 2.57 pages a 1,000 ops in the `io` fault cells and 0.05 over the matrix. Not `[quiet-wrong]`. **The review named this the operator's to rule on**; it is listed in the close's report for that reason. |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 |

@@ -1485,7 +1485,7 @@ Status Catalog::InsertTypeRow(Oid oid, std::string_view name, std::uint32_t type
 
 StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, const Schema& schema,
                                     std::uint64_t trx_id, std::vector<CatalogRowRef>* written,
-                                    ClusteredType clustered) {
+                                    ClusteredType clustered, PendingReclaim* made) {
     if (clustered != ClusteredType::kBtree && clustered != ClusteredType::kHeap) {
         return Status::InvalidArgument("catalog: a user relation is a btree or a heap");
     }
@@ -1617,6 +1617,8 @@ StatusOr<Oid> Catalog::CreateTable(Oid namespace_oid, std::string_view name, con
         if (!created_anchor.ok()) return created_anchor.status();
         anchor_id = created_anchor.value().first;
         storage::FormatAnchorPage(created_anchor.value().second.bytes(), new_oid, root_id);
+        // From here every page made so far hangs from the anchor (DV-S2).
+        if (made != nullptr) *made = PendingReclaim{new_oid, PendingRoots{anchor_id, varheap_root}};
         if (Status s = LogCatPageInit(wal_, trx_id, anchor_id, PageType::kAnchor, new_oid);
             !s.ok()) {
             return s;
@@ -3562,7 +3564,8 @@ StatusOr<Catalog::PatternWaystoneWrite> Catalog::WritePatternWaystone(
     return out;
 }
 
-StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording) {
+StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording,
+                                                         std::vector<PageId>* reusable) {
     // ---- Pass 1: what is opted, read under no write hold ------------------
     auto rows = ScanAll<SysPatternRow>(store_, kCatalogPagePatterns, nullptr, txn_);
     if (!rows.ok()) return rows.status();
@@ -3615,6 +3618,19 @@ StatusOr<std::uint64_t> Catalog::RenewPatternDirectories(bool waystone_recording
     std::unordered_map<Oid, PageId> fresh;
     if (waystone_recording) {
         for (const Oid oid : renew) {
+            // A stale directory's page first (DV-S2), formatted empty, so a
+            // mount does not strand one root per opted row.
+            if (reusable != nullptr && !reusable->empty()) {
+                const PageId page = reusable->back();
+                reusable->pop_back();
+                if (stats::ReformatDirPage(store_, page).ok()) {
+                    fresh.emplace(oid, page);
+                    continue;
+                }
+                // Not formatted, so not used: back where the caller counts
+                // what is left, behind every page not yet tried.
+                reusable->insert(reusable->begin(), page);
+            }
             auto made = stats::CreateDirPage(store_);
             if (!made.ok()) {
                 // The row keeps its bit and goes without a directory until

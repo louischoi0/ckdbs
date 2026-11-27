@@ -59,10 +59,39 @@ Status VerifyDataFilePages(const std::string& data_file, DataFileCheck* out = nu
 namespace kds::catalog {
 class Catalog;
 }  // namespace kds::catalog
+namespace kds::storage {
+class DevicePageStore;
+}  // namespace kds::storage
 
 namespace kds::server {
 
-Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording);
+// **The stale directories' pages, taken back** (DV-S2, DV-Q4 (a),
+// `instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`). Before the
+// renewal, every directory a pattern row names is walked; at that point no
+// live root names any Waystone page - every directory is about to be
+// replaced and nothing has recorded since the mount began - so:
+//
+// - a **trail page** is freed if it is allocated and still reads
+//   `kWaystone`: a logged page is never of that class, so an id a crash gave
+//   to a logged page is passed by, and an id that is free is passed by;
+// - an **interior page** is taken for a fresh root if it is allocated and
+//   headerless - no other class is headerless - and is walked through only
+//   then; one no row needs is left allocated and counted (`dir_pages_left`):
+//   a headerless id is never freed (`DevicePageStore::FreePage`).
+//
+// A link that passes neither check is not followed. Each page is taken
+// once, however many rows name it. `store` null takes nothing back: the
+// renewal alone, for a store that is not a device's (the catalog-level
+// cells).
+struct AdvisoryDiscard {
+    std::uint64_t trail_pages_freed = 0;
+    std::uint64_t dir_pages_reused = 0;
+    std::uint64_t dir_pages_left = 0;  // taken and not needed, or not formatted
+};
+
+Status DiscardAdvisoryState(catalog::Catalog& catalog, bool waystone_recording,
+                            storage::DevicePageStore* store = nullptr,
+                            AdvisoryDiscard* out = nullptr);
 
 // A backup's window: where its replay starts and the stop it must reach.
 struct RestoreWindow {

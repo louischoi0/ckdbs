@@ -571,7 +571,11 @@ TEST_F(ExpeditorTest, EveryMountRenewsTheWaystoneDirectoryItFinds) {
     Expeditor& db = *reopened.value();
     const PageId renewed = root_of(db);
     EXPECT_NE(renewed, kInvalidPageId) << "the opted row was given no directory";
-    EXPECT_NE(renewed, first_root) << "the mount kept the previous run's directory";
+    // The id may be the previous root's own, reused empty (DV-S2): what the
+    // mount owes is a directory that names no child of the previous run's.
+    (void)first_root;
+    EXPECT_EQ(kds::testing_patterns::DirChildren(db.store(), renewed), 0)
+        << "the mount kept the previous run's directory";
     const std::string analyzed = db.dispatcher().Dispatch("ANALYZE " + sql).response;
     EXPECT_EQ(analyzed.find("replays="), std::string::npos)
         << "a trail survived the mount: " << analyzed;

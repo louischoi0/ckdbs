@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <span>
+#include <vector>
 
 #include "kds/base/status.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -101,6 +104,17 @@ public:
     std::uint64_t transactions() const noexcept { return transactions_; }
     std::uint64_t already_done() const noexcept { return already_done_; }
 
+    // **A row insert the pass retired**, reported after its compensation
+    // with the page's owner and the row's bytes as they stood (DV-S2,
+    // `instructions/v3.2.0/workorder-dv-unreachable-page-reclaim.md`): the
+    // mount learns from a retired `sys.tables` row which relation a crash
+    // loser created, and so which pages no row will ever name. Heap and
+    // catalog pages only - a B+ tree leaf's row is a user row. Unset, the
+    // pass reports nothing.
+    using InsertRetired = std::function<void(PageId page_id, std::uint64_t owner_oid,
+                                             std::span<const std::byte> payload)>;
+    void SetInsertRetired(InsertRetired hook) { insert_retired_ = std::move(hook); }
+
 private:
     Status RollBackOne(storage::PageStore& store, std::uint64_t txn_id, std::uint64_t head);
     Status Compensate(storage::PageStore& store, std::uint64_t txn_id, const UndoVersion& rec);
@@ -117,6 +131,7 @@ private:
     std::uint64_t compensations_ = 0;
     std::uint64_t transactions_ = 0;
     std::uint64_t already_done_ = 0;
+    InsertRetired insert_retired_;
 };
 
 }  // namespace kds::txn
