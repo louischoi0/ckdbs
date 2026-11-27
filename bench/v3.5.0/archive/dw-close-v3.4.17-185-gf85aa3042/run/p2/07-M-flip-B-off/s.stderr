@@ -1,0 +1,4 @@
+ckdbs on /home/ukjin/bench-runs/dw-close2/p2/07-M-flip-B-off/d.db: 20 pages, superblock version 41
+logging to /home/ukjin/bench-runs/dw-close2/p2/07-M-flip-B-off/s.log at level WARN
+listening on 127.0.0.1:15718
+stopped; 673 pages persisted

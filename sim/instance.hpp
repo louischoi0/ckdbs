@@ -107,6 +107,14 @@ struct SimInstanceOptions {
     // a row's tuple unit - `PURGE INDEX` - runs here instead of being refused
     // for want of one. Off by default: every corpus seed ran without it.
     bool lock_table = false;
+
+    // **The unasked index purge** (DW): the dispatcher's driver, with a floor
+    // of one write, offered and stepped beside the reclaim's step as core 0's
+    // tick does both - so its passes run, and are crashed, under the harness.
+    // It needs `lock_table`. The relation statistics it reads are the
+    // process's, so every boot empties them, as a server's restart does: a
+    // seed's passes then depend on the seed alone.
+    bool index_purge_driver = false;
 };
 
 // A base backup the harness took (BR-S8): the data pages as the fuzzy copy
@@ -212,6 +220,9 @@ public:
     // durable redo start the recycler was handed, and segments the log
     // device removed. Both survive a reboot; the device does.
     std::uint64_t recycles() const noexcept { return recycles_; }
+    // Entries the unasked index purge removed over the instance's life (DW):
+    // what shows a seed's driver did more than run.
+    std::uint64_t unasked_purged_entries() const noexcept { return unasked_purged_entries_; }
     std::uint64_t segments_recycled() const noexcept { return log_device_->segments_removed(); }
     // Detaches the recycler's detach-only arm had refused.
     std::uint64_t detach_refusals() const noexcept { return detach_refusals_; }
@@ -305,6 +316,7 @@ private:
         return backup_.has_value() ? std::min(d, backup_->image.start) : d;
     }
     std::uint64_t recycles_ = 0;
+    std::uint64_t unasked_purged_entries_ = 0;
     bool last_tear_imaged_ = false;
     std::uint64_t crashes_reviving_segments_ = 0;
     std::uint64_t detach_refusals_ = 0;

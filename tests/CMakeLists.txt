@@ -112,6 +112,7 @@ add_executable(kds_tests
     index_reclaim_job_test.cpp
     index_reindex_test.cpp
     index_purge_premise_test.cpp
+    index_purge_driver_test.cpp
     index_purge_test.cpp
     index_compile_test.cpp
     join_planner_test.cpp

@@ -2521,6 +2521,16 @@ std::vector<std::pair<std::string_view, std::string>> CommandDispatcher::MetaSec
            << " reclaim_skipped=" << reclaim_counters_->skipped.load(std::memory_order_relaxed)
            << " reclaim_refused=" << reclaim_counters_->refused.load(std::memory_order_relaxed);
     }
+    // The unasked index purge (DW), on the dispatcher that runs it and only
+    // where it is switched on: a session on another core reads none.
+    if (index_purge_.has_value()) {
+        section("index_purge");
+        const exec::IndexPurgeDriverCounts& purge = index_purge_->counts();
+        os << " index_purge_passes=" << purge.passes << " index_purge_queued="
+           << index_purge_->queued() << " index_purge_entries_read=" << purge.read
+           << " index_purge_entries_removed=" << purge.removed
+           << " index_purge_rows_skipped=" << purge.skipped;
+    }
     // The buffer pool (BE-R2, `eviction.md` EV9): its budget and what it
     // holds, then what reclaim has cost. `pool_batch_steps` over
     // `pool_batches_inline` is the inline walk's mean, which BE-R2 bounds;
@@ -3904,6 +3914,20 @@ private:
     bool force_;
 };
 
+namespace {
+
+// Every borrow a read holder took in a scope, given back at its end: a slice
+// of `PURGE INDEX`, a step of the heap release and a step of the unasked
+// index purge each hold nothing past their return.
+struct ReleaseAtScopeEnd {
+    txn::LockTable& locks;
+    std::uint64_t holder;
+    txn::LockHoldings& holdings;
+    ~ReleaseAtScopeEnd() { locks.Release(holder, holdings); }
+};
+
+}  // namespace
+
 // ---- `PURGE INDEX <name>` (DD) ---------------------------------------------
 //
 // A `BuildRun` with no transaction (`instructions/v3.2.0/workorder-dd-index-entry-purge.md`,
@@ -3960,12 +3984,7 @@ private:
     Status Step(std::uint32_t leaves) override {
         const std::uint64_t holder = d_.NextReadHolder();
         txn::LockHoldings holdings;
-        struct GiveBack {
-            txn::LockTable& locks;
-            std::uint64_t holder;
-            txn::LockHoldings& holdings;
-            ~GiveBack() { locks.Release(holder, holdings); }
-        } give_back{*d_.locks_, holder, holdings};
+        const ReleaseAtScopeEnd give_back{*d_.locks_, holder, holdings};
         // DD-R10: the relation's `IX` for the slice.
         auto took = d_.locks_->TryAcquire(holder, txn::LockKey::Relation(rel_oid_),
                                           txn::LockMode::kIntentionExclusive, holdings);
@@ -9791,12 +9810,7 @@ StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
     }
     const std::uint64_t holder = NextReadHolder();
     txn::LockHoldings holdings;
-    struct GiveBack {
-        txn::LockTable& locks;
-        std::uint64_t holder;
-        txn::LockHoldings& holdings;
-        ~GiveBack() { locks.Release(holder, holdings); }
-    } give_back{*locks_, holder, holdings};
+    const ReleaseAtScopeEnd give_back{*locks_, holder, holdings};
     auto took = locks_->TryAcquire(holder, txn::LockKey::Relation(heap_release_->rel_oid()),
                                    txn::LockMode::kIntentionExclusive, holdings);
     if (!took.ok()) return took.status();
@@ -9814,6 +9828,35 @@ StatusOr<bool> CommandDispatcher::StepHeapRelease(std::uint32_t budget) {
         if (!stepped.ok()) return stepped;
     }
     return true;
+}
+
+void CommandDispatcher::QueueIndexPurges() {
+    if (!index_purge_.has_value()) return;
+    for (const auto& [oid, activity] : stats::RelationStats::Snapshot()) {
+        index_purge_->Offer(oid, activity.deletes, activity.key_updates);
+    }
+}
+
+StatusOr<bool> CommandDispatcher::StepIndexPurge(std::uint32_t budget) {
+    // No fence or no horizon to judge under (DD-R8): `PURGE INDEX` refuses
+    // there, and the driver does nothing.
+    if (!index_purge_.has_value() || locks_ == nullptr || txn_ == nullptr) return false;
+    const std::optional<catalog::Oid> rel = index_purge_->Current();
+    if (!rel.has_value()) return false;
+    const std::uint64_t holder = NextReadHolder();
+    txn::LockHoldings holdings;
+    const ReleaseAtScopeEnd give_back{*locks_, holder, holdings};
+    auto took = locks_->TryAcquire(holder, txn::LockKey::Relation(*rel),
+                                   txn::LockMode::kIntentionExclusive, holdings);
+    if (!took.ok()) return took.status();
+    if (!took.value()) return true;  // a DDL holds the relation: asked again next tick
+    const storage::DrainOnPressure drain(page_store_);
+    if (Status s = index_purge_->Step(page_store_, catalog_, txn_, wal_, *locks_, holder,
+                                      holdings, budget);
+        !s.ok()) {
+        return s;
+    }
+    return index_purge_->owed();
 }
 
 Status CommandDispatcher::WalkHeapPages(
@@ -14715,16 +14758,20 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
         const exec::IndexWriteLog log_index = IndexWriteLogFor(scope, index_writes);
         // A heap's entry carries the row's rowid, which an in-place
         // overwrite keeps (DN, IX1).
-        if (Status s = exec::MaintainIndexes(
-                catalog_, page_store_, ta, row,
-                /*first_col_pos=*/0, encoded.value(), id, previous,
-                log_index ? &log_index : nullptr,
-                ta.heap()
-                    ? heap::EncodeRowid(heap::Rowid{page_id, slot})
-                    : 0);
-            !s.ok()) {
-            return s;
+        bool appended = false;
+        const Status maintained = exec::MaintainIndexes(
+            catalog_, page_store_, ta, row,
+            /*first_col_pos=*/0, encoded.value(), id, previous,
+            log_index ? &log_index : nullptr,
+            ta.heap() ? heap::EncodeRowid(heap::Rowid{page_id, slot}) : 0,
+            count_key_updates_ ? &appended : nullptr);
+        // The unasked index purge's signal (DW-Q7 (b)): the tree holds a dead
+        // entry more from here, whatever becomes of the statement - counted
+        // before the refusal below, which may follow an index that appended.
+        if (appended) {
+            stats::RelationStats::Record(core_id_, ta.oid, stats::RelationWrite::kKeyUpdate, 1);
         }
+        if (!maintained.ok()) return maintained;
         // The row's entries are in, so its key units go back (BX-Q2 (a)).
         unique_holds.Release();
         unique_cleared.reset();

@@ -1,0 +1,311 @@
+{
+ "cell": "M-fresh",
+ "host_before": {
+  "loadavg": "0.65 3.26 2.99 2/1233 800188",
+  "competing": 0,
+  "cc1plus": 0,
+  "cmake_or_ctest": 0
+ },
+ "entries_before": {
+  "a": 50000,
+  "b": 75336,
+  "c": 6107600
+ },
+ "before": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.955,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.173,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.884,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.319,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.785,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.984,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.875,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.8,
+     "p25": 25.2,
+     "p50": 25.9,
+     "p95": 27.4,
+     "p99": 28.3,
+     "mean": 26.2
+    },
+    "block_cpu": [
+     7.7,
+     8.07,
+     7.91,
+     8.15,
+     8.01,
+     8.05,
+     7.86,
+     7.63,
+     7.65,
+     7.57,
+     8.0,
+     7.92
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.267,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.423,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.109,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.506,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.3,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.439,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.225,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.7,
+     "p25": 24.6,
+     "p50": 25.4,
+     "p95": 26.5,
+     "p99": 27.3,
+     "mean": 25.5
+    },
+    "block_cpu": [
+     7.58,
+     7.34,
+     7.15,
+     7.0,
+     7.03,
+     7.22,
+     7.06,
+     7.12,
+     7.37,
+     7.34,
+     7.36,
+     7.13
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.469,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.666,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 8.245,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.764,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.466,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.727,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.727,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.8,
+     "p25": 25.0,
+     "p50": 25.7,
+     "p95": 27.0,
+     "p99": 28.3,
+     "mean": 26.1
+    },
+    "block_cpu": [
+     7.5,
+     7.35,
+     7.38,
+     7.63,
+     7.65,
+     9.84,
+     7.78,
+     7.71,
+     7.69,
+     7.29,
+     7.53,
+     7.36
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ },
+ "purge": {
+  "rel": "c",
+  "tag": "PURGED INDEX name=ix_c entries=6032264 skipped_rows=0 attempts=1598",
+  "wall_ms": 4417.4
+ },
+ "entries_after": {
+  "a": 50000,
+  "b": 75336,
+  "c": 75336
+ },
+ "after": {
+  "summary": {
+   "a": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.704,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.984,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.965,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 26.329,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.75,
+      "wait_us_per_stmt": 0.001,
+      "wall_us_per_stmt": 25.939,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.806,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.6,
+     "p25": 25.2,
+     "p50": 25.9,
+     "p95": 27.2,
+     "p99": 27.9,
+     "mean": 26.1
+    },
+    "block_cpu": [
+     7.64,
+     7.95,
+     7.61,
+     7.61,
+     7.92,
+     8.01,
+     8.26,
+     7.66,
+     7.65,
+     7.95,
+     7.67,
+     7.73
+    ]
+   },
+   "b": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.574,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.974,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.16,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.39,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.407,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.73,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.38,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.7,
+     "p25": 24.7,
+     "p50": 25.4,
+     "p95": 26.5,
+     "p99": 27.3,
+     "mean": 25.7
+    },
+    "block_cpu": [
+     7.45,
+     7.9,
+     7.56,
+     7.38,
+     7.34,
+     7.11,
+     7.09,
+     7.09,
+     7.56,
+     7.13,
+     7.1,
+     7.84
+    ]
+   },
+   "c": {
+    "per_rep": [
+     {
+      "cpu_us_per_stmt": 7.142,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.375,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.367,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.632,
+      "rows_per_stmt": 1.0
+     },
+     {
+      "cpu_us_per_stmt": 7.413,
+      "wait_us_per_stmt": 0.0,
+      "wall_us_per_stmt": 25.78,
+      "rows_per_stmt": 1.0
+     }
+    ],
+    "cpu_us_per_stmt": 7.307,
+    "latency_us": {
+     "ops": 12000,
+     "p0": 23.8,
+     "p25": 24.7,
+     "p50": 25.4,
+     "p95": 26.4,
+     "p99": 27.1,
+     "mean": 25.6
+    },
+    "block_cpu": [
+     7.08,
+     7.06,
+     7.39,
+     7.04,
+     7.04,
+     7.3,
+     7.69,
+     7.44,
+     7.45,
+     7.42,
+     7.38,
+     7.41
+    ]
+   }
+  },
+  "wrong_row_counts": 0
+ },
+ "refused": {}
+}

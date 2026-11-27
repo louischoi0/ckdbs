@@ -282,6 +282,7 @@ struct SimVerdict {
     // Cadence runs abandoned mid-steps (BI-S2), half a period after each tick.
     std::size_t abandoned_checkpoints = 0;
     std::size_t recycles = 0;
+    std::size_t unasked_purged_entries = 0;  // DW: by the driver, no statement asking
     std::size_t segments_recycled = 0;
     std::size_t crashes_reviving_segments = 0;
     // Iterations the log fail-stopped in (`wal/stream.hpp`): each ended its

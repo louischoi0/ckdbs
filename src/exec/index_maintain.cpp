@@ -171,7 +171,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
                                   std::uint64_t tuple_key,
                                   std::span<const parser::AstValue> previous,
                                   const IndexWriteLog* log, catalog::Catalog* publish,
-                                  std::uint64_t rowid) {
+                                  std::uint64_t rowid, bool* appended) {
     const bool is_update = !previous.empty();
     const index::IndexLayout layout = IndexLayoutOf(ix);
 
@@ -235,6 +235,7 @@ StatusOr<PageId> AppendIndexEntry(storage::PageStore& store,
         return placed.status().WithContext("maintaining index " +
                                            std::to_string(ix.index_oid));
     }
+    if (appended != nullptr && !placed.value().already_present) *appended = true;
 
     // A byte-identical entry was already there, so no page changed and there
     // is nothing to log (index_tree.hpp).
@@ -523,7 +524,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
                        std::span<const parser::AstValue> values, std::uint16_t first_col_pos,
                        std::span<const std::byte> row, std::uint64_t tuple_key,
                        std::span<const parser::AstValue> previous,
-                       const IndexWriteLog* log, std::uint64_t rowid) {
+                       const IndexWriteLog* log, std::uint64_t rowid, bool* appended) {
     // The one test a relation with no index pays.
     if (access.indexes.empty()) return Status::OK();
 
@@ -531,7 +532,7 @@ Status MaintainIndexes(catalog::Catalog& catalog, storage::PageStore& store,
         // With a log the root rides in the split's record
         // (`IndexWrite::new_root`); without one it is published inside.
         auto moved = AppendIndexEntry(store, access, ix, values, first_col_pos, row, tuple_key,
-                                      previous, log, &catalog, rowid);
+                                      previous, log, &catalog, rowid, appended);
         if (!moved.ok()) return moved.status();
     }
     return Status::OK();

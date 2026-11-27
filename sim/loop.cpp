@@ -107,6 +107,9 @@ std::string SimVerdict::Summary(const SimConfig& config) const {
                " crashes_reviving_segments=" + std::to_string(crashes_reviving_segments) +
                " abandoned_checkpoints=" + std::to_string(abandoned_checkpoints);
     }
+    if (unasked_purged_entries != 0) {
+        out += " unasked_purged_entries=" + std::to_string(unasked_purged_entries);
+    }
     if (mounts_refused != 0) out += " mounts_refused=" + std::to_string(mounts_refused);
     if (volume_censuses != 0) {
         out += " volume_censuses=" + std::to_string(volume_censuses) +
@@ -1505,6 +1508,9 @@ SimInstance::Options InstanceOptions(const SimConfig& config, const FeatureToggl
     // draws runs - and is crashed under - instead of being refused for want
     // of one; the other three keep the shape every earlier corpus ran.
     options.lock_table = config.seed % 4 == 3;
+    // DW: the unasked index purge on half of those, so the other half keeps
+    // a lock table with nothing purging unasked.
+    options.index_purge_driver = config.seed % 8 == 7;
     // A cap per seed (BE-Q2): two of the three sit near the floor (128
     // system pages plus a working minimum of 256), so a seed's workload runs
     // against reclaim, and the third leaves room, so the corpus keeps the
@@ -1821,6 +1827,7 @@ bool RunIteration(const SimConfig& config, const SimPlan& plan, std::size_t iter
     // fails is the one whose counts are wanted.
     const auto record_recycling = [&] {
         verdict.recycles = it.instance.recycles();
+        verdict.unasked_purged_entries = it.instance.unasked_purged_entries();
         verdict.segments_recycled = it.instance.segments_recycled();
         verdict.crashes_reviving_segments = it.instance.crashes_reviving_segments();
     };
@@ -1971,6 +1978,7 @@ void SimVerdict::Absorb(const SimVerdict& other) {
     checkpoints += other.checkpoints;
     abandoned_checkpoints += other.abandoned_checkpoints;
     recycles += other.recycles;
+    unasked_purged_entries += other.unasked_purged_entries;
     segments_recycled += other.segments_recycled;
     crashes_reviving_segments += other.crashes_reviving_segments;
     backups_restored += other.backups_restored;

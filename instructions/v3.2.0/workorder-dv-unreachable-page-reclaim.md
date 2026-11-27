@@ -8,9 +8,10 @@ Not on `main`: the landing waits for the operator's word. Opened
 2026-11-27 on worktree `dv-unreachable-page-reclaim` (branch
 `worktree-dv-unreachable-page-reclaim`) from `630ecc359`
 (`v3.4.17-178-g630ecc359`), on the operator's standing go-ahead
-(go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §1), **DV-Q0..Q6
+(go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §2), **DV-Q0..Q6
 adopted as CLA proposed, (a) in each, by that word and not as per-item
-marks**; DV-Q4', DV-Q7..Q10 added by CLA and adopted the same way (§2, §3).
+marks**; DV-Q4', DV-Q7..Q11 added by CLA and adopted the same way (§3, §4,
+§6).
 Written 2026-11-26 on worktree `known-gaps-milestone-orders` from
 `8274c951` (`raft-marks-2026-11-26.md` §3). A `[source-read]` claim
 with a `path:line` was read at `8274c951`; a claim taken from

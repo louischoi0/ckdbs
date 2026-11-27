@@ -16,6 +16,7 @@ void RelationStats::Record(std::uint32_t core, catalog::Oid oid, RelationWrite k
             case RelationWrite::kUpdate: a.updates.add(rows); break;
             case RelationWrite::kDelete: a.deletes.add(rows); break;
             case RelationWrite::kPurge: a.purged.add(rows); break;
+            case RelationWrite::kKeyUpdate: a.key_updates.add(rows); break;
         }
     });
 }

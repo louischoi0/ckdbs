@@ -416,6 +416,80 @@ TEST_F(ExpeditorTest, TheTickRetiresADropsMarksWithNoFurtherDdl) {
     EXPECT_TRUE(running.Stop().ok());
 }
 
+// DW-S1, DW-R3: with `index_purge_driver` on, core 0's ticks offer and step
+// the unasked index purge on a serving instance; with it off no driver is
+// built, so `Start` submits no tick and `sys.meta` shows no section.
+TEST_F(ExpeditorTest, TheTickPurgesABtreesIndexOnlyWhereTheKeyIsOn) {
+    for (const bool on : {false, true}) {
+        Expeditor::Config config = ConfigAt(1);
+        config.data_file = (dir_ / (on ? "on.db" : "off.db")).string();
+        config.wal_dir = (dir_ / (on ? "on.wal" : "off.wal")).string();
+        config.index_purge_driver = on;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        ASSERT_TRUE(db.Start().ok());
+        RunningInstance running(db, config.debug_text_port);
+        ASSERT_TRUE(running.Run()) << "the debug text port never accepted";
+        const int c = running.client();
+        ASSERT_NE(SendLine(c, "CREATE TABLE t (id int64, k int64) BTREE").rfind("ERR", 0), 0u);
+        ASSERT_NE(SendLine(c, "CREATE INDEX by_k ON t (k)").rfind("ERR", 0), 0u);
+        for (int at = 1; at <= 5000; at += 250) {
+            std::string sql = "INSERT INTO t VALUES ";
+            for (int i = at; i < at + 250; ++i) {
+                if (i != at) sql += ", ";
+                sql += "(" + std::to_string(i) + ", " + std::to_string(i % 8) + ")";
+            }
+            ASSERT_NE(SendLine(c, sql).rfind("ERR", 0), 0u);
+        }
+        // 4,500 deletes: over the driver's floor of 4,096.
+        ASSERT_NE(SendLine(c, "DELETE FROM t WHERE id > 500").rfind("ERR", 0), 0u);
+
+        if (!on) {
+            EXPECT_EQ(db.dispatcher().index_purge_driver(), nullptr);
+            EXPECT_FALSE(
+                testing_view::MetaField(SendLine(c, "SHOW META"), "index_purge_passes").has_value());
+            EXPECT_TRUE(running.Stop().ok());
+            continue;
+        }
+        std::uint64_t removed = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (removed < 4000 && std::chrono::steady_clock::now() < deadline) {
+            const auto field =
+                testing_view::MetaField(SendLine(c, "SHOW META"), "index_purge_entries_removed");
+            if (field.has_value()) removed = std::stoull(*field);
+            if (removed < 4000) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        EXPECT_GE(removed, 4000u) << "no tick purged the deleted rows' entries within 10 s";
+        EXPECT_TRUE(running.Stop().ok());
+    }
+}
+
+// DW-Q7 (b), DW-R3: the driver is core 0's, and its signal is counted where
+// a row is written - on every core's dispatcher of an instance that runs the
+// driver, and on none of an instance that does not.
+TEST_F(ExpeditorTest, EveryCoreCountsKeyUpdatesOnlyWhereTheDriverIsOn) {
+    for (const bool on : {false, true}) {
+        Expeditor::Config config = ConfigAt(/*cores=*/2);
+        config.data_file = (dir_ / (on ? "on2.db" : "off2.db")).string();
+        config.wal_dir = (dir_ / (on ? "on2.wal" : "off2.wal")).string();
+        config.index_purge_driver = on;
+        auto opened = Expeditor::Open(config, /*now_unix_seconds=*/1000);
+        ASSERT_TRUE(opened.ok()) << opened.status().message();
+        Expeditor& db = *opened.value();
+        ASSERT_TRUE(Started(db.Start()));
+        ASSERT_EQ(db.cores().size(), 1u);
+        EXPECT_EQ(db.dispatcher().counts_key_updates(), on);
+        EXPECT_EQ(db.cores().front()->dispatcher().counts_key_updates(), on);
+        EXPECT_EQ(db.dispatcher().index_purge_driver() != nullptr, on);
+        EXPECT_EQ(db.cores().front()->dispatcher().index_purge_driver(), nullptr)
+            << "one driver for the instance, on core 0";
+        RunningInstance running(db, config.debug_text_port);
+        ASSERT_TRUE(running.Run()) << "the debug text port never accepted";
+        EXPECT_TRUE(running.Stop().ok());
+    }
+}
+
 // BP-R1's arming cells (BP-H1, H2, H3): each structure the instance shares
 // latches or fences above one core and not at one, where its every caller
 // runs on the reactor thread (the census is in each header).
