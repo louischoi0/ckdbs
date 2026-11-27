@@ -1,11 +1,15 @@
 # Work order DX - the buffer pool under pressure: a full pool that waits for its writeback, and an abort that cannot be refused a frame
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
+Status: **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
+(branch `worktree-dx-pool-under-pressure`) from `481d101aa`
+(`v3.4.17-202-g481d101aa`), under the operator's standing go-ahead of
+2026-11-27 (`raft-marks-2026-11-27.md` §11): every DX-Q item is **adopted
+on that go-ahead, never marked by the operator item by item** (§4,
+"Marks"). Written 2026-11-26 on worktree
 `known-gaps-milestone-orders` (branch
 `worktree-known-gaps-milestone-orders`) from `8274c951`
 (`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; DX-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
+(`raft-marks-2026-11-26.md` §3). A `[source-read]` claim
 with a `path:line` was read at `8274c951`; a claim taken from
 `known-gaps.md` carries that entry's own verification commit and is not
 re-verified here.
@@ -120,6 +124,23 @@ each can cost:
 | DX-Q4 | The scan queue (BG-S2..S4) | (a) stays closed, as the operator closed it on 2026-11-23; (b) reopened inside DX | (a) |
 | DX-Q5 | BE's three untested rules | (a) each gets a cell in the stage that touches it, with a seam between reclaim batches; (b) outside DX | (a) |
 
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-27 (go-ahead-achieving-milestone)** - *"go ahead until
+achieving milestone, I will follow CLA proposal if decision needed"*
+(`raft-marks-2026-11-27.md` §11) - and none is the operator's own mark on
+the item. No item is tagged `[quiet-wrong]`.
+
+| | adopted | note |
+|---|---|---|
+| DX-Q0 | (a) | §2's 1 (the abort), 2 (the wait) and 4 (the stamp); not the scan queue |
+| DX-Q1 | (a) | DX-S0 gates the wait on the refusals reproducing; the abort's assertion is built either way. The bar is read in §7 |
+| DX-Q2 | (a) | the assertion, plus the drain that needs no page of the caller's |
+| DX-Q3 | (a) | the statement's existing deadline (`lock_wait_fault_net_ms`) |
+| DX-Q4 | (a) | the scan queue stays closed, as the operator closed BG on 2026-11-23 |
+| DX-Q5 | (a) | each of BE's three untested rules gets a cell in the stage that touches it |
+
 ## 5. Stages
 
 | stage | what | ends in |
@@ -147,3 +168,63 @@ No stage is opened and no code is written. **Not reviewed**: the
 `critics-developer` review was started and stopped before it reported,
 so no line reference or reading in this order has a second reader behind
 it.
+
+### DX-S0 (2026-11-27): the census, on `dx-pool-under-pressure` from `481d101aa`
+
+The results file is `bench/v3.5.0/results-dx-s0-census-v3.4.17-202-g481d101aa.md`.
+No behaviour changed. The probe was a stderr line at each site, run once
+over the suite and reverted. Every `path:line` below was read at
+`481d101aa`, not at this order's `8274c951`.
+
+- **Every abort is entered with no pin** `[measured]`. Over the whole
+  suite, `bs-nightly` included, every entry read
+  `PinsHeldOnThisThread() == 0`: 20,522 into `TransactionManager::Abort`,
+  20,711 into `AssertionEnforcer::AbortTxn`, 143 into recovery's
+  `RollBackOne`. `[source-read]` Each caller runs at a statement's or a
+  transaction's boundary.
+- **But a compensation can reserve with a pin held** `[source-read]`.
+  - The rollback's row locator descends for write and keeps the leaf while
+    `LeafStillCoversKey` fetches the right sibling
+    (`src/storage/btree/btree.cpp:68-70`, `:109`).
+  - A miss there, in a full pool, is refused with the drain skipped
+    (`device_page_store.cpp:941`). The locator turns that into NotFound,
+    and the compensation's write is left un-undone: `known-gaps.md:112`'s
+    hazard, on a real path.
+  - No measured run reached it. **So DX-S1 builds DX-Q2 (a)'s drain for a
+    thread holding a pin**; no reorder is needed once it does.
+- **The dirty-pool refusal reproduces** `[measured]`: 1,683-5,515
+  refusals in each 6 s lifetime, 2.26-2.49 % of statements, against
+  DM-S1's 143-220 (0.37-0.55 %).
+  - **77-91 % of them are refused at `BeginNoRefuseWindow`'s open**
+    (`device_page_store.cpp:1051`), which §2.2 did not name. The rest are
+    refused at `ReserveFrame` (`:961`).
+  - **Both refuse with the row's leaf held exclusive.** The point update
+    opens its window inside the row visit (`command_dispatcher.cpp:14636`,
+    called at `:14870`).
+  - So DX-R3's wait cannot be taken where the refusal is raised. **DX-S2
+    takes it after the statement has let go of everything**, as BA-S14's
+    structural re-run does: it drains the queue holding nothing, then
+    runs the statement again, only if the statement wrote nothing and under
+    its one deadline.
+- **Where writeback is queued from** `[source-read]`. Only the CLOCK walk
+  (`SweepLocked`) queues a dirty frame. The queue is drained only on core
+  0's 50 ms tick and in drain mode, and at `cores = 1` the tick does not
+  run while a statement holds the reactor. So an ordinary statement's
+  reservation queues the frames, retries 8 times without yielding, and
+  refuses.
+- **DX-Q1's bar, CLA's reading: met.** The refusals reproduce, so the wait
+  is built in DX-S2. The abort's assertion is built in DX-S1 either way.
+  This reading is CLA's on the standing go-ahead, not the operator's.
+- **The suite at `481d101aa`**: 5,341 of 5,342 passed (`-j8`,
+  `-LE bs-nightly`). The one failure was a tmpfs `Disk quota exceeded`
+  while copying a WAL. It passed 3 of 3 times alone.
+- **Reviewed** (`critics-developer`).
+  - Applied:
+    - H1, the locator's pinned sibling fetch the first draft missed;
+    - H2, the refusal sites hold the leaf, so the wait moves to the
+      statement's boundary;
+    - three wrong figures (M1-M3);
+    - L1-L5.
+  - Rejected: H2's probe of the pins at each refusal site. The wait is
+    not taken there, so what the sites hold does not decide the design.
+- Overhead not measured; measured at the milestone's close.

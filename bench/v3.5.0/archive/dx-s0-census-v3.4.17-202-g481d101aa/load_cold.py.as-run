@@ -1,0 +1,27 @@
+# DX-S0: loads DM-S1's cold base (1,000,000 rows of t1, one index) with the
+# same loader `tools/dm_s1_spike.py`'s `cold()` uses, so `tools/dm_s1_check.py`
+# can run the dirty-pool cell over a copy of it.
+#   python3 -I load_cold.py <tools dir> --bin B --workdir D [--port P] [--rows N]
+import argparse
+import os
+import random
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import dm_s0_premise as s0  # noqa: E402
+
+p = argparse.ArgumentParser()
+p.add_argument("tools")
+p.add_argument("--bin", required=True)
+p.add_argument("--workdir", required=True)
+p.add_argument("--port", type=int, default=15791)
+p.add_argument("--rows", type=int, default=1_000_000)
+a = p.parse_args()
+loader = s0.Server(a, 1, "cold_base", 131072, env=dict(os.environ))
+try:
+    c = loader.conn()
+    s0.make(c, "t1", a.rows, 1, random.Random(41))
+    c.close()
+finally:
+    loader.stop()
+print("loaded", os.path.join(a.workdir, "cold_base"))

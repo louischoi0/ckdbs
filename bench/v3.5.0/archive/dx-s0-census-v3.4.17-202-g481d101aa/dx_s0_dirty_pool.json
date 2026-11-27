@@ -1,0 +1,132 @@
+{
+ "bin": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dx-pool-under-pressure/build-dx-base/run/bin/kds_server",
+ "sha256": "17cda4082ac1714e5ba146bf72b212f50593de24aead4a4a87b61fb736cce0c7",
+ "started": "2026-11-27 12:10:50 UTC",
+ "args": {
+  "bin": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dx-pool-under-pressure/build-dx-base/run/bin/kds_server",
+  "base": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dx-pool-under-pressure/build-dx-base/run/cold_base",
+  "workdir": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dx-pool-under-pressure/build-dx-base/run",
+  "out": "/home/ukjin/workspaces/ckdbs/.claude/worktrees/dx-pool-under-pressure/build-dx-base/run/dx_s0_dirty_pool.json",
+  "port": 15781,
+  "arms": "0,0,0,0",
+  "rows": 1000000,
+  "frames": 2048,
+  "sessions": 4,
+  "seconds": 6.0
+ },
+ "arms": [
+  {
+   "arm": 0,
+   "ok": 226158,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 5012,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 503
+   },
+   "pool": {
+    "pool_misses": 378559.0,
+    "pool_hits": 1002646.0,
+    "pool_reclaimed_inline": 349995.0,
+    "pool_reclaimed_background": 25274.0,
+    "pool_batches_inline": 246883.0,
+    "pool_batches_background": 556.0,
+    "pool_dirty_queued": 204012.0,
+    "pool_dirty_drained": 203358.0,
+    "pool_refused": 6521.0,
+    "pool_resident": 1781.0,
+    "contention_checkpoint_pages_written": 1096.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1802.0
+   },
+   "host_before": {
+    "loadavg": "2.19 4.07 3.22 1/1370 1229748",
+    "builds": []
+   }
+  },
+  {
+   "arm": 0,
+   "ok": 146929,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 3189,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 351
+   },
+   "pool": {
+    "pool_misses": 245139.0,
+    "pool_hits": 652000.0,
+    "pool_reclaimed_inline": 224054.0,
+    "pool_reclaimed_background": 18250.0,
+    "pool_batches_inline": 159714.0,
+    "pool_batches_background": 391.0,
+    "pool_dirty_queued": 132250.0,
+    "pool_dirty_drained": 131494.0,
+    "pool_refused": 4242.0,
+    "pool_resident": 1782.0,
+    "contention_checkpoint_pages_written": 1029.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1803.0
+   },
+   "host_before": {
+    "loadavg": "2.18 4.03 3.21 1/1369 1229824",
+    "builds": []
+   }
+  },
+  {
+   "arm": 0,
+   "ok": 72754,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 1294,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 389
+   },
+   "pool": {
+    "pool_misses": 121120.0,
+    "pool_hits": 322619.0,
+    "pool_reclaimed_inline": 107312.0,
+    "pool_reclaimed_background": 10702.0,
+    "pool_batches_inline": 88458.0,
+    "pool_batches_background": 234.0,
+    "pool_dirty_queued": 64817.0,
+    "pool_dirty_drained": 64817.0,
+    "pool_refused": 2461.0,
+    "pool_resident": 1939.0,
+    "contention_checkpoint_pages_written": 37.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1960.0
+   },
+   "host_before": {
+    "loadavg": "2.00 3.93 3.19 2/1375 1229933",
+    "builds": []
+   }
+  },
+  {
+   "arm": 0,
+   "ok": 111737,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 2321,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 531
+   },
+   "pool": {
+    "pool_misses": 187096.0,
+    "pool_hits": 495545.0,
+    "pool_reclaimed_inline": 168859.0,
+    "pool_reclaimed_background": 14866.0,
+    "pool_batches_inline": 142333.0,
+    "pool_batches_background": 309.0,
+    "pool_dirty_queued": 100284.0,
+    "pool_dirty_drained": 100284.0,
+    "pool_refused": 3914.0,
+    "pool_resident": 1778.0,
+    "contention_checkpoint_pages_written": 261.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1799.0
+   },
+   "host_before": {
+    "loadavg": "2.00 3.90 3.18 3/1368 1230010",
+    "builds": []
+   }
+  }
+ ],
+ "ended": "2026-11-27 12:11:15 UTC"
+}
