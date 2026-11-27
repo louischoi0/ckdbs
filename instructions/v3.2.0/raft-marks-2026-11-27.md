@@ -131,3 +131,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **The landing** | the operator's word of §11's second half covers it: merged into `main` and pushed with `--no-verify` once closed |
 | **Does not settle** | a tag or a version; the `relaxed` carve's remedy |
 | **Recorded at** | this file; the order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 15. EA opened on a standing go-ahead scheduled four hours ahead; EA-Q0..Q5 marked as proposed
+
+| | |
+|---|---|
+| **Word** | *"In four hours, /go-ahead-achieving-milestone EA; mark as proposed, and when it is done, push no verify"* (given in Korean at 13:29 UTC; recorded in English). The session's one-shot job ran it at 17:29 UTC with the instruction spelled out: mark every decision as CLA's proposal, and at the close push to `origin/main` with `--no-verify`, no tag and no version. The skill it names carries the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **EA is opened** on worktree `ea-prepared-statement-reuse` (branch `worktree-ea-prepared-statement-reuse`) from `481d101aa` (`v3.4.17-202-g481d101aa`). **EA-Q0..Q5 are marked (a), each as CLA proposed it, on the operator's word "mark as proposed"** - one word for every item, not a word on each: EA-Q0 (a) EA is opened, which is the operator's word EA-Q0 and its header said BN-Q13's standing needed; EA-Q1 (a) S0 gates; EA-Q2 (a) `tools/kwp.py`'s prepare path; EA-Q3 (a) the compiled chain stays unbuilt, CX-Q37 (a) standing; EA-Q4 (a) the double compile outside EA; EA-Q5 (a) `C_DESCRIBE` of a statement stays refused. An item EA's stages raise and mark under the same word is recorded in the order's §4 as such. No EA-Q item is tagged `[quiet-wrong]`; EA-R1 and EA-R5, which are, are rules |
+| **Does not settle** | a tag or a version; CX-Q37 beyond (a) |
+| **Recorded at** | this file; `workorder-ea-prepared-statement-reuse.md` (header, §4, §7); EA's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

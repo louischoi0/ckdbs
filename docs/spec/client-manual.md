@@ -239,6 +239,13 @@ client author has to know to write one.
   the parsed statement in order. `type_oid` is the engine's own column
   type number, which is also what `S_ROW_DESC` reports — one numbering,
   two directions.
+- **Prepare into a named statement to be parsed once** (`protocol.md` §5,
+  EA): a named statement's parse is kept, and each `C_BIND` of it fills
+  the parse with values, so an execution parses nothing; the unnamed
+  statement, and a bind carrying a NULL, are parsed at every execution.
+  **A text value holding a single quote binds only into a named
+  statement**: SQL text has no spelling for it, so the unnamed statement
+  refuses it at `C_BIND`.
 - **Results:** `S_ROW_DESC` describes the shape once — per field a name, a
   `type_oid`, a wire width (`-1` for variable), flags and a `type_mod`
   (the packed `(precision, scale)` of a `DECIMAL`, zero otherwise). Then

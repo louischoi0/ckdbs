@@ -4,6 +4,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +17,7 @@
 #include "kds/server/command_dispatcher.hpp"
 #include "kds/server/connection_limits.hpp"
 #include "kds/server/result_sink.hpp"
+#include "kds/parser/kept_parse.hpp"
 #include "kds/server/session.hpp"
 #include "kds/wire/error_registry.hpp"
 #include "kds/wire/handshake.hpp"
@@ -338,11 +340,19 @@ private:
         std::string sql;
         std::uint64_t pattern_id = 0;
         std::uint32_t param_count = 0;
+        // **A named statement's parse, kept** (EA-S1): built at `C_PARSE` for
+        // a named statement only - the unnamed one is the text path's, parsed
+        // by the statement that runs it (EA-R4) - and null where the text
+        // keeps none (`parser/kept_parse.hpp`).
+        std::shared_ptr<const parser::KeptParse> kept;
     };
 
     struct Portal {
         std::string statement;  // the named statement it was bound from
         std::string sql;        // that statement's text with parameters substituted
+        // Its statement's kept parse with this bind's values, null where the
+        // bind ran the text path: no kept parse, or a NULL among the values.
+        std::shared_ptr<const parser::BoundStatement> bound;
         bool executed = false;
         // Its `S_COMPLETE` has gone out, so the portal is spent: a further
         // `C_CONTINUE` must be refused rather than answered, or it would

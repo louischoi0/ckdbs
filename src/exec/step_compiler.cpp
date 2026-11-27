@@ -2969,7 +2969,7 @@ StatusOr<StepChain> CompileBlock(catalog::Catalog& catalog, const parser::Select
     if (plan->admin != nullptr && plan->admin->any() && shape.has_value()) {
         if (const auto managed = plan->admin->Find(*shape); managed != nullptr) {
             plan->admin->CountServed();
-            const PlanVariant& variant = managed->Choose(plan->statement);
+            const PlanVariant& variant = managed->Choose(plan->statement, plan->arguments);
             const std::vector<std::size_t> perm(variant.order.begin(),
                                                 variant.order.begin() + refs.size());
             PlanSource source = PlanSource::kAdmin;

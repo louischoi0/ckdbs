@@ -76,6 +76,7 @@
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/kept_parse.hpp"
 #include "kds/parser/lexer.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -7756,6 +7757,8 @@ public:
     // The head's state, filled by `HandleSelect` in order.
     std::optional<txn::LeasedSnapshot> snapshot;
     std::optional<parser::Parser> parser;
+    // The statement's fingerprint: its parse's, or its kept parse's (EA-S1).
+    std::optional<parser::Fingerprint> fingerprint;
     std::optional<parser::Statement> statement;
     std::optional<ReadBorrow> borrow;
     // What this run's own compile bound (DI, `stats/statement_binding.hpp`):
@@ -7972,7 +7975,23 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
     co_return Status::OK();
 }
 
-StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_view line) {
+const parser::BoundStatement* CommandDispatcher::KeptFor(const Session* session,
+                                                         std::string_view line) noexcept {
+    if (session == nullptr) return nullptr;
+    const auto& bound = session->bound_statement();
+    if (bound == nullptr || Trim(line) != Trim(bound->text)) return nullptr;
+    return bound.get();
+}
+
+StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_view line,
+                                                                const Session* session) {
+    if (const parser::BoundStatement* kept = KeptFor(session, line); kept != nullptr) {
+        if (statement_fetch_id_ == 0) {
+            statement_fetch_id_ = kept->fingerprint.fetch_id;
+            statement_pattern_id_ = kept->fingerprint.pattern_id;
+        }
+        return kept->Materialize();
+    }
     // `parser::Parse`, keeping the fingerprint the lexer took on the way:
     // `sys.statement_stats`' key costs the statement no second lex (BO-S5).
     parser::Parser parser(line);
@@ -7989,7 +8008,7 @@ StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_vie
 
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope,
                                                const exec::StatementContext& context) {
-    auto parsed = ParseKeepingShape(line);
+    auto parsed = ParseKeepingShape(line, scope.session);
     if (!parsed.ok()) {
         return Refused(parsed.status());
     }
@@ -11141,11 +11160,19 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // fingerprint can be taken **from the parse itself** (parser.hpp): a
     // second lex was ~13% of a point join's latency
     // (bench/results-waystone-v2.md, at 1769487).
-    parser::Parser& parser = run->parser.emplace(line);
-    auto parsed = parser.Parse();
+    //
+    // **A kept parse stands in for the parse** (EA-S1) where the session's
+    // statement was bound for this text: its AST, holes filled, and the
+    // substituted text's fingerprint.
+    const parser::BoundStatement* kept = KeptFor(&session, line);
+    StatusOr<parser::Statement> parsed =
+        kept != nullptr ? StatusOr<parser::Statement>(kept->Materialize())
+                        : run->parser.emplace(line).Parse();
+    run->fingerprint = kept != nullptr ? std::optional<parser::Fingerprint>(kept->fingerprint)
+                                       : run->parser->fingerprint();
     // `sys.statement_stats` (BO-S5): the first parse of the statement keys
     // it - an UPDATE's SET subquery runs here after the UPDATE's own parse.
-    if (const auto fingerprint = parser.fingerprint();
+    if (const auto& fingerprint = run->fingerprint;
         fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
         statement_pattern_id_ = fingerprint->pattern_id;
@@ -11156,7 +11183,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // everything before the clause was native, and the query grammar
         // refuses every clause it meets, so its refusal - of a form the
         // query layer answers - would be false of this statement.
-        if (!analyze && !parser.met_lock_clause()) {
+        if (!analyze && !run->parser->met_lock_clause()) {
             if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
                 return std::move(*layered);
             }
@@ -11389,11 +11416,12 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         plan.admin = admin_plans_;
         plan.search = join_order != exec::JoinOrder::kWritten;
         plan.statement = line;
+        // A kept parse's arguments, its holes' values in place (EA-S2).
+        const parser::BoundStatement* kept = KeptFor(&session, line);
+        plan.arguments = kept != nullptr ? &kept->arguments : nullptr;
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
-        if (const auto fingerprint =
-                run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
-            fingerprint.has_value()) {
+        if (const auto& fingerprint = run->fingerprint; fingerprint.has_value()) {
             plan.fetch_id = fingerprint->fetch_id;
             plan.arg_hash = fingerprint->arg_hash;
             plan.literals_known = fingerprint->param_count == 0;
@@ -11456,7 +11484,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // Where the join order came from, for `sys.statement_stats` (CX-R11) -
     // of the statement's own SELECT, not of a subquery an UPDATE's SET runs
     // through here, which `fetch_id` is guarded against the same way.
-    const auto own = run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
+    const auto& own = run->fingerprint;
     const bool statements_own = own.has_value() && own->fetch_id == statement_fetch_id_;
     if (statements_own) NoteStatementCompiled();
     if (!statements_own) {
@@ -11477,7 +11505,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // (lexer.hpp), so identifying the statement costs nothing beyond the
     // parse that had to happen anyway.
     const std::optional<parser::Fingerprint> fingerprint =
-        run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
+        run->fingerprint;
 
     // **A D2 statement neither records a trail nor reads one** (AR1 §3,
     // D2): a row-volatile function makes its instance key name no stable
@@ -12267,7 +12295,8 @@ std::optional<Status> CommandDispatcher::AnalyzeWithReturning(
 }
 
 CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
-                                                             std::string_view statement) {
+                                                             std::string_view statement,
+                                                             const Session* session) {
     if (statement.empty() || statement_fetch_id_ == 0 || !admin_plans_->any_single()) return {};
     exec::CapturedKey key;
     key.fetch_id = statement_fetch_id_;
@@ -12276,7 +12305,9 @@ CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
     WritePlan found;
     found.plan = admin_plans_->Find(key);
     if (found.plan == nullptr) return {};
-    found.variant = &found.plan->Choose(statement);
+    // A kept parse's arguments, its holes' values in place (EA-S2).
+    const parser::BoundStatement* kept = KeptFor(session, statement);
+    found.variant = &found.plan->Choose(statement, kept != nullptr ? &kept->arguments : nullptr);
     return found;
 }
 
@@ -12737,8 +12768,8 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     if (out.response.rfind("ERR", 0) == 0 || !ContainsWordIgnoringCase(line, "RETURNING")) {
         return out;
     }
-    parser::Parser parser(line);
-    auto parsed = parser.Parse();
+    // The statement's own parse again, or its kept parse (EA-S1).
+    auto parsed = ParseKeepingShape(line, &session);
     if (!parsed.ok()) return out;
     const parser::Returning* returning = nullptr;
     std::string schema;
@@ -13403,7 +13434,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context,
                                                std::vector<exec::SubqueryResult>& subqueries) {
-    auto parsed = ParseKeepingShape(line);
+    auto parsed = ParseKeepingShape(line, scope.session);
     if (!parsed.ok()) {
         return Refused(parsed.status());
     }
@@ -14436,7 +14467,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // an administrator gave its shape one, pins the arm it finds its rows
     // by (DU-S3); the window declared above is the statement's whatever arm
     // that is.
-    const WritePlan plan = arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement);
+    const WritePlan plan =
+        arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement, scope.session);
     if (!arm_target.has_value()) {
         walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
         NoteWritePlan(plan, walk.pin_declined());
@@ -18204,7 +18236,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context) {
     // Keyed by its shape, as an INSERT and an UPDATE are (DF-Q11 (a)).
-    auto parsed = ParseKeepingShape(line);
+    auto parsed = ParseKeepingShape(line, scope.session);
     if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};
@@ -18262,7 +18294,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     // DU-S1 and DU-S3, as UPDATE's: the bound, and the plan's pin.
-    const WritePlan plan = WritePlanFor(ta.oid, line);
+    const WritePlan plan = WritePlanFor(ta.oid, line, scope.session);
     walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
     NoteWritePlan(plan, walk.pin_declined());
     if (declared.has_value()) {

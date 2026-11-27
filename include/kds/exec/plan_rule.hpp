@@ -21,7 +21,9 @@
 //
 // `ARG(k)` is the statement's k-th value position, 1-based: its literals in
 // token order, however they arrived - written in the text or substituted at
-// `C_BIND` (`parser::ArgumentsOf`, CX-R1a).
+// `C_BIND` (`parser::ArgumentsOf`, CX-R1a), or bound into a kept parse, whose
+// arguments are the substituted text's with no lex (EA-S2,
+// `parser/kept_parse.hpp`).
 //
 // **Total and pure** (CX-R4) `[quiet-wrong]-adjacent`: a rule reads nothing
 // but the arguments - no page, no statistic, no clock - and every

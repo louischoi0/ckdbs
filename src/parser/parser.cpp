@@ -320,6 +320,25 @@ StatusOr<AstValue> Parser::ParseValue() {
             v.byte_offset = tok.byte_offset;
             return v;
         }
+        case TokenType::kParam:
+            if (admit_holes_) {
+                AstValue v;
+                v.type = ValueType::kParam;
+                v.byte_offset = tok.byte_offset;
+                v.int_val = holes_read_++;
+                v.str_val = "?";
+                return v;
+            }
+            // A `?` in text that reached the grammar unbound: C_BIND
+            // substitutes every value with a spelling, so this is a value
+            // that has none (a quote, `kept_parse.hpp`) in a form that reads
+            // the statement's text again, or a `?` in a text statement.
+            return Status::InvalidArgument(
+                "a '?' parameter reached the grammar unbound (byte " +
+                std::to_string(tok.byte_offset) +
+                "): a value is bound by C_BIND, and a text value holding a quote binds only "
+                "where the statement's kept parse answers it, never where its text is read "
+                "again (docs/inflight/known-gaps.md)");
         case TokenType::kNamedParam:
             // Accepted by **no** production (`CREATE PATTERN`, its one
             // user, was withdrawn 2026-08-31). The token stays reserved for

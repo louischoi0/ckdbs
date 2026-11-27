@@ -1707,13 +1707,24 @@ Written at BN's close on `worktree-bk-read-update-paths`, verified at `8679367e`
 `instructions/v3.0.0/workorder-bn-opt-read-update-path.md` and the specs each
 stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
 
-- **A prepared statement is still substituted into its text and parsed again
-  at every execution** (BN-R1 not built, BN-Q13). Parse and compile are
-  1.1-4.5 µs of a point statement's server CPU after BN (5-15 % of it,
-  `bench/v3.0.0/archive/bn-close-v2.7.0-787-g8679367e/partsB.md`), and a
-  client that prepares is the only one a cached parse would help; no driver
-  in the tree prepares. A text parameter containing a single quote stays
-  unbindable at `C_BIND` for the same reason.
+- **A prepared statement's parse is kept only where it is a named
+  statement's and its bind carries no NULL** (EA-S1, verified on
+  `ea-prepared-statement-reuse`; `protocol.md` §5). The unnamed statement, a
+  bind with a NULL, a `?` the bind's walk does not reach (a `RETURNING`
+  item, a SET value's scalar subquery, a query-grammar form) and a `?`
+  against a byte it could fuse with still substitute and parse at every
+  execution - 11.9 - 20.9 % of a prepared statement's server CPU at EA-S0
+  (`bench/v3.4.17/results-ea-s0-premise-v3.4.17-202-g481d101aa.md`). **A text
+  value holding a quote binds only through a kept parse**: refused at
+  `C_BIND` elsewhere, and refused by name at its `?` by a form that reads
+  the statement's text again (the query layer after a native compile
+  declines). **The compiled chain is not kept** (EA-Q3 (a), CX-Q37 (a)):
+  with the parse gone, `exec::Compile` is 8.1 % of a prepared point
+  `SELECT`'s server CPU and 18.9 - 22.1 % of a three-relation join's.
+- **A text statement over KWP lexes its text twice**: `C_PARSE`'s
+  `FingerprintOf` for the informational `pattern_id`, then the statement's
+  own parse - 0.23 µs on a point statement and 0.86 µs on a three-relation
+  join, 3.4 - 8.1 % of its server CPU (EA-S0, same file). Left by EA-R4.
 - **Waystone records a trail for a point `SELECT` by tuple key only if an
   operator opted the shape in.** Closed for every shape not opted by CF-S1b
   and CF-S1c (verified on `cf-waystone-premise` at `46c632aa`): a `SELECT`
@@ -3024,7 +3035,9 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 - **A multi-variant plan lexes the statement a second time at every
   compile**, to read its arguments (`parser::ArgumentsOf`); a one-variant
-  plan does not. And while any plan is enabled, every top-level join
+  plan does not, and neither does a statement run from a kept parse, whose
+  bound arguments the rule reads (EA-S2, verified on
+  `ea-prepared-statement-reuse`). And while any plan is enabled, every top-level join
   block's compile on every core probes the administrator's table - one
   partition latch - a tuple key chain's included, which the captured table
   is never asked of (CX-R6 as amended in the stage log). Neither is

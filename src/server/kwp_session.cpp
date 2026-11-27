@@ -174,6 +174,17 @@ Status ScanPlaceholders(std::string_view sql, std::string* out,
     return Status::OK();
 }
 
+// One literal pasted where its `?` stood. A negative value pasted after a
+// `-` would read `--` and open a line comment that eats the rest of the
+// statement: `x -?` bound with -5 is `x --5 WHERE ...`, with no WHERE. A
+// space keeps it a minus and a negative literal.
+void Paste(std::string& dst, std::string_view literal) {
+    if (!dst.empty() && dst.back() == '-' && !literal.empty() && literal.front() == '-') {
+        dst += ' ';
+    }
+    dst += literal;
+}
+
 StatusOr<std::string> Substitute(std::string_view sql,
                                  const std::vector<wire::BoundParam>& params) {
     std::string out;
@@ -187,15 +198,7 @@ StatusOr<std::string> Substitute(std::string_view sql,
         }
         auto literal = LiteralOf(params[next++]);
         if (!literal.ok()) return literal.status();
-        // A negative value pasted after a `-` would read `--` and open a
-        // line comment that eats the rest of the statement: `x -?` bound with
-        // -5 is `x --5 WHERE ...`, with no WHERE. A space keeps it a minus
-        // and a negative literal.
-        if (!dst->empty() && dst->back() == '-' && !literal.value().empty() &&
-            literal.value().front() == '-') {
-            *dst += ' ';
-        }
-        *dst += literal.value();
+        Paste(*dst, literal.value());
         return Status::OK();
     });
     if (!scanned.ok()) return scanned;
@@ -205,6 +208,59 @@ StatusOr<std::string> Substitute(std::string_view sql,
                                        std::to_string(next) + " '?' placeholders");
     }
     return out;
+}
+
+// **A kept parse's bind** (EA-S1, `parser/kept_parse.hpp`): every value in
+// the form its substituted literal lexes to - a number through `LiteralOf`'s
+// own spelling, a string from its bytes, so a quote binds - and the text the
+// dispatch is handed, each `?` its literal or, for a string no literal can
+// spell, left a `?`. Null where the text path answers the bind instead: a
+// NULL among the values (a NULL literal is shape, the header's last rule),
+// or a count the kept parse disagrees with, whose refusal is the text
+// path's.
+StatusOr<std::shared_ptr<const parser::BoundStatement>> BindKept(
+    const std::shared_ptr<const parser::KeptParse>& kept, std::string_view sql,
+    const std::vector<wire::BoundParam>& params) {
+    if (params.size() != kept->holes()) return std::shared_ptr<const parser::BoundStatement>();
+    std::vector<parser::HoleValue> values;
+    std::vector<std::optional<std::string>> literals;
+    values.reserve(params.size());
+    literals.reserve(params.size());
+    for (const wire::BoundParam& param : params) {
+        if (!param.bytes.has_value()) return std::shared_ptr<const parser::BoundStatement>();
+        if (param.type_oid == catalog::kTypeValVarchar || param.type_oid == catalog::kTypeValChar) {
+            std::string text(reinterpret_cast<const char*>(param.bytes->data()),
+                             param.bytes->size());
+            literals.push_back(text.find('\'') == std::string::npos
+                                   ? std::optional<std::string>("'" + text + "'")
+                                   : std::nullopt);
+            values.push_back(parser::HoleValueOfString(std::move(text)));
+            continue;
+        }
+        // Every other value through its own spelling, read as the lexer reads it.
+        auto literal = LiteralOf(param);
+        if (!literal.ok()) return literal.status();
+        auto value = parser::HoleValueOfLiteral(literal.value());
+        if (!value.ok()) return value.status();
+        values.push_back(std::move(value.value()));
+        literals.push_back(std::move(literal.value()));
+    }
+    std::string text;
+    text.reserve(sql.size() + params.size() * 8);
+    std::size_t next = 0;
+    Status scanned = ScanPlaceholders(sql, &text, [&](std::string* dst) -> Status {
+        if (next >= literals.size()) {
+            return Status::InvalidArgument("C_BIND: the kept parse and the text disagree on '?'");
+        }
+        const std::optional<std::string>& literal = literals[next++];
+        Paste(*dst, literal.has_value() ? std::string_view(*literal) : std::string_view("?"));
+        return Status::OK();
+    });
+    if (!scanned.ok()) return scanned;
+    if (next != literals.size()) {
+        return Status::InvalidArgument("C_BIND: the kept parse and the text disagree on '?'");
+    }
+    return parser::Bind(kept, std::move(values), std::move(text));
 }
 
 // The `?` count, by the same scan. Reported at `C_PARSE` so a client knows
@@ -617,6 +673,11 @@ FrameAction KwpSession::OnParse(std::span<const std::byte> payload, std::vector<
     if (auto fp = parser::FingerprintOf(stmt.sql); fp.has_value()) {
         stmt.pattern_id = fp->pattern_id;
     }
+    if (!name->empty()) {
+        if (auto kept = parser::KeptParse::Of(stmt.sql); kept.has_value()) {
+            stmt.kept = std::make_shared<const parser::KeptParse>(std::move(*kept));
+        }
+    }
     // The unnamed statement is overwritten by the next PARSE (§5); a named
     // one survives until `C_CLOSE` or disconnect. One assignment does both.
     const std::uint64_t pattern_id = stmt.pattern_id;
@@ -647,7 +708,14 @@ FrameAction KwpSession::OnBind(std::span<const std::byte> payload, std::vector<s
         return Refuse(out, Protocol(ProtocolDetail::kMalformedPayload,
                                     params.status().message()));
     }
-    auto bound = Substitute(stmt->sql, params.value());
+    std::shared_ptr<const parser::BoundStatement> kept;
+    if (stmt->kept != nullptr) {
+        auto bound_kept = BindKept(stmt->kept, stmt->sql, params.value());
+        if (!bound_kept.ok()) return Refuse(out, wire::ErrorFromStatus(bound_kept.status()));
+        kept = std::move(bound_kept.value());
+    }
+    StatusOr<std::string> bound = kept != nullptr ? StatusOr<std::string>(kept->text)
+                                                  : Substitute(stmt->sql, params.value());
     if (!bound.ok()) return Refuse(out, wire::ErrorFromStatus(bound.status()));
 
     if (portals_.size() >= kMaxSessionPortals && portals_.find(*portal_name) == portals_.end()) {
@@ -662,6 +730,7 @@ FrameAction KwpSession::OnBind(std::span<const std::byte> payload, std::vector<s
     Portal portal;
     portal.statement = *stmt_name;
     portal.sql = std::move(bound.value());
+    portal.bound = std::move(kept);
     portal.idle_since = Now();
     portals_[*portal_name] = std::move(portal);
     std::erase_if(expired_portals_, [&](const ExpiredPortal& e) { return e.name == *portal_name; });
@@ -750,6 +819,10 @@ FrameAction KwpSession::OnExecute(std::span<const std::byte> payload,
     // states it.
     running_txn_ = false;
 
+    // The kept parse rides on the engine session for this statement alone
+    // (`Session::bound_statement`), and `OnStatementComplete` takes it off.
+    session_.set_bound_statement(portal->bound);
+
     FrameAction action;
     action.dispatch = true;
     action.sql = portal->sql;
@@ -759,6 +832,7 @@ FrameAction KwpSession::OnExecute(std::span<const std::byte> payload,
 
 void KwpSession::OnStatementComplete(const DispatchOutcome& outcome,
                                      std::vector<std::byte>& out) {
+    session_.set_bound_statement(nullptr);
     // ---- Transaction control (§9) ---------------------------------------
     if (running_txn_) {
         running_txn_ = false;
