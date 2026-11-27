@@ -1878,6 +1878,7 @@ Status DevicePageStore::StampPageLsn(PageId page_id, std::uint64_t lsn) {
         return Status::InvalidArgument(
             "DevicePageStore: page_lsn 0 means 'never logged' and cannot be stamped");
     }
+    wal::NoteStamp(page_id, lsn);  // DZ-S1's premise check (`wal/stamp_audit.hpp`)
     // **Under the structure latch** (AM-S2 step 3e): the `find` walks a
     // table another core may be growing, and a miss on a rehash would lose
     // the stamp of a resident page (`tests/frame_table_race_test.cpp`). The
@@ -2445,9 +2446,47 @@ Status DevicePageStore::Sync() {
 constexpr std::chrono::microseconds kChunkHandover{20};
 
 template <typename Emit>
-void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
+bool DevicePageStore::EmitDirtyChunk(std::size_t base, bool* last, Emit&& emit) const {
+    const WalkHold structure(structure_latch());
+    if (base >= slot_count_) return false;
+    const std::size_t end = std::min(base + kFrameChunk, slot_count_);
+    *last = end == slot_count_;  // a slot added after this is §5a's case 4
+    const FrameChunk& chunk = chunks_[base / kFrameChunk];
+    for (std::size_t slot = base; slot < end; ++slot) {
+        const PageId owner = chunk.owners[slot - base];
+        if (owner == kInvalidPageId) continue;  // free, or reserved and unpublished
+        // A slot's owner and its frame's slot are written in one
+        // hold (`InsertFrame`) and cleared in one (`ReleaseFrameLocked`).
+        const auto found = frames_.find(owner);
+        assert(found != frames_.end() && found->second.slot == slot &&
+               "a slot names a page whose frame is not in it");
+        if (found->second.dirty) emit(owner, found->second.rec_lsn);
+    }
+    return true;
+}
+
+void DevicePageStore::AfterDirtyChunk(std::size_t chunk, bool last) const {
+    if (after_dirty_table_chunk_for_test_) after_dirty_table_chunk_for_test_(chunk);
+    if (last) return;
+    // **The latch handed to one waiter** before the next chunk: a fetch
+    // woken by the release above would otherwise lose the re-take to
+    // this loop and wait out the whole walk (measured: 13 ms at 1 Mi
+    // frames, with no hold over 224 us). One waiter, not all - a steady
+    // stream of fetches is never empty - and bounded; a spin holds
+    // nothing and is no suspension (§5a).
     Latch* const latch = structure_latch();
-    if (latch == nullptr) {
+    if (latch != nullptr && latch->has_waiters()) {
+        const std::uint32_t seen = latch->handed();
+        const auto until = std::chrono::steady_clock::now() + kChunkHandover;
+        while (latch->handed() == seen && std::chrono::steady_clock::now() < until) {
+            std::this_thread::yield();
+        }
+    }
+}
+
+template <typename Emit>
+void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
+    if (structure_latch() == nullptr) {
         // **Unarmed: one walk of the table**, as before E2 (DO-R2): one
         // thread reaches this store, so nothing runs beside it to wait.
         for (const auto& [page_id, frame] : frames_) {
@@ -2465,44 +2504,31 @@ void DevicePageStore::ForEachDirtyFrame(Emit&& emit) const {
     // suspension point (this is no coroutine, so none can enter it). A page
     // that moved from a walked slot to one not yet walked can be met twice,
     // which the callers merge; one that moved the other way was clean when
-    // it left, and anything stamped on it since is §5a's case 4.
+    // it left, and anything stamped on it since is §5a's case 4. The
+    // checkpoint run's walks are this one taken in slices with a yield
+    // between (`WalkDirtySlice`), for which DZ-S0 re-read §5a.
     for (std::size_t base = 0;; base += kFrameChunk) {
         bool last = false;
-        {
-            const WalkHold structure(latch);
-            if (base >= slot_count_) return;
-            const std::size_t end = std::min(base + kFrameChunk, slot_count_);
-            last = end == slot_count_;  // a slot added after this is §5a's case 4
-            const FrameChunk& chunk = chunks_[base / kFrameChunk];
-            for (std::size_t slot = base; slot < end; ++slot) {
-                const PageId owner = chunk.owners[slot - base];
-                if (owner == kInvalidPageId) continue;  // free, or reserved and unpublished
-                // A slot's owner and its frame's slot are written in one
-                // hold (`InsertFrame`) and cleared in one (`ReleaseFrameLocked`).
-                const auto found = frames_.find(owner);
-                assert(found != frames_.end() && found->second.slot == slot &&
-                       "a slot names a page whose frame is not in it");
-                if (found->second.dirty) emit(owner, found->second.rec_lsn);
-            }
-        }
-        if (after_dirty_table_chunk_for_test_) {
-            after_dirty_table_chunk_for_test_(base / kFrameChunk);
-        }
+        if (!EmitDirtyChunk(base, &last, emit)) return;
+        AfterDirtyChunk(base / kFrameChunk, last);
         if (last) return;
-        // **The latch handed to one waiter** before the next chunk: a fetch
-        // woken by the release above would otherwise lose the re-take to
-        // this loop and wait out the whole walk (measured: 13 ms at 1 Mi
-        // frames, with no hold over 224 us). One waiter, not all - a steady
-        // stream of fetches is never empty - and bounded; a spin holds
-        // nothing and is no suspension (§5a).
-        if (latch->has_waiters()) {
-            const std::uint32_t seen = latch->handed();
-            const auto until = std::chrono::steady_clock::now() + kChunkHandover;
-            while (latch->handed() == seen && std::chrono::steady_clock::now() < until) {
-                std::this_thread::yield();
-            }
-        }
     }
+}
+
+bool DevicePageStore::WalkDirtySlice(std::size_t* next_slot, std::size_t chunks,
+                                     std::vector<wal::CheckpointDirtyPage>* out) const {
+    const auto emit = [out](PageId page_id, wal::Lsn rec_lsn) {
+        out->push_back(wal::CheckpointDirtyPage{page_id, rec_lsn});
+    };
+    for (std::size_t n = 0; n < chunks; ++n) {
+        const std::size_t base = *next_slot;
+        bool last = false;
+        if (!EmitDirtyChunk(base, &last, emit)) return true;
+        *next_slot = base + kFrameChunk;
+        AfterDirtyChunk(base / kFrameChunk, last);
+        if (last) return true;
+    }
+    return false;
 }
 
 void DevicePageStore::MergeDirtyTable(std::vector<std::pair<PageId, wal::Lsn>>& table) {

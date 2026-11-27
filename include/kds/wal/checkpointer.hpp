@@ -181,6 +181,24 @@ public:
     virtual Status VisitSnapshots(std::size_t record_budget, const SnapshotVisitor& visit) = 0;
 };
 
+// **A dirty table taken in slices** (DZ-S1): the run task advances it one
+// slice a poll and yields between, so the walk DZ-S0 measured at 28-73 ms on
+// the reactor at 1 Mi dirty frames is never one hold. `Advance` does one
+// bounded piece and answers true once `Table()` is whole: sorted by page,
+// one entry a page with its lowest non-zero recLSN. Holds no latch, pin or
+// claim between two calls. The storage target's is
+// `storage::DirtyTableCollector`.
+class DirtyCollection {
+public:
+    virtual ~DirtyCollection() = default;
+    virtual bool Advance() = 0;
+    virtual std::vector<CheckpointDirtyPage>& Table() = 0;
+};
+
+// What a collection is for: the start's table (`DirtyTable`'s, recLSNs and
+// all) or the publish's pages (`DirtyPages`', recLSNs unread).
+enum class DirtyCollectionFor : std::uint8_t { kStart, kPublish };
+
 // The pages a checkpoint has to get on disk, and the way to do it. The
 // storage layer implements it (`storage/page_store_checkpoint_target.hpp`,
 // `storage/page_mgr/checkpoint_target.hpp`); the seam lets the crash tests
@@ -222,6 +240,10 @@ public:
     virtual std::vector<PageId> DirtyPages() { return {}; }
     virtual StatusOr<std::uint64_t> WriteHeaderlessMaps() { return std::uint64_t{0}; }
     virtual Status WriteFreeMaps() { return Status::OK(); }
+
+    // Either table in slices (DZ-S1). The default is one slice: `DirtyTable`
+    // or `DirtyPages` whole, at the first `Advance` - a scripted target's.
+    virtual std::unique_ptr<DirtyCollection> CollectDirty(DirtyCollectionFor use);
 };
 
 // What a completed checkpoint publishes. `redo_start_lsn` is where
@@ -478,7 +500,9 @@ public:
     Lsn redo_start_lsn() const noexcept { return redo_start_lsn_; }
     Lsn last_checkpoint_lsn() const noexcept { return last_checkpoint_lsn_; }
 
-    // Logs CHECKPOINT_BEGIN and takes the snapshot. Fails with
+    // Takes the snapshot and logs CHECKPOINT_BEGIN: the dirty table, collected
+    // whole (`CollectDirty`'s slices run back to back), then the active
+    // transactions with the append. Fails with
     // AlreadyExists if one is already running - checkpoints do not nest,
     // and a second one would publish an anchor built from the first one's
     // half-flushed state.
@@ -564,6 +588,13 @@ public:
     void Abandon() noexcept;
 
 private:
+    // `Start`'s body over a dirty table already collected (DZ-S1): the active
+    // transactions snapshotted **here, after the table and with no suspension
+    // before the append** (DZ-R1) - taken before a table collected across
+    // yields, they would miss a transaction this core began meanwhile, whose
+    // change the publish then writes and no begin record lists.
+    Status BeginWith(std::vector<CheckpointDirtyPage>& dirty, bool* busy);
+
     // `busy` given: the tried append (`Start(bool*)`).
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
                     std::span<const CheckpointDirtyPage> dirty_pages, bool* busy = nullptr);
@@ -636,6 +667,9 @@ private:
     // step does (BI-Q5 (a)).
     sched::Coro WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,
                                 std::uint64_t generation);
+    // Advances `collection` to whole, one slice a poll with a yield between
+    // (DZ-S1). False when the run was abandoned meanwhile (`generation`).
+    sched::Coro CollectSliced(DirtyCollection& collection, std::uint64_t generation);
     void LogSkip(std::uint32_t core_id) const;
     bool task_in_flight_ = false;
     // Moved by `Abandon`, so a frame of an abandoned run that is ever polled

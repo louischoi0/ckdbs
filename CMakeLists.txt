@@ -80,6 +80,7 @@ add_library(kds
     src/storage/data_syncer.cpp
     src/storage/page_reader.cpp
     src/storage/device_page_store.cpp
+    src/storage/dirty_table_collector.cpp
     src/storage/page_mgr/page_mgr.cpp
     src/server/superblock.cpp
     src/server/superblock_checkpoint_anchor.cpp
@@ -149,6 +150,7 @@ add_library(kds
     src/wal/recovery.cpp
     src/wal/manager.cpp
     src/wal/checkpointer.cpp
+    src/wal/stamp_audit.cpp
     src/wal/log_device.cpp
     src/wal/memory_log_device.cpp
     src/wal/file_log_device.cpp

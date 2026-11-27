@@ -132,6 +132,7 @@ not located here; DZ-S0 lists them.
 | DZ-Q4 | The carve at `relaxed` | (a) measured, and built only if it is the `fsync` the diagnosis read; (b) outside DZ | (a) |
 | DZ-Q5 | The unlogged-page bit (`:1603`) | (a) outside DZ: it leaks a page and DV counts it; (b) inside | (a) |
 | DZ-Q6 | The map barrier, which DZ-S0 could not price (raised by CLA at DZ-S0) | (a) built as §2 item 4 says: the halves' own holds are 0.01-0.18 ms, but the case §1 names - a wait on another caller's `fsync` under the barrier - needs a concurrent blocking flush and a changed headerless map, which S0's bench does not create, and when it happens it is one data-file `fsync` on the reactor (`[source-read]`; 3.2 ms median and up to 252 ms on this host, BA's diagnosis); (b) left, as DZ-Q1 (a) leaves a piece under the bar | (a): DZ-Q1's "under the bar" is a measurement S0 did not take for this piece |
+| DZ-Q8 | What the premise check does when it fires (raised by CLA at DZ-S1) | (a) **records**, as the suspend audit's other three findings do (`sched/coro.cpp`: "recorded, not fatal"), read by a cell; §2 item 2's "aborts" is the audit's house rule amended; (b) aborts the debug build, the order's text | (a): one audit, one policy - an abort would make this finding the only fatal one, and the suite showed it firing on one kind that needs no stamp (`PAGE_INIT`), the case an abort turns into a crash |
 | DZ-Q7 | DZ-R1's crash cell (raised by CLA at DZ-S0) | (a) on the one-core simulator, the seam at a slice boundary of the start's walk, for both covers and for the loser S0 found (§7, DZ-S0); the two-core form waits for a simulator with cores (EC, written); (b) wait for EC | (a): the loser is a one-core defect, and EC is not opened |
 
 ### Marks
@@ -152,6 +153,7 @@ the item. No item is tagged `[quiet-wrong]`; DZ-R1 is, and is a rule.
 | DZ-Q5 | (a) | outside DZ: DV counts the page it leaks (`sys.volume_census`, landed at `8dd5ce8ea`) |
 | DZ-Q6 | (a) | raised at DZ-S0; the map halves tried and parked on a busy barrier |
 | DZ-Q7 | (a) | raised at DZ-S0; the crash cells on the one-core simulator |
+| DZ-Q8 | (a) | raised at DZ-S1; the premise check records, never aborts |
 
 ## 5. Stages
 

@@ -102,3 +102,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **The push** | the same word's second half is the operator's own word on DZ's landing: once DZ closes under the go-ahead, the work branch is merged into `main` and pushed with `--no-verify`, the hook skipped by the operator's word. It covers that push only |
 | **Does not settle** | a tag or a version; the push of any tag; any milestone but DZ; a push of DZ before it closes |
 | **Recorded at** | this file; `workorder-dz-checkpoint-reactor-residue.md` (header, §4 "Marks"); DZ's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 12. DZ-Q6..Q8 added and adopted on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §11 - no new word from the operator |
+| **Mark** | CLA's proposals, written into the order's §4 at DZ-S0 and DZ-S1 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not per-item marks by the operator: **DZ-Q6 (a)** - the map barrier is tried and parked on although DZ-S0 could not price its wait; **DZ-Q7 (a)** - DZ-R1's crash cells on the one-core simulator, the two-core form left to EC; **DZ-Q8 (a)** - the append-before-stamp premise check records its finding as the suspend audit's other findings do, where §2 item 2 said it aborts. None is `[quiet-wrong]`; DZ-Q7 stands beside DZ-R1, which is, and **DZ-R1 gained a second half at DZ-S0** (the begin record lists every transaction of its core undecided at the append), CLA's reading of DO's §5a against a yielding walk, recorded in the order's §3 and §7 |
+| **Does not settle** | a tag or a version; any milestone but DZ |
+| **Recorded at** | this file; `workorder-dz-checkpoint-reactor-residue.md` §3, §4 and §7 |

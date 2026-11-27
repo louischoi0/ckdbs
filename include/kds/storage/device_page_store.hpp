@@ -26,6 +26,7 @@
 #include "kds/base/current_core.hpp"
 #include "kds/storage/page_store.hpp"
 #include "kds/wal/durability.hpp"
+#include "kds/wal/payload.hpp"
 
 // The disk-backed PageStore: the same three-operation contract catalog,
 // bootstrap and the dispatcher already speak, served out of a PageDevice.
@@ -567,6 +568,19 @@ public:
     // Sorts `table` by page and leaves one entry a page, its lowest
     // non-zero recLSN (0 when every entry is 0). Public for its test.
     static void MergeDirtyTable(std::vector<std::pair<PageId, wal::Lsn>>& table);
+
+    // **One slice of a dirty-table walk** (DZ-S1, the checkpoint run's
+    // `DirtyTableCollector`): up to `chunks` slot chunks from `*next_slot`,
+    // each read as `ForEachDirtyFrame`'s armed walk reads one - a hold of the
+    // structure latch a chunk, the handover between two - each dirty frame's
+    // page and recLSN appended to `out`. Returns true once the last chunk is
+    // walked. **Armed or not**: unarmed there is no hold, and a walk resumed
+    // at a slot index is still the walk, because a slot is never moved, only
+    // appended (BE-R1), and nothing touches this store between two slices
+    // but the calling thread's own tasks. A page can be appended twice; the
+    // collector merges.
+    bool WalkDirtySlice(std::size_t* next_slot, std::size_t chunks,
+                        std::vector<wal::CheckpointDirtyPage>* out) const;
 
     // Writes back exactly these pages and syncs - a checkpoint step. Ids
     // that are not dirty, or not resident, are skipped rather than treated
@@ -1393,6 +1407,14 @@ private:
     // E2), so a page can be emitted twice. Defined in the .cpp, its callers'.
     template <typename Emit>
     void ForEachDirtyFrame(Emit&& emit) const;
+    // One chunk of the armed walk from slot `base`, under a hold of its own,
+    // `emit`ted; false once `base` is past the last slot. `*last` is set when
+    // this chunk was the last one.
+    template <typename Emit>
+    bool EmitDirtyChunk(std::size_t base, bool* last, Emit&& emit) const;
+    // After each chunk of a walk: the test seam, then, unless the chunk was
+    // the last, the latch handed to one waiter (`ForEachDirtyFrame`'s comment).
+    void AfterDirtyChunk(std::size_t chunk, bool last) const;
     // An armed exclusive grant given `owed` also takes the frame's image
     // debt in the hold it already takes for the dirty mark, setting
     // `*owed` (DO's E4a): only while images are on, or whatever the switch

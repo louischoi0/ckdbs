@@ -1,6 +1,7 @@
 #include "kds/storage/page_header.hpp"
 #include "kds/exec/heap_store.hpp"
 #include "kds/exec/step_vm.hpp"
+#include "kds/wal/stamp_audit.hpp"
 #include "kds/exec/cabin_expr.hpp"
 
 #include "kds/sched/coro.hpp"
@@ -3637,6 +3638,10 @@ void InstallSuspendAudit() noexcept {
         // inside one: another task on this reactor would spend its share.
         if (storage::NoRefuseWindowOpenOnThisThread()) {
             return "a coroutine suspended inside a no-refuse window (BE-Q11)";
+        }
+        if (wal::AppendAwaitsStampOnThisThread()) {
+            return "a coroutine suspended between a record's append and its page's stamp "
+                   "(DZ-S1, the fuzzy dirty table's premise)";
         }
         return {};
     });

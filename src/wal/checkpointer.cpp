@@ -185,6 +185,34 @@ Status Checkpointer::LogAssertionSnapshots() {
         });
 }
 
+namespace {
+
+// `CheckpointTarget::CollectDirty`'s default: the whole table at once.
+class WholeCollection final : public DirtyCollection {
+public:
+    WholeCollection(CheckpointTarget& target, DirtyCollectionFor use) : target_(target), use_(use) {}
+    bool Advance() override {
+        if (use_ == DirtyCollectionFor::kStart) {
+            table_ = target_.DirtyTable();
+        } else {
+            for (const PageId id : target_.DirtyPages()) table_.push_back({id, kNoLsn});
+        }
+        return true;
+    }
+    std::vector<CheckpointDirtyPage>& Table() override { return table_; }
+
+private:
+    CheckpointTarget& target_;
+    DirtyCollectionFor use_;
+    std::vector<CheckpointDirtyPage> table_;
+};
+
+}  // namespace
+
+std::unique_ptr<DirtyCollection> CheckpointTarget::CollectDirty(DirtyCollectionFor use) {
+    return std::make_unique<WholeCollection>(*this, use);
+}
+
 Status Checkpointer::Start() { return Start(nullptr); }
 
 Status Checkpointer::Start(bool* busy) {
@@ -192,17 +220,28 @@ Status Checkpointer::Start(bool* busy) {
     if (in_progress_) {
         return Status::AlreadyExists("checkpointer: a checkpoint is already in progress");
     }
+    const std::unique_ptr<DirtyCollection> collection = target_.CollectDirty(DirtyCollectionFor::kStart);
+    while (!collection->Advance()) {
+    }
+    return BeginWith(collection->Table(), busy);
+}
+
+Status Checkpointer::BeginWith(std::vector<CheckpointDirtyPage>& dirty, bool* busy) {
+    if (busy != nullptr) *busy = false;
     const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     const PhaseTimer timed(CheckpointPhase::kStart);
 
     // Both tables are snapshotted before the record is written, so what
-    // BEGIN carries is exactly what recovery's analysis phase will see.
-    // **No suspension lies between them and the append** (CZ-R3): a tried
-    // append that answers busy appends nothing, and the task's next call
-    // takes both again, so the record describes the instant it is appended
-    // at in every attempt.
+    // BEGIN carries is what recovery's analysis phase will see. **No
+    // suspension lies between the active transactions and the append**
+    // (CZ-R3, DZ-R1): a tried append that answers busy appends nothing, and
+    // the task collects both again. The dirty table may have been collected
+    // across yields (DZ-S1): it is then each frame's as of its slot's visit,
+    // which DO's §5a, re-read at DZ-S0, proves enough for the redo start.
+    // The transactions may not be, so they are taken last: one this core
+    // began during a yield of the walk is listed if it is still undecided
+    // now.
     const std::vector<CheckpointActiveTxn> active_txns = txns_.Snapshot();
-    const std::vector<CheckpointDirtyPage> dirty = target_.DirtyTable();
 
     if (Status s = LogBegin(active_txns, dirty, busy); !s.ok()) {
         // BI-S1 counts it: the BEGIN ceiling refuses here, at the append.
@@ -511,7 +550,15 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             if (answers < kLatchTries) {
                 busy = wal_.rolling();
                 if (!busy) {
-                    if (Status s = Start(&busy); !s.ok()) co_return FinishTask(core_id, s);
+                    // **The table in slices, a yield between** (DZ-S1); the
+                    // transactions and the tried append in the one call after
+                    // it (`BeginWith`). A busy answer collects both again.
+                    const std::unique_ptr<DirtyCollection> collection =
+                        target_.CollectDirty(DirtyCollectionFor::kStart);
+                    if (!(co_await CollectSliced(*collection, generation)).ok()) co_return Status::OK();
+                    if (Status s = BeginWith(collection->Table(), &busy); !s.ok()) {
+                        co_return FinishTask(core_id, s);
+                    }
                 }
             } else {
                 ++site.bound;
@@ -624,10 +671,18 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // which no step of this run synced, among them.
     // The maps go in two halves with a park between (`page.md` section 5,
     // the map write order), owed only when a headerless map changed.
-    const std::vector<PageId> dirty = target_.DirtyPages();
+    // The collection in slices, a yield between (DZ-S1): DZ-S0 measured it
+    // whole at about 10 ms on the reactor at 1 Mi dirty frames.
+    const std::unique_ptr<DirtyCollection> collection =
+        target_.CollectDirty(DirtyCollectionFor::kPublish);
+    if (!(co_await CollectSliced(*collection, generation)).ok()) co_return Status::OK();
+    const std::vector<CheckpointDirtyPage>& dirty = collection->Table();
+    std::vector<PageId> batch;
+    batch.reserve(config_.pages_per_step);
     for (std::size_t at = 0; at < dirty.size(); at += config_.pages_per_step) {
-        const std::span<const PageId> batch(
-            dirty.data() + at, std::min(config_.pages_per_step, dirty.size() - at));
+        batch.clear();
+        const std::size_t end = std::min(dirty.size(), at + config_.pages_per_step);
+        for (std::size_t i = at; i < end; ++i) batch.push_back(dirty[i].page_id);
         if (Status s = co_await WriteForPublish(batch, core_id, generation); !s.ok()) {
             co_return FinishTask(core_id, s);
         }
@@ -688,6 +743,15 @@ Status LogStopped() {
 }
 
 }  // namespace
+
+sched::Coro Checkpointer::CollectSliced(DirtyCollection& collection, std::uint64_t generation) {
+    while (!collection.Advance()) {
+        co_await sched::Yield{};
+        // Abandoned meanwhile: nothing of this checkpointer is the task's.
+        if (generation != task_generation_) co_return Status::Cancelled("checkpoint run abandoned");
+    }
+    co_return Status::OK();
+}
 
 sched::Coro Checkpointer::ParkOnDataSync() {
     co_return co_await ParkOnDataSyncTicket(target_.RequestSync());

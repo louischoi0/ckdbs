@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/dirty_table_collector.hpp"
 #include "kds/wal/checkpointer.hpp"
 
 // Adapter: a DevicePageStore seen as the thing a checkpoint flushes
@@ -34,7 +35,9 @@ public:
 
     std::vector<wal::CheckpointDirtyPage> DirtyTable() const override {
         std::vector<wal::CheckpointDirtyPage> table;
-        for (const auto& [page_id, rec_lsn] : store_.DirtyPagesWithRecLsn()) {
+        const auto pages = store_.DirtyPagesWithRecLsn();
+        table.reserve(pages.size());
+        for (const auto& [page_id, rec_lsn] : pages) {
             table.push_back(wal::CheckpointDirtyPage{page_id, rec_lsn});
         }
         return table;
@@ -52,11 +55,31 @@ public:
     Status SyncResult(std::uint64_t ticket) override { return store_.data_sync().Result(ticket); }
 
     std::vector<PageId> DirtyPages() override { return store_.DirtyPageIds(); }
+    // Both tables are the store's one walk in slices (DZ-S1); the publish
+    // reads the page ids and leaves the recLSNs.
+    std::unique_ptr<wal::DirtyCollection> CollectDirty(wal::DirtyCollectionFor) override {
+        return std::make_unique<Collection>(store_, chunks_per_slice_);
+    }
+    // A cell's: the walk's slice in chunks, so a store of a few chunks takes
+    // several slices.
+    void SetChunksPerSliceForTest(std::size_t chunks) noexcept { chunks_per_slice_ = chunks; }
     StatusOr<std::uint64_t> WriteHeaderlessMaps() override { return store_.WriteHeaderlessMaps(); }
     Status WriteFreeMaps() override { return store_.WriteFreeMaps().status(); }
 
 private:
+    class Collection final : public wal::DirtyCollection {
+    public:
+        Collection(const DevicePageStore& store, std::size_t chunks) noexcept
+            : collector_(store, chunks) {}
+        bool Advance() override { return collector_.Advance(); }
+        std::vector<wal::CheckpointDirtyPage>& Table() override { return collector_.table(); }
+
+    private:
+        DirtyTableCollector collector_;
+    };
+
     DevicePageStore& store_;
+    std::size_t chunks_per_slice_ = DirtyTableCollector::kChunksPerSlice;
 };
 
 }  // namespace kds::storage

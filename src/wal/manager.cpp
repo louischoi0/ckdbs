@@ -1,4 +1,5 @@
 #include "kds/wal/manager.hpp"
+#include "kds/wal/stamp_audit.hpp"
 
 #include <array>
 #include <cctype>
@@ -458,6 +459,8 @@ StatusOr<Lsn> WalManager::AppendThrough(const RecordSpec& spec,
                                std::to_string(spec.page_id) + " bytes=" +
                                std::to_string(EncodedRecordSize(payload.size())));
     }
+    // DZ-S1: the page it names is owed a stamp before this thread suspends.
+    NoteAppendAwaitingStamp(spec.type, spec.page_id, lsn.value());
     return lsn.value();
 }
 

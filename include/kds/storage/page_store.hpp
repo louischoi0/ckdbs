@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/wal/stamp_audit.hpp"
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/base/statistics_scope.hpp"
@@ -768,6 +769,7 @@ public:
     // hold the gate (DevicePageStore). No store stamps a stream: a page
     // carries none since BP-S3 (one log for the instance).
     virtual Status StampPageLsn(PageId page_id, std::uint64_t lsn) {
+        wal::NoteStamp(page_id, lsn);  // DZ-S1's premise check (`wal/stamp_audit.hpp`)
         auto page = Get(page_id);
         if (!page.ok()) return page.status();
         SetPageLsn(page.value().bytes(), lsn);
