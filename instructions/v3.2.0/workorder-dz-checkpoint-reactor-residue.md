@@ -408,5 +408,15 @@ against `481d101aa`, release, copied.
 - **Documents**: `page.md` §8, `wal.md` §11, `txn.md` §4.2, `known-gaps.md`
   ("Carve and checkpoint stalls", "The frame table's structure latch"),
   `CLAUDE.md`'s WAL row, the index and the register.
-- **The close's review**: below, once run.
+- **The close's review** (`critics-developer`, documents only, against the
+  code and the archives): **one reading corrected** - the carve's split "met
+  at `group`" rested on the first three pairs; over twelve its effect is
+  shown at neither shape (`raft-marks-2026-11-27.md` §14's correction row) -
+  and counts, ranges and times recomputed in both results files; `page.md`
+  §8's "one pass at one core", `wal.md` §11's missing DZ-R1 order, `txn.md`'s
+  tick wording and `CLAUDE.md`'s "no longer than a slice" corrected to what
+  the code does; the gaps given their commit. Its one code observation - the
+  collector's slice comment against the measured slice - is recorded in
+  `known-gaps.md`, the comment left unchanged so the suite run at
+  `00ca380a9` stands for the pushed tree.
 

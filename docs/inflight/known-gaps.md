@@ -1839,6 +1839,12 @@ each saying so.
   and the begin and end appends and the assertion visit, which it does not
   time apart. A synchronous run (mount, shutdown) still writes, walks and
   waits on the map barrier on its thread.
+- **The collector's slice is sized and not measured apart** (DZ's close
+  review, verified at `27e85e848`): `dirty_table_collector.hpp` sizes a
+  slice at 0.3-0.7 ms from DZ-S0's per-chunk cost, and the close measured
+  the start's longest slice at 3.2-3.5 ms at 1 Mi; the slice that ends the
+  walk also sizes the sort's buffer and spends a sort slice, and no field
+  times it apart. Under the bar, by a margin the comment overstates.
 - **A claim staged across a park is longer than a write's** (DZ-S2's review,
   `[source-read]`, verified at `27e85e848`): a step's pages
   stay claimed from the copy until the writer thread has written the batch,
