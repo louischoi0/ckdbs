@@ -1796,7 +1796,10 @@ Verified at `e5a7e1b7` (BA's close,
 `results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
 `results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
 §11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`,
-closed 2026-10-11 at `ec827a19`).
+closed 2026-10-11 at `ec827a19`) and DZ
+(`workorder-dz-checkpoint-reactor-residue.md`, closed 2026-11-27 at
+`27e85e848`). The entries below DZ rewrote were verified at `27e85e848`,
+each saying so.
 
 - **A `relaxed` carve's longest stall is still a data-file `fsync` at
   `cores = 1`** (re-verified at DZ's close, `27e85e848`,
@@ -1806,14 +1809,17 @@ closed 2026-10-11 at `ec827a19`).
   the early carve's sync is off the reactor (`txn.md` §4.2), but at that
   rate the window's last quarter - 1,024 ids, about 10 ms - drains before
   the sync is done, and the `BEGIN` that drains it persists the pending
-  block whole on its path. At `group`, `cores = 2` the longest carve fell to
-  9-12 ms (from up to 440 ms). A block or a trigger sized to the sync is not
-  built; BA-S13's exit, a carve under 10 ms, is not met at `relaxed`.
+  block whole on its path. At `group`, `cores = 2` the split is not shown to
+  help either: over 12 pairs the longest carve was 0.8-273 ms against
+  1.7-440 ms at DZ's base, medians 10.4 and 11.0 ms (9-12 ms in B's first
+  three pairs, 273 ms in its fourth). A block or a trigger sized to the sync
+  is not built; BA-S13's exit, a carve under 10 ms, is met at neither
+  shape.
 - **The early carve's page-0 write can wait out a staged checkpoint batch**
-  (DZ-S3's review, `[source-read]`): when page 0 is in a step's staged
-  batch, the carve's `WriteBack(kWait)` waits for that batch's write (armed)
-  on the tick's reactor; `kSkip` would be unsound, the claimed copy possibly
-  predating the raise. Not measured beside a run. A staged block drained
+  (DZ-S3's review, `[source-read]`, verified at `27e85e848`): when page 0
+  is in a step's staged batch, the carve's `WriteBack(kWait)` waits for that
+  batch's write (armed) on the tick's reactor; `kSkip` would be unsound, the
+  claimed copy possibly predating the raise. Not measured beside a run. A staged block drained
   before its sync is done counts as two carves in `contention_carves`, and
   no cell drives the expeditor's staged persist through a crash.
 - **What a cadence checkpoint still does on its reactor, since DZ** (verified
@@ -1824,12 +1830,17 @@ closed 2026-10-11 at `ec827a19`).
   on a busy barrier (`wal.md` §11). What is left: a poll of up to 9.6 ms at
   1 Mi between the last step and the publish's first batch that the census's
   pieces do not name; the begin record's O(n) pieces over the walked table
-  (the redo start, the cursor's copy, the record's cut), 3.2-3.6 ms at 1 Mi;
-  the inline log gate after 16 deferrals at `relaxed`; the anchor page's
-  write and the begin and end appends, which the census bench does not
-  exercise. A synchronous run (mount, shutdown) still writes, walks and
+  (the redo start, the cursor's copy, the record's cut) in one poll, not
+  timed apart - the start phase's longest occurrence was 3.2-3.6 ms at 1 Mi,
+  equal to the longest walk slice in three of four cells; the inline log
+  gate after 16 deferrals at `relaxed`, and each tried site's blocking call
+  after 16 busy answers (the begin and end appends, the log flush, a map
+  half); the anchor page's write, which the census bench does not exercise,
+  and the begin and end appends and the assertion visit, which it does not
+  time apart. A synchronous run (mount, shutdown) still writes, walks and
   waits on the map barrier on its thread.
-- **A claim staged across a park is longer than a write's**: a step's pages
+- **A claim staged across a park is longer than a write's** (DZ-S2's review,
+  `[source-read]`, verified at `27e85e848`): a step's pages
   stay claimed from the copy until the writer thread has written the batch,
   so a `kWait` writeback of one of them - `SYNC`, the carve's page 0, a
   shutdown flush - waits out the batch (armed), or cleans it on its own
@@ -1863,7 +1874,8 @@ order's §7 names it). Owned by `docs/spec/page.md` §8 and §12 and
   handover bounds but does not remove). CW's C1, not built: CW closed at
   V0.
 - **The fuzzy table's premise is checked in debug builds only, and
-  recorded, not fatal** (DZ-S1, DZ-Q8 (a)): the suspend audit records a
+  recorded, not fatal** (DZ-S1, DZ-Q8 (a); verified at `27e85e848`): the
+  suspend audit records a
   suspension between a record's append and its page's stamp
   (`wal/stamp_audit.hpp`), and only where the audit is installed - the
   server's reactors and the rigs that install it, not the simulator.

@@ -13,8 +13,9 @@ are not.** At 1 Mi dirty frames the run's start - the dirty-table walk -
 holds the reactor 28-73 ms, the publish's walk about 10-11 ms, and a step's
 `pwrite`s up to 35-1,256 ms (the kernel's writeback throttle, with 8 GiB
 dirty); the map halves hold it 0.04-0.05 ms. At 256 Ki the start is over
-the bar (7-14 ms) and every write is under 1 ms; at 64 Ki every piece is
-under it but one start (8.5 ms, under three readers).
+the bar in three of four cells (6.8-14.3 ms) and every write is under 1 ms;
+at 64 Ki every piece is under it, the longest one start (8.5 ms, under three
+readers).
 
 ## Setup
 
@@ -35,7 +36,8 @@ under it but one start (8.5 ms, under three readers).
   (`df -T /var/tmp`), never tmpfs.
 - **Grid**: 64 Ki, 256 Ki, 1 Mi frames x `cores` 1 and 4 x two rounds, one
   process a cell, in that order. Load at each cell's start is in
-  `status` in the archive (0.9-9.3; other sessions on the host). **Rule 4 is
+  `status` in the archive (0.9-7.7 at a cell's start, 9.3 at the last
+  cell's end; other sessions on the host). **Rule 4 is
   met by the load half only**: no `pgrep` for compilers was recorded.
 - **What is cut**, each a piece the bench does not price: the pages carry no
   LSN, so no write is gated on the log and no step defers; the anchor is the
@@ -43,8 +45,8 @@ under it but one start (8.5 ms, under three readers).
   holds the map write barrier beside the run, so the map halves' wait on
   another caller's `fsync` (`known-gaps.md`, "Carve and checkpoint stalls")
   is not exercised; the carve is not re-measured here (moved to DZ-S3,
-  which needs the server binary). Time spent: 6 minutes running, 4
-  building.
+  which needs the server binary). Time spent: 5 minutes running
+  (15:38:16-15:43:16 in `status`), 4 building.
 
 Archive: `archive/dz-s0-census-v3.4.17-202-g481d101aa/` (each cell's
 output, the status log, the driver).
@@ -72,16 +74,18 @@ exactly as long as the run's longest poll.
 
 - **The start's walk is `DirtyTable()`, not `DirtyPagesWithRecLsn()` alone**:
   timed directly after the run with every page dirtied again, the latter is
-  19-25 ms at 1 Mi (`h1_call_max_ms` in each cell), against 28-73 ms for the
+  17-25 ms at 1 Mi (`h1_call_max_ms` in each cell), against 28-73 ms for the
   former in the run - the projection into a second vector, grown with no
   reserve, and the first touch of both, on top of the walk and the sort.
 - **The writes are the throttle's, not the device's**: at 256 Ki (2 GiB
   dirty) no step's writes passed 0.7 ms; at 1 Mi (8 GiB, past the host's
-  dirty limits) every cell had a thousand or more steps over 10 ms and one
-  at 1.26 s.
-- **Rounds disagree on run length** (0.16 s against 2.80 s at 64 Ki), the
-  data park's: the data file's `fsync` behind another session's writeback.
-  No piece's hold moved with it.
+  dirty limits) every cell had 966-1,738 `system` polls over 10 ms and one
+  step's writes took 1.26 s.
+- **Rounds disagree on run length** (0.16 s against 2.80 s at 64 Ki,
+  `cores = 1`), the data park the largest part of it (0.01 s against
+  1.51 s; under three readers 0.23 s against 3.96 s, the park 0.0003 s
+  against 3.44 s): the data file's `fsync` behind another session's
+  writeback. No piece's hold moved with it.
 
 ## DO's §5a re-read with a yield between slices (DZ-R1) `[quiet-wrong]`
 
