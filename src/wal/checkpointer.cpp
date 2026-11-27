@@ -213,6 +213,29 @@ std::unique_ptr<DirtyCollection> CheckpointTarget::CollectDirty(DirtyCollectionF
     return std::make_unique<WholeCollection>(*this, use);
 }
 
+namespace {
+
+// `CheckpointTarget::StageWrite`'s default: written at the stage.
+class WrittenAtOnce final : public CheckpointTarget::StagedPages {
+public:
+    explicit WrittenAtOnce(std::size_t wrote) noexcept : wrote_(wrote) {}
+    bool Done() const override { return true; }
+    StatusOr<std::size_t> Finish() override { return wrote_; }
+    void Drain() override {}
+
+private:
+    std::size_t wrote_;
+};
+
+}  // namespace
+
+StatusOr<std::shared_ptr<CheckpointTarget::StagedPages>> CheckpointTarget::StageWrite(
+    std::span<const PageId> page_ids, Lsn* defer) {
+    auto wrote = WritePages(page_ids, defer);
+    if (!wrote.ok()) return wrote.status();
+    return std::shared_ptr<StagedPages>(std::make_shared<WrittenAtOnce>(wrote.value()));
+}
+
 Status Checkpointer::Start() { return Start(nullptr); }
 
 Status Checkpointer::Start(bool* busy) {
@@ -319,7 +342,7 @@ Status Checkpointer::BeginWith(std::span<const CheckpointDirtyPage> dirty, bool*
     return Status::OK();
 }
 
-StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
+StatusOr<bool> Checkpointer::Step() {
     if (!in_progress_) {
         return Status::OutOfRange("checkpointer: no checkpoint in progress");
     }
@@ -340,19 +363,8 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
         const sched::MonoTimeNs step_start = wal_.clock().Now();
         const std::size_t write = static_cast<std::size_t>(CheckpointPhase::kPageWrite);
         const std::uint64_t writes_before = run_report_ != nullptr ? run_report_->sum_ns[write] : 0;
-        if (!write_only) {
-            flushed = target_.FlushPages(pages);
-            if (flushed.ok()) Contention::Add(Tally::kCheckpointPagesWritten, pages.size());
-        } else if (auto wrote = target_.WritePages(pages, defer); !wrote.ok()) {
-            flushed = wrote.status();
-        } else if (wrote.value() > 0) {
-            Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
-            // Asked for and not waited on (BI-Q13): the data-sync thread
-            // keeps the unsynced backlog near one step, so a synchronous sync
-            // landing mid-run - a carve's page 0, the reclaimer's maps - does
-            // not inherit a run's worth of writeback; only the publish parks.
-            (void)target_.RequestSync();
-        }
+        flushed = target_.FlushPages(pages);
+        if (flushed.ok()) Contention::Add(Tally::kCheckpointPagesWritten, pages.size());
         if (run_report_ != nullptr) {
             const std::uint64_t held = wal_.clock().Now() - step_start;
             run_report_->step_max_ns = std::max(run_report_->step_max_ns, held);
@@ -363,20 +375,9 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
     if (Status s = std::move(flushed); !s.ok()) {
         // The cursor does not move: these pages are still the
         // checkpoint's responsibility, and the next Step() retries them.
-        // Logged because the retry makes this survivable and therefore
-        // silent - a checkpoint that fails every step forever looks
-        // exactly like one that is merely slow.
-        if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
-            log_->Error("checkpoint", "flush of " + std::to_string(batch) +
-                                          " page(s) failed at offset " +
-                                          std::to_string(next_page_) + ", will retry: " +
-                                          s.message());
-        }
+        LogStepFailure(batch, s);
         return s;
     }
-    // Deferred: the pages before the deferred run are clean now and the
-    // next call skips them; the cursor stays on this batch.
-    if (defer != nullptr && *defer != kNoLsn) return false;
     next_page_ += batch;
     stats_.pages_flushed += batch;
     if (run_report_ != nullptr) run_report_->pages += batch;
@@ -386,6 +387,16 @@ StatusOr<bool> Checkpointer::Step(Lsn* defer, bool write_only) {
                                       " remaining");
     }
     return next_page_ >= pending_pages_.size();
+}
+
+void Checkpointer::LogStepFailure(std::size_t batch, const Status& s) const {
+    // Logged because the retry makes this survivable and therefore silent -
+    // a checkpoint that fails every step forever looks exactly like one that
+    // is merely slow.
+    if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+        log_->Error("checkpoint", "flush of " + std::to_string(batch) + " page(s) failed at offset " +
+                                      std::to_string(next_page_) + ", will retry: " + s.message());
+    }
 }
 
 StatusOr<Lsn> Checkpointer::AppendEnd(bool* busy) {
@@ -607,11 +618,32 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // its collection follows every step's writes and precedes the anchor's
     // page, which is the order the anchor needs, and a sync per step cost
     // each step a park. The reactor polls everything else meanwhile.
+    // **And every write is off the reactor** (DZ-S2): a step's batch is
+    // staged here and written by the data-sync thread while the task parks.
     int parks = 0;
-    while (true) {
+    while (next_page_ < pending_pages_.size()) {
+        ++stats_.steps;
+        ++task_report_.steps;
+        const std::size_t batch =
+            std::min(config_.pages_per_step, pending_pages_.size() - next_page_);
+        const std::span<const PageId> pages(pending_pages_.data() + next_page_, batch);
         Lsn deferred = kNoLsn;
-        auto done = Step(parks < kGateParks ? &deferred : nullptr, /*write_only=*/true);
-        if (!done.ok()) co_return FinishTask(core_id, done.status());
+        std::size_t wrote = 0;
+        const Status written = co_await WriteOffReactor(
+            pages, parks < kGateParks ? &deferred : nullptr, &wrote, generation);
+        if (generation != task_generation_) co_return Status::OK();
+        if (!written.ok()) {
+            LogStepFailure(batch, written);
+            co_return FinishTask(core_id, written);
+        }
+        if (wrote > 0) {
+            Contention::Add(Tally::kCheckpointPagesWritten, wrote);
+            // Asked for and not waited on (BI-Q13): the data-sync thread
+            // keeps the unsynced backlog near one step, so a synchronous sync
+            // landing mid-run - a carve's page 0, the reclaimer's maps - does
+            // not inherit a run's worth of writeback; only the publish parks.
+            (void)target_.RequestSync();
+        }
         if (deferred != kNoLsn) {
             // A page_lsn at or past the append point names no record, and no
             // sync satisfies a park on it: the next step's inline gate
@@ -629,10 +661,14 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
             if (generation != task_generation_) co_return Status::OK();
             continue;
         }
+        // The pages before a deferred run were written and the next stage
+        // skips them; the cursor moves only past a whole batch.
+        next_page_ += batch;
+        stats_.pages_flushed += batch;
+        task_report_.pages += batch;
         parks = 0;
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
-        if (done.value()) break;
     }
 
     // `CHECKPOINT_END`, durable before anything points at it. **Tried**
@@ -700,22 +736,46 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
         co_await sched::Yield{};
         if (generation != task_generation_) co_return Status::OK();
     }
+    // **Each half tried** (DZ-Q6 (a)): a busy map write barrier is a
+    // blocking flush holding it across a data-file `fsync`, which the task
+    // parks out instead of waiting on its reactor, to `kLatchTries` busy
+    // answers a half and then the blocking call.
     std::uint64_t map_ticket = 0;
-    {
-        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-        auto staged = target_.WriteHeaderlessMaps();
+    for (int answers = 0;; ++answers) {
+        bool busy = false;
+        StatusOr<std::uint64_t> staged = std::uint64_t{0};
+        {
+            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+            staged = answers < kLatchTries ? target_.TryWriteHeaderlessMaps(&busy)
+                                           : target_.WriteHeaderlessMaps();
+        }
         if (!staged.ok()) co_return FinishTask(core_id, staged.status());
-        map_ticket = staged.value();
+        if (!busy) {
+            map_ticket = staged.value();
+            break;
+        }
+        ++task_report_.map_busy;
+        co_await ParkBriefly();
+        if (generation != task_generation_) co_return Status::OK();
     }
     if (Status s = co_await ParkOnDataSyncTicket(map_ticket); !s.ok()) {
         co_return FinishTask(core_id, s);
     }
     if (generation != task_generation_) co_return Status::OK();
-    {
-        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-        const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-        if (Status s = target_.WriteFreeMaps(); !s.ok()) co_return FinishTask(core_id, s);
+    for (int answers = 0;; ++answers) {
+        bool busy = false;
+        Status wrote;
+        {
+            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+            wrote = answers < kLatchTries ? target_.TryWriteFreeMaps(&busy) : target_.WriteFreeMaps();
+        }
+        if (!wrote.ok()) co_return FinishTask(core_id, wrote);
+        if (!busy) break;
+        ++task_report_.map_busy;
+        co_await ParkBriefly();
+        if (generation != task_generation_) co_return Status::OK();
     }
     if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
     if (generation != task_generation_) co_return Status::OK();
@@ -771,6 +831,51 @@ sched::Coro Checkpointer::CollectSliced(DirtyCollection& collection, std::uint64
     co_return Status::OK();
 }
 
+sched::Coro Checkpointer::WriteOffReactor(std::span<const PageId> pages, Lsn* defer,
+                                          std::size_t* wrote, std::uint64_t generation) {
+    *wrote = 0;
+    const auto hold = [this](sched::MonoTimeNs since) {
+        task_report_.step_max_ns = std::max(task_report_.step_max_ns, wal_.clock().Now() - since);
+    };
+    {
+        const sched::MonoTimeNs since = wal_.clock().Now();
+        auto staged = target_.StageWrite(pages, defer);
+        hold(since);
+        if (!staged.ok()) co_return staged.status();
+        staged_ = std::move(staged.value());
+    }
+    if (!staged_->Done()) {
+        // The predicate holds its own reference: a frame of an abandoned run
+        // asks it after `Abandon` let `staged_` go.
+        const std::shared_ptr<CheckpointTarget::StagedPages> in_flight = staged_;
+        const std::function<bool()> done = [in_flight] { return in_flight->Done(); };
+        const sched::MonoTimeNs parked = wal_.clock().Now();
+        {
+            sched::WaitScope wait(stats::WaitEvent::kSysioCheckpoint);
+            co_await sched::WaitUntil{&done};
+        }
+        if (generation != task_generation_) co_return Status::OK();
+        task_report_.write_park_ns += wal_.clock().Now() - parked;
+    }
+    const sched::MonoTimeNs since = wal_.clock().Now();
+    auto finished = staged_->Finish();
+    staged_.reset();
+    hold(since);
+    if (!finished.ok()) co_return finished.status();
+    *wrote = finished.value();
+    co_return Status::OK();
+}
+
+sched::Coro Checkpointer::ParkBriefly() {
+    const sched::MonoTimeNs deadline = wal_.clock().Now() + kBusyParkNs;
+    const std::function<bool()> ended = [this, deadline] { return wal_.clock().Now() >= deadline; };
+    {
+        sched::WaitScope wait(stats::WaitEvent::kSysioCheckpoint);
+        co_await sched::WaitUntil{&ended};
+    }
+    co_return Status::OK();
+}
+
 sched::Coro Checkpointer::ParkOnDataSync() {
     co_return co_await ParkOnDataSyncTicket(target_.RequestSync());
 }
@@ -791,15 +896,12 @@ sched::Coro Checkpointer::WriteForPublish(std::span<const PageId> pages, std::ui
                                           std::uint64_t generation) {
     for (int parks = 0;; ++parks) {
         Lsn deferred = kNoLsn;
-        StatusOr<std::size_t> wrote = std::size_t{0};
-        {
-            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-            wrote = target_.WritePages(pages,
-                                       parks < kGateParks && !pages.empty() ? &deferred : nullptr);
-        }
-        if (!wrote.ok()) co_return wrote.status();
-        Contention::Add(Tally::kCheckpointPagesWritten, wrote.value());
+        std::size_t wrote = 0;
+        const Status written = co_await WriteOffReactor(
+            pages, parks < kGateParks && !pages.empty() ? &deferred : nullptr, &wrote, generation);
+        if (generation != task_generation_) co_return Status::OK();
+        if (!written.ok()) co_return written;
+        Contention::Add(Tally::kCheckpointPagesWritten, wrote);
         if (deferred == kNoLsn) co_return Status::OK();
         if (deferred >= wal_.appended_lsn()) {
             parks = kGateParks - 1;  // the next attempt's inline gate refuses it
@@ -909,6 +1011,12 @@ Status Checkpointer::FinishTask(std::uint32_t core_id, const Status& ran) {
 }
 
 void Checkpointer::Abandon() noexcept {
+    // A batch off the reactor is written and cleaned before anything else:
+    // its claims would keep the shutdown checkpoint's writes waiting.
+    if (staged_ != nullptr) {
+        staged_->Drain();
+        staged_.reset();
+    }
     if (run_report_ == &task_report_) {
         // The run's census edge is closed as a run's end would close it, and
         // its record is not published: it did not finish.

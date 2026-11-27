@@ -50,6 +50,13 @@ public:
     StatusOr<std::size_t> WritePages(std::span<const PageId> page_ids, wal::Lsn* defer) override {
         return store_.WriteBackPages(page_ids, defer);
     }
+    // DZ-S2: the store's staged writeback, its writes on the data-sync thread.
+    StatusOr<std::shared_ptr<StagedPages>> StageWrite(std::span<const PageId> page_ids,
+                                                      wal::Lsn* defer) override {
+        auto staged = store_.StageWriteBack(page_ids, defer);
+        if (!staged.ok()) return staged.status();
+        return std::shared_ptr<StagedPages>(std::make_shared<Staged>(store_, std::move(staged.value())));
+    }
     std::uint64_t RequestSync() override { return store_.data_sync().Request(); }
     bool SyncDone(std::uint64_t ticket) override { return store_.data_sync().Done(ticket); }
     Status SyncResult(std::uint64_t ticket) override { return store_.data_sync().Result(ticket); }
@@ -65,8 +72,25 @@ public:
     void SetChunksPerSliceForTest(std::size_t chunks) noexcept { chunks_per_slice_ = chunks; }
     StatusOr<std::uint64_t> WriteHeaderlessMaps() override { return store_.WriteHeaderlessMaps(); }
     Status WriteFreeMaps() override { return store_.WriteFreeMaps().status(); }
+    StatusOr<std::uint64_t> TryWriteHeaderlessMaps(bool* busy) override {
+        return store_.WriteHeaderlessMaps(busy);
+    }
+    Status TryWriteFreeMaps(bool* busy) override { return store_.WriteFreeMaps(busy).status(); }
 
 private:
+    class Staged final : public StagedPages {
+    public:
+        Staged(DevicePageStore& store, std::shared_ptr<DevicePageStore::StagedWrite> staged) noexcept
+            : store_(store), staged_(std::move(staged)) {}
+        bool Done() const override { return staged_->Done(); }
+        StatusOr<std::size_t> Finish() override { return store_.FinishStaged(*staged_); }
+        void Drain() override { store_.DrainStaged(*staged_); }
+
+    private:
+        DevicePageStore& store_;
+        std::shared_ptr<DevicePageStore::StagedWrite> staged_;
+    };
+
     class Collection final : public wal::DirtyCollection {
     public:
         Collection(const DevicePageStore& store, std::size_t chunks) noexcept

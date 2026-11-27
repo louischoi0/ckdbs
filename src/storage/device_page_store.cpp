@@ -698,9 +698,16 @@ StatusOr<std::size_t> DevicePageStore::FlushMaps() {
     return WriteStagedFreeMapsLocked();
 }
 
-StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps() {
+StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps(bool* busy) {
     AssertNotUnderMapHold("WriteHeaderlessMaps");
-    LatchGuard barrier(map_flush_latch());
+    std::optional<LatchGuard> barrier;
+    if (busy != nullptr) {
+        barrier.emplace(map_flush_latch(), std::try_to_lock);
+        *busy = !barrier->owns();
+        if (*busy) return std::uint64_t{0};
+    } else {
+        barrier.emplace(map_flush_latch());
+    }
     stage_lost_ = Status::OK();
     auto wrote_headerless = StageMapsLocked();
     if (!wrote_headerless.ok()) return wrote_headerless.status();
@@ -711,9 +718,16 @@ StatusOr<std::uint64_t> DevicePageStore::WriteHeaderlessMaps() {
     return staged_ticket_;
 }
 
-StatusOr<std::size_t> DevicePageStore::WriteFreeMaps() {
+StatusOr<std::size_t> DevicePageStore::WriteFreeMaps(bool* busy) {
     AssertNotUnderMapHold("WriteFreeMaps");
-    LatchGuard barrier(map_flush_latch());
+    std::optional<LatchGuard> barrier;
+    if (busy != nullptr) {
+        barrier.emplace(map_flush_latch(), std::try_to_lock);
+        *busy = !barrier->owns();
+        if (*busy) return std::size_t{0};
+    } else {
+        barrier.emplace(map_flush_latch());
+    }
     // A flush that adopted the first half's stage and failed gave it back to
     // the regions: the free maps this run copied are not on the device.
     if (!stage_lost_.ok()) return std::exchange(stage_lost_, Status::OK());
@@ -2012,6 +2026,11 @@ void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
             auto it = frames_.find(page_id);
             if (it == frames_.end() || !it->second.writing) return;
         }
+        // **Unarmed, a staged claim is this thread's to clean** (DZ-S2): the
+        // run that staged it is parked on this same thread, so waiting for it
+        // would wait forever. The data-sync thread writes on its own; once it
+        // has, the clean is done here.
+        if (structure_latch() == nullptr) CleanWrittenStagedUnarmed();
         if (turn < 64) {
             std::this_thread::yield();
         } else {
@@ -2021,7 +2040,8 @@ void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
 }
 
 StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_ids,
-                                                  HeldFrames held, wal::Lsn* defer) {
+                                                  HeldFrames held, wal::Lsn* defer,
+                                                  StagedWrite* stage) {
     // Ascending and unique: id order is file order (page.md section 13),
     // and the queue this drains may name a page twice across sweeps.
     std::vector<PageId> ordered(page_ids.begin(), page_ids.end());
@@ -2090,10 +2110,6 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // wait holds no claim of this call's own - a run is claimed, written
     // and released before the next is looked at - so two writebacks cannot
     // wait on each other.
-    struct CopiedPage {
-        Frame* frame = nullptr;
-        std::uint32_t dirty_gen = 0;  // the frame's generation at the copy
-    };
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     std::vector<CopiedPage> copied;
@@ -2283,6 +2299,20 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
             }
         }
 
+        // **Staged** (DZ-S2): the run's copy and its claims go to `stage`,
+        // whose writer writes and whose clean cleans; `claims` gives back
+        // nothing now. The scratch and the claim list are replaced, each
+        // reserved again outside any hold.
+        if (stage != nullptr) {
+            stage->runs_.push_back(StagedWrite::Run{ordered[i], std::move(scratch), std::move(copied)});
+            scratch = {};
+            copied = {};
+            copied.reserve(kWritebackRunPages);
+            written += run;
+            i += run;
+            continue;
+        }
+
         // (3) write: one device call for a run, per page otherwise, and
         // best-effort by spec §4 - a device without a real scatter write
         // still sees the pages land in file order.
@@ -2322,27 +2352,129 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // waiter that sees it gone sees the clean with it.
         {
             LatchGuard structure(structure_latch());
-            for (std::size_t k = 0; k < run; ++k) {
-                Frame& frame = *copied[k].frame;  // resident: claimed, so dirty
-                frame.writing = false;
-                if (frame.dirty_gen != copied[k].dirty_gen) {
-                    if (frame.stamped_since_copy != wal::kNoLsn) {
-                        frame.rec_lsn = frame.stamped_since_copy;
-                    }
-                    continue;
-                }
-                frame.dirty = false;
-                frame.rec_lsn = wal::kNoLsn;  // nothing to replay into it
-                if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
-                    log_->Trace("pagestore", "wrote page=" + std::to_string(ordered[i + k]));
-                }
-            }
+            CleanCopiedLocked(copied);
             copied.clear();  // given back here, so `claims` has nothing to do
         }
         written += run;
         i += run;
     }
     return written;
+}
+
+void DevicePageStore::CleanCopiedLocked(std::span<CopiedPage> copied) {
+    for (CopiedPage& page : copied) {
+        Frame& frame = *page.frame;  // resident: claimed, so dirty
+        frame.writing = false;
+        if (frame.dirty_gen != page.dirty_gen) {
+            if (frame.stamped_since_copy != wal::kNoLsn) frame.rec_lsn = frame.stamped_since_copy;
+            continue;
+        }
+        frame.dirty = false;
+        frame.rec_lsn = wal::kNoLsn;  // nothing to replay into it
+        if (log_ != nullptr && log_->enabled(LogLevel::kTrace)) {
+            log_->Trace("pagestore", "wrote page=" + std::to_string(frame.page_id));
+        }
+    }
+}
+
+StatusOr<std::shared_ptr<DevicePageStore::StagedWrite>> DevicePageStore::StageWriteBack(
+    std::span<const PageId> page_ids, wal::Lsn* defer) {
+    auto staged = std::make_shared<StagedWrite>();
+    staged->armed_ = structure_latch() != nullptr;
+    auto copied = WriteBack(page_ids, HeldFrames::kWait, defer, staged.get());
+    if (!copied.ok()) {
+        // Runs staged before the refusal are claimed: written and cleaned
+        // here, on this thread, as `WriteBack` would have before refusing.
+        WriteStagedRuns(*staged);
+        CleanStaged(*staged);
+        return copied.status();
+    }
+    if (staged->runs_.empty()) {
+        staged->state_.store(StagedWrite::kCleaned, std::memory_order_release);
+        return staged;
+    }
+    if (!staged->armed_) staged_unarmed_.push_back(staged);
+    // The job owns a reference, so the stage outlives whichever of it and
+    // the run's task lets go first.
+    data_sync_.Post([this, staged] {
+        WriteStagedRuns(*staged);
+        if (staged->armed_) {
+            CleanStaged(*staged);
+        } else {
+            staged->state_.store(StagedWrite::kWritten, std::memory_order_release);
+        }
+    });
+    return staged;
+}
+
+void DevicePageStore::WriteStagedRuns(StagedWrite& staged) {
+    for (StagedWrite::Run& r : staged.runs_) {
+        const std::size_t pages = r.copied.size();
+        // A data-file sync failed since the copy: nothing more goes out, as
+        // `WriteBack` refuses (BI-Q3 (a)).
+        Status wrote = data_sync_.failed()
+                           ? Status::IoError("pagestore: no page is written back after a failed "
+                                             "data-file sync; restart the instance to recover")
+                       : pages > 1 ? device_.WritePageRun(r.first, static_cast<std::uint32_t>(pages),
+                                                          std::span<const std::byte>(r.bytes))
+                                   : device_.WritePage(r.first, std::span<const std::byte, kPageSize>(
+                                                                    r.bytes.data(), kPageSize));
+        if (!wrote.ok()) {
+            if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
+                log_->Error("pagestore", "staged write failed for page " + std::to_string(r.first) +
+                                             " (run of " + std::to_string(pages) +
+                                             "): " + wrote.message());
+            }
+            staged.status_ = std::move(wrote);
+            return;
+        }
+        ++staged.written_runs_;
+    }
+}
+
+void DevicePageStore::CleanStaged(StagedWrite& staged) {
+    std::size_t cleaned = 0;
+    {
+        LatchGuard structure(structure_latch());
+        for (std::size_t r = 0; r < staged.runs_.size(); ++r) {
+            std::vector<CopiedPage>& copied = staged.runs_[r].copied;
+            if (r < staged.written_runs_) {
+                CleanCopiedLocked(copied);
+                cleaned += copied.size();
+            } else {
+                for (CopiedPage& page : copied) page.frame->writing = false;  // dirty still
+            }
+            copied.clear();
+        }
+    }
+    staged.cleaned_pages_ = cleaned;
+    staged.state_.store(StagedWrite::kCleaned, std::memory_order_release);
+}
+
+void DevicePageStore::CleanWrittenStagedUnarmed() {
+    std::erase_if(staged_unarmed_, [this](const std::shared_ptr<StagedWrite>& staged) {
+        const int state = staged->state_.load(std::memory_order_acquire);
+        if (state == StagedWrite::kWritten) CleanStaged(*staged);
+        return state != StagedWrite::kStaged;
+    });
+}
+
+StatusOr<std::size_t> DevicePageStore::FinishStaged(StagedWrite& staged) {
+    if (!staged.armed_) {
+        // The store's one thread: clean it if no waiter has, and forget it.
+        if (staged.state_.load(std::memory_order_acquire) == StagedWrite::kWritten) {
+            CleanStaged(staged);
+        }
+        std::erase_if(staged_unarmed_,
+                      [&](const std::shared_ptr<StagedWrite>& s) { return s.get() == &staged; });
+    }
+    if (!staged.status_.ok()) return staged.status_;
+    return staged.cleaned_pages_;
+}
+
+void DevicePageStore::DrainStaged(StagedWrite& staged) {
+    while (!staged.Done()) std::this_thread::sleep_for(std::chrono::microseconds(50));
+    (void)FinishStaged(staged);
 }
 
 StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {

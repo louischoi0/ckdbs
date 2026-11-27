@@ -385,9 +385,35 @@ public:
     // returns what it wrote before. A checkpoint task parks on that LSN and
     // asks again; nothing is written ahead of its record either way.
     enum class HeldFrames : std::uint8_t { kWait, kSkip };
+
+private:
+    struct Frame;  // below, with the table
+
+public:
+    struct CopiedPage;
+    class StagedWrite;
+    // `stage` given (DZ-S2), each run is left claimed and copied in it rather
+    // than written and cleaned; the count is of pages staged.
     StatusOr<std::size_t> WriteBack(std::span<const PageId> page_ids,
                                     HeldFrames held = HeldFrames::kWait,
-                                    wal::Lsn* defer = nullptr);
+                                    wal::Lsn* defer = nullptr, StagedWrite* stage = nullptr);
+    // A run's clean, `WriteBack`'s (4): under the structure latch, the claim
+    // given back and the frame cleaned only where the copy covered it.
+    void CleanCopiedLocked(std::span<CopiedPage> copied);
+    // The staged runs' device writes, on whichever thread runs the job.
+    void WriteStagedRuns(StagedWrite& staged);
+    // The staged clean: written runs cleaned, unwritten ones' claims given
+    // back dirty. Once, by whoever takes `kWritten` to `kCleaned`.
+    void CleanStaged(StagedWrite& staged);
+    // Unarmed: cleans every staged write already written (`AwaitWritebackClaim`).
+    void CleanWrittenStagedUnarmed();
+
+    // A writeback's copy of one frame: the frame, claimed, and its
+    // generation at the copy, which the clean compares.
+    struct CopiedPage {
+        Frame* frame = nullptr;
+        std::uint32_t dirty_gen = 0;
+    };
 
     // Pages one coalesced run may span, and so the scratch bound: 8 pages
     // = 64 KiB, chosen as the largest single write the background task
@@ -607,13 +633,76 @@ public:
         return WriteBack(page_ids, HeldFrames::kWait, defer);
     }
 
+    // ---- A checkpoint's writeback off its reactor (DZ-S2) ----------------
+    //
+    // `WriteBackPages` in halves. **`StageWriteBack`** runs `WriteBack`'s
+    // gate, claims and copies on the caller's thread - each page copied under
+    // its page latch, as writeback copies - and hands the copies' device
+    // writes to the data-sync thread (`DataSyncer::Post`); its `defer` is
+    // `WriteBack`'s, the runs before the deferred one staged. The claims stay
+    // set until the clean, so every other writeback of those pages waits or
+    // skips as it does behind a write in progress (`Frame::writing`).
+    // **Armed, the data-sync thread cleans** under the structure latch once it
+    // has written, and a claim's waiter on any core sees it go. **Unarmed the
+    // store has one thread**, so the clean is that thread's: `FinishStaged`,
+    // or a `kWait` writeback that meets the claim on the same thread while the
+    // run that staged it is parked - it waits for the write and cleans for it
+    // (`AwaitWritebackClaim`), which is what keeps a `SYNC`, a carve or an
+    // eviction drain on the checkpointing core from waiting on itself. The
+    // clean is writeback's own (DZ-R2): only what a copy covered is cleaned.
+    // A failed write leaves its run and every later one dirty, as
+    // `WriteBack`'s failure does; only a failed data-file sync is sticky
+    // (DZ-R4). With no data-sync thread the write runs inline.
+    class StagedWrite {
+    public:
+        // The write is done and, armed, cleaned: `FinishStaged` may run.
+        bool Done() const noexcept {
+            return state_.load(std::memory_order_acquire) >= (armed_ ? kCleaned : kWritten);
+        }
+
+    private:
+        friend class DevicePageStore;
+        static constexpr int kStaged = 0;
+        static constexpr int kWritten = 1;
+        static constexpr int kCleaned = 2;
+        struct Run {
+            PageId first = kInvalidPageId;
+            std::vector<std::byte> bytes;       // `pages` images, one run
+            std::vector<CopiedPage> copied;     // their frames, claimed
+        };
+        bool armed_ = false;
+        std::vector<Run> runs_;
+        // Set by the writer before `kWritten`: the runs written, the first
+        // failure if any, and what the clean then cleaned.
+        std::size_t written_runs_ = 0;
+        Status status_;
+        std::size_t cleaned_pages_ = 0;
+        std::atomic<int> state_{kStaged};
+    };
+    StatusOr<std::shared_ptr<StagedWrite>> StageWriteBack(std::span<const PageId> page_ids,
+                                                          wal::Lsn* defer);
+    // After `Done()`: the clean, where it is the caller's; the pages written,
+    // or the write's failure.
+    StatusOr<std::size_t> FinishStaged(StagedWrite& staged);
+    // Waits for the write and cleans - `Checkpointer::Abandon`'s, whose
+    // reactor is stopped, so no task will.
+    void DrainStaged(StagedWrite& staged);
+
     // The publish's map write as two halves the run task parks between
     // (the map write order, above `FlushMaps` in the .cpp): the first
     // answers the `data_sync()` ticket the second waits on, 0 for none; the
     // second refuses `OutOfRange`, writing nothing, while it is pending, and
     // the failure of any flush that gave the stage back since the first.
-    StatusOr<std::uint64_t> WriteHeaderlessMaps();
-    StatusOr<std::size_t> WriteFreeMaps();
+    // `busy` given (DZ-Q6 (a)), the map write barrier is tried: held by a
+    // blocking flush, `*busy` is set and nothing is written.
+    StatusOr<std::uint64_t> WriteHeaderlessMaps(bool* busy = nullptr);
+    StatusOr<std::size_t> WriteFreeMaps(bool* busy = nullptr);
+    // A cell's: runs `while_held` on this thread with the map write barrier
+    // held, as a blocking flush holds it across its `fsync`.
+    void HoldMapFlushBarrierForTest(const std::function<void()>& while_held) {
+        LatchGuard barrier(map_flush_latch());
+        while_held();
+    }
 
     // **Every resident map region's pages as they stand in memory**, each
     // stamped with its checksum, and **nothing written** (BR-S5): a backup's
@@ -1836,6 +1925,9 @@ private:
         std::unique_ptr<PageId[]> owners;
     };
     std::unique_ptr<FrameChunk[]> chunks_;
+    // Unarmed only: the staged writes not yet cleaned (DZ-S2), which a
+    // `kWait` writeback on the store's one thread cleans for a parked run.
+    std::vector<std::shared_ptr<StagedWrite>> staged_unarmed_;
     // Slots that exist: whole chunks, and a last one cut at the configured
     // capacity (`TakeSlotLocked` says why not `capacity_`).
     std::size_t slot_count_ = 0;

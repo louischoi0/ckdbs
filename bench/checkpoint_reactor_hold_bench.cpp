@@ -84,6 +84,8 @@ double Ms(std::uint64_t ns) { return static_cast<double>(ns) / 1e6; }
 class TimedTarget final : public kds::wal::CheckpointTarget {
 public:
     enum Piece { kDirtyTable, kWritePages, kDirtyPages, kHeaderlessMaps, kFreeMaps, kRequestSync, kPieces };
+    // `write_pages` is a batch's stage or finish since DZ-S2, its device
+    // writes being off the reactor.
     static constexpr const char* kNames[kPieces] = {"dirty_table", "write_pages", "dirty_pages",
                                                     "headerless_maps", "free_maps", "request_sync"};
     explicit TimedTarget(kds::storage::PageStoreCheckpointTarget& inner) : inner_(inner) {}
@@ -119,6 +121,22 @@ public:
     kds::Status WriteFreeMaps() override {
         return Time(kFreeMaps, [&] { return inner_.WriteFreeMaps(); });
     }
+    kds::StatusOr<std::uint64_t> TryWriteHeaderlessMaps(bool* busy) override {
+        return Time(kHeaderlessMaps, [&] { return inner_.TryWriteHeaderlessMaps(busy); });
+    }
+    kds::Status TryWriteFreeMaps(bool* busy) override {
+        return Time(kFreeMaps, [&] { return inner_.TryWriteFreeMaps(busy); });
+    }
+    // The store's writes off the reactor (DZ-S2): the stage and the finish,
+    // the two reactor holds of a batch, each timed as the write piece.
+    // Without this the run takes the default, `WritePages` whole on the
+    // reactor, and measures the writes DZ-S2 moved.
+    kds::StatusOr<std::shared_ptr<StagedPages>> StageWrite(std::span<const PageId> ids,
+                                                         kds::wal::Lsn* defer) override {
+        auto staged = Time(kWritePages, [&] { return inner_.StageWrite(ids, defer); });
+        if (!staged.ok()) return staged.status();
+        return std::shared_ptr<StagedPages>(std::make_shared<TimedStaged>(*this, std::move(staged.value())));
+    }
     // The store's sliced collection (DZ-S1), each slice timed into the piece
     // the whole call was. Without this the run takes `CheckpointTarget`'s
     // default - `DirtyTable` and `DirtyPages` whole, in one poll each - and
@@ -135,6 +153,21 @@ public:
     }
 
 private:
+    class TimedStaged final : public StagedPages {
+    public:
+        TimedStaged(const TimedTarget& target, std::shared_ptr<StagedPages> inner)
+            : target_(target), inner_(std::move(inner)) {}
+        bool Done() const override { return inner_->Done(); }
+        kds::StatusOr<std::size_t> Finish() override {
+            return target_.Time(kWritePages, [&] { return inner_->Finish(); });
+        }
+        void Drain() override { inner_->Drain(); }
+
+    private:
+        const TimedTarget& target_;
+        std::shared_ptr<StagedPages> inner_;
+    };
+
     class TimedCollection final : public kds::wal::DirtyCollection {
     public:
         TimedCollection(const TimedTarget& target, Piece piece,

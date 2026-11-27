@@ -233,6 +233,27 @@ public:
     virtual bool SyncDone(std::uint64_t /*ticket*/) { return true; }
     virtual Status SyncResult(std::uint64_t /*ticket*/) { return Status::OK(); }
 
+    // ---- The run task's writes, off its reactor (DZ-S2) ------------------
+    //
+    // `WritePages` in halves: `StageWrite` takes the gate, the claims and
+    // the copies on the calling thread and hands the device writes to
+    // another, the task parks until `Done`, and `Finish` answers the pages
+    // written or the write's failure. `defer` is `WritePages`'. DZ-S0
+    // measured a step's writes on the reactor at up to 1.26 s at 1 Mi dirty
+    // frames, all of it the kernel's writeback throttle. The default writes
+    // at `StageWrite`, done at once: a scripted target's.
+    class StagedPages {
+    public:
+        virtual ~StagedPages() = default;
+        virtual bool Done() const = 0;
+        virtual StatusOr<std::size_t> Finish() = 0;
+        // Waits for the write and finishes it: `Checkpointer::Abandon`'s,
+        // with the reactor that would have finished it stopped.
+        virtual void Drain() = 0;
+    };
+    virtual StatusOr<std::shared_ptr<StagedPages>> StageWrite(std::span<const PageId> page_ids,
+                                                               Lsn* defer);
+
     // The paced publish (BI-Q5 (a)): every page dirty now, for the task to
     // write in batches, and the maps after all of them, in two halves the
     // task parks between on the ticket the first answers (`page.md`
@@ -240,6 +261,18 @@ public:
     virtual std::vector<PageId> DirtyPages() { return {}; }
     virtual StatusOr<std::uint64_t> WriteHeaderlessMaps() { return std::uint64_t{0}; }
     virtual Status WriteFreeMaps() { return Status::OK(); }
+    // **The map halves tried** (DZ-Q6 (a)): a busy map write barrier - a
+    // blocking flush holding it across a data-file `fsync` - sets `*busy`
+    // and writes nothing, and the task parks and tries again. The default
+    // never answers busy.
+    virtual StatusOr<std::uint64_t> TryWriteHeaderlessMaps(bool* busy) {
+        *busy = false;
+        return WriteHeaderlessMaps();
+    }
+    virtual Status TryWriteFreeMaps(bool* busy) {
+        *busy = false;
+        return WriteFreeMaps();
+    }
 
     // Either table in slices (DZ-S1). The default is one slice: `DirtyTable`
     // or `DirtyPages` whole, at the first `Advance` - a scripted target's.
@@ -514,15 +547,14 @@ public:
     // assertion bases behind the record stay blocking (CZ-Q16 (a)).
     Status Start(bool* busy);
 
-    // Flushes up to `pages_per_step` of the snapshot. Returns true once
-    // every page in it has been written back, at which point Complete()
-    // is the next call. A failed step leaves the checkpoint in progress
-    // and its remaining pages unflushed, so the next Step() retries them.
-    // The run task's step writes and does not sync (`write_only`): the
-    // publish's sync covers it (BI-Q13). With `defer`, a step that needs the
-    // log further stores the LSN there and returns false with its cursor
-    // unmoved.
-    StatusOr<bool> Step(Lsn* defer = nullptr, bool write_only = false);
+    // Flushes up to `pages_per_step` of the snapshot, written and synced on
+    // this thread (`FlushPages`). Returns true once every page in it has
+    // been written back, at which point Complete() is the next call. A
+    // failed step leaves the checkpoint in progress and its remaining pages
+    // unflushed, so the next Step() retries them. The synchronous callers'
+    // step; the run task's writes and does not sync, off its reactor
+    // (`WriteOffReactor`, DZ-S2), and the publish's sync covers it (BI-Q13).
+    StatusOr<bool> Step();
 
     // Logs CHECKPOINT_END, makes it durable, and publishes the anchor -
     // in that order. Fails with OutOfRange if the flush phase has not
@@ -671,8 +703,21 @@ private:
     // (DZ-S1), a start's slices timed as its phase. Cancelled when the run
     // was abandoned meanwhile (`generation`).
     sched::Coro CollectSliced(DirtyCollection& collection, std::uint64_t generation, bool start);
+    // **A batch written off the reactor** (DZ-S2): staged here, parked on
+    // while another thread writes it, finished here; `*wrote` the pages
+    // written, `defer` as `WritePages`'. The stage and the finish are the
+    // reactor's holds, counted in `step_max_ns`. An abandoned run returns OK
+    // with nothing written; `Abandon` drained the write.
+    sched::Coro WriteOffReactor(std::span<const PageId> pages, Lsn* defer, std::size_t* wrote,
+                                std::uint64_t generation);
+    // One park of `kBusyParkNs` on the clock, no kick: the map barrier's.
+    sched::Coro ParkBriefly();
+    // A failed step's log line, `Step`'s and the task's.
+    void LogStepFailure(std::size_t batch, const Status& s) const;
     void LogSkip(std::uint32_t core_id) const;
     bool task_in_flight_ = false;
+    // The run task's batch in flight off the reactor (DZ-S2), for `Abandon`.
+    std::shared_ptr<CheckpointTarget::StagedPages> staged_;
     // Moved by `Abandon`, so a frame of an abandoned run that is ever polled
     // returns without touching this checkpointer.
     std::uint64_t task_generation_ = 0;
