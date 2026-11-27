@@ -1,11 +1,14 @@
 # Work order DW - what a btree relation's deletes leave, purged unasked: index entries first, the row's own space on the operator's word
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
-`known-gaps-milestone-orders` (branch
-`worktree-known-gaps-milestone-orders`) from `8274c951`
+Status: **OPENED 2026-11-27** on worktree `dw-btree-purge-driver` (branch
+`worktree-dw-btree-purge-driver`) from `630ecc359`
+(`v3.4.17-178-g630ecc359`), under the operator's standing go-ahead of
+2026-11-27 (`raft-marks-2026-11-27.md` §1): every DW-Q item is **adopted
+on that go-ahead, never marked by the operator item by item** (§4,
+"Marks"). Written 2026-11-26 on worktree `known-gaps-milestone-orders`
+(branch `worktree-known-gaps-milestone-orders`) from `8274c951`
 (`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; DW-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
+(`raft-marks-2026-11-26.md` §3). A `[source-read]` claim
 with a `path:line` was read at `8274c951`; a claim taken from
 `known-gaps.md` carries that entry's own verification commit and is not
 re-verified here.
@@ -121,6 +124,24 @@ OLTP mix, and what a read pays for them.
 | DW-Q4 | The row and its key | (a) left to `PURGE`, as built; (b) a delete-marked row's spills released unasked, the tombstone kept - no key freed, a var-heap release at `kNoTxnId` as `PURGE`'s is; (c) the keyed tombstone, K1's second exception or a new slot state | (a); (b) is CLA's next proposal and (c) needs the operator's own word |
 | DW-Q5 | IX2c's first entry and spilled covered churn | (a) outside DW, stated; (b) inside | (a): DM, which would have lifted IX2c, was abandoned |
 | DW-Q6 | `PURGE`'s polling wait | (a) outside DW (EE's decide slot would give it a wake); (b) inside | (a) |
+
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-27 (go-ahead-achieving-milestone)** - *"go ahead until
+achieving milestone, I will follow CLA proposal if decision needed"*
+(`raft-marks-2026-11-27.md` §1) - and none is the operator's own mark on
+the item. No item is tagged `[quiet-wrong]`.
+
+| | adopted | note |
+|---|---|---|
+| DW-Q0 | (a) | the index driver for btree relations and the moved-key purge for both kinds |
+| DW-Q1 | (a) | DW-S0 gates; the bar is read in §7 |
+| DW-Q2 | (a) | existing counters only |
+| DW-Q3 | (a) | one boot key, off by default |
+| DW-Q4 | (a) | the row is left to `PURGE`; DW-S3 has no subject. (c) needs the operator's own word and the standing word is not that |
+| DW-Q5 | (a) | IX2c's first entry and spilled covered churn stay outside |
+| DW-Q6 | (a) | `PURGE`'s polling wait stays outside |
 
 ## 5. Stages
 
