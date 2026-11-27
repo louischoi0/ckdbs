@@ -115,17 +115,11 @@ public:
     std::vector<PageId> DirtyPages() override {
         return Time(kDirtyPages, [&] { return inner_.DirtyPages(); });
     }
-    kds::StatusOr<std::uint64_t> WriteHeaderlessMaps() override {
-        return Time(kHeaderlessMaps, [&] { return inner_.WriteHeaderlessMaps(); });
+    kds::StatusOr<std::uint64_t> WriteHeaderlessMaps(bool* busy) override {
+        return Time(kHeaderlessMaps, [&] { return inner_.WriteHeaderlessMaps(busy); });
     }
-    kds::Status WriteFreeMaps() override {
-        return Time(kFreeMaps, [&] { return inner_.WriteFreeMaps(); });
-    }
-    kds::StatusOr<std::uint64_t> TryWriteHeaderlessMaps(bool* busy) override {
-        return Time(kHeaderlessMaps, [&] { return inner_.TryWriteHeaderlessMaps(busy); });
-    }
-    kds::Status TryWriteFreeMaps(bool* busy) override {
-        return Time(kFreeMaps, [&] { return inner_.TryWriteFreeMaps(busy); });
+    kds::Status WriteFreeMaps(bool* busy) override {
+        return Time(kFreeMaps, [&] { return inner_.WriteFreeMaps(busy); });
     }
     // The store's writes off the reactor (DZ-S2): the stage and the finish,
     // the two reactor holds of a batch, each timed as the write piece.
@@ -161,7 +155,6 @@ private:
         kds::StatusOr<std::size_t> Finish() override {
             return target_.Time(kWritePages, [&] { return inner_->Finish(); });
         }
-        void Drain() override { inner_->Drain(); }
 
     private:
         const TimedTarget& target_;

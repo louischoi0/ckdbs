@@ -111,3 +111,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | CLA's proposals, written into the order's §4 at DZ-S0 and DZ-S1 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not per-item marks by the operator: **DZ-Q6 (a)** - the map barrier is tried and parked on although DZ-S0 could not price its wait; **DZ-Q7 (a)** - DZ-R1's crash cells on the one-core simulator, the two-core form left to EC; **DZ-Q8 (a)** - the append-before-stamp premise check records its finding as the suspend audit's other findings do, where §2 item 2 said it aborts. None is `[quiet-wrong]`; DZ-Q7 stands beside DZ-R1, which is, and **DZ-R1 gained a second half at DZ-S0** (the begin record lists every transaction of its core undecided at the append), CLA's reading of DO's §5a against a yielding walk, recorded in the order's §3 and §7 |
 | **Does not settle** | a tag or a version; any milestone but DZ |
 | **Recorded at** | this file; `workorder-dz-checkpoint-reactor-residue.md` §3, §4 and §7 |
+
+## 13. DZ-Q2 revised at DZ-S2 on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §11 - no new word from the operator |
+| **Mark** | **DZ-Q2 (b)**, revised by CLA from its own adopted (a) and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's mark: the checkpoint's page writes go to a writer thread inside `DataSyncer`, started and stopped with the sync's thread, because on the one thread a write queued behind a whole `fsync` (BI-Q13). (a)'s own text named (b) as its fallback; the order's §4 records the revision. Not `[quiet-wrong]` |
+| **Does not settle** | a tag or a version; any milestone but DZ |
+| **Recorded at** | this file; `workorder-dz-checkpoint-reactor-residue.md` §4 and §7 |

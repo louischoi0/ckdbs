@@ -244,6 +244,33 @@ TEST_P(StagedWriteTest, AFailedStagedWriteLeavesItsPagesDirtyForTheNextWriteback
     EXPECT_TRUE(store_->DirtyPageIds().empty());
 }
 
+// A gate whose log fail-stops on the cell's word.
+class StoppableGate final : public wal::WalDurability {
+public:
+    wal::Lsn durable_lsn() const noexcept override { return ~wal::Lsn{0}; }
+    Status EnsureDurable(wal::Lsn) override { return Status::OK(); }
+    bool stopped() const noexcept override { return stopped_.load(); }
+    std::atomic<bool> stopped_{false};
+};
+
+TEST_P(StagedWriteTest, ALogStoppedBetweenTheCopyAndTheWriteWritesNoLaterRun) {
+    // `WriteBack` refuses at its start once the log fail-stopped; a staged
+    // run is written up to a park later, so the writer asks again.
+    StoppableGate gate;
+    store_->SetWalGate(&gate);
+    held_->Hold();
+    auto staged = store_->StageWriteBack(ids_, nullptr);
+    ASSERT_TRUE(staged.ok()) << staged.status().message();
+    ASSERT_TRUE(WaitFor([&] { return held_->writes_entered() > 0; }));
+    gate.stopped_ = true;  // the first run's write is already in the device
+    held_->Release();
+    ASSERT_TRUE(WaitFor([&] { return staged.value()->Done(); }));
+    EXPECT_FALSE(store_->FinishStaged(*staged.value()).ok());
+    EXPECT_EQ(held_->writes_entered(), 1u) << "a run went out after the log fail-stopped";
+    EXPECT_FALSE(store_->DirtyPageIds().empty()) << "an unwritten run was cleaned";
+    store_->SetWalGate(nullptr);
+}
+
 INSTANTIATE_TEST_SUITE_P(ArmedAndNot, StagedWriteTest, ::testing::Bool(),
                          [](const auto& info) { return info.param ? "Armed" : "Unarmed"; });
 

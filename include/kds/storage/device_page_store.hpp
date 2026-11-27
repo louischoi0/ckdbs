@@ -272,6 +272,10 @@ public:
     // `capacity` is the pool's ceiling: resident frames, fills in flight
     // included, never exceed it (BE-R1, BE-R3). Zero is `InvalidArgument` -
     // there is no unbounded pool.
+    // Stops the data-sync threads first: a queued staged write's job cleans
+    // frames under the structure latch (DZ-S2).
+    ~DevicePageStore() override { data_sync_.Stop(); }
+
     static StatusOr<std::unique_ptr<DevicePageStore>> Open(PageDevice& device,
                                                            FrameCapacity capacity,
                                                            PageId first_new_page_id = 1);
@@ -638,11 +642,11 @@ public:
     // `WriteBackPages` in halves. **`StageWriteBack`** runs `WriteBack`'s
     // gate, claims and copies on the caller's thread - each page copied under
     // its page latch, as writeback copies - and hands the copies' device
-    // writes to the data-sync thread (`DataSyncer::Post`); its `defer` is
+    // writes to the data-sync writer thread (`DataSyncer::Post`); its `defer` is
     // `WriteBack`'s, the runs before the deferred one staged. The claims stay
     // set until the clean, so every other writeback of those pages waits or
     // skips as it does behind a write in progress (`Frame::writing`).
-    // **Armed, the data-sync thread cleans** under the structure latch once it
+    // **Armed, the writer thread cleans** under the structure latch once it
     // has written, and a claim's waiter on any core sees it go. **Unarmed the
     // store has one thread**, so the clean is that thread's: `FinishStaged`,
     // or a `kWait` writeback that meets the claim on the same thread while the
@@ -652,7 +656,7 @@ public:
     // clean is writeback's own (DZ-R2): only what a copy covered is cleaned.
     // A failed write leaves its run and every later one dirty, as
     // `WriteBack`'s failure does; only a failed data-file sync is sticky
-    // (DZ-R4). With no data-sync thread the write runs inline.
+    // (DZ-R4). With no writer thread the write runs inline.
     class StagedWrite {
     public:
         // The write is done and, armed, cleaned: `FinishStaged` may run.
@@ -671,6 +675,9 @@ public:
             std::vector<CopiedPage> copied;     // their frames, claimed
         };
         bool armed_ = false;
+        // The staging core's gate, asked again before each write: the log
+        // may fail-stop between the copy and the write (`WriteBackRefusal`).
+        const wal::WalDurability* gate_ = nullptr;
         std::vector<Run> runs_;
         // Set by the writer before `kWritten`: the runs written, the first
         // failure if any, and what the clean then cleaned.
@@ -684,9 +691,6 @@ public:
     // After `Done()`: the clean, where it is the caller's; the pages written,
     // or the write's failure.
     StatusOr<std::size_t> FinishStaged(StagedWrite& staged);
-    // Waits for the write and cleans - `Checkpointer::Abandon`'s, whose
-    // reactor is stopped, so no task will.
-    void DrainStaged(StagedWrite& staged);
 
     // The publish's map write as two halves the run task parks between
     // (the map write order, above `FlushMaps` in the .cpp): the first
@@ -1405,6 +1409,10 @@ private:
     // The gate a writeback on this thread asks: the calling core's own
     // (SetCoreWalGate), or the default.
     wal::WalDurability* GateForCaller() const noexcept;
+    // Why nothing may be written back now, or OK: the log behind `gate`
+    // fail-stopped, or a data-file sync failed. Asked at a writeback's
+    // start and again at each staged write, which lands after its copy.
+    Status WriteBackRefusal(const wal::WalDurability* gate) const;
 
     // `Resolve`'s miss half: reserve a slot, read, verify, publish. It
     // reaches the frame table only under holds of its own (`ReserveFrame`'s
@@ -1735,9 +1743,10 @@ private:
     void InstallEmptyHeaderlessMapLocked(MapRegion& region, PageId headerless_id);
 
     PageDevice& device_;
-    // Syncs `device_`. Declared second, so it is destroyed (its thread
-    // joined) after the store's later members; its thread touches only
-    // `device_`, which outlives the store.
+    // Syncs `device_`, and writes a checkpoint's staged pages on its writer
+    // thread (DZ-S2), whose armed job cleans frames under the structure
+    // latch - so the store's destructor stops it first, while every member
+    // a queued job touches is alive. Declared second, after `device_`.
     DataSyncer data_sync_{device_};
     Logger* log_ = nullptr;
     wal::WalDurability* wal_gate_ = nullptr;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <string>
 #include <utility>
 
@@ -221,7 +222,6 @@ public:
     explicit WrittenAtOnce(std::size_t wrote) noexcept : wrote_(wrote) {}
     bool Done() const override { return true; }
     StatusOr<std::size_t> Finish() override { return wrote_; }
-    void Drain() override {}
 
 private:
     std::size_t wrote_;
@@ -741,42 +741,26 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // parks out instead of waiting on its reactor, to `kLatchTries` busy
     // answers a half and then the blocking call.
     std::uint64_t map_ticket = 0;
-    for (int answers = 0;; ++answers) {
-        bool busy = false;
-        StatusOr<std::uint64_t> staged = std::uint64_t{0};
-        {
-            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-            staged = answers < kLatchTries ? target_.TryWriteHeaderlessMaps(&busy)
-                                           : target_.WriteHeaderlessMaps();
-        }
-        if (!staged.ok()) co_return FinishTask(core_id, staged.status());
-        if (!busy) {
-            map_ticket = staged.value();
-            break;
-        }
-        ++task_report_.map_busy;
-        co_await ParkBriefly();
-        if (generation != task_generation_) co_return Status::OK();
+    if (Status s = co_await TryMapHalf(
+            [this](bool* busy) { return target_.WriteHeaderlessMaps(busy); }, &map_ticket, generation);
+        !s.ok()) {
+        co_return FinishTask(core_id, s);
     }
+    if (generation != task_generation_) co_return Status::OK();
     if (Status s = co_await ParkOnDataSyncTicket(map_ticket); !s.ok()) {
         co_return FinishTask(core_id, s);
     }
     if (generation != task_generation_) co_return Status::OK();
-    for (int answers = 0;; ++answers) {
-        bool busy = false;
-        Status wrote;
-        {
-            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
-            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
-            wrote = answers < kLatchTries ? target_.TryWriteFreeMaps(&busy) : target_.WriteFreeMaps();
-        }
-        if (!wrote.ok()) co_return FinishTask(core_id, wrote);
-        if (!busy) break;
-        ++task_report_.map_busy;
-        co_await ParkBriefly();
-        if (generation != task_generation_) co_return Status::OK();
+    if (Status s = co_await TryMapHalf(
+            [this](bool* busy) -> StatusOr<std::uint64_t> {
+                if (Status w = target_.WriteFreeMaps(busy); !w.ok()) return w;
+                return std::uint64_t{0};
+            },
+            nullptr, generation);
+        !s.ok()) {
+        co_return FinishTask(core_id, s);
     }
+    if (generation != task_generation_) co_return Status::OK();
     if (Status s = co_await ParkOnDataSync(); !s.ok()) co_return FinishTask(core_id, s);
     if (generation != task_generation_) co_return Status::OK();
 
@@ -838,6 +822,9 @@ sched::Coro Checkpointer::WriteOffReactor(std::span<const PageId> pages, Lsn* de
         task_report_.step_max_ns = std::max(task_report_.step_max_ns, wal_.clock().Now() - since);
     };
     {
+        // Under the run's scope, so the gate and claim timers inside the
+        // stage record into its report as a step's did (BI-S1).
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
         const sched::MonoTimeNs since = wal_.clock().Now();
         auto staged = target_.StageWrite(pages, defer);
         hold(since);
@@ -857,6 +844,7 @@ sched::Coro Checkpointer::WriteOffReactor(std::span<const PageId> pages, Lsn* de
         if (generation != task_generation_) co_return Status::OK();
         task_report_.write_park_ns += wal_.clock().Now() - parked;
     }
+    const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     const sched::MonoTimeNs since = wal_.clock().Now();
     auto finished = staged_->Finish();
     staged_.reset();
@@ -864,6 +852,27 @@ sched::Coro Checkpointer::WriteOffReactor(std::span<const PageId> pages, Lsn* de
     if (!finished.ok()) co_return finished.status();
     *wrote = finished.value();
     co_return Status::OK();
+}
+
+template <typename Write>
+sched::Coro Checkpointer::TryMapHalf(Write write, std::uint64_t* ticket, std::uint64_t generation) {
+    for (int answers = 0;; ++answers) {
+        bool busy = false;
+        StatusOr<std::uint64_t> wrote = std::uint64_t{0};
+        {
+            const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+            const PhaseTimer timed(CheckpointPhase::kPublishWriteback);
+            wrote = write(answers < kLatchTries ? &busy : nullptr);
+        }
+        if (!wrote.ok()) co_return wrote.status();
+        if (!busy) {
+            if (ticket != nullptr) *ticket = wrote.value();
+            co_return Status::OK();
+        }
+        ++task_report_.map_busy;
+        co_await ParkBriefly();
+        if (generation != task_generation_) co_return Status::OK();
+    }
 }
 
 sched::Coro Checkpointer::ParkBriefly() {
@@ -1014,7 +1023,10 @@ void Checkpointer::Abandon() noexcept {
     // A batch off the reactor is written and cleaned before anything else:
     // its claims would keep the shutdown checkpoint's writes waiting.
     if (staged_ != nullptr) {
-        staged_->Drain();
+        // On the thread acting as the core, which an unarmed store's clean
+        // needs; the write is the writer thread's and ends on its own.
+        while (!staged_->Done()) std::this_thread::sleep_for(std::chrono::microseconds(50));
+        (void)staged_->Finish();
         staged_.reset();
     }
     if (run_report_ == &task_report_) {

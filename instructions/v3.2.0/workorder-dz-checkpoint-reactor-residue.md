@@ -147,7 +147,7 @@ the item. No item is tagged `[quiet-wrong]`; DZ-R1 is, and is a rule.
 |---|---|---|
 | DZ-Q0 | (a) | §2's 1-4 |
 | DZ-Q1 | (a) | DZ-S0 gates; a piece already under DZ-R5's bar is left |
-| DZ-Q2 | (a) | the existing data-sync thread, (b) only if S0 shows syncs queueing |
+| DZ-Q2 | **(b), revised by CLA at DZ-S2 from its own (a)** | (a)'s proposal named its trigger, "(b) if S0 shows syncs queueing"; DZ-S2 met its mirror on the tree: on the one data-sync thread a step's write queued behind a whole held `fsync` (`CheckpointDataSyncTest.TheRunParksWhileItsDataSyncIsHeld`), which BI-Q13 says no step waits for. The writes get a writer thread inside `DataSyncer`, started and stopped with the sync's (DZ-R6: at startup, none after) |
 | DZ-Q3 | (a) | the yield interval derived, no key |
 | DZ-Q4 | (a) | the carve measured first, built only if it is the `fsync` |
 | DZ-Q5 | (a) | outside DZ: DV counts the page it leaks (`sys.volume_census`, landed at `8dd5ce8ea`) |
@@ -268,4 +268,58 @@ top.
   1 of 10). The review's changes ran S1's 86 cells green; the full suite
   runs again with DZ-S2.
 - Overhead not measured; measured at the milestone's close.
+
+### DZ-S2 - the writes off the reactor and the map barrier tried, done 2026-11-27
+
+On `dz-checkpoint-reactor-residue` at `78cbbf464`.
+
+- **Built**: `DevicePageStore::StageWriteBack` - `WriteBack`'s gate, claims
+  and copies on the caller (the copy under each page's latch, as writeback
+  copies), the device writes posted to `DataSyncer::Post`'s writer thread
+  (DZ-Q2 revised to (b), §4). Armed, the writer cleans under the structure
+  latch; unarmed, the store's one thread cleans - the run's finish, or a
+  `kWait` writeback that meets the claim on that thread, which cleans for the
+  parked run instead of waiting on itself. The clean is writeback's own
+  (`CleanCopiedLocked`, DZ-R2). A failed write leaves its run and every later
+  one dirty; only a failed sync is sticky (DZ-R4). The run task's every step
+  and publish batch is staged, parked on and finished (`WriteOffReactor`);
+  `Abandon` drains a batch in flight. The map halves try the barrier and park
+  1 ms on a busy answer, to 16 a half, then block (DZ-Q6 (a)).
+- **Cells** (`tests/checkpoint_offreactor_write_test.cpp`): the writer's
+  order, a sync served beside a held job, `Stop` draining; a staged write done
+  only once written, a page written after its copy left dirty; a blocking
+  flush of a staged page on the store's own thread returning (armed and not);
+  a failed staged write leaving its pages dirty for the next writeback; a run
+  parked on its held step write while the reactor runs a foreground task,
+  then publishing; the map halves parking on a held barrier.
+  `CheckpointDataSyncTest.TheRunParksWhileItsDataSyncIsHeld` turns until the
+  writer thread's writes land rather than a fixed 50 turns.
+- **Checked against the bar before the suite** (one round, `hold-s2`, the
+  census's bench forwarding the staged writes and tried maps): the longest
+  `system` poll 1.05-1.12 ms at 256 Ki and 3.81-7.59 ms at 1 Mi, no poll over
+  10 ms, against DZ-S0's 7.8-15.3 ms and 35-1,256 ms. Not the close's number.
+- **Review** (`critics-developer`), at `78cbbf464`. **Fixed by the
+  reviewer**, two defects: (B1) a staged run was written after the log
+  fail-stopped - `WriteBack` asked the gate once, at its start, and the write
+  came a whole park later - so each staged run now asks the same refusal
+  (`WriteBackRefusal`) before its write, with a cell
+  (`StagedWriteTest.ALogStoppedBetweenTheCopyAndTheWriteWritesNoLaterRun`,
+  shown to fail without the check); (B2) a thrown allocation while staging
+  could leave claims no thread gives back, so every later `kWait` writeback
+  of those pages waited for good - the run is emplaced before its claims move,
+  and a throw before the post gives every staged claim back dirty.
+  **Applied**: the stage and the finish under the run's phase scope, so the
+  gate and claim timers inside record as a step's did (P1); the store's
+  destructor stops the data-sync threads before any member a queued job
+  touches dies (P2); a refused stage gives its earlier runs back dirty
+  instead of writing them on the reactor (P3); the map halves one virtual
+  each with `busy`, null blocking, and one loop (`TryMapHalf`); `Drain` gone
+  from the seam, `Abandon` waiting and finishing itself; three stale
+  comments, and `WriteBack`'s claim comment naming the staged call's
+  exception and why no cycle follows (DZ-R3). **Rejected**: one bookkeeping
+  helper for `Step` and the task's step loop - the two differ in deferral and
+  parking, and a shared helper would carry both. **Noted, unchanged**: a
+  claimed frame answers `FreePage` with `kDeferred` for a step's park rather
+  than a write's microseconds; the pages-written tally counts pages cleaned;
+  an empty snapshot counts no step.
 

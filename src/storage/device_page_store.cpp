@@ -2014,6 +2014,26 @@ Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalD
     return Status::OK();
 }
 
+Status DevicePageStore::WriteBackRefusal(const wal::WalDurability* gate) const {
+    // **Nothing at all once the log fail-stopped** (`wal/durability.hpp`).
+    // The page_lsn gate cannot catch it: a page whose record was refused
+    // keeps its old, durable page_lsn - a split's leaf, a new page at
+    // kNoLsn, a var-heap body - and writing it would put a change on the
+    // device that no record lets recovery redo or undo.
+    if (gate != nullptr && gate->stopped()) {
+        return Status::IoError("pagestore: no page is written back after the log fail-stopped; "
+                               "restart the instance to recover");
+    }
+    // **Nor after a failed data-file sync** (BI-Q3 (a)): the device may have
+    // dropped pages this pool already calls clean, and only a restart, which
+    // replays the log over them, can stand behind what is written next.
+    if (data_sync_.failed()) {
+        return Status::IoError("pagestore: no page is written back after a failed data-file "
+                               "sync; restart the instance to recover");
+    }
+    return Status::OK();
+}
+
 void DevicePageStore::AwaitWritebackClaim(PageId page_id) {
     const PhaseTimer timed(CheckpointPhase::kClaimWait);  // BI-S1
     // A writeback's claim spans a device write and, at worst, a WAL sync -
@@ -2053,22 +2073,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // writeback** (BA-S1): the calling core's, chosen once, so the batch's
     // call and every run's below ask the same manager.
     wal::WalDurability* const gate = GateForCaller();
-    // **Nothing at all once the log fail-stopped** (`wal/durability.hpp`).
-    // The page_lsn gate cannot catch it: a page whose record was refused
-    // keeps its old, durable page_lsn - a split's leaf, a new page at
-    // kNoLsn, a var-heap body - and writing it would put a change on the
-    // device that no record lets recovery redo or undo.
-    if (gate != nullptr && gate->stopped()) {
-        return Status::IoError("pagestore: no page is written back after the log fail-stopped; "
-                               "restart the instance to recover");
-    }
-    // **Nor after a failed data-file sync** (BI-Q3 (a)): the device may have
-    // dropped pages this pool already calls clean, and only a restart, which
-    // replays the log over them, can stand behind what is written next.
-    if (data_sync_.failed()) {
-        return Status::IoError("pagestore: no page is written back after a failed data-file "
-                               "sync; restart the instance to recover");
-    }
+    if (Status s = WriteBackRefusal(gate); !s.ok()) return s;
     if (Status s = AwaitWalGate(ordered, gate, defer); !s.ok()) return s;
     if (defer != nullptr && *defer != wal::kNoLsn) return std::size_t{0};
 
@@ -2109,7 +2114,10 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // clean; `kWait` waits for that and looks again, `kSkip` leaves it. The
     // wait holds no claim of this call's own - a run is claimed, written
     // and released before the next is looked at - so two writebacks cannot
-    // wait on each other.
+    // wait on each other. **A staged call is the exception** (DZ-S2): it
+    // holds its earlier runs' claims while it waits on a later page. No
+    // cycle follows, because one checkpoint stages at a time in the
+    // instance (DZ-R3) and no other writeback waits holding a claim.
     std::size_t written = 0;
     std::vector<std::byte> scratch;
     std::vector<CopiedPage> copied;
@@ -2304,7 +2312,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         // nothing now. The scratch and the claim list are replaced, each
         // reserved again outside any hold.
         if (stage != nullptr) {
-            stage->runs_.push_back(StagedWrite::Run{ordered[i], std::move(scratch), std::move(copied)});
+            // The slot first: a throwing push then leaves the claims on
+            // `copied`, where `claims` gives them back.
+            StagedWrite::Run& staged_run = stage->runs_.emplace_back();
+            staged_run.first = ordered[i];
+            staged_run.bytes = std::move(scratch);
+            staged_run.copied = std::move(copied);
             scratch = {};
             copied = {};
             copied.reserve(kWritebackRunPages);
@@ -2381,44 +2394,55 @@ StatusOr<std::shared_ptr<DevicePageStore::StagedWrite>> DevicePageStore::StageWr
     std::span<const PageId> page_ids, wal::Lsn* defer) {
     auto staged = std::make_shared<StagedWrite>();
     staged->armed_ = structure_latch() != nullptr;
-    auto copied = WriteBack(page_ids, HeldFrames::kWait, defer, staged.get());
-    if (!copied.ok()) {
-        // Runs staged before the refusal are claimed: written and cleaned
-        // here, on this thread, as `WriteBack` would have before refusing.
-        WriteStagedRuns(*staged);
-        CleanStaged(*staged);
-        return copied.status();
-    }
-    if (staged->runs_.empty()) {
-        staged->state_.store(StagedWrite::kCleaned, std::memory_order_release);
-        return staged;
-    }
-    if (!staged->armed_) staged_unarmed_.push_back(staged);
-    // The job owns a reference, so the stage outlives whichever of it and
-    // the run's task lets go first.
-    data_sync_.Post([this, staged] {
-        WriteStagedRuns(*staged);
-        if (staged->armed_) {
+    staged->gate_ = GateForCaller();  // the one `WriteBack` asks below
+    try {
+        auto copied = WriteBack(page_ids, HeldFrames::kWait, defer, staged.get());
+        if (!copied.ok()) {
+            // Runs staged before the refusal are claimed: given back dirty,
+            // with no write on this thread; the next writeback carries them.
             CleanStaged(*staged);
-        } else {
-            staged->state_.store(StagedWrite::kWritten, std::memory_order_release);
+            return copied.status();
         }
-    });
+        if (staged->runs_.empty()) {
+            staged->state_.store(StagedWrite::kCleaned, std::memory_order_release);
+            return staged;
+        }
+        if (!staged->armed_) staged_unarmed_.push_back(staged);
+        // The job owns a reference, so the stage outlives whichever of it and
+        // the run's task lets go first.
+        data_sync_.Post([this, staged] {
+            WriteStagedRuns(*staged);
+            if (staged->armed_) {
+                CleanStaged(*staged);
+            } else {
+                staged->state_.store(StagedWrite::kWritten, std::memory_order_release);
+            }
+        });
+    } catch (...) {
+        // A thrown allocation before the job was queued - in the staging, the
+        // list push or the post: no thread will clean, so the staged claims
+        // go back here, their frames dirty, as `ClaimRelease` gives back an
+        // unstaged run's.
+        if (staged->state_.load(std::memory_order_acquire) == StagedWrite::kStaged) {
+            CleanStaged(*staged);
+        }
+        throw;
+    }
     return staged;
 }
 
 void DevicePageStore::WriteStagedRuns(StagedWrite& staged) {
     for (StagedWrite::Run& r : staged.runs_) {
         const std::size_t pages = r.copied.size();
-        // A data-file sync failed since the copy: nothing more goes out, as
-        // `WriteBack` refuses (BI-Q3 (a)).
-        Status wrote = data_sync_.failed()
-                           ? Status::IoError("pagestore: no page is written back after a failed "
-                                             "data-file sync; restart the instance to recover")
-                       : pages > 1 ? device_.WritePageRun(r.first, static_cast<std::uint32_t>(pages),
-                                                          std::span<const std::byte>(r.bytes))
-                                   : device_.WritePage(r.first, std::span<const std::byte, kPageSize>(
-                                                                    r.bytes.data(), kPageSize));
+        // The log fail-stopped or a data-file sync failed since the copy:
+        // nothing more goes out, as `WriteBack` refuses.
+        Status wrote = WriteBackRefusal(staged.gate_);
+        if (wrote.ok()) {
+            wrote = pages > 1 ? device_.WritePageRun(r.first, static_cast<std::uint32_t>(pages),
+                                                     std::span<const std::byte>(r.bytes))
+                              : device_.WritePage(r.first, std::span<const std::byte, kPageSize>(
+                                                               r.bytes.data(), kPageSize));
+        }
         if (!wrote.ok()) {
             if (log_ != nullptr && log_->enabled(LogLevel::kError)) {
                 log_->Error("pagestore", "staged write failed for page " + std::to_string(r.first) +
@@ -2472,10 +2496,6 @@ StatusOr<std::size_t> DevicePageStore::FinishStaged(StagedWrite& staged) {
     return staged.cleaned_pages_;
 }
 
-void DevicePageStore::DrainStaged(StagedWrite& staged) {
-    while (!staged.Done()) std::this_thread::sleep_for(std::chrono::microseconds(50));
-    (void)FinishStaged(staged);
-}
 
 StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {
     const std::vector<PageId> queued = TakeDirtyEvictionQueue();

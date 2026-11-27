@@ -246,10 +246,8 @@ public:
     public:
         virtual ~StagedPages() = default;
         virtual bool Done() const = 0;
+        // After `Done`, on the thread that staged it.
         virtual StatusOr<std::size_t> Finish() = 0;
-        // Waits for the write and finishes it: `Checkpointer::Abandon`'s,
-        // with the reactor that would have finished it stopped.
-        virtual void Drain() = 0;
     };
     virtual StatusOr<std::shared_ptr<StagedPages>> StageWrite(std::span<const PageId> page_ids,
                                                                Lsn* defer);
@@ -259,19 +257,17 @@ public:
     // task parks between on the ticket the first answers (`page.md`
     // section 5, the map write order). A scripted target has neither.
     virtual std::vector<PageId> DirtyPages() { return {}; }
-    virtual StatusOr<std::uint64_t> WriteHeaderlessMaps() { return std::uint64_t{0}; }
-    virtual Status WriteFreeMaps() { return Status::OK(); }
-    // **The map halves tried** (DZ-Q6 (a)): a busy map write barrier - a
+    // **Tried with `busy`** (DZ-Q6 (a)): a busy map write barrier - a
     // blocking flush holding it across a data-file `fsync` - sets `*busy`
-    // and writes nothing, and the task parks and tries again. The default
-    // never answers busy.
-    virtual StatusOr<std::uint64_t> TryWriteHeaderlessMaps(bool* busy) {
-        *busy = false;
-        return WriteHeaderlessMaps();
+    // and writes nothing, and the task parks and tries again; null blocks.
+    // The defaults write nothing and are never busy.
+    virtual StatusOr<std::uint64_t> WriteHeaderlessMaps(bool* busy) {
+        if (busy != nullptr) *busy = false;
+        return std::uint64_t{0};
     }
-    virtual Status TryWriteFreeMaps(bool* busy) {
-        *busy = false;
-        return WriteFreeMaps();
+    virtual Status WriteFreeMaps(bool* busy) {
+        if (busy != nullptr) *busy = false;
+        return Status::OK();
     }
 
     // Either table in slices (DZ-S1). The default is one slice: `DirtyTable`
@@ -712,6 +708,10 @@ private:
                                 std::uint64_t generation);
     // One park of `kBusyParkNs` on the clock, no kick: the map barrier's.
     sched::Coro ParkBriefly();
+    // A map half tried (DZ-Q6 (a)): `write(busy)` to `kLatchTries` busy
+    // answers, a park between, then `write(nullptr)`, which blocks.
+    template <typename Write>
+    sched::Coro TryMapHalf(Write write, std::uint64_t* ticket, std::uint64_t generation);
     // A failed step's log line, `Step`'s and the task's.
     void LogStepFailure(std::size_t batch, const Status& s) const;
     void LogSkip(std::uint32_t core_id) const;

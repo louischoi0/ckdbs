@@ -70,12 +70,10 @@ public:
     // A cell's: the walk's slice in chunks, so a store of a few chunks takes
     // several slices.
     void SetChunksPerSliceForTest(std::size_t chunks) noexcept { chunks_per_slice_ = chunks; }
-    StatusOr<std::uint64_t> WriteHeaderlessMaps() override { return store_.WriteHeaderlessMaps(); }
-    Status WriteFreeMaps() override { return store_.WriteFreeMaps().status(); }
-    StatusOr<std::uint64_t> TryWriteHeaderlessMaps(bool* busy) override {
+    StatusOr<std::uint64_t> WriteHeaderlessMaps(bool* busy) override {
         return store_.WriteHeaderlessMaps(busy);
     }
-    Status TryWriteFreeMaps(bool* busy) override { return store_.WriteFreeMaps(busy).status(); }
+    Status WriteFreeMaps(bool* busy) override { return store_.WriteFreeMaps(busy).status(); }
 
 private:
     class Staged final : public StagedPages {
@@ -84,7 +82,6 @@ private:
             : store_(store), staged_(std::move(staged)) {}
         bool Done() const override { return staged_->Done(); }
         StatusOr<std::size_t> Finish() override { return store_.FinishStaged(*staged_); }
-        void Drain() override { store_.DrainStaged(*staged_); }
 
     private:
         DevicePageStore& store_;
