@@ -25,6 +25,8 @@
 //   relations  each live relation's anchor and var-heap root, and each
 //              tombstone's pending roots, through `PageReclaimer::ReachFrom`
 //              (its trees, its indexes' trees, its heap pages, its chain);
+//   creates    each create that did not stand and is still owed by the
+//              reclaim (`PageReclaimer::UndoneCreates`), the same way;
 //   assertions each `AssertionDef::cabin_root` chain (`kCabinBound`);
 //   waystone   each opted row's directory: `dir_depth` interior levels, then
 //              its trail pages.

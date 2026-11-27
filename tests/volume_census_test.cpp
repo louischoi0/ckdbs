@@ -56,6 +56,14 @@ protected:
         return census.value();
     }
 
+    static std::uint64_t Unmarked(const VolumeCensus& c, const std::string& page_class) {
+        std::uint64_t n = 0;
+        for (const auto& [key, count] : c.unmarked_by_class) {
+            if (key.page_class == page_class) n += count;
+        }
+        return n;
+    }
+
     static void Print(const char* cell, const VolumeCensus& c) {
         std::string classes;
         for (const auto& [key, count] : c.unmarked_by_class) {
@@ -239,6 +247,10 @@ TEST_F(VolumeCensusTest, WaystoneOffStrandsItsDirectory) {
     }
     const VolumeCensus c = Census();
     Print("waystone on/off x10", c);
+    // One directory an `OFF`, and its trails: what the documents cite.
+    EXPECT_EQ(Unmarked(c, "waystone_dir"), 10u);
+    EXPECT_EQ(Unmarked(c, "waystone"), 72u);
+    EXPECT_EQ(c.unmarked, 82u);
 }
 
 // Left with `OFF`'s (DV-Q4'): a committed `DROP TABLE` ends the opt-ins
@@ -260,13 +272,10 @@ TEST_F(VolumeCensusTest, ADropTablesEndOfAnOptInStrandsItsDirectory) {
     if (HasFatalFailure()) return;
     const VolumeCensus c = Census();
     Print("drop table ending an opt-in", c);
-    std::uint64_t waystone = 0;
-    for (const auto& [key, n] : c.unmarked_by_class) {
-        EXPECT_TRUE(key.page_class == "waystone" || key.page_class == "waystone_dir")
-            << key.page_class;
-        waystone += n;
-    }
-    EXPECT_GT(waystone, 0u) << "the premise moved: a drop's end of an opt-in strands nothing";
+    // Its root and one trail per instance recorded: what the documents cite.
+    EXPECT_EQ(Unmarked(c, "waystone_dir"), 1u);
+    EXPECT_EQ(Unmarked(c, "waystone"), 8u);
+    EXPECT_EQ(c.unmarked, 9u) << "the premise moved: a drop's end of an opt-in strands this";
 }
 
 // §1: a rolled-back `CREATE TABLE`'s pages.
@@ -284,7 +293,12 @@ TEST_F(VolumeCensusTest, RolledBackCreateTable) {
     // (`InRunReclaimTest.ARolledBackCreateIsFreedInTheRun`); here the pages
     // stand until a mount, and a clean mount owes nothing for a decided
     // transaction.
-    Print("rolled-back create table x10", Census());
+    const VolumeCensus c = Census();
+    Print("rolled-back create table x10", c);
+    EXPECT_EQ(Unmarked(c, "anchor"), 10u);
+    EXPECT_EQ(Unmarked(c, "btree_leaf"), 10u);
+    EXPECT_EQ(Unmarked(c, "varheap"), 10u);
+    EXPECT_EQ(c.unmarked, 30u);
 }
 
 // DV-S2's mount half: a crash loser's `CREATE TABLE`, its `sys.tables` row
@@ -309,6 +323,14 @@ TEST_F(VolumeCensusTest, ACrashLosersCreateIsFreedAtTheMount) {
     Status s = db_->Reboot();
     ASSERT_TRUE(s.ok()) << s.message();
     EXPECT_EQ(db_->recovery().undone_creates.size(), 4u);
+    {
+        // Before the reclaim runs a step, as a mount's census finds them:
+        // owed, so reached through their jobs, not counted as leaked.
+        const VolumeCensus owed = Census();
+        EXPECT_EQ(owed.unmarked, 0u);
+        ASSERT_TRUE(owed.roots_walked.contains("undone_create"));
+        EXPECT_EQ(owed.roots_walked.at("undone_create"), 4u);
+    }
     ASSERT_TRUE(db_->SettleReclaim().ok());
     EXPECT_EQ(db_->reclaim_counters().refused.load(), 0u);
     const VolumeCensus c = Census();

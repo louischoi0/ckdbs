@@ -28,9 +28,10 @@ Status PageReclaimer::CollectAtMount(wal::Lsn gate_lsn,
     for (const catalog::Catalog::PendingReclaim& owed : pending.value()) {
         jobs_.push_back(MakeJob(owed.oid, /*index_oid=*/0, owed.roots, gate_lsn, /*word=*/0));
     }
-    // DV-S2: a crash loser's create, which this mount's undo retired. No
-    // statement of this run can name it - its rows are gone and its oid is
-    // never issued again.
+    // DV-S2: a crash loser's create, which this mount's undo retired. Its
+    // rows are gone, so no statement of this run can reach its pages; its
+    // oid can be issued again (`page_reclaim.hpp`), which is why the walk
+    // is by links from these roots.
     for (const catalog::Catalog::PendingReclaim& create : undone) {
         Job job = MakeJob(create.oid, /*index_oid=*/0, create.roots,
                           std::max(gate_lsn, undone_gate), /*word=*/0);
@@ -472,6 +473,14 @@ bool PageReclaimer::FreeSome(Job& job, std::size_t& budget) {
         ++job.next;
     }
     return true;
+}
+
+std::vector<catalog::Catalog::PendingReclaim> PageReclaimer::UndoneCreates() const {
+    std::vector<catalog::Catalog::PendingReclaim> out;
+    for (const Job& job : jobs_) {
+        if (job.undone_create) out.push_back({job.oid, job.roots});
+    }
+    return out;
 }
 
 StatusOr<PageReclaimer::Reach> PageReclaimer::ReachFrom(catalog::Oid oid,

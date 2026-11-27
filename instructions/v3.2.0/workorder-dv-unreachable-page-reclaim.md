@@ -1,11 +1,17 @@
 # Work order DV - pages no root reaches: counted, then reclaimed
 
-Status: **OPENED 2026-11-27** on worktree `dv-unreachable-page-reclaim`
-(branch `worktree-dv-unreachable-page-reclaim`) from `630ecc359`
+Status: **CLOSED NARROW 2026-11-27 on the work branch**, on CLA's reading
+of DV-S0 adopted on the go-ahead (DV-Q7 (a)): the census (S0, S1) and the
+two source fixes S0 ranked over DV-Q1's bar (S2) are built; **the sweep
+(S3) is not**, and the online build's root between H2 and H3 is not closed.
+Not on `main`: the landing waits for the operator's word. Opened
+2026-11-27 on worktree `dv-unreachable-page-reclaim` (branch
+`worktree-dv-unreachable-page-reclaim`) from `630ecc359`
 (`v3.4.17-178-g630ecc359`), on the operator's standing go-ahead
 (go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §1), **DV-Q0..Q6
 adopted as CLA proposed, (a) in each, by that word and not as per-item
-marks**. Written 2026-11-26 on worktree `known-gaps-milestone-orders` from
+marks**; DV-Q4', DV-Q7..Q10 added by CLA and adopted the same way (§2, §3).
+Written 2026-11-26 on worktree `known-gaps-milestone-orders` from
 `8274c951` (`raft-marks-2026-11-26.md` §3). A `[source-read]` claim
 with a `path:line` was read at `8274c951`; a claim taken from
 `known-gaps.md` carries that entry's own verification commit and is not
@@ -119,8 +125,9 @@ further.
 | DV-Q4' | DV-Q4 (a) revised against the tree at DV-S2 | (a) at the mount's renewal only: a stale directory's trail pages freed where each still reads `kWaystone`, its interior pages - allocated and headerless - reused as the renewal's fresh roots, the rest counted and left; `OFF` left; (b) DV-Q4 (a) as written, `OFF` included, interior pages freed | (a): `FreePage` refuses a headerless id (`device_page_store.cpp:1785`) because a reused one would read its dead image after a crash, so freeing one needs a durable zero first - a new primitive - while reuse needs none; and an `OFF` runs while another core's recorder may hold the old root in its memo, so freeing there needs a statement-epoch fence against a trail write into a reused logged page (`[quiet-wrong]`), for an operator act whose rate is far under DV-Q1's bar | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q7 | Is the sweep (DV-S3) reached? DV-Q0 (a) left it to S0's numbers | (a) no: S0 measured no class without a source over DV-Q1's bar, so S3 is not built and DV closes narrow; (b) build S3 regardless | (a): every class over the bar has a source fix (DV-S2); a failed growth or split leaked 0 pages over 50,102 `grow`-fault ops; a sweep is the one stage that can free a reachable page (DV-R1, `[quiet-wrong]`) and has nothing measured to free | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q8 | A create rolled back in the run whose queued job a crash loses | (a) a stated known gap: the transaction is decided, so the next mount's undo does not see it, and its pages stay leaked; (b) a durable owed record written at the rollback | (a): the window is a crash between a rollback and its job's gate; a durable record is a new record kind or catalog row, which DV-R4's spirit (no logged free state) argues against | (a), adopted on the standing go-ahead of 2026-11-27 |
-| DV-Q10 | DV-R6 as built | (a) the simulator fails a seed whose census mark is not whole, and reports the unreached count; the zero per closed source is each source's cell (`VolumeCensusTest.WaystoneMountsStrandNothing`, `ACrashLosersCreateIsFreedAtTheMount`, `InRunReclaimTest.ARolledBackCreateIsFreedInTheRun`); (b) DV-R6 as written - the simulator fails a seed that ends with an unreachable page of a closed class | (a): a page's class does not name its source - a directory an `OFF` or a drop's end of an opt-in strands is `waystone` as a mount's was, and a rolled-back create's page whose queued job the seed's crash lost is `anchor` as any other - so (b) would fail seeds on the leaks DV-Q4' and DV-Q8 leave | (a), adopted on the standing go-ahead of 2026-11-27 |
 | DV-Q9 | What `sys.volume_census` reads | (a) the census the mount took, memory only, empty where `volume_census_at_mount` is off; (b) a census taken at every read | (a): DV-R2 - a mark is only whole with no writer, and a read runs beside writers | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q10 | DV-R6 as built | (a) the simulator fails a seed whose census mark is not whole, and reports the unreached count; the zero per closed source is each source's cell (`VolumeCensusTest.WaystoneMountsStrandNothing`, `ACrashLosersCreateIsFreedAtTheMount`, `InRunReclaimTest.ARolledBackCreateIsFreedInTheRun`); (b) DV-R6 as written - the simulator fails a seed that ends with an unreachable page of a closed class | (a): a page's class does not name its source - a directory an `OFF` or a drop's end of an opt-in strands is `waystone` as a mount's was, and a rolled-back create's page whose queued job the seed's crash lost is `anchor` as any other - so (b) would fail seeds on the leaks DV-Q4' and DV-Q8 leave | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q11 | How DV-Q1's bar is read for a class that leaks only in the `io` fault cells (the close's review: the create's pages and the residual index root both read 2.57 pages a 1,000 ops there and 0.05 over the matrix) | (a) by what an operation leaks with no fault: an uncommitted `CREATE TABLE` leaks 3 pages at every rollback (`VolumeCensusTest.RolledBackCreateTable`, no fault armed) and is closed; a crash loser's own index root needs a log cut between two adjacent records of an uncommitted create, at most one page a crash, and is recorded and left; (b) by the `io` cells' rate for both: both closed; (c) by the matrix's rate for both: neither closed | (a): the `io` cells' denominator is runs that fail-stop within about 100 ops, so their rate prices a fault schedule and not a workload; and seeding the anchor slot before the root's image would move the index root's window rather than close it - a cut after the slot's record leaves a slot naming a page with no image, which the reclaim's walk passes by (`page_reclaim.cpp`, `NotFound`) - a reading no cell checks | (a), adopted on the standing go-ahead of 2026-11-27 |
 
 ## 5. Stages
 
@@ -141,6 +148,69 @@ further.
 - No reclaim of a retired slot's space inside a live leaf.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### DV-S4 - the close (2026-11-27)
+
+**Closed narrow.** Built: the volume census as a tool, a mount's report
+and `sys.volume_census` (S0, S1); an uncommitted `CREATE TABLE`'s pages
+reclaimed in the run and at the mount; a mount's stale Waystone
+directories taken back (S2). Not built: **DV-S3, the sweep** (DV-Q7 (a) -
+S0 measured no class without a source over DV-Q1's bar), so DV-R1's
+refusal cells, the crash mid-sweep and DV-Q2's statement do not exist, and
+DV-Q6's restore sweep with them; **the online build's root between H2 and
+H3** (produced by no S0 run). DV-R5 is answered for the census, the one
+thing that reads the volume. Rules as built: DV-R1 holds for the census's
+`complete` and for S2's two frees, each by its own check (a link walk from
+the create's anchor; a class check per stale page); DV-R2 by where each
+runs (before the listener, or past BF-R9's epoch gate); DV-R3 has no sweep
+to bind; DV-R4 holds - no record kind was added; DV-R6 as DV-Q10 (a).
+
+**The measurement**
+(`bench/v3.5.0/results-dv-close-v3.4.17-182-g82235ad2c.md`; Release,
+`630ecc359` against `82235ad2c`, interleaved, 11 rounds, server pinned to
+CPUs 0-7, host load 3 to 5 from other sessions' servers):
+
+| shape | `630ecc359` | `82235ad2c` | delta |
+|---|---|---|---|
+| keyed `INSERT`, server CPU | 6.38 us | 6.32 us | -0.9 % |
+| point `SELECT`, server CPU | 6.59 us | 6.46 us | -2.0 % |
+| point `UPDATE`, server CPU | 7.51 us | 7.26 us | -3.3 % |
+| `CREATE TABLE` + `DROP TABLE` | 562.6 us | 555.3 us | -1.3 % |
+| `BEGIN; CREATE TABLE; ROLLBACK` | 265.1 us | 257.7 us | -2.8 % |
+| mount to listening, 1 GiB, 16 opted shapes (mean of 12) | 79.2 ms | 81.3 ms | +2.1 ms |
+
+Every delta is inside the run's noise floor (about 4 %; the mount's ranges
+67.7-95.2 ms and 75.4-92.4 ms): **no cost DV adds is read, and none of the
+negative deltas is a gain.** `volume_census_at_mount = on` adds 179 ms at
+0.25 GiB of allocated pages, 660 ms at 1 GiB and 1,878 ms at 4 GiB (about
+0.5 to 0.7 s a GiB, warm cache) over a mount of 64 ms to 123 ms without
+it (medians 75.4 ms to 117.7 ms). Its
+census of the measurement's own volumes read 640 and 1,280 Waystone pages
+reached by no root at 1 GiB and 4 GiB and none at 0.25 GiB: the three
+volumes are snapshots of one file after its first, second and third mount
+under `630ecc359` (the archived `vol.py`), so 0, 640 and 1,280 pages is 640
+a mount of that build stranded and none added by the measured mount -
+**and a leak made before DV stays, since no sweep is built.** Cut, and stated in the
+file: a row-count sweep, a cold-cache mount, the PostgreSQL floor; the
+drivers are scratch drivers modelled on `tools/du_close.py`, archived
+beside the results, since no `tools/` driver covers these shapes. The run
+also read a `CREATE TABLE` + `DROP TABLE` pair growing from about 92 us to
+about 1,037 us over 3,300 pairs in both arms alike - not DV's, and not
+traced.
+
+**The suite** at the closing commit: SUITE_PLACEHOLDER
+
+**The sync**: SYNC_PLACEHOLDER
+
+**The owning documents**: `page.md` §5 (counted, not swept; `FreePage`'s
+callers) and §2a (a burned oid and the undone create); `drop-table.md`
+(what stays leaked, the undone create's job, its gate and its walk);
+`waystone-concpets.md` §4c (the stale directories taken back) and its
+status line; `sys-views.md` §6.4a (`sys.volume_census`);
+`known-gaps.md`, "Page reclamation" and the restore's leak;
+`manual/server/server.md` (the key, the mount's line) and
+`manual/sql/sql.md` (the view); `CLAUDE.md`'s rows for the free map,
+`DROP TABLE` and Waystone.
 
 ### DV-S1 and DV-S2 - the report, and the two sources closed (2026-11-27)
 
@@ -194,7 +264,10 @@ opt-in strands as an `OFF` does: 9 pages in
 seed's 23 are all a drop's is CLA's reading, not traced) and 18
 `kIndexLeaf` pages, each a crash loser's own index root
 whose image reached the log and whose anchor slot did not (0.05 a 1,000
-ops, under the bar; `known-gaps.md`). **DV-R6 is built as DV-Q10 (a)**: the
+ops over the matrix, read as under the bar; but all 18 are in the `io`
+cells, 2.57 a 1,000 of their 7,002 ops, the per-cell rate S0 read the
+create's pages over the bar at; DV-Q11 (a) is how the bar is read for
+both - `known-gaps.md`). **DV-R6 is built as DV-Q10 (a)**: the
 sim fails a seed whose mark is not whole.
 
 Review (`critics-developer`): no defect in the change; the harvest's

@@ -1425,9 +1425,10 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     }
     // **The volume census, where a boot key asks** (DV-S1, DV-Q3 (a)): here
     // the volume is quiescent - recovered, renewed, no peer and no listener
-    // (DV-R2) - and the reclaim's jobs still hold their roots, so a page they
-    // owe is marked through them. Its report is the mount log line and
-    // `sys.volume_census`; it frees nothing.
+    // (DV-R2) - and no reclaim job has run a step, so a page one owes is
+    // marked through its root: a tombstone's from the catalog, a create
+    // that did not stand from the reclaim's own queue. Its report is the
+    // mount log line and `sys.volume_census`; it frees nothing.
     if (expeditor->config_.volume_census_at_mount) {
         std::vector<PageId> undo;
         expeditor->undo_log_->AppendOwnedPages(undo);

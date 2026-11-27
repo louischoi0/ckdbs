@@ -28,3 +28,21 @@ The operator's words of 2026-11-27, recorded in English.
 | **Mark** | **DV-Q10 (a)**, CLA's proposal written into the order's §4 at the review of DV-S2 and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: DV-R6 is built narrower than written - the simulator fails a seed whose census mark is not whole and reports the unreached count, and the zero per closed source is each source's cell - because a page's class does not name the source that leaked it. Not `[quiet-wrong]`. |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 |
+
+## 4. DV closed narrow on the work branch
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §1 - no new word from the operator |
+| **Mark** | **DV is closed narrow on `worktree-dv-unreachable-page-reclaim`**, on CLA's reading of DV-S0 and of the close measurement, adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone) and not the operator's own word: the census and two source fixes built, the sweep not (DV-Q7 (a)). The order's §7 carries the close. |
+| **Does not settle** | **the landing**: no merge to `main`, no push, no tag and no version - each waits for the operator's word |
+| **Recorded at** | this file; the order's header and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 5. DV-Q11 added and adopted on the same go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §1 - no new word from the operator |
+| **Mark** | **DV-Q11 (a)**, CLA's proposal written into the order's §4 at the review of the close and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: DV-Q1's bar is read by what an operation leaks with no fault armed, so an uncommitted `CREATE TABLE` (3 pages a rollback) is closed and a crash loser's own index root (at most one page a crash landing between two adjacent records) is recorded and left, though both read 2.57 pages a 1,000 ops in the `io` fault cells and 0.05 over the matrix. Not `[quiet-wrong]`. **The review named this the operator's to rule on**; it is listed in the close's report for that reason. |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` §4 |

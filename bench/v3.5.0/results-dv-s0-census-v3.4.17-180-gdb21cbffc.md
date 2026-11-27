@@ -65,8 +65,9 @@ By configuration (ops are each cell's own):
 The `io` cells' four-page set is one heap relation's anchor, data head,
 Keystone index leaf and var-heap root: a `CREATE TABLE ... HEAP` that an
 injected error failed after its pages were made and whose transaction was
-rolled back. `io` runs fail-stop early (2,334 ops over 72 runs), so its
-rate is per few ops.
+rolled back. `io` runs fail-stop early (2,334 ops over each toggle's 24
+runs, 7,002 over the 72; every toggle leaks the same 24 pages), so its rate
+is per few ops.
 
 ## Run 2 - the cells (`tests/volume_census_test.cpp`)
 

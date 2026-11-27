@@ -176,6 +176,12 @@ public:
     // Jobs this run still holds, refused ones included.
     std::size_t jobs() const noexcept { return jobs_.size(); }
 
+    // The creates that did not stand whose jobs this run still holds, for
+    // the volume census: no catalog row names their roots, so the queue is
+    // the one place they are named. Core 0's, as `Step` is; the inbox's are
+    // not listed until a step drains them.
+    std::vector<catalog::Catalog::PendingReclaim> UndoneCreates() const;
+
     // **The walk alone, freeing nothing** (BF-R12): every page `roots`
     // reach for relation `oid`, by the same descent, links and checks a
     // reclaim makes, with the count of pages the check refused - a link to a

@@ -1129,11 +1129,14 @@ pages and the cases it does not reach.
     Keystone index or a primary key's, made by `exec::CreateEmptyIndex`,
     which logs the root's image before `Catalog::CreateIndex` seeds the
     slot, so a log cut between the two leaves one `kIndexLeaf` page the
-    anchor does not name (18 pages over 357,716 simulated ops, every one
-    under `io` faults, 0.05 a 1,000 ops: under DV-Q1's bar, recorded and
-    left); a crash during a mount after its undo retired the `sys.tables`
-    row and before its reclaim ran, since the next mount reads the row as
-    already undone; and a create whose anchor the walk refuses;
+    anchor does not name (18 pages in DV-S2's sim matrix: 0.05 a 1,000
+    ops over its 357,716, which CLA read as under DV-Q1's bar and left;
+    every one under `io` faults, where it is 2.57 a 1,000 of those cells'
+    7,002 ops - the per-cell rate at which DV-S0 read the create's pages
+    over the bar); a crash during a mount after its undo retired the
+    `sys.tables` row and before its reclaim ran, since the next mount reads
+    the row as already undone; and a create whose anchor the walk refuses.
+    Read on `dv-unreachable-page-reclaim` at `8204fbec2`;
   - a refused catalog report's page (WAL, above);
   - a previous run's undo pages (UP4, `txn.md` §4.1);
   - a dropped assertion's Bound Cabin chain;
@@ -1166,8 +1169,8 @@ pages and the cases it does not reach.
   (a concurrent `ON` rooted the row first, the row was found opted with a
   root, or the write failed) is logged `leaked by WAYSTONE ON`, and a page
   the renewal's second pass did not use `leaked by the mount's renewal`;
-  neither is freed. Verified on `dv-unreachable-page-reclaim` at the commit
-  that lands DV-S2.
+  neither is freed. Verified on `dv-unreachable-page-reclaim` at
+  `82235ad2c`, the commit that lands DV-S2.
 - **At `cores > 1`, a reclaim waits for every core's first checkpoint.**
   The durable redo start does not move until every core has published, so
   with `checkpoint_interval_ms = 0` nothing a mount found is freed until a

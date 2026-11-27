@@ -246,6 +246,14 @@ StatusOr<VolumeCensus> RunVolumeCensus(storage::DevicePageStore& store, catalog:
                      "tombstone oid=" + std::to_string(owed.oid));
     }
 
+    // A create that did not stand, still owed by the reclaim: its pages are
+    // reached through the job that will free them, as a tombstone's are.
+    for (const catalog::Catalog::PendingReclaim& owed : reclaimer.UndoneCreates()) {
+        marker.Root("undone_create");
+        WalkRelation(marker, reclaimer, owed.oid, owed.roots,
+                     "uncommitted create oid=" + std::to_string(owed.oid));
+    }
+
     auto assertions = exec::ListAssertionTargets(catalog, store);
     if (!assertions.ok()) return assertions.status();
     for (const exec::AssertionDef& def : assertions.value()) {

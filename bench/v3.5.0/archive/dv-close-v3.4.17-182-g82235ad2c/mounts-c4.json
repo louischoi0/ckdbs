@@ -1,0 +1,128 @@
+{
+ "cell3": {
+  "A": [],
+  "B": []
+ },
+ "cell4": {
+  "0.25": {
+   "off": [
+    [
+     75.4,
+     []
+    ],
+    [
+     113.6,
+     []
+    ],
+    [
+     63.9,
+     []
+    ]
+   ],
+   "on": [
+    [
+     254.6,
+     [
+      "1795758962 INFO [census] 32079 page(s) allocated, 32072 reached, 0 reached by no root, 7 previous-run undo page(s); the mark is whole"
+     ]
+    ],
+    [
+     240.0,
+     [
+      "1795758963 INFO [census] 32079 page(s) allocated, 32072 reached, 0 reached by no root, 7 previous-run undo page(s); the mark is whole"
+     ]
+    ],
+    [
+     264.3,
+     [
+      "1795758963 INFO [census] 32079 page(s) allocated, 32072 reached, 0 reached by no root, 7 previous-run undo page(s); the mark is whole"
+     ]
+    ]
+   ],
+   "host": {
+    "loadavg": "4.38 3.73 2.83 1/1417 698761",
+    "busy": []
+   }
+  },
+  "1.0": {
+   "off": [
+    [
+     74.9,
+     []
+    ],
+    [
+     75.8,
+     []
+    ],
+    [
+     79.8,
+     []
+    ]
+   ],
+   "on": [
+    [
+     742.1,
+     [
+      "1795758964 INFO [census] 130300 page(s) allocated, 129646 reached, 640 reached by no root (waystone owner 0: 624, waystone_dir owner 0: 16), 14 previous-run undo page(s); the mark is whole"
+     ]
+    ],
+    [
+     735.9,
+     [
+      "1795758965 INFO [census] 130300 page(s) allocated, 129646 reached, 640 reached by no root (waystone owner 0: 624, waystone_dir owner 0: 16), 14 previous-run undo page(s); the mark is whole"
+     ]
+    ],
+    [
+     732.9,
+     [
+      "1795758966 INFO [census] 130300 page(s) allocated, 129646 reached, 640 reached by no root (waystone owner 0: 624, waystone_dir owner 0: 16), 14 previous-run undo page(s); the mark is whole"
+     ]
+    ]
+   ],
+   "host": {
+    "loadavg": "4.19 3.70 2.83 1/1418 698885",
+    "busy": []
+   }
+  },
+  "4.0": {
+   "off": [
+    [
+     72.7,
+     []
+    ],
+    [
+     117.7,
+     []
+    ],
+    [
+     123.0,
+     []
+    ]
+   ],
+   "on": [
+    [
+     2066.3,
+     [
+      "1795758968 INFO [census] 523533 page(s) allocated, 522232 reached, 1280 reached by no root (waystone owner 0: 1248, waystone_dir owner 0: 32), 21 previous-run undo page(s); the mark is whole"
+     ]
+    ],
+    [
+     1995.8,
+     [
+      "1795758970 INFO [census] 523533 page(s) allocated, 522232 reached, 1280 reached by no root (waystone owner 0: 1248, waystone_dir owner 0: 32), 21 previous-run undo page(s); the mark is whole"
+     ]
+    ],
+    [
+     1976.4,
+     [
+      "1795758972 INFO [census] 523533 page(s) allocated, 522232 reached, 1280 reached by no root (waystone owner 0: 1248, waystone_dir owner 0: 32), 21 previous-run undo page(s); the mark is whole"
+     ]
+    ]
+   ],
+   "host": {
+    "loadavg": "4.19 3.70 2.83 1/1420 698938",
+    "busy": []
+   }
+  }
+ }
+}
