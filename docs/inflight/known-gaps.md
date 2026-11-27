@@ -3007,7 +3007,9 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 - **A multi-variant plan lexes the statement a second time at every
   compile**, to read its arguments (`parser::ArgumentsOf`); a one-variant
-  plan does not. And while any plan is enabled, every top-level join
+  plan does not, and neither does a statement run from a kept parse, whose
+  bound arguments the rule reads (EA-S2, verified on
+  `ea-prepared-statement-reuse`). And while any plan is enabled, every top-level join
   block's compile on every core probes the administrator's table - one
   partition latch - a tuple key chain's included, which the captured table
   is never asked of (CX-R6 as amended in the stage log). Neither is

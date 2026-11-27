@@ -990,6 +990,98 @@ TEST_F(KwpSessionTest, AKeptParseAnswersAsItsTextOverAShapeSet) {
     EXPECT_EQ(Run("SELECT * FROM u2"), Run("SELECT * FROM u")) << "every write alike";
 }
 
+TEST_F(KwpSessionTest, AMultiVariantPlanChoosesByTheBoundValuesAsByTheText) {
+    // EA-S2: an administrator's plan's rule reads the statement's arguments.
+    // A kept parse hands it its bound values - the statement is not lexed for
+    // them - and the variant chosen is the one its text chooses.
+    Run("CREATE TABLE models (id int64, name int64) BTREE");
+    Run("CREATE TABLE results (id int64, model_id int64, pnl int64) BTREE");
+    for (int m = 1; m <= 4; ++m) Run("INSERT INTO models VALUES (" + std::to_string(m) + ", 0)");
+    for (int r = 1; r <= 16; ++r) {
+        Run("INSERT INTO results VALUES (" + std::to_string(r) + ", " +
+            std::to_string(1 + r % 4) + ", " + std::to_string(r) + ")");
+    }
+    const std::string head =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE results.pnl > ";
+    const std::string created =
+        Run("CREATE PLAN ea_plan FOR " + head +
+            "5 VARIANT low WHEN ARG(1) < 10 ORDER (models, results)"
+            " VARIANT high ELSE ORDER (results, models)");
+    ASSERT_EQ(created.rfind("ERR", 0), std::string::npos) << created;
+    Handshake();
+    auto variant_of = [&](std::int64_t pnl, bool kept) {
+        std::vector<std::byte> bytes;
+        if (kept) {
+            Feed(ClientFrameType::kParse, Parse("k", head + "?"));
+            Feed(ClientFrameType::kBind,
+                 Bind("kp", "k",
+                      {ea::Fixed(catalog::kTypeValInt64, bytes, static_cast<std::uint64_t>(pnl),
+                                 8)}));
+            Feed(ClientFrameType::kExecute, Execute("kp", 0));
+        } else {
+            Feed(ClientFrameType::kParse, Parse("", head + std::to_string(pnl)));
+            Feed(ClientFrameType::kBind, Bind("t", ""));
+            Feed(ClientFrameType::kExecute, Execute("t", 0));
+        }
+        // One row for the shape, both paths' (EA-R2), naming its last run's
+        // variant.
+        return Run("SELECT variant FROM sys.statement_stats WHERE plan_name = 'ea_plan'");
+    };
+    EXPECT_TRUE(parser::KeptParse::Of(head + "?").has_value());
+    for (const std::int64_t pnl : {3, 30, 7, 12}) {
+        const std::string text = variant_of(pnl, /*kept=*/false);
+        const std::string kept = variant_of(pnl, /*kept=*/true);
+        EXPECT_EQ(kept, text) << pnl;
+        EXPECT_NE(text.find(pnl < 10 ? "low" : "high"), std::string::npos) << text;
+    }
+
+    // A value the dispatched text cannot carry - its `?` stays - is read
+    // from the kept parse: lexed from the text it would be unbound, and the
+    // rule false.
+    Run("CREATE TABLE tags (id int64, tag varchar) BTREE");
+    Run("INSERT INTO tags VALUES (1, 'b')");
+    const std::string tagged =
+        "SELECT results.pnl, tags.tag FROM results JOIN tags ON results.model_id = tags.id "
+        "WHERE tags.tag = ";
+    const std::string made = Run("CREATE PLAN ea_tag FOR " + tagged +
+                                 "'a' VARIANT named WHEN ARG(1) != 'zz' ORDER (tags, results)"
+                                 " VARIANT other ELSE ORDER (results, tags)");
+    ASSERT_EQ(made.rfind("ERR", 0), std::string::npos) << made;
+    Feed(ClientFrameType::kParse, Parse("q", tagged + "?"));
+    Feed(ClientFrameType::kBind, Bind("qp", "q", {ea::Text(catalog::kTypeValVarchar, "it's")}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("qp", 0));
+    ASSERT_FALSE(frames.empty());
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << ea::Answer(frames);
+    EXPECT_NE(Run("SELECT variant FROM sys.statement_stats WHERE plan_name = 'ea_tag'")
+                  .find("named"),
+              std::string::npos);
+}
+
+TEST_F(KwpSessionTest, AKeyedWritesPlanChoosesByTheBoundValues) {
+    // EA-S2 on the write arm (`WritePlanFor`): a keyed UPDATE's plan rule
+    // reads the kept parse's arguments, a quote-bearing value among them,
+    // which the dispatched text leaves a `?`.
+    Run("CREATE TABLE w (id int64, tag varchar, v int64) BTREE");
+    Run("INSERT INTO w VALUES (1, 'a', 0), (2, 'b', 0)");
+    Run("CREATE INDEX w_tag ON w (tag)");
+    const std::string made = Run(
+        "CREATE PLAN ea_w FOR UPDATE w SET v = v + 1 WHERE tag = 'a' "
+        "VARIANT named WHEN ARG(2) != 'zz' ORDER (w) ACCESS w SCAN VARIANT other ELSE ORDER (w)");
+    ASSERT_EQ(made.rfind("ERR", 0), std::string::npos) << made;
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("u", "UPDATE w SET v = v + 1 WHERE tag = ?"));
+    Feed(ClientFrameType::kBind, Bind("up", "u", {ea::Text(catalog::kTypeValVarchar, "it's")}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("up", 0));
+    ASSERT_FALSE(frames.empty());
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << ea::Answer(frames);
+    EXPECT_NE(Run("SELECT variant FROM sys.statement_stats WHERE plan_name = 'ea_w'")
+                  .find("named"),
+              std::string::npos);
+}
+
 TEST_F(KwpSessionTest, AKeptParsesRefusalNamesTheMarkersByte) {
     // EA-R3: the compile refuses a string against an integer column at the
     // value's byte - on the kept path the `?` the client wrote.

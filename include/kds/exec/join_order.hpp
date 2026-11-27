@@ -30,6 +30,10 @@
 //
 // The unit is one row visited by a walk.
 
+namespace kds::parser {
+struct StatementArgument;  // `parser/lexer.hpp`
+}  // namespace kds::parser
+
 namespace kds::exec {
 
 struct ArmPin;  // admin_plans.hpp
@@ -111,6 +115,10 @@ struct PlanOptions {
     // arguments an administrator's plan's rules read, lexed only where a
     // plan with more than one variant matches.
     std::string_view statement;
+    // The statement's arguments where its kept parse bound them (EA-S2,
+    // `parser/kept_parse.hpp`): a plan's rules read these, and `statement`
+    // is lexed for them only where they are absent.
+    const std::vector<parser::StatementArgument>* arguments = nullptr;
     // `join_build_max_rows`: a build the model expects to bucket more rows
     // is priced as the per-row walk the executor falls back to; 0, no build.
     std::size_t join_build_max_rows = kDefaultJoinBuildMaxRows;

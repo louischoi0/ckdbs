@@ -11416,6 +11416,9 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         plan.admin = admin_plans_;
         plan.search = join_order != exec::JoinOrder::kWritten;
         plan.statement = line;
+        // A kept parse's arguments, its holes' values in place (EA-S2).
+        const parser::BoundStatement* kept = KeptFor(&session, line);
+        plan.arguments = kept != nullptr ? &kept->arguments : nullptr;
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
         if (const auto& fingerprint = run->fingerprint; fingerprint.has_value()) {
@@ -12292,7 +12295,8 @@ std::optional<Status> CommandDispatcher::AnalyzeWithReturning(
 }
 
 CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
-                                                             std::string_view statement) {
+                                                             std::string_view statement,
+                                                             const Session* session) {
     if (statement.empty() || statement_fetch_id_ == 0 || !admin_plans_->any_single()) return {};
     exec::CapturedKey key;
     key.fetch_id = statement_fetch_id_;
@@ -12301,7 +12305,9 @@ CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
     WritePlan found;
     found.plan = admin_plans_->Find(key);
     if (found.plan == nullptr) return {};
-    found.variant = &found.plan->Choose(statement);
+    // A kept parse's arguments, its holes' values in place (EA-S2).
+    const parser::BoundStatement* kept = KeptFor(session, statement);
+    found.variant = &found.plan->Choose(statement, kept != nullptr ? &kept->arguments : nullptr);
     return found;
 }
 
@@ -14461,7 +14467,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // an administrator gave its shape one, pins the arm it finds its rows
     // by (DU-S3); the window declared above is the statement's whatever arm
     // that is.
-    const WritePlan plan = arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement);
+    const WritePlan plan =
+        arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement, scope.session);
     if (!arm_target.has_value()) {
         walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
         NoteWritePlan(plan, walk.pin_declined());
@@ -18287,7 +18294,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     // DU-S1 and DU-S3, as UPDATE's: the bound, and the plan's pin.
-    const WritePlan plan = WritePlanFor(ta.oid, line);
+    const WritePlan plan = WritePlanFor(ta.oid, line, scope.session);
     walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
     NoteWritePlan(plan, walk.pin_declined());
     if (declared.has_value()) {

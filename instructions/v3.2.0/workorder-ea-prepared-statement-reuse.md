@@ -181,3 +181,72 @@ inside the server (archived beside the results, never in the tree), driver
 - **Outside EA, found on the way**: a text statement over KWP lexes its text
   twice (`C_PARSE`'s `FingerprintOf`), 3.4 - 8.1 % of its server CPU;
   EA-R4 leaves it, and it is in `known-gaps.md`.
+
+### EA-S1 - done 2026-11-27
+
+On `ea-prepared-statement-reuse` at `ea0592074`. `C_PARSE` of a named
+statement keeps its parse, each `?` a typed hole (`parser::KeptParse`,
+`include/kds/parser/kept_parse.hpp`); `C_BIND` fills the holes with values
+(`BindKept`, `kwp_session.cpp`), and the dispatcher takes the bound AST where
+a parse was asked of the text the session's statement was bound for
+(`CommandDispatcher::KeptFor`: `HandleSelect`, and `ParseKeepingShape` for
+`INSERT`, `UPDATE`, `DELETE` and `WithReturning`). The dispatch is still
+handed the substituted text, so every form that reads a statement's text
+again reads what it read before. A text value holding a quote binds through
+a kept parse, its `?` left in the dispatched text (§2.2).
+
+- **Built differently from §2.1, as the tree demanded** (CLA's reading,
+  recorded here rather than raised as an item, since it narrows what is
+  built and changes no answer): **a parse is not kept** for the unnamed
+  statement (EA-R4: the text path's `C_PARSE` adds no parse), for a
+  statement other than a native `SELECT`, `INSERT`, `UPDATE` or `DELETE`,
+  for a `?` the bind's walk does not reach (a `RETURNING` item, a SET
+  value's scalar subquery, a query-grammar form: each is read again from
+  text), for a `?` against a byte its literal could fuse with or right after
+  `CASE` (`CASE -5 WHEN` is a column minus 5), and for a text over 64 KiB
+  (EA-R6, `KeptParse::kMaxText`); **and a bind carrying a NULL runs the text
+  path**, since a NULL literal is shape and its substituted text has another
+  `pattern_id` (EA-R2).
+- **EA-R1**: `KeptParseTest` takes every statement of the V01 golden corpus
+  and of a shape set apart into its `?` form, binds the kept parse with its
+  own literals and compares the AST with the text's parse through an
+  independent rendering (byte offsets aside, EA-R3), and every fingerprint
+  field. `KwpSessionTest` runs every storable type and NULL, the quote and a
+  shape set of reads and writes both ways on twin relations.
+- **EA-R2**: the bound fingerprint is the substituted text's, `arg_hash`
+  refolded by `ArgumentHashOf` (pinned equal to the lexer's fold over the
+  corpus). **EA-R3**: a refusal from the kept path names the `?`'s byte.
+- **Review** (`critics-developer`): found the `CASE ?` fusion (fixed, with
+  its cell) and an S0 figure (12.2 % where the `UPDATE` reads 11.9 %,
+  corrected); its cuts applied - `HoleValue` reduced to the value, a literal
+  read by the lexer itself (`HoleValueOfLiteral`), one paste rule, a
+  forward declaration in `session.hpp`, `Fill` a bool, the splice's count
+  checked - but the bound arguments, which EA-S2 reads; `BoundStatement` is
+  made uncopyable instead, the risk the review named.
+- **Suite**: 5,356 of 5,356 at `ea0592074` (`ctest -LE bs-nightly -j4`, two
+  disabled, two skipped). Overhead not measured; measured at the
+  milestone's close.
+
+### EA-S2 - done 2026-11-27
+
+On `ea-prepared-statement-reuse`, after `ea0592074`. An administrator's
+multi-variant plan's rule reads a kept parse's arguments - the substituted
+text's `ArgumentsOf` stream, each hole's value in place - and the statement
+is not lexed for them (`exec::PlanOptions::arguments`, `AdminPlan::Choose`
+over a span; the read compile in `SelectBody`, and `WritePlanFor` for the
+keyed `UPDATE` and `DELETE` arms). A text statement lexes as before.
+
+- **Cells**: a two-variant join plan chooses the same variant by either path
+  for four values on each side of its rule; a rule over a quote-bearing
+  value - which the dispatched text carries as `?` - chooses by the bound
+  value on the read arm and on the keyed write arm. **Both quote cells were
+  run with the hand-off removed and failed**, so they pin S2 and not the
+  text's own lex.
+- **Review** (`critics-developer`): no correctness finding; it traced every
+  path a wrong argument could come from (a SET subquery's text, `ANALYZE`,
+  the query layer's walk, `CREATE PLAN` and `ADVISE PLAN`'s examples) to
+  `KeptFor`'s whole-text match. Applied: `SelectRun::kept` removed for a
+  `KeptFor` at the compile, a forward declaration in `join_order.hpp` in
+  place of the lexer's header, and the write arm's missing cell. Kept: the
+  two-argument `Choose`, which the review itself left.
+- **Suite**: 5,358 of 5,358 on this tree (`ctest -LE bs-nightly -j4`, two disabled, two skipped). Overhead not measured; measured at the milestone's close.

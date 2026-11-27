@@ -184,6 +184,15 @@ struct AdminPlan {
     // The variant `statement` runs: the first whose rule holds for its
     // arguments. The statement is lexed only where a rule must be asked.
     const PlanVariant& Choose(std::string_view statement) const;
+    // The same, with the arguments already in hand: a kept parse's, its
+    // holes' values in place (EA-S2), so the statement is not lexed.
+    const PlanVariant& Choose(std::span<const parser::StatementArgument> args) const;
+    // `args` where given, else `statement` lexed for them.
+    const PlanVariant& Choose(std::string_view statement,
+                              const std::vector<parser::StatementArgument>* args) const {
+        return args != nullptr ? Choose(std::span<const parser::StatementArgument>(*args))
+                               : Choose(statement);
+    }
 };
 
 class AdminPlans {

@@ -2810,7 +2810,7 @@ private:
                        : nullptr;
         }
     };
-    WritePlan WritePlanFor(catalog::Oid oid, std::string_view statement);
+    WritePlan WritePlanFor(catalog::Oid oid, std::string_view statement, const Session* session);
     // What became of it, for `sys.statement_stats` and `ANALYZE`: served,
     // or declined for this statement (CX-R2), counted either way.
     void NoteWritePlan(const WritePlan& plan, bool declined);
