@@ -249,11 +249,14 @@ constexpr bool IsIndexOrder(EmitOrder order) noexcept {
 struct RangeBounds {
     std::uint64_t low = 0;
     std::uint64_t high = 0;
-    // One end is the key space's own, not the statement's (EB-S1): the
-    // range a bound written at one end alone stands for. The join planner
-    // prices such a bound as a bound, not the window's width, which says
-    // nothing (`join_order.cpp`).
-    bool open = false;
+};
+
+// One correlated column of an index probe's prefix (EB-S2,
+// `Step::index_key_from`): the key column's position in the index, and the
+// earlier step's or enclosing chain's column its value is read from.
+struct IndexKeyFrom {
+    std::uint8_t at = 0;
+    ColumnRef from;
 };
 
 // What a kCabinProbe step probes: which Cabin, and with which value.
@@ -374,25 +377,9 @@ struct IndexProbe {
     std::vector<std::uint16_t> key_cols;
     std::vector<std::uint16_t> covered_cols;
 
-    // The correlated form (docs/spec/index.md §8a): some of the prefix's
-    // columns take their value from an *earlier step's row* - a join key -
-    // so they cannot be encoded at compile time. Non-empty, the prefix is
-    // `eq_prefix` columns each pinned by an equality, with a literal (encoded
-    // into `low`/`high` here, as any probe's) or with an earlier step's
-    // column (one entry here, in key order), `ranged == false`, and every
-    // byte past the prefix padding: the executor copies the templates and
-    // encodes each entry's frame value into its column's width per outer
-    // row, which is the one exception to "no per-row key building" - priced
-    // at a fixed-width encode a column against the inner walk it replaces.
-    // A join on every column of a composite key descends by the whole key
-    // (EB-S2), where it once descended by the first and filtered the run.
-    // The single authority for the key source: the plan printer renders it,
-    // and `Step::key` keeps its two-kind contract.
-    struct KeyFrom {
-        std::uint8_t at = 0;  // the key column's position in the index
-        ColumnRef from;
-    };
-    std::vector<KeyFrom> key_from;
+    // The correlated form (docs/spec/index.md §8a) is `Step::index_key_from`,
+    // held on the step's cold side so this struct, which sits among the hot
+    // fields, keeps its size (EB's close).
 
     // **A hashed primary key's home** (DR-S3f, `exec/hashed_key.hpp`): set
     // on a literal `kIndexProbe` over a hashed relation whose residual pins
@@ -821,6 +808,13 @@ struct Step {
     // `arm=plan`.
     bool arm_pinned = false;
 
+    // A `kRange` whose one end is the key space's own, not the statement's
+    // (EB-S1): the range a bound written at one end alone stands for. The
+    // join planner prices it as a bound, not by the window's width, which
+    // says nothing (`join_order.cpp`). Beside `arm_pinned`, in its padding,
+    // so no hot field moves (EB's close).
+    bool range_open = false;
+
     // The function conjuncts placed at this step (see FunctionPredicate).
     // Below the hot fields with `build`, for `build`'s reason: most steps
     // carry none, and the evaluation sites test for empty first.
@@ -833,6 +827,22 @@ struct Step {
     // The value list this step descends for, on `kLookup` with no `key`
     // (see KeySet). Cold, with `build`.
     std::optional<KeySet> key_set;
+
+    // **The correlated form of an index probe** (docs/spec/index.md §8a,
+    // IX17; EB-S2): the prefix columns of `index` that take their value from
+    // an *earlier step's row* - a join key - one entry a column, in key
+    // order; empty for every other step. With it, `index`'s prefix is
+    // `eq_prefix` columns each pinned by an equality - a literal's encoded
+    // into `low`/`high` at compile, as any probe's, or an entry here -
+    // `ranged == false`, and every byte past the prefix padding: the
+    // executor copies the templates and encodes each entry's frame value
+    // into its column's width per outer row, the one exception to "no
+    // per-row key building", priced at a fixed-width encode a column against
+    // the inner walk it replaces. The single authority for the key source:
+    // the plan printer renders it, and `Step::key` keeps its two-kind
+    // contract. Cold, with `key_set` (EB's close: in `IndexProbe` it moved
+    // `residual` across a cache line).
+    std::vector<IndexKeyFrom> index_key_from;
 
     // **An embedded primary key's id, computed per outer row** (EB-S2), on
     // `kProbe` with no `key`: one operand a key column, in key order, each a

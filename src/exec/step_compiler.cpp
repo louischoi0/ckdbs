@@ -1063,8 +1063,9 @@ std::optional<KeySet> TupleKeySetOf(const Step& step, std::uint16_t slot) {
 // window on an index is taken before it. The write ladder never asks for
 // one (EB-Q9 (a)): `WriteRangeOutranksIndex` keeps both ends.
 struct TupleKeyRange {
-    RangeBounds bounds;  // `bounds.open` for an open end
+    RangeBounds bounds;
     bool strict = false;
+    bool open = false;
 };
 
 std::optional<TupleKeyRange> TupleKeyRangeOf(const Step& step, std::uint16_t slot,
@@ -1111,7 +1112,7 @@ std::optional<TupleKeyRange> TupleKeyRangeOf(const Step& step, std::uint16_t slo
     // plain scan: the residual returns the correct empty answer, and a
     // range walk would have to special-case it anyway.
     if (*low > *high) return std::nullopt;
-    return TupleKeyRange{RangeBounds{*low, *high, open}, low_strict || high_strict};
+    return TupleKeyRange{RangeBounds{*low, *high}, low_strict || high_strict, open};
 }
 
 // Whether this step has at least one equality against a literal on a
@@ -1648,7 +1649,7 @@ std::optional<IndexProbe> OrderedIndexChoiceOf(const catalog::TableAccess& acces
     std::vector<std::uint16_t> prefix;
     const bool indexed = (step.kind == AccessKind::kIndexProbe ||
                           step.kind == AccessKind::kIndexRange) &&
-                         step.index.has_value() && step.index->key_from.empty() &&
+                         step.index.has_value() && step.index_key_from.empty() &&
                          !step.key_set.has_value();
     if (indexed) {
         prefix.assign(step.index->key_cols.begin(),
@@ -1818,7 +1819,14 @@ std::optional<CabinSetChoice> CabinSetOf(const catalog::TableAccess& access, con
 //    slot, or `up > 0` - an enclosing chain's row is bound before this
 //    chain opens). A reference to this step or a later one has no value
 //    when the descent happens; same rule as the tuple-key-probe arm.
-std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
+// A correlated index probe: the probe, and its prefix's correlated columns
+// (`Step::index_key_from`).
+struct CorrelatedIndexProbe {
+    IndexProbe probe;
+    std::vector<IndexKeyFrom> from;
+};
+
+std::optional<CorrelatedIndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
                                                  const catalog::TableAccess& access,
                                                  const Step& step, std::uint16_t slot,
                                                  std::string_view only = {}) {
@@ -1833,12 +1841,13 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
     // lowest oid (`TableAccess::indexes` is in oid order): the literal
     // arm's own rule, so a join on every column of a composite key descends
     // by the whole key.
-    std::optional<IndexProbe> best;
+    std::optional<CorrelatedIndexProbe> best;
     for (const catalog::TableAccess::IndexRef& ix : access.indexes) {
         if (ix.building || ix.nkeys == 0) continue;  // CI-R1
         if (!only.empty() && !SameName(ix.name, only)) continue;  // a plan's pin
-        if (best.has_value() && ix.nkeys <= best->eq_prefix) continue;
+        if (best.has_value() && ix.nkeys <= best->probe.eq_prefix) continue;
         IndexProbe probe = ProbeOverIndex(ix);
+        std::vector<IndexKeyFrom> from;
         std::size_t at = 0;
         std::uint8_t eq = 0;
         for (; eq < ix.nkeys; ++eq) {
@@ -1849,7 +1858,7 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
             const auto source = EqualitySourceOn(scope, access, step, slot, col_pos);
             if (!source.has_value()) break;
             if (source->kind == OperandKind::kColumn) {
-                probe.key_from.push_back({eq, source->column});
+                from.push_back({eq, source->column});
             } else {
                 if (!EncodeIndexKeyColumn(col, source->literal,
                                           std::span<std::byte>(probe.low).subspan(at, width.value()))
@@ -1860,10 +1869,10 @@ std::optional<IndexProbe> CorrelatedIndexProbeOf(const Scope& scope,
             }
             at += width.value();
         }
-        if (probe.key_from.empty()) continue;
-        if (best.has_value() && eq <= best->eq_prefix) continue;
+        if (from.empty()) continue;
+        if (best.has_value() && eq <= best->probe.eq_prefix) continue;
         probe.eq_prefix = eq;
-        best = std::move(probe);
+        best = CorrelatedIndexProbe{std::move(probe), std::move(from)};
     }
     return best;
 }
@@ -2145,7 +2154,7 @@ std::optional<IndexChoice> LiteralIndexChoiceOf(const Scope& scope,
     // literal one would descend by its shorter prefix and filter the run
     // for every outer row. Declined here, it is taken by the correlated arm
     // just below.
-    if (correlated.has_value() && correlated->eq_prefix > choice->probe.eq_prefix) {
+    if (correlated.has_value() && correlated->probe.eq_prefix > choice->probe.eq_prefix) {
         return std::nullopt;
     }
     return choice;
@@ -3803,7 +3812,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             // A two-sided inclusive range, the one that ranks above every
             // arm below; a strict or an open one ranks at the end.
             const bool inclusive_range =
-                key_range.has_value() && !key_range->strict && !key_range->bounds.open;
+                key_range.has_value() && !key_range->strict && !key_range->open;
             // **An embedded primary key** (DR-S3e), below the Keystone's own
             // arms and above every other: the key is the Keystone id, so its
             // whole value is a lookup and a prefix or a range of it a tuple
@@ -3874,11 +3883,12 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // The correlated form, after the literal one for the reason
                 // its comment gives, and ahead of the Cabin per spec §9's
                 // ordering: an index is complete for every key value.
-                // `IndexProbe::key_from` is the single authority - the plan
+                // `Step::index_key_from` is the single authority - the plan
                 // printer renders it, and `Step::key` keeps its two-kind
                 // contract untouched.
                 step.kind = AccessKind::kIndexProbe;
-                step.index = std::move(cx);
+                step.index = std::move(cx->probe);
+                step.index_key_from = std::move(cx->from);
             } else if (auto probe = cabin ? CabinProbeOf(rel, step, slot, gate) : std::nullopt;
                        probe.has_value()) {
                 // Ahead of kFilterScan, and only ahead of it: a cabined
@@ -3928,7 +3938,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 // a cover would re-serve its whole union for every outer row.
                 step.kind = AccessKind::kCabinProbe;
                 step.cabin = std::move(cv);
-            } else if (auto cs = (key_range.has_value() && !key_range->bounds.open) || !cabin
+            } else if (auto cs = (key_range.has_value() && !key_range->open) || !cabin
                                      ? std::nullopt
                                      : CabinSetOf(rel, step, slot, gate);
                        cs.has_value()) {
@@ -3970,7 +3980,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
             // which is bounded at one.
             if (step.kind == AccessKind::kScan && !step.build.has_value()) {
                 std::optional<IndexChoice> window;
-                if (key_range.has_value() && !key_range->bounds.open) {
+                if (key_range.has_value() && !key_range->open) {
                     step.kind = AccessKind::kRange;
                     step.range = key_range->bounds;
                 } else if (index && (window = IndexProbeOf(rel, step, slot, /*with_lists=*/false,
@@ -3982,6 +3992,7 @@ StatusOr<StepChain> CompileBound(catalog::Catalog& catalog, const parser::Select
                 } else if (key_range.has_value()) {
                     step.kind = AccessKind::kRange;
                     step.range = key_range->bounds;
+                    step.range_open = true;
                 }
             }
         }

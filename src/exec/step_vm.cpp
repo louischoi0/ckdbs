@@ -1608,7 +1608,7 @@ private:
         // the walk, per this function's opening rule.
         const std::vector<std::byte>* low = &probe.low;
         const std::vector<std::byte>* high = &probe.high;
-        if (!probe.key_from.empty()) {
+        if (!step.index_key_from.empty()) {
             // The live index's prefix columns must be the ones the compiler
             // chose: each value is encoded into *that* column's key format
             // at *that* column's offset, and a different column would narrow
@@ -1634,8 +1634,8 @@ private:
                 if (!width.ok() || offset + width.value() > ix->key_width) {
                     co_return co_await RunWalkStep(steps, index, step, access);
                 }
-                if (next < probe.key_from.size() && probe.key_from[next].at == i) {
-                    const ColumnRef& from = probe.key_from[next++].from;
+                if (next < step.index_key_from.size() && step.index_key_from[next].at == i) {
+                    const ColumnRef& from = step.index_key_from[next++].from;
                     if (!frame_.CanResolve(from)) {
                         co_return Status::Corruption(
                             "a correlated index probe references a column the frame cannot "
@@ -1659,7 +1659,7 @@ private:
                 }
                 offset += width.value();
             }
-            if (next != probe.key_from.size()) {
+            if (next != step.index_key_from.size()) {
                 co_return co_await RunWalkStep(steps, index, step, access);
             }
             low = &corr_low_;
@@ -3559,7 +3559,7 @@ private:
     // the walk is the descents avoided.
     std::unordered_set<std::uint64_t> filtered_tuple_keys_;
 
-    // A correlated index probe's per-row bounds (IndexProbe::key_from): the
+    // A correlated index probe's per-row bounds (Step::index_key_from): the
     // compile-time padding templates with the outer row's value encoded into
     // the leading width. On the runner for index_scratch_'s allocation
     // reason, and safe against its re-entrancy hazard by a narrower
