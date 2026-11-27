@@ -198,9 +198,26 @@ also read a `CREATE TABLE` + `DROP TABLE` pair growing from about 92 us to
 about 1,037 us over 3,300 pairs in both arms alike - not DV's, and not
 traced.
 
-**The suite** at the closing commit: SUITE_PLACEHOLDER
+**The suite: closed without a green run.** Three runs of
+`scripts/test.sh`, each failing only cells that fail alone at the base
+commit too: at `82235ad2c` 5,310 of 5,312
+(`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`,
+`SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`); at
+`8204fbec2` 5,312 of 5,314
+(`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+`SetExprTwoCoreRigTest...`); at `b538f30f1`, the closing code commit, 5,313
+of 5,314 (`DurableKickRigTest...`). Repeated alone on this tree:
+`DurableKickRigTest` 4 of 15, `SetExprTwoCoreRigTest` 9 of 60.
+`ContentionCountersTest`, interleaved against a Debug build of `630ecc359`
+from `git archive`: the base 3 of 32, this tree 6 of 32 (and 4 of 8 in one
+earlier run alone, on a host loaded by other sessions) - both fail, and 32
+rounds do not separate the rates. None is on a path DV changes (a group
+commit's kick, first-updater-wins). Read as the three known two-core
+flakes, CLA's reading; no run is reported as a pass.
 
-**The sync**: SYNC_PLACEHOLDER
+**The sync**: `git fetch origin` at the close found `origin/main` at
+`630ecc359`, the commit DV opened from: nothing to merge, nothing
+resolved.
 
 **The owning documents**: `page.md` §5 (counted, not swept; `FreePage`'s
 callers) and §2a (a burned oid and the undone create); `drop-table.md`
