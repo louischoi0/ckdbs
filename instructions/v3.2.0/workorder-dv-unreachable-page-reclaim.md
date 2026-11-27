@@ -1,11 +1,12 @@
 # Work order DV - pages no root reaches: counted, then reclaimed
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
-`known-gaps-milestone-orders` (branch
-`worktree-known-gaps-milestone-orders`) from `8274c951`
-(`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; DV-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
+Status: **OPENED 2026-11-27** on worktree `dv-unreachable-page-reclaim`
+(branch `worktree-dv-unreachable-page-reclaim`) from `630ecc359`
+(`v3.4.17-178-g630ecc359`), on the operator's standing go-ahead
+(go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §1), **DV-Q0..Q6
+adopted as CLA proposed, (a) in each, by that word and not as per-item
+marks**. Written 2026-11-26 on worktree `known-gaps-milestone-orders` from
+`8274c951` (`raft-marks-2026-11-26.md` §3). A `[source-read]` claim
 with a `path:line` was read at `8274c951`; a claim taken from
 `known-gaps.md` carries that entry's own verification commit and is not
 re-verified here.
@@ -106,15 +107,15 @@ further.
 
 ## 4. Items for the operator (DV-Q), CLA's proposals
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| DV-Q0 | Is DV opened, and with what scope? | (a) the census, the source fixes, then the sweep; (b) the census and the source fixes only; (c) the census only | (a), with S0's numbers deciding whether the sweep is reached |
-| DV-Q1 | Does DV-S0 gate? | (a) S0 measures the leak per class on scenario runs and on 100 mounts; a class leaking under one page per 1,000 operations is recorded and left. (b) every class is closed | (a) |
-| DV-Q2 | When the sweep runs | (a) on an administrator's statement only, offline-safe first - nothing runs it unasked; (b) at every mount; (c) at a mount when the census passes a threshold | (a): a mount's length is a recovery-time promise |
-| DV-Q3 | A mount's census | (a) the census runs at the mount only when a boot key asks; (b) always | (a) |
-| DV-Q4 | Waystone's stranded directories | (a) freed at the renewal and at `OFF`, the page list read from the directory being replaced under invariant 9's discipline; (b) left to the sweep | (a) |
-| DV-Q5 | Leaked spills inside live var-heap pages | (a) outside DV - a value's release is DW's and the var-heap's rule; (b) inside | (a) |
-| DV-Q6 | A restore's leak | (a) the restore's mount runs the sweep when asked, as any mount; (b) always after a restore | (a) |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| DV-Q0 | Is DV opened, and with what scope? | (a) the census, the source fixes, then the sweep; (b) the census and the source fixes only; (c) the census only | (a), with S0's numbers deciding whether the sweep is reached | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q1 | Does DV-S0 gate? | (a) S0 measures the leak per class on scenario runs and on 100 mounts; a class leaking under one page per 1,000 operations is recorded and left. (b) every class is closed | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q2 | When the sweep runs | (a) on an administrator's statement only, offline-safe first - nothing runs it unasked; (b) at every mount; (c) at a mount when the census passes a threshold | (a): a mount's length is a recovery-time promise | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q3 | A mount's census | (a) the census runs at the mount only when a boot key asks; (b) always | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q4 | Waystone's stranded directories | (a) freed at the renewal and at `OFF`, the page list read from the directory being replaced under invariant 9's discipline; (b) left to the sweep | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q5 | Leaked spills inside live var-heap pages | (a) outside DV - a value's release is DW's and the var-heap's rule; (b) inside | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
+| DV-Q6 | A restore's leak | (a) the restore's mount runs the sweep when asked, as any mount; (b) always after a restore | (a) | (a), adopted on the standing go-ahead of 2026-11-27 |
 
 ## 5. Stages
 
