@@ -174,7 +174,7 @@ TEST_F(IndexPurgeDriverTest, ARelationIsQueuedOnlyOnceItsDeletesReachTheThreshol
 // DW-R5: the driver reads the horizon as the statement does. A row a view
 // still sees is owed its entries, so a pass under that view removes none of
 // them, and the reader finds every row it saw. The deletes that bought the
-// fruitless pass are spent: the next is bought at the same price, and with
+// fruitless pass are spent: the next is bought by the same rule, and with
 // the reader gone it takes them all.
 TEST_F(IndexPurgeDriverTest, AnOldViewKeepsItsRowsEntriesAndTheNextPassTakesThem) {
     dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
@@ -453,8 +453,9 @@ TEST_F(IndexPurgeDriverTest, OnlyAnUpdateThatMovesWhatAnIndexCarriesBuysAPass) {
 }
 
 // A value that recurs on one row - a status that flips - appends an entry
-// the first time it is taken and finds it there every time after. The dead
-// entries are one a row an index however often it flips, and so is the count.
+// the first time it is taken and finds it there every time after, **while
+// no pass has taken it**: the dead entries are then one a row an index
+// however often it flips, and so is the count.
 TEST_F(IndexPurgeDriverTest, ARowFlippingBetweenTwoValuesIsCountedOncePerEntryItLeaves) {
     dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
     Table(200);
@@ -466,6 +467,27 @@ TEST_F(IndexPurgeDriverTest, ARowFlippingBetweenTwoValuesIsCountedOncePerEntryIt
     EXPECT_EQ(stats::RelationStats::Snapshot()[Oid("t")].key_updates.get(), 10u);
     EXPECT_EQ(Entries("by_k"), 210u);
     EXPECT_EQ(Drive(), 0u) << "100 updates left 10 dead entries, under the floor";
+}
+
+// And once a pass has taken the entry of the value a row is off, the flip
+// back appends it again and is counted again: the driver removes what the
+// next write puts back (the close's `M-flip` cell, `known-gaps.md`).
+TEST_F(IndexPurgeDriverTest, AFlipBackAfterAPassAppendsAndIsCountedAgain) {
+    dispatcher_->EnableIndexPurgeDriver(/*min_writes=*/40);
+    Table(200);
+    const auto counted = [&] {
+        return stats::RelationStats::Snapshot()[Oid("t")].key_updates.get();
+    };
+    Ok("UPDATE t SET k = k + 100 WHERE id <= 50");
+    ASSERT_EQ(counted(), 50u);
+    EXPECT_EQ(Drive(), 1u) << "50 dead entries: the old values'";
+    ASSERT_LE(Entries("by_k"), 201u);
+    Ok("UPDATE t SET k = k - 100 WHERE id <= 50");  // back, to entries the pass took
+    // All but a leaf's first entry, which no pass takes (IX2c) and the flip
+    // back therefore finds.
+    EXPECT_GE(counted(), 99u) << "each flip back appended its entry again";
+    EXPECT_GE(Entries("by_k"), 249u);
+    EXPECT_EQ(Drive(), 1u);
 }
 
 // A row an `UPDATE` wrote is counted where it is written, so a statement a

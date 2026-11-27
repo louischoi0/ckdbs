@@ -40,7 +40,7 @@
 // (`docs/rules/rules.md` §3a; DL-S2), the core a statement ran on its only
 // writer - once per write statement at its end, once per lock wait at its
 // end, and where the unasked index purge is on once per `UPDATE` row that
-// moved what an index carries, at the row under its leaf's hold
+// appended an index entry, at the row under its leaf's hold
 // (`key_updates`, which `oid_parts.hpp` admits) - and a reader summing the
 // parts by oid. A relation's counts in a
 // part are relaxed single-writer words: a record takes nothing and waits

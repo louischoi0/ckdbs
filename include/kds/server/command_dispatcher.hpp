@@ -2272,8 +2272,8 @@ public:
         index_purge_.emplace(min_writes);
         count_key_updates_ = true;
     }
-    // Whether this dispatcher's `UPDATE`s count the rows that moved what an
-    // index carries (`RelationActivity::key_updates`), the driver's signal:
+    // Whether this dispatcher's `UPDATE`s count the rows that appended an
+    // index entry (`RelationActivity::key_updates`), the driver's signal:
     // on for every core's dispatcher of an instance that runs the driver,
     // and off - nothing counted - everywhere else (DW-R3).
     void CountKeyUpdates(bool on) noexcept { count_key_updates_ = on; }

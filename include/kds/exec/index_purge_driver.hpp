@@ -45,7 +45,8 @@
 // least one `kLiveShare`th of the entries an index kept at the last pass -
 // the rows, near enough. A pass an older view makes fruitless (its rows are
 // still owed their entries) has spent the writes that bought it, and the
-// next is bought at the same price.
+// next is bought by the same rule: a fifth of what that pass kept, the
+// view's dead entries among them.
 //
 // ---- Protocol ---------------------------------------------------------------
 //

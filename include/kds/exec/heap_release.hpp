@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <set>
-#include <vector>
 
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"

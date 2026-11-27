@@ -200,9 +200,10 @@ enough - and no page is read to choose.
 - **`deletes`**: a deleted row's entry, one an index, which a pass takes
   but for a row an older view still sees. A pass such a view makes
   fruitless has spent the writes that bought it, and the next is bought
-  at the same price. **On a heap a delete does not count**: its slot
-  release purges for it. The driver reads a relation's kind at its first
-  pass.
+  by the same rule, with no back-off: a fifth of what that pass kept, the
+  entries the view holds included. **On a heap a delete does not count**:
+  its slot release purges for it. The driver reads a relation's kind at
+  its first pass.
 - **`key_updates`** (DW-Q7 (b)): the rows an `UPDATE` wrote with a new
   entry appended to some index (`MaintainIndexes`' `appended`). A row is
   owed one entry an index, so an append is exactly one dead entry more:
@@ -233,12 +234,17 @@ is held between two slices**, so a relation `X` asked on any core is
 granted in the gap, and a slice that finds the relation held is skipped,
 not waited for. No transaction, no view and no purge horizon is held; the
 horizon is read as the statement reads it (`ResolvedForEveryReader`).
+**One pass runs at a time**, the relations in the order they were queued,
+and a relation is not offered while its own pass runs: the writes made
+during it count toward the next, queued at the first offer after it ends.
 
 **Off, nothing exists**: no driver is built, no tick is submitted, no
-count is read and `key_updates` is not counted. On, `sys.meta` on core 0 carries the `index_purge` section
-(`sys-views.md` §7). The driver's state is memory-resident and a restart
-starts it empty; a pass's images are §2.2's, so a crash can lose a pass,
-which leaves those entries in place for the next.
+count is read and `key_updates` is not counted. On, `sys.meta` on core 0
+carries the `index_purge` section (`sys-views.md` §7). The driver's state
+is memory-resident and a restart starts it empty, its counts and every
+relation's threshold with it, so a relation's first pass of a boot is
+bought by the floor's 4,096 writes; a pass's images are §2.2's, so a
+crash can lose a pass, which leaves those entries in place for the next.
 
 ---
 

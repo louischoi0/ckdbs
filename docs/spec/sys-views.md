@@ -698,7 +698,9 @@ dispatcher that runs the unasked index purge - core 0's, where
 `index_purge_driver` is on - so a session on another core, or any session
 with the key off, reads none. It carries `index_purge_passes`, the
 relations whose pass ended, however it ended; `index_purge_queued`, the
-relations waiting for one; and the passes' totals from the process's
+relations waiting for one, the running pass's not among them (so a lone
+relation reads 0 here but in the 50 ms between the offer that queues it
+and the step that starts its pass); and the passes' totals from the process's
 start: `index_purge_entries_read`, `index_purge_entries_removed` and
 `index_purge_rows_skipped`, the rows whose unit a writer held.
 

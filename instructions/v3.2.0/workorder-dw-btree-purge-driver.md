@@ -303,7 +303,10 @@ the results file now says what the writes' check does not cover.
 
 ### DW-S1: the driver for btree indexes (2026-11-27)
 
-On `dw-btree-purge-driver`, over `05c32f378`.
+On `dw-btree-purge-driver`, over `05c32f378`. *Later: the signal below is
+`deletes` alone; DW-S2 added `updates` and DW-S4's remedy replaced them
+with `key_updates` (§7, "DW-S4"). The threshold, the switch, the step
+and `RelationIndexPurge` stand as built here.*
 
 **Built.**
 
@@ -410,7 +413,11 @@ No committed seed of `tests/testdata/sim_seeds.txt` draws the driver
 
 ### DW-S2: a moved key's entry, with no retired slot (2026-11-27)
 
-On `dw-btree-purge-driver`, over `39b19ea77`.
+On `dw-btree-purge-driver`, over `39b19ea77`. *Later: DW-S4's remedy
+(`f85aa3042`) deleted the update weight, the horizon mark and
+`TransactionManager::CommitCeiling` described below and counts
+`key_updates` in place of `updates` (§7, "DW-S4"); a heap's walk, its
+deletes buying no pass, and the release and a pass by turns stand.*
 
 **Built.**
 
@@ -510,13 +517,15 @@ Release, pinned, interleaved
   cheaper side is on every shape and is not explained.
 - **On, an index is held at its rows**: 57,515 to 99,800 entries for
   50,000 live rows where off it reached 2.6 to 5.3 million, a point read
-  at 1.06 to 1.08 of a clean index's cost against 26 and 4.9 times; at a
-  cost of 9 % to 12 % of server CPU a statement on the churn cells.
+  at 1.06 to 1.08 of a clean index's cost at one core (1.82 and 1.83 at
+  two) against 26.0 to 29.5 and 4.9 times (48 and 54); at a cost of 9 % to
+  13 % of server CPU a statement on the one-core churn cells, 5 % to 6 %
+  at two cores.
 - **And it wasted a pass every 2 s on updates that move no key**: 61
   passes in 120 s, 3.05 million entries read, none removed, 4.8 % of
   server CPU a statement for one index. DW-S2's learned weight halves a
   relation's updates to an eighth and no further, which at 46,000
-  updates a second over 50,000 rows is a pass every 80,000.
+  updates a second over 50,000 rows is a pass every 80,000 updates.
 
 **The remedy** (`f85aa3042`): DW-Q7 revised from (a) to (b) (§4,
 "Marks"). The driver's second signal is `key_updates`, the rows an
@@ -533,7 +542,17 @@ for one dead entry, and the count now is the append itself; a row is
 counted before a later index's refusal, not after; the clamp to the
 floor is made once. **Left**: a spilled covered value changed to another
 of the same length is counted and never purged (IX2a) - narrow, and in
-`known-gaps.md`.
+`known-gaps.md`. **Cells** (`tests/index_purge_driver_test.cpp`, 24 in
+all; one added in `expeditor_test.cpp`): the learned weight's three
+cells are replaced by four - an update that moves nothing an index
+carries buying no pass and a covered value's buying one, a flipping row
+counted once an entry it leaves (with no pass between its flips), a
+rolled-back update's entries counted and taken, an older view finding a
+moved row through its old key - and every core counting only where the
+driver is on. **Suite**, as the commit message of `f85aa3042` records
+it: 5,326 of 5,326 at `-j4` on the sixth run, the five before failing
+only the two-core cells `known-gaps.md` ("Testing") lists; the
+simulator 108 of 108.
 
 **The second close**, `[measured]` at `f85aa3042`
 (`v3.4.17-185-gf85aa3042`)
@@ -559,7 +578,9 @@ of the same length is counted and never purged (IX2a) - narrow, and in
   flips appended again, for 7.2 % of server CPU a statement and nothing
   a read gains.
 - **A slice costs its core**: statements over 1 ms rose 15 to 21 a pass
-  with the key on, p99.9 by 12 us to 50 us, p99 not at all.
+  with the key on, p99 not at all. The p99.9 rose by 12 us to 50 us, and
+  neither close attributes it: the slices' statements are under 0.1 % of
+  the total.
 
 **CLA's reading, adopted on the standing go-ahead and not the operator's
 mark.** DW closes: the default engine is not slower (off against the
@@ -582,7 +603,9 @@ comparison is interleaved and carries its control; the absolute figures
 are that host's.
 
 **Budget**: the first close 29 min 53 s of measurement, the second
-28 min 37 s; no quiet-gate hold in either. **Cut**, both: 120 s a mix,
+28 min 37 s, together 58 min 30 s against the milestone's hour, the two
+Release builds' time in neither results file; no quiet-gate hold in
+either. **Cut**, both: 120 s a mix,
 one size (50,000 rows) in the mixes, one run a cell and arm in the
 second, `relaxed` only, a client that bound every cell (the server 29 %
 to 38 % busy), no heap in the mixes, no reader holding an old view.
@@ -592,3 +615,35 @@ to 38 % busy), no heap in the mixes, no reader holding an old view.
 `docs/inflight/known-gaps.md` ("The unasked index purge (DW)", and three
 entries above it corrected); `CLAUDE.md`'s "Secondary indexes" row;
 `kds.conf.sample`; `manual/server/server.md`, `manual/sql/sql.md`.
+
+**The close's review** (`critics-developer`, on `6bad7d706`, the
+milestone read as one change): no correctness defect in
+`630ecc359..f85aa3042`, and nothing dead in the code but one include.
+**Applied by the review, in documents only**: the p99.9 rise was blamed
+on the slice against both results files, which leave its source
+unidentified; the first close's figures were given for one core as if
+for all; `known-gaps.md` lacked that a restart puts every threshold back
+at the floor, that a relation is not offered while its own pass runs,
+and what the second close could not resolve of throughput; an older
+view's next pass is bought "by the same rule", not at the same price; a
+sentence comparing the shape with PostgreSQL's autovacuum had nothing
+behind it and is gone; `sys-views.md` says what `index_purge_queued`
+does not count; the logs of DW-S1 and DW-S2 each got one line pointing
+at what this stage replaced. **Applied by CLA on its findings**: three
+comments that still described the count's first form, the dead include,
+a cell for the mechanism the second close could only infer (a flip back
+after a pass appends, and is counted, again), the candidate cause of the
+two-core pass rate in `known-gaps.md`, and a correction note in the
+second close's results file on its reading of `index_purge_queued`.
+**Rejected**: letting a relation be offered while its own pass runs - a
+change of behaviour that would want its own cell and measurement, after
+the close measured the other.
+
+**Suite at the close**: 5,327 of 5,327 at `-j4`, first run, on the tree
+this log is committed with. **That tree is not byte for byte the one
+measured**: after `f85aa3042` came comments, one removed include and one
+test cell, and no statement of engine code.
+
+**The merge of `origin/main`**: nothing to merge. `origin/main` stood at
+`630ecc359`, the commit DW opened from, at every fetch through the
+close.
