@@ -2732,20 +2732,26 @@ Status Parser::ParseInsertTail(InsertStmt& stmt) {
                                        At(lexer_.Peek().byte_offset));
     }
     lexer_.Next();
+    // A column list (EB-S4): the arbiter is the key those columns are whole,
+    // which the dispatcher resolves (`ResolveConflictArbiter`).
     if (lexer_.Peek().type == TokenType::kLParen) {
         lexer_.Next();
-        IndexColumnRef target;
-        target.byte_offset = lexer_.Peek().byte_offset;
-        auto name = ParseIdent();
-        if (!name.ok()) return name.status();
-        target.name = std::move(name.value());
+        while (true) {
+            IndexColumnRef target;
+            target.byte_offset = lexer_.Peek().byte_offset;
+            auto name = ParseIdent();
+            if (!name.ok()) return name.status();
+            target.name = std::move(name.value());
+            stmt.conflict_target.push_back(std::move(target));
+            if (lexer_.Peek().type != TokenType::kComma) break;
+            lexer_.Next();
+        }
         if (lexer_.Peek().type != TokenType::kRParen) {
-            return Status::NotImplemented("a conflict target of more than one column is not "
-                                          "supported" + At(lexer_.Peek().byte_offset) +
-                                          "; the tuple key is the one conflict there is");
+            return Status::InvalidArgument("expected ',' or ')' in the conflict target, got '" +
+                                           std::string(Describe(lexer_.Peek())) + "'" +
+                                           At(lexer_.Peek().byte_offset));
         }
         lexer_.Next();
-        stmt.conflict_target = std::move(target);
     }
     if (!IsWord(lexer_.Peek(), "DO")) {
         return Status::InvalidArgument("expected DO, got '" + std::string(Describe(lexer_.Peek())) +

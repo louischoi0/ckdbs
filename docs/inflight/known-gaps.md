@@ -3935,13 +3935,6 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
   declines (a set operation, a derived table, an outer join) answers
   `unknown column 'keyidentity'`: the layer's walk emits no hidden column.
   A refusal, never a wrong answer.
-- **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is admitted,
-  against `heap-and-tuple.md` §3.1b** ("`ON CONFLICT (<column>)` cannot name
-  a hidden Keystone"): `ResolveConflictArbiter` resolves the name through
-  `Schema::FindColumn` to column 0 and takes the tuple key as the arbiter
-  (`src/server/command_dispatcher.cpp:8263`); no test covers it. Whether the
-  code refuses it or the spec admits it is not decided. Read at `2403b86d`,
-  2026-11-22.
 - **Partly filled pages are abandoned at each restart.** The placement hints
   are memory only (DN-Q23): after a restart a core fills from the head and
   up to `cores` partly filled pages wait for a release to find their free
@@ -4186,9 +4179,16 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   `0c2092df8`; at `f85aa3042` the driver counts the updates that appended
   an entry, `key_updates`, and walks a heap, `index.md` §2.3); the key is
   off by default, and with it off nothing runs it.
-- **A multi-column `ON CONFLICT` target is refused by the parser**, so a
-  composite primary key arbitrates no upsert (P2c, its own order,
-  DR-Q5 (a)).
+- **`ON CONFLICT DO NOTHING` on the tuple key skips a row whose key is held
+  before the row's own refusals are asked** (found by EB-S4's review,
+  verified on `eb-key-forms-in-the-executor` over `88164d7fb`; not EB's
+  change): `INSERT INTO t VALUES (1, NULL) ON CONFLICT DO NOTHING` into a
+  `NOT NULL` column, or a value of the wrong type, answers `rows=0` where
+  key 1 is held and is refused where it is free. PostgreSQL 18 refuses the
+  row before it asks the arbiter. The tuple key arm decides every row up
+  front (BU-Q18), before the row is encoded; a row that names a
+  `keyidentity` an embedded key does not encode to is refused either way
+  (EB-S4). A refusal turned into a skip, never a wrong row written.
 - **A string key's cost grows with the keys sharing its first 32 bytes**
   (DR-Q3 (a)): 0.25 us a key of the run on a read and 0.66 us on an insert,
   1.0 ms and 2.7 ms at a run of 4,096. A limit, stated in the spec.
@@ -4235,11 +4235,6 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   because the reverse walk would return its ties by descending `b` where
   the sort returns them ascending. So do mixed directions, the key's
   columns out of key order, and a column past the key.
-- **`ON CONFLICT` on a relation whose key is embedded is refused
-  `NotImplemented`**, whatever its target - a column of another unique
-  index included, which the insert path could serve: no arbiter computes
-  the id the row's key encodes to, and the refusal is not narrowed to the
-  targets that need it.
 - **An embedded key's literal prefix with a join on a column past the key
   is a range per outer row** (EB-S2 narrowed it; verified on
   `eb-key-forms-in-the-executor` over `cf3f5bb87`). Where every key column

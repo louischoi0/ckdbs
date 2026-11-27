@@ -601,10 +601,12 @@ struct InsertStmt {
     std::string select_text;
     std::uint32_t select_byte_offset = 0;
     // `ON CONFLICT [(col)] DO NOTHING` (BU-S8, BU-Q18): a row whose tuple key
-    // is placed is skipped. `conflict_target` is the written `(col)`: the
-    // tuple key, or since CG the one column of a unique index.
+    // is placed is skipped. `conflict_target` is the written `(col, ...)`:
+    // the tuple key, since CG a unique index's key, since EB-S4 of several
+    // columns, or an embedded primary key's columns.
     bool on_conflict_do_nothing = false;
-    std::optional<IndexColumnRef> conflict_target;
+    // Empty where none was written; since EB-S4 one or more columns.
+    std::vector<IndexColumnRef> conflict_target;
     // `ON CONFLICT [(col)] DO UPDATE SET ...` (CG): a row whose arbiter is
     // held updates the holder through `UPDATE`'s per-row path instead.
     // `EXCLUDED.<col>` in a value names the proposed row's column.

@@ -190,14 +190,43 @@ TEST_F(DmlFormsTest, OnConflictDoNothingSkipsARowWhoseTupleKeyIsPlaced) {
 
 TEST_F(DmlFormsTest, OnConflictRefusesWhatItDoesNotDo) {
     ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name) DO NOTHING",
-                  "the arbiter is the tuple key or the one column of a unique index");
+                  "the arbiter is the tuple key or the columns of a unique index");
     // A name the relation has no column for is no arbiter either - with a
     // unique index present too, whose key position the lookup once compared
     // against a position computed from no column at all.
     Ok("CREATE UNIQUE INDEX w_name_u ON w (name)");
     ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (nosuch) DO NOTHING",
-                  "ON CONFLICT (nosuch) at byte 52: the arbiter is the tuple key or the one "
-                  "column of a unique index");
+                  "ON CONFLICT (nosuch) at byte 52: the arbiter is the tuple key or the "
+                  "columns of a unique index");
+    // A column list that is no unique index's key whole, and one naming a
+    // column twice (EB-S4).
+    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name, region) DO NOTHING",
+                  "ON CONFLICT (name, region) at byte 52: the arbiter is the tuple key or the "
+                  "columns of a unique index");
+    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name, name) DO NOTHING",
+                  "names column 'name' twice");
+    ExpectRefused("INSERT INTO w VALUES (1, 'a', 'EU', 1) ON CONFLICT (name region) DO NOTHING",
+                  "expected ',' or ')' in the conflict target");
+}
+
+// **A conflict target of several columns** (EB-S4): the unique index whose
+// key those columns are whole, in any order, arbitrates; `DO NOTHING` skips
+// a row whose key is held and `DO UPDATE` updates its holder.
+TEST_F(DmlFormsTest, OnConflictArbitratesByAUniqueIndexOfSeveralColumns) {
+    Ok("CREATE UNIQUE INDEX w_name_region ON w (name, region)");
+    ExpectReply("INSERT INTO w (name, region, tier) VALUES ('alice', 'EU', 9), ('alice', 'US', 9) "
+                "ON CONFLICT (region, name) DO NOTHING",
+                "INSERTED oid=4005 rows=1 first_id=7 last_id=7");
+    ExpectRows("SELECT name, region, tier FROM w WHERE name = 'alice' ORDER BY id",
+               {"name,region,tier", "alice,EU,1", "alice,US,9"});
+    Ok("INSERT INTO w (name, region, tier) VALUES ('alice', 'US', 5), ('zed', 'EU', 2) "
+       "ON CONFLICT (name, region) DO UPDATE SET tier = tier + EXCLUDED.tier");
+    ExpectRows("SELECT name, region, tier FROM w WHERE name = 'alice' OR name = 'zed' ORDER BY id",
+               {"name,region,tier", "alice,EU,1", "alice,US,14", "zed,EU,2"});
+    // Two rows naming one key in a `DO UPDATE` (CG-Q4 (a)).
+    ExpectRefused("INSERT INTO w (name, region, tier) VALUES ('q', 'EU', 1), ('q', 'EU', 2) "
+                  "ON CONFLICT (name, region) DO UPDATE SET tier = 0",
+                  "would update one row twice");
 }
 
 // ---- ON CONFLICT DO UPDATE (CG) ---------------------------------------------
@@ -292,7 +321,7 @@ TEST_F(DmlFormsTest, OnConflictArbitratesOnTheOneColumnOfAUniqueIndex) {
     // A non-unique or multi-column index is no arbiter.
     Ok("CREATE INDEX w_region ON w (region)");
     ExpectRefused("INSERT INTO w (name, region) VALUES ('q', 'EU') ON CONFLICT (region) DO NOTHING",
-                  "the arbiter is the tuple key or the one column of a unique index");
+                  "the arbiter is the tuple key or the columns of a unique index");
 }
 
 // A string key's index encoding is its first 32 bytes (IX6), so two values

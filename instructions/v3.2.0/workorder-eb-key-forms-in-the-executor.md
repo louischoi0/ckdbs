@@ -394,6 +394,52 @@ ran with S4's code in the tree (S4's stage log).
 
 Overhead not measured; measured at the milestone's close.
 
+### EB-S4 - upserts by any key, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `88164d7fb`. **A conflict target is
+a column list** (`parser-v2.md` I20): the arbiter is the unique index whose
+key the columns are whole, in any order (`ResolveConflictArbiter`); **on a
+relation whose primary key is embedded the key is the tuple key**, no target
+or its columns in any order taking the tuple key arm at the id the row's key
+encodes to (`ConflictTupleKeyOf`, the insert's own `EmbeddedRowId`), and
+another unique index's key arbitrating there too (`heap-and-tuple.md`
+§3.1c); **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is refused**
+(EB-Q4 (a), BZ-R4). `kFingerprintVersion` did not move (EB-Q3 (a)): the
+fingerprint is the token stream's, and a statement the parser refused was
+never storable.
+
+**The differential against PostgreSQL 18** (`tools/eb_s4_difftest.py`, a
+throwaway `postgres:18` container, PostgreSQL 18.7): 13 statements over a
+unique index of two columns and a primary key of two narrow integers -
+`DO NOTHING` and `DO UPDATE` by the key written in either order, no target,
+the key's bounds, two rows naming one key under `DO UPDATE`, a target of
+one key column - and **no mismatch**: each statement ok or refused on both,
+and the rows equal after each.
+
+**The review** (`critics-developer`, report only, with probes against the
+built server). **Applied**: **a `[quiet-wrong]` defect** - on an embedded
+relation `ConflictTupleKeyOf` dropped the `keyidentity` a row wrote, so a
+row naming another id than its key's, which the insert refuses, was
+skipped under `DO NOTHING` and updated the key's row under `DO UPDATE`; it
+now reads the written id under `EmbeddedRowId`'s own rule and the row is
+refused, the cell in `btree_primary_key_test.cpp`; a refusal's byte pointed
+at the row's first value where the key's column stands elsewhere, now the
+key's (`ConflictKey::byte`, cell at byte 49); the `parser-v2.md` and
+`ast.hpp` wording; three cuts (one embedded test, the arbiter's refusal
+built once, `ta.oid` for a parameter). **Recorded, not EB's**: `DO NOTHING`
+on the tuple key turns a held key's row refusal into a skip
+(`known-gaps.md`). **Rejected**: none.
+
+Overhead not measured; measured at the milestone's close.
+
+### EB-S5 - nothing marked inside, 2026-11-27
+
+EB-Q5 (b), EB-Q6 (a) and EB-Q7 (a) put a heap's sampled prior, a view that
+carries its level and the heap's restart hints with `PURGE` by the
+Keystone index outside EB; no item is left for S5, and no code is written
+for it. The query layer's refusal of `keyidentity` (`known-gaps.md`) was
+listed beside them in §1 with no item, and stays.
+
 ### Written 2026-11-26
 
 On `known-gaps-milestone-orders` from `8274c951`, on the operator's word.

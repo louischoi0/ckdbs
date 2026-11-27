@@ -8349,11 +8349,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         kept.emplace(InsertShellOf(shaped));
         std::set<std::uint64_t> named;
         for (const std::vector<parser::AstValue>& r : shaped.rows) {
+            const auto key = ConflictTupleKeyOf(ta, r);
             const std::optional<std::uint64_t> id =
-                r.size() == ta.schema.columns.size() ? KeystoneIdOf(r.front()) : std::nullopt;
+                key.has_value() ? std::optional<std::uint64_t>(key->id) : std::nullopt;
             if (id.has_value()) {
                 if (named.count(*id) != 0) continue;
-                auto placed = TupleKeyPlaced(ta, *id, r.front().byte_offset, scope);
+                auto placed = TupleKeyPlaced(ta, *id, key->byte, scope);
                 if (!placed.ok()) {
                     return Refused(placed.status());
                 }
@@ -8536,18 +8537,12 @@ constexpr const catalog::TableAccess::IndexRef* kTupleKeyArbiter = nullptr;
 
 StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConflictArbiter(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
-    // **An embedded primary key arbitrates nothing yet** (DR-S3e): its
-    // conflict is a tuple key's, found at the id the row's key encodes to,
-    // and neither arm here computes that id - the tuple key arm reads a key
-    // the row wrote, and the index arm has no index. Refused by name rather
-    // than answered with the duplicate the clause was written to avoid.
-    if (!ta.schema.embedded_key.empty()) {
-        return Status::NotImplemented(
-            "ON CONFLICT at byte " + std::to_string(written.conflict_byte_offset) +
-            " on a relation whose primary key is its Keystone id is not built");
-    }
-    if (!written.conflict_target.has_value()) {
-        if (written.on_conflict_do_update && ta.schema.hidden_keystone()) {
+    // **An embedded primary key is the tuple key** (EB-S4): its conflict is
+    // found at the id the row's key encodes to (`ConflictTupleKeyOf`), so no
+    // target, or a target of the key's columns, is the tuple key arm.
+    const bool embedded = !ta.schema.embedded_key.empty();
+    if (written.conflict_target.empty()) {
+        if (written.on_conflict_do_update && ta.schema.hidden_keystone() && !embedded) {
             return Status::NotImplemented(
                 "ON CONFLICT DO UPDATE at byte " + std::to_string(written.conflict_byte_offset) +
                 " names its arbiter here: the relation's tuple key is hidden (BZ-R4), so write "
@@ -8555,24 +8550,80 @@ StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConfli
         }
         return kTupleKeyArbiter;
     }
-    const parser::IndexColumnRef& target = *written.conflict_target;
-    auto col = ta.schema.FindColumn(target.name, target.byte_offset);
-    if (!col.ok()) return col.status();
-    // `FindColumn` answers OK with no column for a name the relation does not
-    // have: no position to look an index up by, so the refusal below.
-    if (col.value() != nullptr) {
-        if (col.value() == &ta.schema.columns.front()) return kTupleKeyArbiter;
-        const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
-        for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
-            if (ix.unique && ix.nkeys == 1 && ix.key_cols[0] == at) return &ix;
+    // The written columns, by position; a name the relation does not have
+    // (`FindColumn` answers OK with no column) or one written twice is no key.
+    const std::uint32_t at_byte = written.conflict_target.front().byte_offset;
+    const auto names = [&] {
+        std::string out;
+        for (const parser::IndexColumnRef& target : written.conflict_target) {
+            out += (out.empty() ? "" : ", ") + target.name;
         }
+        return out;
+    };
+    const auto refuse = [&] {
+        return Status::NotImplemented(
+            "ON CONFLICT (" + names() + ") at byte " + std::to_string(at_byte) +
+            (ta.schema.hidden_keystone()
+                 ? ": the arbiter is the columns of a unique index" +
+                       std::string(embedded ? " or of the primary key" : "") +
+                       ", and this relation's tuple key is hidden (BZ-R4)"
+                 : ": the arbiter is the tuple key or the columns of a unique index"));
+    };
+    std::vector<std::uint16_t> cols;
+    for (const parser::IndexColumnRef& target : written.conflict_target) {
+        auto col = ta.schema.FindColumn(target.name, target.byte_offset);
+        if (!col.ok()) return col.status();
+        if (col.value() == nullptr) return refuse();
+        const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
+        if (std::ranges::find(cols, at) != cols.end()) {
+            return Status::InvalidArgument("ON CONFLICT names column '" + target.name +
+                                           "' twice (byte " + std::to_string(target.byte_offset) +
+                                           ")");
+        }
+        cols.push_back(at);
     }
-    return Status::NotImplemented(
-        "ON CONFLICT (" + target.name + ") at byte " + std::to_string(target.byte_offset) +
-        (ta.schema.hidden_keystone()
-             ? ": the arbiter is the one column of a unique index, and this relation's tuple "
-               "key is hidden (BZ-R4)"
-             : ": the arbiter is the tuple key or the one column of a unique index"));
+    const auto same_set = [&](const auto& key) {
+        return key.size() == cols.size() &&
+               std::is_permutation(cols.begin(), cols.end(), key.begin());
+    };
+    if (cols.size() == 1 && cols.front() == 0) {
+        // **A hidden Keystone is named by no conflict target on a heap**
+        // (`heap-and-tuple.md` §3.1b, BZ-R4; EB-Q4 (a)).
+        if (ta.heap() && ta.schema.hidden_keystone()) {
+            return Status::NotImplemented(
+                "ON CONFLICT (" + names() + ") at byte " + std::to_string(at_byte) +
+                " names a heap's hidden Keystone, which no conflict target names (BZ-R4); the "
+                "arbiter is the columns of a unique index");
+        }
+        return kTupleKeyArbiter;
+    }
+    if (embedded && same_set(ta.schema.embedded_key)) return kTupleKeyArbiter;
+    for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
+        if (ix.unique && !ix.building && same_set(ix.keys())) return &ix;
+    }
+    return refuse();
+}
+
+std::optional<CommandDispatcher::ConflictKey> CommandDispatcher::ConflictTupleKeyOf(
+    const catalog::TableAccess& ta, const std::vector<parser::AstValue>& row) {
+    // A full-width row names its tuple key, as `InsertOneRow` reads it.
+    const bool named = row.size() == ta.schema.columns.size();
+    std::optional<std::uint64_t> written;
+    if (named) {
+        written = KeystoneIdOf(row.front());
+        if (!written.has_value()) return std::nullopt;  // the insert's refusal
+    }
+    if (ta.schema.embedded_key.empty()) {
+        if (!written.has_value()) return std::nullopt;
+        return ConflictKey{*written, row.front().byte_offset};
+    }
+    const std::vector<parser::AstValue> body = InsertBodyOf(ta, row);
+    if (body.empty()) return std::nullopt;
+    ConflictKey key{written.value_or(0), named ? row.front().byte_offset : 0};
+    // A key that does not encode, a NULL in it, or a `keyidentity` that is
+    // not the key's id names no id: the insert refuses the row by name.
+    if (!EmbeddedRowId(ta.oid, ta, body, named, key.id, key.byte).ok()) return std::nullopt;
+    return key;
 }
 
 namespace {
@@ -8682,10 +8733,10 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
         p.body = InsertBodyOf(ta, r);
         bool repeated = false;
         if (arbiter == nullptr) {
-            if (r.size() == ta.schema.columns.size()) {
-                p.key = KeystoneIdOf(r.front());
-                p.byte = r.front().byte_offset;
-                repeated = p.key.has_value() && !keys_seen.insert(*p.key).second;
+            if (const auto key = ConflictTupleKeyOf(ta, r); key.has_value()) {
+                p.key = key->id;
+                p.byte = key->byte;
+                repeated = !keys_seen.insert(key->id).second;
             }
         } else {
             // A key that does not encode is the insert arm's refusal.
