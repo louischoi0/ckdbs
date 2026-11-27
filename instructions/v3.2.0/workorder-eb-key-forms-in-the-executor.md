@@ -1,14 +1,16 @@
 # Work order EB - the key forms in the executor: a key range that is a range, a join by a whole key, an order the rows already hold, an upsert by any key
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
-`known-gaps-milestone-orders` (branch
-`worktree-known-gaps-milestone-orders`) from `8274c951`
-(`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; EB-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
-with a `path:line` was read at `8274c951`; a claim taken from
-`known-gaps.md` carries that entry's own verification commit and is not
-re-verified here.
+Status: **OPENED 2026-11-27** on worktree `eb-key-forms-in-the-executor`
+(branch `worktree-eb-key-forms-in-the-executor`) from `9e7597d5d`
+(`v3.4.17-224-g9e7597d5d`), on the operator's standing go-ahead of
+2026-11-27 (go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §20).
+EB-Q0..Q10 are CLA's proposals adopted on that go-ahead (§4 "Marks"),
+none the operator's own per-item mark. Written 2026-11-26 on worktree
+`known-gaps-milestone-orders` from `8274c951` (`v3.4.17-148-g8274c951e`)
+on the operator's word of 2026-11-26 (`raft-marks-2026-11-26.md` §3). A
+`[source-read]` claim with a `path:line` in §1 was read at `8274c951`; the
+`known-gaps.md` lines it cites moved, and §7's "Opened" names where each
+now stands at `9e7597d5d`.
 
 Tags: `[operator]`, `[source-read]`, `[measured]`, `[design]`,
 `[quiet-wrong]`, as in DT's order.
@@ -136,6 +138,33 @@ outer row, a write by a unique key above one core.
 | EB-Q5 | A heap's sampled prior | (a) inside S5: a sample of data pages, so a heap's block can be captured; (b) outside - `GATHER STATISTICS` is the answer | (a) |
 | EB-Q6 | A view that carries its level (the hashed home inside a read-write transaction) | (a) outside EB: a snapshot's layout is the transaction manager's; (b) inside | (a) |
 | EB-Q7 | The heap's restart hints and `PURGE` by the Keystone index | (a) outside EB; (b) inside S5 | (a) |
+| EB-Q8 | A descending prefix of an embedded key (added at the opening, from the review) | (a) stays sorted: its ties would leave by descending tuple key where the sort's leave ascending (EB-R2); an ascending prefix, and the whole key either way, are elided; (b) elided, ties descending, as CV-Q4 (a) chose for an index walk | (a) |
+| EB-Q9 | The write ladder (added at the opening) | (a) EB moves the read ladder only: `WriteIndexArmOf` and `WriteRangeOutranksIndex` read the bounds as today, as `tests/keyed_write_test.cpp`'s "A one-sided range on the column is none to the ladder" and "A strict range ... rank below the index" pin, and §6 says the write side is DU's; (b) both ladders | (a) |
+| EB-Q10 | Waystone and a computed-key probe (added at the opening) | (a) a probe whose key is computed from an outer row's columns records no trail and replays none, so invariants 8 and 9 are not reached; (b) the trail contract extended to it | (a) |
+
+### Marks
+
+All adopted on the operator's standing go-ahead of 2026-11-27
+(go-ahead-achieving-milestone), never the operator's own per-item mark
+(`raft-marks-2026-11-27.md` §20):
+
+- **EB-Q0 (a)**, **EB-Q1 (a)**, **EB-Q3 (a)** - confirmed by reading
+  `include/kds/parser/fingerprint.hpp`'s bump rule: making a refused
+  statement admitted moves no stored hash - **EB-Q4 (a)**, **EB-Q6 (a)**,
+  **EB-Q7 (a)**, **EB-Q8 (a)**, **EB-Q9 (a)**, **EB-Q10 (a)**.
+- **EB-Q2 revised, (a) to (b), and (b) adopted**: (a) priced the arm by the
+  planner's statistics, which `docs/spec/index.md` IX9 forbids (an arm is
+  `f(shape, catalog)`), and placed a range above other arms, which reopens
+  the operator's ruling (a) of 2026-10-15 at `TupleKeyRangeOf` ("a strict
+  range ranks last ... where a range belongs against those arms is
+  undecided"). As adopted: **a one-sided or strict end ranks where a
+  strict tuple key range ranks - it replaces a bare walk and nothing else -
+  and an index or a heap's Keystone index takes one only where its walk in
+  key order seeds an elided `ORDER BY ... LIMIT`** (CV's ordered walk), the
+  one place a range with an open end is known to stop early.
+- **EB-Q5 revised, (a) to (b), and (b) adopted**: a heap's sampled prior is
+  the statistics steward's, shares no code with the key forms, and
+  `GATHER STATISTICS` already counts a heap exactly. S5 holds no item.
 
 ## 5. Stages
 
@@ -158,6 +187,69 @@ outer row, a write by a unique key above one core.
 - No write-side arm: DU's.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### Opened 2026-11-27
+
+On `eb-key-forms-in-the-executor` from `9e7597d5d`, on the operator's
+standing go-ahead (`raft-marks-2026-11-27.md` §20).
+
+**§1 read again at `9e7597d5d`.** Every item stands but one: **a two-sided
+inclusive range on a heap's Keystone is already an index range** - the
+Keystone index is one of `TableAccess::indexes` and `IndexProbeOf` does
+not skip it (`src/catalog/catalog.cpp:3023`, `docs/spec/index.md` §9a:
+"a read ranges a heap's Keystone only for `>=` with `<=`"); what is a walk
+is a strict end, a one-sided bound, and `ORDER BY keyidentity` under a
+`LIMIT` (`DriverOrderOf` drops the tuple key, the elision skips a heap).
+`known-gaps.md`'s lines, the order's then now: 3499 to 3927, 3641 to 4167,
+3103 to 3534, 3657 to 4185, 3701 to 4229, 3716 to 4243, 3706 to 4234,
+3661 to 4189, 3711 to 4238, 3513 to 3940, 3504 to 3932, 3508 to 3936, 3670
+to 4198, 3519 to 3947, 3528 to 3956, 3682 to 4210. `ResolveConflictArbiter`
+is at `src/server/command_dispatcher.cpp:8537`; the parser's target refusal
+at `src/parser/parser.cpp:2742`.
+
+**The review the writing left unfinished** (`critics-developer`, on the
+order against `9e7597d5d`, reading only). Applied: S1 moves the write
+ladder unless kept out (EB-Q9 added); the range kinds, the open ends'
+padding (`ProbeOverIndex`) and the reverse walk's seed from a `kRange`
+already exist, so S1 widens what reads bounds and adds no kind; the heap's
+two-sided Keystone range already served (above); EB-Q2 (a) against IX9 and
+ruling (a) (revised); a computed-key probe is `kProbe`-like and Waystone
+replays `kProbe` (EB-Q10 added); the one encoder is `exec::EmbeddedKeyId`
+(`include/kds/exec/embedded_key.hpp`), which EB-R3 names; S2 takes a
+prefix mixing literal and correlated equalities, the common case; EB-Q3
+needs no operator item (read and recorded); an ascending prefix of an
+embedded key can be elided (EB-Q8 added for the descending one); S5's
+items share no code with the key forms (EB-Q5 revised); the missing cells
+- `v >= NULL`, a bound above `2^48 - 1`, a strict end on a non-integer
+index column, a plan's `ACCESS` variant a new arm now meets - go into the
+stages that add each shape. **Rejected**: "measure only joins and order,
+at 100,000 rows" - the ranges' shapes S1 serves are not DR-Q17's (strict
+windows, a heap's page), and all of S0 fits its 20 minutes; "fold S4 into
+another stage" - a stage that lands whole costs nothing more for being
+small; EB-Q4's widening to every hidden Keystone - S4 reads the spec for a
+btree's hidden Keystone before it refuses anything the spec does not say.
+
+### EB-S0 - the premise, 2026-11-27
+
+Measured at `b761306e0` (`v3.4.17-225-gb761306e0`), whose build inputs are
+`9e7597d5d`'s. Results: `bench/v3.5.0/results-eb-s0-premise-v3.4.17-225-gb761306e0.md`.
+Each shape was run against a proxy, the cheapest statement or schema
+returning the same rows through an arm that exists:
+
+- **S1** (ranges) passes EB-Q1 (a)'s bar: 13.5x to 50.4x at 100,000 rows
+  and 119x to 391x at 1,000,000.
+- **S2** (joins) passes on its two whole-key cells: a composite index key
+  at 1,286x and 20,422x; an embedded key at 4,554x, and **refused** by the
+  row-touch budget at 1,000,000 rows.
+- **S3** (order) passes: 263x and 2,546x.
+- **The literal-prefix join is 2.77x and 1.54x**: the planner already
+  reorders it to one range and a build. Under the bar at 1,000,000 rows,
+  its item is recorded and left, and S2 does not change its rank.
+- **S4** is a refusal family, which the bar cannot price. CLA reads it as
+  built: what an operator writes instead is a transaction that reads and
+  then writes.
+
+These readings are CLA's, on the go-ahead.
 
 ### Written 2026-11-26
 

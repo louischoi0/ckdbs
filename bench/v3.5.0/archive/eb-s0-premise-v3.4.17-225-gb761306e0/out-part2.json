@@ -1,0 +1,328 @@
+{
+ "binary_sha256": "c4ad5c210a12130abd264a5e7efa8750056be9a207a595377a60f76d48a34c84",
+ "binary_mtime": 1795816184.7514474,
+ "reps": 3,
+ "stmts": 40,
+ "runs": [
+  {
+   "rows": 1000000,
+   "cells": [
+    {
+     "name": "J2 join by a whole embedded key",
+     "family": "S2",
+     "refused": {
+      "arm": "T",
+      "error": "statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner relation once per outer row, which is quadratic - rewrite it to bind a tuple key, or raise `max_rows_touched` in the config if this statement is meant to cost that much"
+     },
+     "sql": {
+      "T": "SELECT o.id, e.v FROM o JOIN e ON e.a = o.ea WHERE e.b = o.eb",
+      "B": "SELECT o.id, bt.v FROM o JOIN bt ON bt.id = o.x"
+     }
+    },
+    {
+     "name": "J3 embedded key, literal prefix and a joined column",
+     "family": "S2",
+     "sql": {
+      "T": "SELECT o.id, e.v FROM o JOIN e ON e.b = o.eb WHERE e.a = 500",
+      "B": "SELECT o.id, bt.v FROM o JOIN bt ON bt.id = o.x"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 221.2,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 159.8,
+        "p25_us": 165.8,
+        "p50_us": 298.8,
+        "p75_us": 304.4,
+        "p99_us": 807.9,
+        "max_us": 1573.4
+       },
+       "load": [
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.19 2.23 1/1440 1257959"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 143.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 83.0,
+        "p25_us": 87.6,
+        "p50_us": 224.0,
+        "p75_us": 229.5,
+        "p99_us": 268.6,
+        "max_us": 286.7
+       },
+       "load": [
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.19 2.23 1/1440 1257959"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 219.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 160.3,
+        "p25_us": 168.2,
+        "p50_us": 299.4,
+        "p75_us": 305.6,
+        "p99_us": 328.6,
+        "max_us": 333.4
+       },
+       "load": [
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.19 2.23 1/1440 1257959"
+       ]
+      }
+     },
+     "ratio_T_over_B": 1.54
+    },
+    {
+     "name": "O1 order by an embedded key",
+     "family": "S3",
+     "sql": {
+      "T": "SELECT a, b, v FROM e ORDER BY a, b LIMIT 100",
+      "B": "SELECT id, v FROM bt ORDER BY id LIMIT 100"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 39466.9,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 39126.7,
+        "p25_us": 39428.5,
+        "p50_us": 39570.5,
+        "p75_us": 39703.6,
+        "p99_us": 40179.1,
+        "max_us": 40357.9
+       },
+       "load": [
+        "3.04 2.19 2.23 1/1440 1257959",
+        "3.04 2.20 2.23 2/1444 1258130",
+        "3.04 2.20 2.23 2/1445 1258191"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 15.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 46.7,
+        "p25_us": 47.7,
+        "p50_us": 48.2,
+        "p75_us": 49.1,
+        "p99_us": 105.4,
+        "max_us": 107.5
+       },
+       "load": [
+        "3.04 2.19 2.23 2/1451 1257974",
+        "3.04 2.20 2.23 2/1444 1258130",
+        "3.04 2.20 2.23 2/1453 1258205"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 39539.6,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 39136.5,
+        "p25_us": 39435.3,
+        "p50_us": 39528.8,
+        "p75_us": 39684.3,
+        "p99_us": 41213.4,
+        "max_us": 45273.8
+       },
+       "load": [
+        "3.04 2.19 2.23 2/1451 1257974",
+        "3.04 2.19 2.23 3/1443 1258117",
+        "3.04 2.20 2.23 2/1453 1258205"
+       ]
+      }
+     },
+     "ratio_T_over_B": 2546.25
+    }
+   ],
+   "refusals": [
+    {
+     "family": "S4",
+     "sql": "INSERT INTO c VALUES (1, 1, 1, 0) ON CONFLICT (a, b) DO NOTHING",
+     "answer": "refused: a conflict target of more than one column is not supported (byte 48); the tuple key is the one conflict there is"
+    },
+    {
+     "family": "S4",
+     "sql": "INSERT INTO e VALUES (1, 1, 0) ON CONFLICT (a, b) DO NOTHING",
+     "answer": "refused: a conflict target of more than one column is not supported (byte 45); the tuple key is the one conflict there is"
+    },
+    {
+     "family": "S4",
+     "sql": "INSERT INTO e VALUES (1, 1, 0) ON CONFLICT DO NOTHING",
+     "answer": "refused: ON CONFLICT at byte 31 on a relation whose primary key is its Keystone id is not built"
+    },
+    {
+     "family": "S4",
+     "sql": "INSERT INTO hp (keyidentity, k, v) VALUES (1, 1, 0) ON CONFLICT (keyidentity) DO NOTHING",
+     "answer": "INSERTED oid=4004 rows=0 (0 rows)"
+    }
+   ],
+   "analyze": {
+    "J2 join by a whole embedded key / T": "refused: statement exceeded its row-touch budget of 100000000 tuples; it was still reading. A correlated subquery or a join on a non-tuple-key column reads the inner relation once per outer row, which is quadratic - rewrite it to bind a tuple key, or raise `max_rows_touched` in the config if this statement is meant to cost that much",
+    "J2 join by a whole embedded key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=200 pages=101 opens=101 pattern_id=0x19e55adfe10dde8e fetch_id=0x34a29bb317425f8c"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=written gen=0 switch=1 est=0:100000,1:100000"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 Probe bt key=0:0.1"
+     ],
+     [
+      "  filter 0:1.0 = 0:0.1"
+     ],
+     [
+      "project o.id=0:0.0, bt.v=0:1.2"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 Probe bt opens=100 examined=100 matched=100 sel=100% pages=100"
+     ],
+     [
+      "DB time 0.22 ms = CPU 0.22"
+     ]
+    ],
+    "J3 embedded key, literal prefix and a joined column / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=1238 pages=105 opens=1001 pattern_id=0x2013b079dd018c9f fetch_id=0xf08948c379eb9e75"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0 reordered=1"
+     ],
+     [
+      "planned order=planned gen=1 switch=0.0112047 est=1:655,0:1"
+     ],
+     [
+      "step 1 Range e range=[140737521123329, 140737521188864]"
+     ],
+     [
+      "  filter 0:0.1 = 500"
+     ],
+     [
+      "step 0 Scan o build on=col5 key=0:0.2"
+     ],
+     [
+      "  filter 0:0.2 = 0:1.5"
+     ],
+     [
+      "project o.id=0:1.0, e.v=0:0.3"
+     ],
+     [
+      "step 1 Range e opens=1 examined=1038 matched=1000 sel=96% pages=7 range_stopped_early=1"
+     ],
+     [
+      "step 0 Scan o opens=1000 examined=200 matched=100 sel=50% pages=98 inner_built=1 build_rows=100 build_probes=999"
+     ],
+     [
+      "DB time 0.20 ms = CPU 0.20"
+     ]
+    ],
+    "J3 embedded key, literal prefix and a joined column / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=200 pages=101 opens=101 pattern_id=0x19e55adfe10dde8e fetch_id=0x34a29bb317425f8c"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=written gen=1 switch=1 est=0:91,1:91"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 Probe bt key=0:0.1"
+     ],
+     [
+      "  filter 0:1.0 = 0:0.1"
+     ],
+     [
+      "project o.id=0:0.0, bt.v=0:1.2"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 Probe bt opens=100 examined=100 matched=100 sel=100% pages=100"
+     ],
+     [
+      "DB time 0.15 ms = CPU 0.15"
+     ]
+    ],
+    "O1 order by an embedded key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=1000000 pages=5781 opens=1 sorted=100 pattern_id=0xfab4ce5c26eedf09 fetch_id=0xb2324fb23944ca34"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan e"
+     ],
+     [
+      "project a=0:0.1, b=0:0.2, v=0:0.3"
+     ],
+     [
+      "sort 0:0.1 asc, 0:0.2 asc"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan e opens=1 examined=1000000 matched=1000000 sel=100% pages=5781"
+     ],
+     [
+      "DB time 39.83 ms = CPU 39.83"
+     ]
+    ],
+    "O1 order by an embedded key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=1 opens=1 pattern_id=0xa6085769bb82e981 fetch_id=0x500a764810fc141b"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan bt"
+     ],
+     [
+      "project id=0:0.0, v=0:0.2"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan bt opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "DB time 0.03 ms = CPU 0.03"
+     ]
+    ]
+   }
+  }
+ ]
+}

@@ -149,6 +149,7 @@ def main():
     ap.add_argument("--stmts", type=int, default=40)
     ap.add_argument("--port", type=int, default=31991)
     ap.add_argument("--arm-budget-s", type=float, default=3.0)
+    ap.add_argument("--cells", default="", help="comma-separated cell name prefixes; all if empty")
     a = ap.parse_args()
 
     def status(text):
@@ -226,7 +227,10 @@ def main():
             for fam, sql in REFUSALS:
                 run["refusals"].append({"family": fam, "sql": sql, "answer": answer(conn, sql)})
             table = cells(n)
+            wanted = [c for c in a.cells.split(",") if c]
             for name, (fam, arms) in table.items():
+                if wanted and not any(name.startswith(w + " ") for w in wanted):
+                    continue
                 status(f"n={n} cell={name}")
                 arms = {"T": arms["T"], "B": arms["B"], "T2": arms["T"]}
                 for arm in ("T", "B"):
@@ -238,8 +242,18 @@ def main():
                             for row in plan[1]][:40]
                     except Exception as exc:
                         run["analyze"][f"{name} / {arm}"] = f"refused: {exc}"
+                refused = None
                 for arm in arms:  # warm: every page resident, every statement parsed once
-                    conn.execute(arms[arm](random.Random(1)))
+                    try:
+                        conn.execute(arms[arm](random.Random(1)))
+                    except kwp.KwpError as exc:  # a refusal today is the cell's datum
+                        refused = {"arm": arm, "error": str(exc)[:400]}
+                        break
+                if refused is not None:
+                    run["cells"].append({"name": name, "family": fam, "refused": refused,
+                                         "sql": {x: arms[x](random.Random(1))[:300]
+                                                 for x in ("T", "B")}})
+                    continue
                 acc = {arm: {"lat": [], "ns": 0, "stmts": 0, "rows": 0, "load": []} for arm in arms}
                 for rep in range(a.reps):
                     order = list(arms) if rep % 2 == 0 else list(reversed(list(arms)))
