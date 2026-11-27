@@ -219,7 +219,8 @@ public:
     // **A checkpoint whose begin record lists the live transactions** (DZ-S1),
     // as a cadence or shutdown run's does: `RunCheckpoint` is the mount's,
     // which lists none because none is live after recovery. Run whole, on
-    // this thread, through the same `Start` the cadence's task calls.
+    // this thread: `Start`'s collection and then `BeginWith`, the order the
+    // cadence's task takes them in across its yields.
     Status RunLiveCheckpoint();
 
     // Recycling's counts over the instance's life (BC-S4): advances of the

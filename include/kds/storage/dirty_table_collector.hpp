@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "kds/wal/payload.hpp"
@@ -90,7 +91,9 @@ private:
     std::size_t at_ = 0;   // the next entry of the current pass
     std::size_t out_ = 0;  // the merge's write position
     std::vector<wal::CheckpointDirtyPage> entries_;
-    std::vector<wal::CheckpointDirtyPage> scratch_;
+    // The scatter's other buffer, never zero-filled (the entry is trivial):
+    // its pages fault in across the low pass's slices, not in one poll.
+    std::unique_ptr<wal::CheckpointDirtyPage[]> scratch_;
     // Each digit's count, then, after the count, its next write position.
     std::vector<std::uint32_t> low_;
     std::vector<std::uint32_t> high_;

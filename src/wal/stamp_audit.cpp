@@ -8,13 +8,13 @@ namespace kds::wal {
 #ifndef NDEBUG
 namespace {
 
-// A thread's records appended and not yet stamped. A mutation appends and
-// stamps one or two records before its next suspension point, so a few
-// slots are plenty; an overflow is counted as a note that never clears,
-// which the audit then reports - a thread appending that many records
-// unstamped is the finding.
+// A thread's pages owed a stamp, each at the highest LSN appended for it: a
+// stamp at or past that clears the page. A mutation appends and stamps a
+// page or two before its next suspension point, so a few slots are plenty;
+// past them a page is counted as an overflow that never clears, which the
+// audit then reports - a thread with that many pages unstamped is the
+// finding.
 struct Note {
-    RecordType type = RecordType::kInvalid;
     PageId page = kInvalidPageId;
     Lsn lsn = kNoLsn;
 };
@@ -23,7 +23,6 @@ struct Notes {
     std::array<Note, kNotes> at{};
     std::size_t used = 0;
     bool overflowed = false;
-    RecordType overflow_type = RecordType::kInvalid;
 };
 thread_local Notes t_notes;
 
@@ -51,32 +50,31 @@ bool Stamps(RecordType type) noexcept {
 void NoteAppendAwaitingStamp(RecordType type, PageId page, Lsn lsn) noexcept {
     if (page == kInvalidPageId || !Stamps(type)) return;
     Notes& n = t_notes;
+    for (std::size_t i = 0; i < n.used; ++i) {
+        if (n.at[i].page == page) {
+            if (lsn > n.at[i].lsn) n.at[i].lsn = lsn;
+            return;
+        }
+    }
     if (n.used == kNotes) {
-        if (!n.overflowed) n.overflow_type = type;
         n.overflowed = true;
         return;
     }
-    n.at[n.used++] = Note{type, page, lsn};
+    n.at[n.used++] = Note{page, lsn};
 }
 
 void NoteStamp(PageId page, Lsn lsn) noexcept {
     Notes& n = t_notes;
-    std::size_t out = 0;
     for (std::size_t i = 0; i < n.used; ++i) {
-        // A stamp at `lsn` covers every record of the page at or below it:
-        // the page's LSN is then past them all.
-        if (n.at[i].page == page && n.at[i].lsn <= lsn) continue;
-        n.at[out++] = n.at[i];
+        // A stamp at `lsn` covers every record of the page at or below it.
+        if (n.at[i].page == page && n.at[i].lsn <= lsn) {
+            n.at[i] = n.at[--n.used];
+            return;
+        }
     }
-    n.used = out;
 }
 
 bool AppendAwaitsStampOnThisThread() noexcept { return t_notes.used != 0 || t_notes.overflowed; }
-
-RecordType OldestUnstampedTypeOnThisThread() noexcept {
-    if (t_notes.used != 0) return t_notes.at[0].type;
-    return t_notes.overflowed ? t_notes.overflow_type : RecordType::kInvalid;
-}
 
 void ResetStampAuditForTest() noexcept { t_notes = Notes{}; }
 
@@ -85,7 +83,6 @@ void ResetStampAuditForTest() noexcept { t_notes = Notes{}; }
 void NoteAppendAwaitingStamp(RecordType, PageId, Lsn) noexcept {}
 void NoteStamp(PageId, Lsn) noexcept {}
 bool AppendAwaitsStampOnThisThread() noexcept { return false; }
-RecordType OldestUnstampedTypeOnThisThread() noexcept { return RecordType::kInvalid; }
 void ResetStampAuditForTest() noexcept {}
 
 #endif

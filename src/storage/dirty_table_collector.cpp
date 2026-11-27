@@ -33,7 +33,7 @@ DirtyTableCollector DirtyTableCollector::ForEntriesForTest(
 }
 
 void DirtyTableCollector::BeginSort() {
-    scratch_.resize(entries_.size());
+    scratch_ = std::make_unique_for_overwrite<wal::CheckpointDirtyPage[]>(entries_.size());
     low_.assign(kDigits, 0);
     high_.assign(kDigits, 0);
     at_ = 0;
@@ -42,6 +42,9 @@ void DirtyTableCollector::BeginSort() {
 
 bool DirtyTableCollector::Advance() {
     if (phase_ == Phase::kWalk) {
+        // The store's capacity bounds the table: reserved once, so no walk
+        // slice pays a reallocation of everything collected before it.
+        if (next_slot_ == 0) entries_.reserve(store_->configured_capacity());
         if (!store_->WalkDirtySlice(&next_slot_, chunks_per_slice_, &entries_)) return false;
         BeginSort();
     }
@@ -113,7 +116,7 @@ std::size_t DirtyTableCollector::Pass(std::size_t budget) {
                 break;
             case Phase::kMerge:
                 entries_.resize(out_);
-                std::vector<wal::CheckpointDirtyPage>().swap(scratch_);
+                scratch_.reset();
                 std::vector<std::uint32_t>().swap(low_);
                 std::vector<std::uint32_t>().swap(high_);
                 phase_ = Phase::kDone;

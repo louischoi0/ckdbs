@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "kds/wal/stamp_audit.hpp"
 #include "kds/base/common.hpp"
 #include "kds/base/status.hpp"
 #include "kds/base/statistics_scope.hpp"
@@ -30,6 +29,10 @@
 //
 // The `*Unpinned` accessors are the implementation seam only: protected
 // since MG06, so engine code cannot name them.
+
+namespace kds::wal {
+void NoteStamp(PageId page, std::uint64_t lsn) noexcept;  // `wal/stamp_audit.hpp` (DZ-S1)
+}  // namespace kds::wal
 
 namespace kds::storage {
 

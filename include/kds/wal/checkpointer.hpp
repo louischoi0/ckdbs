@@ -593,7 +593,7 @@ private:
     // before the append** (DZ-R1) - taken before a table collected across
     // yields, they would miss a transaction this core began meanwhile, whose
     // change the publish then writes and no begin record lists.
-    Status BeginWith(std::vector<CheckpointDirtyPage>& dirty, bool* busy);
+    Status BeginWith(std::span<const CheckpointDirtyPage> dirty, bool* busy);
 
     // `busy` given: the tried append (`Start(bool*)`).
     Status LogBegin(std::span<const CheckpointActiveTxn> active_txns,
@@ -668,8 +668,9 @@ private:
     sched::Coro WriteForPublish(std::span<const PageId> pages, std::uint32_t core_id,
                                 std::uint64_t generation);
     // Advances `collection` to whole, one slice a poll with a yield between
-    // (DZ-S1). False when the run was abandoned meanwhile (`generation`).
-    sched::Coro CollectSliced(DirtyCollection& collection, std::uint64_t generation);
+    // (DZ-S1), a start's slices timed as its phase. Cancelled when the run
+    // was abandoned meanwhile (`generation`).
+    sched::Coro CollectSliced(DirtyCollection& collection, std::uint64_t generation, bool start);
     void LogSkip(std::uint32_t core_id) const;
     bool task_in_flight_ = false;
     // Moved by `Abandon`, so a frame of an abandoned run that is ever polled

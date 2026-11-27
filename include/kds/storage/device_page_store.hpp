@@ -581,6 +581,8 @@ public:
     // collector merges.
     bool WalkDirtySlice(std::size_t* next_slot, std::size_t chunks,
                         std::vector<wal::CheckpointDirtyPage>* out) const;
+    // The frame capacity fixed at `Open`, which bounds every dirty table.
+    std::size_t configured_capacity() const noexcept { return configured_capacity_; }
 
     // Writes back exactly these pages and syncs - a checkpoint step. Ids
     // that are not dirty, or not resident, are skipped rather than treated

@@ -217,3 +217,55 @@ No stage is opened and no code is written. **Not reviewed**: the
 `critics-developer` review was started and stopped before it reported,
 so no line reference or reading in this order has a second reader behind
 it.
+
+### DZ-S1 - the walks in slices and the premise checked, done 2026-11-27
+
+On `dz-checkpoint-reactor-residue` at `78dfeb068`, its review's changes on
+top.
+
+- **Built**: `storage::DirtyTableCollector` - the store's slot walk
+  (`WalkDirtySlice`, 16 chunks a slice, the hold and handover a chunk as
+  DO's E2 takes them, armed or not), a two-pass LSD radix sort by page id and
+  the merge to one entry a page at its lowest non-zero recLSN, 64 Ki entries
+  a slice. The run task's start and publish advance it one slice a poll with
+  a yield between (`CollectSliced`); the synchronous `Start` runs the same
+  slices back to back. `BeginWith` takes the active transactions after the
+  table, with no suspension before the append (DZ-R1's second half). The
+  premise check (§2 item 2): `wal/stamp_audit.hpp` notes each appended
+  record that names a page, `StampPageLsn` clears it, and the suspend audit
+  records a suspension between the two (DZ-Q8 (a)); a suite run with the
+  audit printing found one kind that never stamps, `PAGE_INIT` (31
+  suspensions), exempt with its reason. The simulator gained
+  `RunLiveCheckpoint`, a checkpoint whose begin record lists the live
+  transactions (`RunCheckpoint` is the mount's, which lists none).
+- **DZ-R1's cell**: `DirtyTableCrashTest.ATransactionBegunInsideTheWalkIsListedAndTakenBackAfterACrash`
+  - a transaction begun at the walk's seam, its row updated and left
+  undecided, a live checkpoint, a crash: the row reads its old value. **Shown
+  to fail with the transactions taken before the walk** (the row read 7007).
+  It drives the synchronous path; the task path takes the same calls in the
+  same order with yields between.
+- **Review** (`critics-developer`): no engine defect. **Fixed by the
+  reviewer**: the census bench's timing wrapper did not forward
+  `CollectDirty`, so it measured the whole walk S1 replaced. **Applied**: the
+  walk timed again as the start phase, a slice an occurrence (P1); the
+  collection's vector reserved to the store's capacity and the scatter buffer
+  never zero-filled, which put about 5 ms in the poll that ended the walk
+  (P2); one note a page in the premise check, so sixteen appends to one page
+  cannot overflow it (P4); the dead accessor, the table taken as a span, no
+  handover after a slice's last chunk, a forward declaration for the store
+  header, two stale comments. **Rejected**: re-using a walked table across a
+  busy begin append (P3) - sound by §5a but against CZ-R3's "collects both
+  again", which is not CLA's to reword, and a busy answer needs a roll;
+  folding `MergeDirtyTable` into the collector (the whole and the sliced
+  merge take different shapes, and `DirtyTableCollectorTest` pins them
+  equal); deriving the collector from the WAL seam (it keeps the storage
+  class free of the checkpointer's header); a task-path loser cell (the
+  order is one function's, `BeginWith`, on both paths).
+- **Suite**: 5,346 of 5,348 at `78dfeb068` with the audit printing
+  (`ctest -LE bs-nightly -j4`, 186 s); the two failures are memory's base
+  flakes (`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`
+  3 of 10 alone, `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`
+  1 of 10). The review's changes ran S1's 86 cells green; the full suite
+  runs again with DZ-S2.
+- Overhead not measured; measured at the milestone's close.
+

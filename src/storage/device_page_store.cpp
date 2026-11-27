@@ -2525,7 +2525,9 @@ bool DevicePageStore::WalkDirtySlice(std::size_t* next_slot, std::size_t chunks,
         bool last = false;
         if (!EmitDirtyChunk(base, &last, emit)) return true;
         *next_slot = base + kFrameChunk;
-        AfterDirtyChunk(base / kFrameChunk, last);
+        // No handover after a slice's last chunk: the task yields next,
+        // holding nothing.
+        AfterDirtyChunk(base / kFrameChunk, last || n + 1 == chunks);
         if (last) return true;
     }
     return false;

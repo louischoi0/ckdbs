@@ -45,6 +45,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <random>
 #include <string>
 #include <thread>
@@ -118,6 +119,14 @@ public:
     kds::Status WriteFreeMaps() override {
         return Time(kFreeMaps, [&] { return inner_.WriteFreeMaps(); });
     }
+    // The store's sliced collection (DZ-S1), each slice timed into the piece
+    // the whole call was. Without this the run takes `CheckpointTarget`'s
+    // default - `DirtyTable` and `DirtyPages` whole, in one poll each - and
+    // the bench measures the walk DZ-S1 replaced.
+    std::unique_ptr<kds::wal::DirtyCollection> CollectDirty(kds::wal::DirtyCollectionFor use) override {
+        const Piece piece = use == kds::wal::DirtyCollectionFor::kStart ? kDirtyTable : kDirtyPages;
+        return std::make_unique<TimedCollection>(*this, piece, inner_.CollectDirty(use));
+    }
 
     void Print() const {
         for (int i = 0; i < kPieces; ++i) {
@@ -126,6 +135,20 @@ public:
     }
 
 private:
+    class TimedCollection final : public kds::wal::DirtyCollection {
+    public:
+        TimedCollection(const TimedTarget& target, Piece piece,
+                        std::unique_ptr<kds::wal::DirtyCollection> inner)
+            : target_(target), piece_(piece), inner_(std::move(inner)) {}
+        bool Advance() override { return target_.Time(piece_, [&] { return inner_->Advance(); }); }
+        std::vector<kds::wal::CheckpointDirtyPage>& Table() override { return inner_->Table(); }
+
+    private:
+        const TimedTarget& target_;
+        Piece piece_;
+        std::unique_ptr<kds::wal::DirtyCollection> inner_;
+    };
+
     kds::storage::PageStoreCheckpointTarget& inner_;
     mutable std::uint64_t max_[kPieces] = {};
 };

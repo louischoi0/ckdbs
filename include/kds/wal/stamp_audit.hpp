@@ -28,8 +28,6 @@ namespace kds::wal {
 void NoteAppendAwaitingStamp(RecordType type, PageId page, Lsn lsn) noexcept;
 void NoteStamp(PageId page, Lsn lsn) noexcept;
 bool AppendAwaitsStampOnThisThread() noexcept;
-// The oldest note still waiting, for the audit's message and a test.
-RecordType OldestUnstampedTypeOnThisThread() noexcept;
 // Drops this thread's notes: a test's, after it provoked one.
 void ResetStampAuditForTest() noexcept;
 

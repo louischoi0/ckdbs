@@ -221,12 +221,19 @@ Status Checkpointer::Start(bool* busy) {
         return Status::AlreadyExists("checkpointer: a checkpoint is already in progress");
     }
     const std::unique_ptr<DirtyCollection> collection = target_.CollectDirty(DirtyCollectionFor::kStart);
-    while (!collection->Advance()) {
+    {
+        // The walk is the start's (`CheckpointPhase::kStart`): its own
+        // occurrence, beside `BeginWith`'s, since one scope may not nest
+        // another's timer.
+        const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
+        const PhaseTimer timed(CheckpointPhase::kStart);
+        while (!collection->Advance()) {
+        }
     }
     return BeginWith(collection->Table(), busy);
 }
 
-Status Checkpointer::BeginWith(std::vector<CheckpointDirtyPage>& dirty, bool* busy) {
+Status Checkpointer::BeginWith(std::span<const CheckpointDirtyPage> dirty, bool* busy) {
     if (busy != nullptr) *busy = false;
     const CheckpointPhaseScope scope(&wal_.clock(), run_report_);
     const PhaseTimer timed(CheckpointPhase::kStart);
@@ -538,11 +545,12 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // `Complete`, a yield after each. A failed one ends the task with the
     // run left in progress; the next tick's task resumes it.
     //
-    // **The begin record is tried** (CZ-S3, C1b): on a roll the task parks
-    // before it snapshots anything, so no snapshot is taken to be thrown
-    // away; a tried `Start` that finds the latch held appends nothing and is
-    // called again after the park, snapshots and all (CZ-R3). Each busy
-    // answer, the roll flag's included, counts against `kLatchTries`.
+    // **The begin record is tried** (CZ-S3, C1b): on a roll already begun
+    // the task parks before it collects anything; a roll that begins during
+    // the sliced walk (DZ-S1) is met by the tried append, which appends
+    // nothing, and the task collects both tables again after the park
+    // (CZ-R3). Each busy answer, the roll flag's included, counts against
+    // `kLatchTries`.
     if (!in_progress_) {
         CheckpointRunReport::LatchSite& site = Site(CheckpointLatchSite::kBegin);
         for (int answers = 0;; ++answers) {
@@ -555,7 +563,9 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
                     // it (`BeginWith`). A busy answer collects both again.
                     const std::unique_ptr<DirtyCollection> collection =
                         target_.CollectDirty(DirtyCollectionFor::kStart);
-                    if (!(co_await CollectSliced(*collection, generation)).ok()) co_return Status::OK();
+                    if (!(co_await CollectSliced(*collection, generation, /*start=*/true)).ok()) {
+                        co_return Status::OK();
+                    }
                     if (Status s = BeginWith(collection->Table(), &busy); !s.ok()) {
                         co_return FinishTask(core_id, s);
                     }
@@ -675,7 +685,7 @@ sched::Coro Checkpointer::RunTask(CheckpointGate* gate, std::uint32_t core_id,
     // whole at about 10 ms on the reactor at 1 Mi dirty frames.
     const std::unique_ptr<DirtyCollection> collection =
         target_.CollectDirty(DirtyCollectionFor::kPublish);
-    if (!(co_await CollectSliced(*collection, generation)).ok()) co_return Status::OK();
+    if (!(co_await CollectSliced(*collection, generation, /*start=*/false)).ok()) co_return Status::OK();
     const std::vector<CheckpointDirtyPage>& dirty = collection->Table();
     std::vector<PageId> batch;
     batch.reserve(config_.pages_per_step);
@@ -744,8 +754,16 @@ Status LogStopped() {
 
 }  // namespace
 
-sched::Coro Checkpointer::CollectSliced(DirtyCollection& collection, std::uint64_t generation) {
-    while (!collection.Advance()) {
+sched::Coro Checkpointer::CollectSliced(DirtyCollection& collection, std::uint64_t generation,
+                                        bool start) {
+    // A start's slices are each an occurrence of its phase (the census's
+    // `start`), timed one poll at a time: no scope spans a yield.
+    const auto advance = [&] {
+        const CheckpointPhaseScope scope(&wal_.clock(), start ? run_report_ : nullptr);
+        const PhaseTimer timed(CheckpointPhase::kStart);
+        return collection.Advance();
+    };
+    while (!advance()) {
         co_await sched::Yield{};
         // Abandoned meanwhile: nothing of this checkpointer is the task's.
         if (generation != task_generation_) co_return Status::Cancelled("checkpoint run abandoned");
