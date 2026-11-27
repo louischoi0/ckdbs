@@ -1,11 +1,15 @@
 # Work order DZ - what a checkpoint still does on its reactor: the dirty-table walk, the page writes, the map barrier
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
+Status: **OPEN since 2026-11-27**, on worktree `dz-checkpoint-reactor-residue`
+(branch `worktree-dz-checkpoint-reactor-residue`) from `481d101aa`
+(`v3.4.17-202-g481d101aa`), under the operator's standing go-ahead of
+2026-11-27 (`raft-marks-2026-11-27.md` §11): every DZ-Q item is **adopted
+on that go-ahead, never marked by the operator item by item** (§4,
+"Marks"). Written 2026-11-26 on worktree
 `known-gaps-milestone-orders` (branch
 `worktree-known-gaps-milestone-orders`) from `8274c951`
 (`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; DZ-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
+(`raft-marks-2026-11-26.md` §3). A `[source-read]` claim
 with a `path:line` was read at `8274c951`; a claim taken from
 `known-gaps.md` carries that entry's own verification commit and is not
 re-verified here.
@@ -96,7 +100,11 @@ not located here; DZ-S0 lists them.
   before its begin record's redo point** `[quiet-wrong]`: a page the
   fold drops is a page redo does not replay. The anchor's fold never
   decreases, as today; a crash cell cuts between two yields of one walk
-  on every core of a two-core instance.
+  on every core of a two-core instance (built on one core, DZ-Q7 (a)).
+  **And its begin record lists every transaction of its core undecided
+  at the append** (added at DZ-S0, §7): the active-transaction table is
+  snapshotted after the walk, with no suspension between it and the
+  append.
 - **DZ-R2. A page write off the reactor writes the bytes copied under
   the latch**, and only what the copy covered is cleaned - writeback's
   rule, unchanged.
@@ -123,6 +131,27 @@ not located here; DZ-S0 lists them.
 | DZ-Q3 | The walk's yield interval | (a) derived from DZ-R5's bar and S0's per-chunk cost; (b) a boot key | (a): a key is a second name for the bar |
 | DZ-Q4 | The carve at `relaxed` | (a) measured, and built only if it is the `fsync` the diagnosis read; (b) outside DZ | (a) |
 | DZ-Q5 | The unlogged-page bit (`:1603`) | (a) outside DZ: it leaks a page and DV counts it; (b) inside | (a) |
+| DZ-Q6 | The map barrier, which DZ-S0 could not price (raised by CLA at DZ-S0) | (a) built as §2 item 4 says: the halves' own holds are 0.01-0.18 ms, but the case §1 names - a wait on another caller's `fsync` under the barrier - needs a concurrent blocking flush and a changed headerless map, which S0's bench does not create, and when it happens it is one data-file `fsync` on the reactor (`[source-read]`; 3.2 ms median and up to 252 ms on this host, BA's diagnosis); (b) left, as DZ-Q1 (a) leaves a piece under the bar | (a): DZ-Q1's "under the bar" is a measurement S0 did not take for this piece |
+| DZ-Q7 | DZ-R1's crash cell (raised by CLA at DZ-S0) | (a) on the one-core simulator, the seam at a slice boundary of the start's walk, for both covers and for the loser S0 found (§7, DZ-S0); the two-core form waits for a simulator with cores (EC, written); (b) wait for EC | (a): the loser is a one-core defect, and EC is not opened |
+
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-27 (go-ahead-achieving-milestone)** - *"go ahead until
+achieving milestone, I will follow CLA proposal if decision needed"*
+(`raft-marks-2026-11-27.md` §11) - and none is the operator's own mark on
+the item. No item is tagged `[quiet-wrong]`; DZ-R1 is, and is a rule.
+
+| | adopted | note |
+|---|---|---|
+| DZ-Q0 | (a) | §2's 1-4 |
+| DZ-Q1 | (a) | DZ-S0 gates; a piece already under DZ-R5's bar is left |
+| DZ-Q2 | (a) | the existing data-sync thread, (b) only if S0 shows syncs queueing |
+| DZ-Q3 | (a) | the yield interval derived, no key |
+| DZ-Q4 | (a) | the carve measured first, built only if it is the `fsync` |
+| DZ-Q5 | (a) | outside DZ: DV counts the page it leaks (`sys.volume_census`, landed at `8dd5ce8ea`) |
+| DZ-Q6 | (a) | raised at DZ-S0; the map halves tried and parked on a busy barrier |
+| DZ-Q7 | (a) | raised at DZ-S0; the crash cells on the one-core simulator |
 
 ## 5. Stages
 
@@ -142,6 +171,42 @@ not located here; DZ-S0 lists them.
 - No change to the cadence, the rotation or what a checkpoint records.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### Opened 2026-11-27, on the standing go-ahead
+
+On `dz-checkpoint-reactor-residue` from `481d101aa`
+(`v3.4.17-202-g481d101aa`), the operator's word of 2026-11-27
+(`raft-marks-2026-11-27.md` §11); DZ-Q0..Q5 adopted as proposed (§4,
+"Marks"). The order was not reviewed when written (below); it is read
+against the tree by DZ-S0, and its line references into `known-gaps.md`
+are `8274c951`'s (about 230 lines lower at `481d101aa`, every entry
+present).
+
+### DZ-S0 - census, done 2026-11-27
+
+`bench/v3.5.0/results-dz-s0-census-v3.4.17-202-g481d101aa.md`, on
+`dz-checkpoint-reactor-residue` at `481d101aa`, a new bench
+(`bench/checkpoint_reactor_hold_bench.cpp`).
+
+- **Over the bar**: the start's walk at 256 Ki and 1 Mi (7-73 ms), the
+  publish's walk at 1 Mi (9.9-10.9 ms), a step's writes at 1 Mi (35 ms to
+  1.26 s, the kernel's writeback throttle). **Under it**: the map halves'
+  own holds (0.01-0.18 ms), every piece at 64 Ki but one start (8.5 ms).
+- **DZ-Q1 (a) read**: the walks are DZ-S1's and the writes DZ-S2's; the
+  map halves are built anyway on DZ-Q6 (a), raised here, because the case
+  §1 names was not exercised.
+- **§5a re-read with a yield** (`[quiet-wrong]`): the publish covers every
+  window a yield opens, so redo needs nothing new; **the active-transaction
+  table does**. `Start` takes it before the walk, so a transaction of the
+  checkpointing core begun during a yield and undecided at the append is in
+  no begin record: its change reaches the device by the publish, and a
+  crash leaves it committed in effect. DZ-R1 now says so, and DZ-S1 takes
+  the transactions after the walk.
+- **Not measured**: the carve (DZ-S3 measures it first, with the server
+  binary); the map barrier's wait (DZ-Q6); the log gate and the anchor
+  page, which the bench cuts.
+- No code beyond the bench; no review run on a results file and a bench
+  (the bench is reviewed with DZ-S1, which keeps it).
 
 ### Written 2026-11-26
 

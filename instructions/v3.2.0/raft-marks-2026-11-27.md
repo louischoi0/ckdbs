@@ -92,3 +92,13 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | `worktree-dv-unreachable-page-reclaim` - DV's close at `8e2b5869c`, then `origin/main` merged into it on the work branch twice (`fb08bcd67` for DW, `8cb53b614` for DW's landing record and DY-S0) - merged into `main` `--no-ff` at `8dd5ce8ea` and pushed, **the pre-push hook skipped**. **The full suite was not executed on the merged tree**: it was built, and 125 cells of DV's, DW's and the mount's ran green on it. No suite run before the merge was green either - three runs, 5,310 of 5,312, 5,312 of 5,314 and 5,313 of 5,314, each failing only two-core cells that fail alone at the base commit. No run is reported as a pass. |
 | **Does not settle** | DV-Q11, which the close's review named the operator's to rule on and the word did not speak to - the 18 index-root pages stay recorded and left on CLA's reading; every other DV item, each CLA's proposal adopted on the go-ahead of §5; a tag or a version |
 | **Recorded at** | this file; `workorder-dv-unreachable-page-reclaim.md` (header, §7 "Landed"); DV's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 11. DZ opened on a standing go-ahead scheduled two hours ahead; DZ-Q0..Q5 adopted
+
+| | |
+|---|---|
+| **Word** | *"In 2 hours, /go-ahead-achieving-milestone DZ; when it is done, commit push no verify"* (given in Korean at 2026-11-27 13:30 UTC; recorded in English), run by the session's one-shot job at 15:31 UTC. The skill it names carries the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **DZ is opened** on worktree `dz-checkpoint-reactor-residue` (branch `worktree-dz-checkpoint-reactor-residue`) from `481d101aa` (`v3.4.17-202-g481d101aa`). **DZ-Q0..Q5 are CLA's proposals adopted on that standing go-ahead**, recorded as such in the order's §4 "Marks" and never as the operator's own mark on an item: DZ-Q0 (a), DZ-Q1 (a), DZ-Q2 (a), DZ-Q3 (a), DZ-Q4 (a), DZ-Q5 (a). No DZ-Q item is tagged `[quiet-wrong]`; the rule DZ-R1, which is, is re-read against the tree at DZ-S0 before any stage builds on it |
+| **The push** | the same word's second half is the operator's own word on DZ's landing: once DZ closes under the go-ahead, the work branch is merged into `main` and pushed with `--no-verify`, the hook skipped by the operator's word. It covers that push only |
+| **Does not settle** | a tag or a version; the push of any tag; any milestone but DZ; a push of DZ before it closes |
+| **Recorded at** | this file; `workorder-dz-checkpoint-reactor-residue.md` (header, §4 "Marks"); DZ's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
