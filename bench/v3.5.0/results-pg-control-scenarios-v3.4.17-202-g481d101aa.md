@@ -9,7 +9,7 @@ host, another PostgreSQL minor version and a native install, and they differ fro
 made of (section 9: commit 9.7x, round trip 2.6x, per examined row 1.9x, per returned row 1.2x to 1.4x). No KDS cell ran in this window.
 
 The thesis, in the order the file shows it: (1) the cells are repeatable on this host, with a median spread of 2.9 % to 3.9 % per scenario and
-a few small cells above 20 % that carry no claim (section 4); (2) a booking is 479 µs, of which the durable commit is 29 % and its floor
+29 of 257 measurements above 20 %, which carry no claim (section 4); (2) a booking is 479 µs, of which the durable commit is 29 % and its floor
 (p0) is 125.4 µs (section 5); (3) an unindexed equality costs a fixed 22 to 27 µs round trip plus about 18 ns per row examined, and an index
 removes the per-row term only from 1,000 loans up, 1.3x to 1.7x there and 4.7x to 7.6x on the `loans` equalities at 10,000 (sections 6 and 8); (4) the shapes that return many rows are bounded by a per-returned-row
 cost of 2.8 µs that moved least against v3.3.0, which is the cell family where a later KDS ratio is least sensitive to the host (section 8).
@@ -24,7 +24,7 @@ cost of 2.8 µs that moved least against v3.3.0, which is the cell family where 
 | Build type, KDS binary | not applicable: no KDS binary ran. The version of record at the measured commit is `v3.4.17`, `git describe --tags` = `v3.4.17-202-g481d101aa` |
 | Server | PostgreSQL **18.7** (Debian 18.7-1.pgdg13+5, gcc 14.2.0, x86_64) in a fresh `docker.io/library/postgres:18` container (image created 2026-11-24 04:30:03 UTC, id `71351f08f4be...`), started by `podman` 6.2.0 for this run, container id `a7177958b26a...`, run as `podman run -d --network host`, so **no rootless port proxy** sits between the driver and the postmaster. `initdb --encoding=UTF8 --locale=C`, `trust` authentication, database `bench`, role `postgres` |
 | Server configuration | **PostgreSQL defaults**. The run set exactly two keys, both on the command line: `port = 15434` and `listen_addresses = 127.0.0.1`. Every other non-default line of `conf/pg-nondefault.txt` is the image's or `initdb`'s (`shared_buffers = 128MB`, `max_connections = 100`, `max_wal_size = 1GB`, `min_wal_size = 80MB`, `autovacuum_worker_slots = 16`, `dynamic_shared_memory_type = posix`); `synchronous_commit = on`, `fsync = on` (`conf/pg-settings.txt`, 400 settings). No tuning |
-| Device | the container's storage under `/home/ukjin/.local/share/containers/storage` on `/` = **`/dev/mapper/fedora-root`, xfs** (`df -T /home/ukjin` at writing time; an LVM volume on an NVMe device, per the operator's record of this host); **never tmpfs**. A fresh cluster for this run (ready to accept connections at 00:18:31.97 UTC, `logs/pg.serverlog`) |
+| Device | the container's storage under `/home/ukjin/.local/share/containers/storage` on `/` = **`/dev/mapper/fedora-root`, xfs** (`df -T /home/ukjin` at writing time, not at run time as `bench/README.md` rule 2 asks: the run did not record it, a deviation of this run; an LVM volume on an NVMe device, per the operator's record of this host); **never tmpfs**. A fresh cluster for this run (ready to accept connections at 00:18:31.97 UTC, `logs/pg.serverlog`) |
 | Host | Intel Core Ultra 7 270K Plus, 24 logical CPUs (8 P-cores = CPUs 0-7, 16 E-cores = CPUs 8-23), `powersave` governor, Linux 7.3.6-300.fc45 (`uname -r` at writing time). **Not the host of any earlier PostgreSQL number in `bench/`** |
 | Pinning | the postmaster and every process under it on **CPUs 0-7**: `podman --cpuset-cpus` is unavailable in rootless mode on this host, so `taskset -a -cp 0-7` was applied to the postmaster and its children after start, and new backends inherit it (`conf/pg-affinity.txt`: nine processes, all `0-7`). Every driver ran under **`taskset -c 8-23`** |
 | Quiet host | a gate before every cell waits for no `cc1plus`, `cmake --build`, `ctest` or `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh`), **ignoring `kds_server` by name**: another project's `kds_server` (pid 1386) and containers (`sql-tuning-*`: postgres 17, mssql, two oracle and a `kds` image) run on this host throughout, so the gate sees their CPU only as the 8 % busy ceiling, not by process. `/proc/loadavg` and the foreign-process list are in every cell's `.precheck` (1-minute load 0.50 to 1.20 over the 36 cells). Section 4 states what the gate did and did not catch |
@@ -82,8 +82,8 @@ claim (marked `†` below). A cell is a finding against another only if the diff
 What explains the spreads that are large, as far as the run shows:
 
 * **The first read phase of a scenario-3 cell is slow to start.** `pk-user` runs first (200 operations, about 5 ms) and carries 5 of the 9 scenario-3 cells above 20 %: in `pg-s3-n10000-none` its three runs have means of 38.4 µs, 62.7 µs and 21.2 µs (p50 28.7, 56.5, 20.3 µs). The
-  pattern (an early stretch of a short phase several times slower, then the steady state) is what a CPU that has not yet ramped up would show; the host's CPUs report `powersave`
-  and about 51 % of maximum frequency at an idle sample. **The cause is unverified** (no frequency was sampled during a cell). Consequence: `pk-user` is not usable as the
+  pattern (a short first phase slower than the rest of the cell) is consistent with a CPU that has not yet ramped up (the host's governor is `powersave`), but the JSON holds
+  percentiles only, not operation order, so an early slow stretch is not shown. **The cause is unverified** (no frequency was sampled during a cell). Consequence: `pk-user` is not usable as the
   control that cannot be affected, and a later KDS run's first phase is exposed to the same start-up term if its cause is the host (unverified).
 * **A time-triggered checkpoint overlapped round 1.** The server log has `checkpoint starting: time` at 00:23:32 (before any cell) and again at **00:28:32**, completing at 00:29:26 (543 buffers written over 54.4 s, as the default spreading
   gives). It overlapped the round-1 cells from `pg-s3-n1000-all` to `pg-s1s-n10080` (`pg-s3-n1000-none` ended at 00:28:31 by the `timeline`); rounds 2 and 3 saw none. This is PostgreSQL's own default behaviour and was not controlled. `pg-s4` run 1's `d1-open` (240 autocommit inserts, mean 383.8 µs, p99 12,986.6 µs, max 13,414.3 µs against means of
@@ -95,6 +95,48 @@ What explains the spreads that are large, as far as the run shows:
 
 The shared-host caveat is the one the gate cannot remove: the other project's containers and `kds_server` ran throughout; the gate's 8 % busy ceiling bounds them in aggregate (the loads it sampled during waits were 0 to 1 %), and
 the drivers' and server's CPU sets are disjoint from each other but not from those processes.
+
+Per cell (`bench/README.md` rule 4): the `.precheck` written just before each cell started, quoted from the archive. The foreign-process column
+counts the `pgrep -a -f "cc1plus|cmake --build|ctest|kds_tests"` processes and names the program.
+
+| Cell | Precheck (UTC) | `/proc/loadavg` 1 / 5 / 15 min | Gate wait | Foreign processes |
+|---|---|---|---|---|
+| `pg-s2-b1` | 00:25:07 | 1.20 / 1.17 / 1.46 | 390 s | 3 (kds_tests, shell wrapper of kds_tests) |
+| `pg-s3-n200-none` | 00:28:23 | 0.55 / 0.96 / 1.33 | 190 s | none |
+| `pg-s3-n200-all` | 00:28:27 | 0.55 / 0.96 / 1.33 | 0 s | none |
+| `pg-s3-n1000-none` | 00:28:30 | 0.50 / 0.94 / 1.32 | 0 s | none |
+| `pg-s3-n1000-all` | 00:28:34 | 0.70 / 0.98 / 1.33 | 0 s | none |
+| `pg-s3-n10000-none` | 00:28:37 | 0.70 / 0.98 / 1.33 | 0 s | none |
+| `pg-s3-n10000-all` | 00:28:44 | 0.82 / 1.00 / 1.33 | 0 s | none |
+| `pg-s4` | 00:28:51 | 0.76 / 0.98 / 1.32 | 0 s | none |
+| `pg-s1` | 00:28:55 | 0.78 / 0.98 / 1.32 | 0 s | none |
+| `pg-s1s-n252` | 00:29:16 | 0.77 / 0.97 / 1.31 | 0 s | none |
+| `pg-s1s-n1008` | 00:29:21 | 0.70 / 0.95 / 1.30 | 0 s | none |
+| `pg-s1s-n10080` | 00:29:25 | 0.65 / 0.93 / 1.29 | 0 s | none |
+| `r2-pg-s2-b1` | 00:29:32 | 0.60 / 0.92 / 1.29 | 0 s | none |
+| `r2-pg-s3-n200-none` | 00:29:38 | 0.63 / 0.92 / 1.28 | 0 s | none |
+| `r2-pg-s3-n200-all` | 00:29:41 | 0.74 / 0.94 / 1.29 | 0 s | none |
+| `r2-pg-s3-n1000-none` | 00:29:44 | 0.68 / 0.92 / 1.28 | 0 s | none |
+| `r2-pg-s3-n1000-all` | 00:29:48 | 0.62 / 0.91 / 1.27 | 0 s | none |
+| `r2-pg-s3-n10000-none` | 00:29:52 | 0.62 / 0.91 / 1.27 | 0 s | none |
+| `r2-pg-s3-n10000-all` | 00:30:03 | 0.79 / 0.93 / 1.27 | 0 s | none |
+| `r2-pg-s4` | 00:30:10 | 0.89 / 0.95 / 1.28 | 0 s | none |
+| `r2-pg-s1` | 00:30:14 | 0.81 / 0.93 / 1.27 | 0 s | none |
+| `r2-pg-s1s-n252` | 00:30:35 | 0.95 / 0.95 / 1.27 | 0 s | none |
+| `r2-pg-s1s-n1008` | 00:30:40 | 0.87 / 0.94 / 1.26 | 0 s | none |
+| `r2-pg-s1s-n10080` | 00:30:44 | 0.80 / 0.92 / 1.26 | 0 s | none |
+| `r3-pg-s2-b1` | 00:30:51 | 0.74 / 0.91 / 1.25 | 0 s | none |
+| `r3-pg-s3-n200-none` | 00:30:57 | 0.92 / 0.94 / 1.26 | 0 s | none |
+| `r3-pg-s3-n200-all` | 00:31:00 | 0.85 / 0.92 / 1.25 | 0 s | none |
+| `r3-pg-s3-n1000-none` | 00:31:04 | 0.78 / 0.91 / 1.25 | 0 s | none |
+| `r3-pg-s3-n1000-all` | 00:31:07 | 0.78 / 0.91 / 1.25 | 0 s | none |
+| `r3-pg-s3-n10000-none` | 00:31:11 | 0.71 / 0.89 / 1.24 | 0 s | none |
+| `r3-pg-s3-n10000-all` | 00:31:18 | 0.74 / 0.90 / 1.24 | 0 s | none |
+| `r3-pg-s4` | 00:31:24 | 0.70 / 0.88 / 1.23 | 0 s | none |
+| `r3-pg-s1` | 00:31:29 | 0.64 / 0.87 / 1.22 | 0 s | none |
+| `r3-pg-s1s-n252` | 00:31:50 | 0.74 / 0.88 / 1.22 | 0 s | none |
+| `r3-pg-s1s-n1008` | 00:31:54 | 0.76 / 0.88 / 1.22 | 0 s | none |
+| `r3-pg-s1s-n10080` | 00:31:59 | 0.70 / 0.86 / 1.21 | 0 s | none |
 
 ## 5. Scenario 2: one durable booker
 
@@ -595,7 +637,7 @@ What the ratios show is that the move did not scale PostgreSQL uniformly: **it m
 
 | wait | measure here | measure at v3.3.0 | ratio |
 |---|---|---|---|
-| durable commit | scenario 2 `commit` mean 138.2 µs (p0 125.4 µs) | 1,343.4 µs (p0 not tabulated; p50 1,278.8 µs) | **9.7x lower** |
+| durable commit | scenario 2 `commit` mean 138.2 µs (p0 125.4 µs) | 1,343.4 µs (p0 1,011.7 µs from its archived JSON; p50 1,278.8 µs) | **9.7x lower** (p0 8.1x) |
 | durable commit | autocommit insert, scenario 1 write sweep, 5,988 rows/s | 739 rows/s | 8.10x |
 | booking, commit included | 2,087.1 tps | 419.5 tps | 4.98x |
 | fixed round trip | `read-bar-lookup` mean 27.1 µs (p0 22.7 µs) | 70.8 µs (p0 65.0 µs) | 2.6x lower (p0 2.9x) |
