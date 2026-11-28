@@ -468,6 +468,16 @@ cheaper. The residual is EB-Q11 (a), stated in `known-gaps.md`. The
 remedies' own review is the suite and the diagnosis cells; no
 `critics-developer` review was run on them, a statement of fact.
 
+**The full suite at the closing commit** (`4ab5d55d5`, Debug, `ctest -LE
+bs-nightly -j4`, pinned to CPUs 8-23 beside the measurement): **5,404 of
+5,405**. The one failure is
+`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+which expires at its 60 s net. Repeated under the same pinning it failed
+**9 of 10 at the base `9e7597d5d`** (a Debug build of that commit) and 7 of
+10 on this tree; unpinned on this tree it failed 4 of 5. It is the
+group-commit flake this host's notes record, at a higher rate on this day,
+and EB did not cause it. It is not reported as a pass.
+
 **The documents**: `CLAUDE.md`'s Primary keys, Query language and
 `ORDER BY` rows; `index.md` IX8, IX9, IX17; `heap-and-tuple.md` §3.1c;
 `parser-v2.md` I11, I20; `manual/sql/sql.md`; `known-gaps.md`, as each
