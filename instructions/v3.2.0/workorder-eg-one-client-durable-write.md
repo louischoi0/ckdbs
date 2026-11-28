@@ -72,7 +72,8 @@ runs
 - **The sync is at parity and so are the writes.** An autocommit insert
   at `strict` is not slower than PostgreSQL's.
 - **The reads carry the booking's gap**, and they are the statements the
-  unequal clients bear on (EF §1.1). `recipe-read` is also an index on
+  unequal clients bear on (EF §1.1; measured at EF-S0: the KDS client
+  adds 16.6 µs a statement where the twin's decoding read adds 0.8 µs). `recipe-read` is also an index on
   PostgreSQL and a walk of 93 rows on KDS, by the drivers' design.
 - **`result-insert` is the open cell**: 4,859.0 qps (205.8 µs, spread
   1.7 %) on KDS at `6c98f7c32`, `cores = 1`, `group`, against 5,981 qps

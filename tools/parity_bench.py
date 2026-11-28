@@ -55,6 +55,7 @@ import statistics
 import sys
 import time
 
+import ckdbs_cli
 import kwp
 import pg_wire
 from bb_overhead_benchmark import host_state
@@ -97,12 +98,26 @@ LOAD_BATCH = 500
 class Kds:
     name = "kds"
 
-    def __init__(self, port, pid):
+    def __init__(self, port, pid, client="query"):
         self.conn = kwp.Connection("127.0.0.1", port, timeout=120.0, client_name="parity_bench")
         self.pid = pid
+        # `--kds-client send_command`: the timed statements go through the
+        # path the scenario drivers timed before EF-S1, on a connection of
+        # its own. Loading and DDL stay on `query` either way.
+        self.cli = (ckdbs_cli.ServerConnection("127.0.0.1", port, timeout=120.0)
+                    if client == "send_command" else None)
 
     def run(self, sql):
         return self.conn.query(sql)
+
+    def timed(self, sql):
+        if self.cli is None:
+            return self.conn.query(sql)
+        reply = ckdbs_cli.format_reply(self.cli.send_command(sql))
+        if reply.startswith("ERR"):
+            return "", 0, 0, reply
+        # A row set renders as a header line and one line per row.
+        return "", reply.count("\n"), len(reply), None
 
     def cpu_ns(self):
         return sched_ns(self.pid)
@@ -114,19 +129,62 @@ class Kds:
 class Pg:
     name = "pg"
 
-    def __init__(self, port, database):
+    def __init__(self, port, database, client="query"):
         self.conn = pg_wire.PgConnection(port=port, database=database, timeout=120.0,
                                          application_name="parity_bench")
+        self.client = client
         must(self, "SET max_parallel_workers_per_gather = 0")
+
+        # A containerised server reports its backend's pid in the
+        # container's namespace; `schedstat` is read by the host's.
+        self.pid = host_pid(self.conn.backend_pid, self.conn._sock.getsockname()[1])
 
     def run(self, sql):
         return self.conn.query(sql)
 
+    def timed(self, sql):
+        if self.client == "query":
+            return self.conn.query(sql)
+        # `--pg-client fetch`: what the scenario 2 and 3 twins time around a
+        # read - every value fetched and decoded to a string, no rendering.
+        result, error = self.conn.fetch(sql)
+        if error is not None:
+            return "", 0, 0, error
+        rows = [[None if v is None else v.decode() for v in row] for row in result]
+        return "", len(rows), 0, None
+
     def cpu_ns(self):
-        return backend_ns(self.conn.backend_pid)
+        return backend_ns(self.pid)
 
     def create(self, table):
         return f"CREATE TABLE {table} ({', '.join(f'{c} {p}' for c, _, p in SCHEMA[table])}, PRIMARY KEY (id))"
+
+
+def host_pid(pid, client_port):
+    """The host pid of the PostgreSQL backend whose own namespace calls it
+    `pid`. Several servers on one host can each have a backend of that
+    number; this session's shows its client port in its process title."""
+    found = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/status") as f:
+                text = f.read()
+            with open(f"/proc/{entry}/cmdline", "rb") as f:
+                title = f.read()
+        except OSError:
+            continue
+        if not text.startswith("Name:\tpostgres"):
+            continue
+        nspid = next((line for line in text.splitlines() if line.startswith("NSpid:")), "")
+        if nspid and int(nspid.split()[-1]) == pid:
+            found.append((int(entry), title))
+    if len(found) > 1:
+        found = [f for f in found if f"({client_port})".encode() in f[1]]
+    if len(found) != 1:
+        sys.exit(f"pg: backend {pid} maps to {len(found)} host processes; cannot pick one")
+    return found[0][0]
 
 
 def must(engine, sql):
@@ -175,14 +233,14 @@ def cell(engine, shape, args, rep):
     warm = random.Random(f"{args.seed}-{shape}-{rep}-warm")
     for _ in range(max(1, ops // 10)):
         sql = make(warm, args)
-        if engine.run(sql)[3] is not None:
+        if engine.timed(sql)[3] is not None:
             sys.exit(f"{engine.name} {shape} warm-up: {sql[:120]}")
     statements = [make(rng, args) for _ in range(ops)]
     latencies, counts = [], []
     cpu0, client0, wall0 = engine.cpu_ns(), time.process_time(), time.perf_counter()
     for sql in statements:
         t0 = time.perf_counter()
-        _tag, n, _bytes, error = engine.run(sql)
+        _tag, n, _bytes, error = engine.timed(sql)
         latencies.append(time.perf_counter() - t0)
         if error is not None:
             sys.exit(f"{engine.name} {shape}: {error}")
@@ -225,13 +283,21 @@ def main():
     p.add_argument("--scale", type=float, default=1.0, help="multiplies every shape's ops")
     p.add_argument("--shapes", default=",".join(SHAPES))
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--kds-client", choices=("query", "send_command"), default="query",
+                   help="the KDS client the timed statements go through: `query` counts rows as "
+                        "pg_wire's does; `send_command` decodes and renders every field, as the "
+                        "scenario drivers' timed path did before EF-S1")
+    p.add_argument("--pg-client", choices=("query", "fetch"), default="query",
+                   help="the PostgreSQL client the timed statements go through: `query` counts "
+                        "rows; `fetch` decodes every value to a string, as the scenario 2 and 3 "
+                        "twins' timed reads do")
     p.add_argument("--json", required=True)
     p.add_argument("--status")
     args = p.parse_args()
     args.bars = args.symbols * args.sessions
     shapes = args.shapes.split(",")
 
-    kds, pg = Kds(args.kds_port, args.kds_pid), Pg(args.pg_port, args.pg_db)
+    kds, pg = Kds(args.kds_port, args.kds_pid, args.kds_client), Pg(args.pg_port, args.pg_db, args.pg_client)
     for engine in (kds, pg):
         status(args, f"load {engine.name}")
         load(engine, args)

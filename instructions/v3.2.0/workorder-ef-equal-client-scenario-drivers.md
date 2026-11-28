@@ -66,17 +66,23 @@ server's per-statement work (S3, behind EF-Q1's gate).
   it calls `kwp.Connection.execute`, which builds a list per row and a
   bytes object per field, then renders every field to text and joins the
   rows into one string.
-- **The PostgreSQL twins of scenarios 2, 3 and 4 time
-  `PgConnection.query`** (`tools/pg_wire.py:224-262`; scenario 4's through
-  `PgConnection.send_command`, `tools/pg_wire.py:313-322`): rows are
-  counted and their column lengths walked, and no value is decoded. Its
-  `_skip_data_row` says of the KDS side that `send_command` "is not one" -
-  not its counterpart (`tools/pg_wire.py:256-262`). **Scenario 1's twin is
-  the exception**: its `PgClient` times `PgConnection.fetch` and decodes
-  and joins every field into the KDS client's reply shape, "the client
-  pays the same price on both sides" (`tools/pg_scenario1_backtest.py:78-83`,
-  `:266-292`), so scenario 1's cells are timed through near-equal clients
-  already.
+- **Only scenario 4's twin times a client that counts** (corrected at
+  EF-S0; the order as written said "scenarios 2, 3 and 4"): its `timed`
+  goes through `PgConnection.send_command`, which is `query` - rows
+  counted, column lengths walked, no value decoded
+  (`tools/pg_scenario4_cabinopt_days.py:56-70`, `tools/pg_wire.py:224-262`,
+  `:313-322`). `_skip_data_row` says of the KDS side that `send_command`
+  "is not one" - not its counterpart (`tools/pg_wire.py:256-262`).
+- **Scenario 2's and 3's twins decode their reads**: `rows_timed` and
+  `Client.timed` call `PgConnection.fetch` and decode every value to a
+  string, with no rendering (`tools/pg_scenario2_freight.py:164-168`,
+  `tools/pg_scenario3_library.py:109-121`); their writes and DDL go
+  through `query`. **Scenario 1's twin decodes and renders**: its
+  `PgClient` joins every field into the KDS client's reply shape, "the
+  client pays the same price on both sides"
+  (`tools/pg_scenario1_backtest.py:78-83`, `:266-292`). So the clients are
+  unequal in every scenario and by a different amount in each; EF-S0
+  measured the amounts (§7).
 - **The counterpart exists and no scenario driver calls it**:
   `kwp.Connection.query` (`tools/kwp.py:654`) returns
   `(tag, rows, payload_bytes, error)` as `pg_wire`'s does, and its
@@ -260,6 +266,39 @@ rule and binds S3 only.
 - Nothing of the commit (EG) or of the fold (EH).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EF-S0 (2026-11-28): the premise, on `ef-equal-client-scenario-drivers` from `72580aa04`
+
+`[measured]` at `v3.5.1-6-g72580aa04`, Release, both servers on CPUs 0 to
+7, `bench/v3.5.1/results-ef-s0-premise-v3.5.1-6-g72580aa04.md`:
+
+- **Through clients that count on both sides a lookup is 20.1 µs on KDS
+  against 22.1 µs on PostgreSQL 18.7** (1.10x, spreads 7.7 % and 6.7 %),
+  on 7.0 µs against 10.9 µs of server CPU; the row-returning shapes are
+  1.47x to 2.01x.
+- **The break**: the KDS scenario client (`send_command`) adds 16.6 µs a
+  statement and 1.4 µs to 1.7 µs a returned 8-column row over the
+  counting one; PostgreSQL's decoding client (`fetch`) adds 0.8 µs and
+  0.7 µs to 0.8 µs. Through scenario 4's pair the same lookup reads 0.62x
+  and through scenario 2's and 3's 0.63x.
+- **One shape is behind on equal clients, and it is EH's**: `agg-global`
+  at 0.71x on 1.40x the server CPU, 39.5 ns against 28.1 ns a row.
+- **EF-Q1, read early**: on this evidence no short read is behind
+  PostgreSQL on equal clients, so S3 does not open. The gate is read
+  again at S2, on the scenario cells themselves.
+- **EF-Q2's list** (`[source-read]` at `72580aa04`): scenario 2's four
+  booking reads and its verification reads need their values on both
+  sides; scenario 3's twelve read shapes are timed through a decode on
+  PostgreSQL and need no value on either side; scenario 4's phases need
+  none; scenario 1 is EF-Q7's.
+- **Cut**: a booking's reads were not run in S0 (they are point reads
+  through the same two clients; the scenario 2 schema is S2's), and no
+  quiet gate was applied to a 30-second run.
+- **The tool**: `tools/parity_bench.py` takes `--kds-client` and
+  `--pg-client` and reads a containerised backend's `schedstat` by its
+  host pid.
+- The suite was not executed: no build input changed. Overhead not
+  measured; nothing in the engine changed.
 
 ### Written 2026-11-28
 

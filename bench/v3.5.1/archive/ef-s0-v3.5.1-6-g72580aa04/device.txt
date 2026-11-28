@@ -1,0 +1,2 @@
+Filesystem              Type 1K-blocks     Used Available Use% Mounted on
+/dev/mapper/fedora-root xfs  485595652 82695292 402900360  18% /
