@@ -1,0 +1,5 @@
+2026-11-28T02:52:49Z master=none alive=n status_age=0s 
+2026-11-28T02:52:49Z ORPHAN: launching
+2026-11-28T02:53:49Z master=2031860 alive=y status_age=11s 2026-11-28T02:53:38Z r2-insert-group
+2026-11-28T02:54:49Z master=2031860 alive=y status_age=13s 2026-11-28T02:54:36Z r3-insert-strict
+2026-11-28T02:55:49Z end: /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/eg-s0/done/ALL

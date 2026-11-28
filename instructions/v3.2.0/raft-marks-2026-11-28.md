@@ -106,3 +106,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version; the opening of EG, which follows under §10's word |
 | **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks", §7); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
+## 12. EG opened on the standing go-ahead, on EF's unlanded close; EG-Q0..Q5 adopted
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10, which names EG after EF; no further word |
+| **Mark** | **EG is opened** on worktree `eg-one-client-durable-write` (branch `worktree-eg-one-client-durable-write`) from `d50d304f8` (`v3.5.1-26-gd50d304f8`), the close of EF's work branch. **EG-Q0..Q5 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator |
+| **CLA's reading, revised from §10** | §10 said each milestone stops at its own push gate. **EF's gate is not waited at**: the word names three milestones to be worked in order in one session, so EG is opened on a branch from EF's close and EF's push gate is reported with the others at the end. Nothing is pushed or merged to `main` by this |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DY-Q2, which EG-S0 gives a new price and does not decide |
+| **Recorded at** | this file; `workorder-eg-one-client-durable-write.md` (header, §4 "Marks", §7); EG's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+

@@ -1,6 +1,12 @@
 # Work order EG - one client's durable write beyond its sync: an insert left unattributed, and a one-core commit the wait statistics do not see
 
-Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
+Status: **OPENED 2026-11-28** on worktree `eg-one-client-durable-write`
+(branch `worktree-eg-one-client-durable-write`) from `d50d304f8`
+(`v3.5.1-26-gd50d304f8`), the close of EF's work branch, which is not
+landed; under the operator's standing go-ahead of 2026-11-28
+(`raft-marks-2026-11-28.md` §12): every EG-Q item is **adopted on that
+go-ahead, never marked by the operator item by item** (§4, "Marks").
+Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
 2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EG-S0
@@ -30,8 +36,9 @@ PostgreSQL is 16 % to 19 % faster". **That premise is false for the
 commit**: with one booker at one core, `strict`, the commit is 135.5 µs
 on KDS against 138.2 µs on PostgreSQL (§1.1), and the booking's 16 % sits
 in its four reads, which are EF's. What the comparison leaves without a
-cause is one cell: scenario 1's `result-insert`, an autocommit insert at
-`group`, at 0.81x.
+cause is one cell: scenario 1's `result-insert`, an autocommit insert, at
+0.81x (read at `group` in the comparison; EF-S2 resolved it at `strict`
+and at 60,480 bars only).
 
 `[source-read]` Reading the path for that premise turned up a second
 matter that is the engine's whatever a comparison says: **at one core a
@@ -194,6 +201,23 @@ runs
 | EG-Q4 | The two documents of §1.3 | (a) corrected at EG's close whatever the gate; (b) left to their owners | (a) |
 | EG-Q5 | S0's PostgreSQL side | (a) run in S0's window; (b) the control run reused | (a) |
 
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-28 (go-ahead-achieving-milestone)** (`raft-marks-2026-11-28.md`
+§10, §12), and none is the operator's own mark on the item. No EG-Q item
+is tagged `[quiet-wrong]`; EG-R1, which is, is a rule, and S1 was read
+against it before it was built (§7).
+
+| | adopted | note |
+|---|---|---|
+| EG-Q0 | (a) | S0 and S1, S2 behind EG-Q1 |
+| EG-Q1 | (a) | **read at S0: S2 does not open.** The insert is behind and its cause is the engine's, but the cause is the breadth of a sync, which EG-R2 leaves to DY |
+| EG-Q2 | (a) | the one-core inline sync booked as `commit.wal_flush`, timed in place |
+| EG-Q3 | (a) | measured at eight bookers in S0 and recorded; not built |
+| EG-Q4 | (a) | the two documents corrected at the close |
+| EG-Q5 | (a) | PostgreSQL run in S0's window |
+
 ## 5. Stages
 
 | stage | what | ends in |
@@ -212,6 +236,44 @@ runs
 - Nothing of a read's cost (EF) or a fold's (EH).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EG-S0 (2026-11-28): the insert attributed, on `eg-one-client-durable-write` from `d50d304f8`
+
+`[measured]` on `main`'s engine (EF's binary; no engine source differs),
+`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`, three
+rounds, every cell through the quiet gate at once:
+
+- **The insert is at PostgreSQL's cost with one live segment and 65 µs
+  to 70 µs dearer with two.** Idle: 145.8 µs (`strict`) and 146.8 µs
+  (`group`) against 143.8 µs. At once after a bulk load that rolled the
+  log: 210.6 µs and 217.1 µs against 145.1 µs (0.69x, 0.67x). After the
+  checkpoint removed the old segment, 9.7 s later: 158.6 µs and
+  156.1 µs. Server CPU, bytes logged and syncs per insert are the same
+  in the three states.
+- **That is `result-insert`**: scenario 1's 60,480-bar run rolled its
+  log once (`wal_rolls` 1) and its insert read 215.2 µs, p50 202.4 µs.
+- **The cause is `known-gaps.md`'s "Every sync covers every live
+  segment"** (`src/wal/file_log_device.cpp`), whose narrowing is BQ's
+  rung 3 and DY-Q2, `[quiet-wrong]` with its proof unwritten.
+- **EG-Q1 read: S2 does not open.** An engine cause is named, and it is
+  one EG-R2 forbids EG to touch. The new price - a one-client commit at
+  0.67x to 0.69x of PostgreSQL's rate between a roll and the checkpoint
+  after it - is written into that `known-gaps.md` entry for DY-Q2's
+  reader; whether the narrowed sync is reopened is the operator's.
+- **The candidates S0 was to split** (§2): the statement, no (13 µs to
+  16 µs of server CPU in every state, and level with PostgreSQL idle);
+  the `group` rung's park against `strict`'s inline call, no (145.8 µs
+  against 146.8 µs); bytes and images in the commit's write, no (815 B
+  an insert in every state, no image in the dear cells); the live
+  segments under the sync, yes.
+- **EG-Q2's premise confirmed on a running server**: 500 `strict`
+  commits, 0 booked under `commit.wal_flush`; `group` books 500.
+- **EG-Q3's record**: eight bookers on one core, 3,325.2 bookings a
+  second at `strict` (commit p99 2,114.5 µs) against 4,191.9 at `group`
+  (p99 413.1 µs), one run each.
+- **Also seen, not EG's**: KDS logs 815 B for an insert PostgreSQL logs
+  227 B for.
+- The suite was not executed: no build input changed.
 
 ### Written 2026-11-28
 

@@ -1,0 +1,24 @@
+2026-11-28T02:52:55Z == r1-insert-strict start
+2026-11-28T02:53:05Z == r1-insert-strict end rc=0
+2026-11-28T02:53:08Z == r1-insert-group start
+2026-11-28T02:53:19Z == r1-insert-group end rc=0
+2026-11-28T02:53:22Z == r1-insert-pg start
+2026-11-28T02:53:35Z == r1-insert-pg end rc=0
+2026-11-28T02:53:38Z == r2-insert-group start
+2026-11-28T02:53:48Z == r2-insert-group end rc=0
+2026-11-28T02:53:51Z == r2-insert-pg start
+2026-11-28T02:54:04Z == r2-insert-pg end rc=0
+2026-11-28T02:54:07Z == r2-insert-strict start
+2026-11-28T02:54:17Z == r2-insert-strict end rc=0
+2026-11-28T02:54:20Z == r3-insert-pg start
+2026-11-28T02:54:33Z == r3-insert-pg end rc=0
+2026-11-28T02:54:36Z == r3-insert-strict start
+2026-11-28T02:54:47Z == r3-insert-strict end rc=0
+2026-11-28T02:54:50Z == r3-insert-group start
+2026-11-28T02:55:00Z == r3-insert-group end rc=0
+2026-11-28T02:55:03Z == s1-c1-s start
+2026-11-28T02:55:21Z == s1-c1-s end rc=0
+2026-11-28T02:55:24Z == b8-s2-c1-s start
+2026-11-28T02:55:28Z == b8-s2-c1-s end rc=0
+2026-11-28T02:55:31Z == b8-s2-c1-g start
+2026-11-28T02:55:33Z == b8-s2-c1-g end rc=0

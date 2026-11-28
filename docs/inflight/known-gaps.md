@@ -563,6 +563,16 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   proof unwritten) was recorded unable to meet BQ's bar and not built
   (BQ-Q6 (a), `instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7).
   The breadth stays and so does the comment forbidding the narrowing.
+  **Priced a second time at EG-S0, 2026-11-28, on `eg-one-client-durable-write`
+  at `d50d304f8`, against a commit and not a roll**: one client's
+  autocommit insert is 145.8 µs with one live segment and 210.6 µs with
+  two (`strict`; 146.8 µs and 217.1 µs at `group`), where PostgreSQL 18.7
+  is 143.8 µs and 145.1 µs - 0.67x to 0.69x of its rate from a roll until
+  the checkpoint after it removes the old segment, 9.7 s at the default
+  cadence (`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`).
+  It is scenario 1's `result-insert` at 60,480 bars. BQ's bar was the
+  roll's hold and DY-Q2 stands at "left"; this price was before neither.
+  EG did not narrow the sync (EG-R2).
   Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
