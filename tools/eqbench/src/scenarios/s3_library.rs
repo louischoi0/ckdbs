@@ -429,6 +429,20 @@ pub fn run(ctx: &mut Ctx) {
             engines[0].prepare(&format!("INSERT INTO {} VALUES ({marks})", t.name)).unwrap_or_else(|e| panic!("{}: {e}", t.name))
         })
         .collect();
+    // Each INSERT's first executions (Oracle's hard parse, a PostgreSQL
+    // backend's first touch of the relation) out of the phase: six a
+    // relation, each in a transaction rolled back, on an id the load never
+    // writes.
+    for (t, rows) in data.iter().enumerate() {
+        let Some(first) = rows.first() else { continue };
+        let mut w = first.clone();
+        w[0] = Val::I64(1 << 40);
+        for _ in 0..6 {
+            engines[0].begin().unwrap();
+            engines[0].exec(ins[t], &w).unwrap_or_else(|err| panic!("load warm-up {}: {err}", TABLES[t].name));
+            engines[0].rollback().unwrap();
+        }
+    }
     ctx.phase("load", &mut engines, |_, e, r| {
         let mut shown = 0;
         for (t, rows) in data.iter().enumerate() {

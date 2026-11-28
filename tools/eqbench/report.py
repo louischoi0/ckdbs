@@ -40,6 +40,36 @@ def load(run, pass_, engines):
     return out
 
 
+def good(d):
+    """A round that ran and passed every check: the only kind a figure comes
+    from (EN §3, "a scenario whose checks fail on an engine reports no
+    number for it")."""
+    return not d.get("failed") and all(c["ok"] for c in d.get("checks", []))
+
+
+def digests_line(timed, sc):
+    """Scenario 4's answers compared across every run read - each arm, each
+    engine, each round (EN §3): the cells run one arm a server, so no run
+    compares them itself."""
+    seen = {}
+    for (s, cell, arm), ds in timed.items():
+        if s != sc:
+            continue
+        for d in ds:
+            if not good(d):
+                continue
+            for a, groups in d.get("meta", {}).get("digests", {}).items():
+                key = json.dumps(groups, sort_keys=True)
+                seen.setdefault(key, []).append(f"{cell} {arm} {a} r{d['_round']}")
+    if not seen:
+        return None
+    if len(seen) == 1:
+        runs = next(iter(seen.values()))
+        return f"Answers: every group's digest equal across all {len(runs)} runs read (each arm, engine and round)."
+    return "Answers DIFFER: " + " | ".join(f"{len(v)} runs ({', '.join(v[:3])}{', ...' if len(v) > 3 else ''})"
+                                         for v in seen.values()) + "."
+
+
 def med(xs):
     xs = [x for x in xs if x is not None]
     return statistics.median(xs) if xs else None
@@ -81,12 +111,14 @@ def render(run, engines):
                 for c in d.get("checks", []):
                     if not c["ok"]:
                         bad.append(f"{arm} r{d['_round']}: {c['name']} {c['detail']}")
-        nrounds = {arm: len(timed[(sc, cell, arm)]) for arm in arms}
+        # Every figure below is from the rounds that passed.
+        runs = {arm: [d for d in timed[(sc, cell, arm)] if good(d)] for arm in arms}
         lines.append("Checks: " + ("every check passed in every round" if not bad else "; ".join(bad)) +
-                     ". Rounds: " + ", ".join(f"{a} {n}" for a, n in nrounds.items()) + ".\n")
+                     ". Rounds with figures (passed of run): " +
+                     ", ".join(f"{a} {len(runs[a])} of {len(timed[(sc, cell, a)])}" for a in arms) + ".\n")
         phases = []
         for arm in arms:
-            for d in timed[(sc, cell, arm)]:
+            for d in runs[arm]:
                 for p in d.get("phases", []):
                     if p["name"] not in phases:
                         phases.append(p["name"])
@@ -95,7 +127,7 @@ def render(run, engines):
         lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for ph in phases:
             for arm in arms:
-                ps = [p for d in timed[(sc, cell, arm)] for p in d.get("phases", []) if p["name"] == ph]
+                ps = [p for d in runs[arm] for p in d.get("phases", []) if p["name"] == ph]
                 if not ps:
                     continue
                 means = [p["latency"]["mean_us"] for p in ps]
@@ -118,7 +150,7 @@ def render(run, engines):
         kinds_rows = []
         for ph in phases:
             for arm in arms:
-                ps = [p for d in timed[(sc, cell, arm)] for p in d.get("phases", []) if p["name"] == ph]
+                ps = [p for d in runs[arm] for p in d.get("phases", []) if p["name"] == ph]
                 names = sorted({k for p in ps for k in p.get("kinds", {})})
                 for k in names:
                     ks = [p["kinds"][k] for p in ps if k in p.get("kinds", {})]
@@ -137,7 +169,7 @@ def render(run, engines):
         lines.append("|---|---|" + "---|" * len(CATS) + "---|")
         for ph in phases:
             for arm in arms:
-                src = prof.get((sc, cell, arm)) if arm == "pg" else timed[(sc, cell, arm)]
+                src = [d for d in prof.get((sc, cell, arm), []) if good(d)] if arm == "pg" else runs[arm]
                 if not src:
                     continue
                 ps = [p for d in src for p in d.get("phases", []) if p["name"] == ph]
@@ -156,6 +188,9 @@ def render(run, engines):
                 top = sorted(ev.items(), key=lambda kv: -kv[1][1])[:4]
                 evs = "; ".join(f"{n} ({c:,.0f}, {t:,.0f} µs)" for n, (c, t) in top) or "none"
                 lines.append(f"| {ph} | {arm} | " + " | ".join(row) + f" | {evs} |")
+    s4 = digests_line(timed, "s4")
+    if s4:
+        lines.append(f"\n### s4 answers\n\n{s4}\n")
     return "\n".join(lines)
 
 

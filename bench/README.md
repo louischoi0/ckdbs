@@ -153,7 +153,7 @@ kdbs, under client conditions as equal as possible; consider Rust too"*.
 - **Each cell carries the harness's own CPU per operation**
   (`getrusage(RUSAGE_THREAD)`) beside the server's, **counted over every
   process and thread of the server**: KDS's one process from
-  `/proc/<pid>/stat` (all its threads), PostgreSQL's and Oracle's container
+  `/proc/<pid>/task/*/schedstat` (all its threads, in nanoseconds), PostgreSQL's and Oracle's container
   from its cgroup's `cpu.stat` (every backend and background process - a
   walwriter, a checkpointer, a log writer). So a reader sees how far apart
   the three clients are and what each whole server spent.

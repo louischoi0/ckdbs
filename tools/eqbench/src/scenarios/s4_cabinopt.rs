@@ -38,6 +38,13 @@
 //! Relation kinds on KDS (`bench/README.md`, "What a relation is stored as"),
 //! the same in both arms:
 //!
+//! **Kinds, EN-Q9 (a)** (adopted on the operator's standing go-ahead of
+//! 2026-11-28): the tapes and `board_b` are only walked on `off`, which the
+//! rule would make HEAP, but this scenario's subject is the declared Cabin,
+//! whose authority is the tuple key and which resolves through the
+//! clustered tree; the arms keep one kind so the arm comparison isolates the
+//! Cabin. Every relation is BTREE on both arms.
+//!
 //! | relation | kind | the statements that decided it |
 //! |---|---|---|
 //! | `s4_<arm>_board_a` | BTREE | `pk`: a point by the tuple key; `board`: a walk on `off`, on `declared` a Cabin whose authority is the tuple key, resolved through the clustered tree when its page hint fails (`cabin.md` §3, C2); `open` appends ids above the load |
@@ -74,7 +81,9 @@
 //! - Each read phase is preceded by `warmup` unrecorded executions of its
 //!   statements: the symbol probes with the zero-row symbol `ZZZZ99`, which
 //!   reads the relation's pages without observing any timed value, so the
-//!   declared Cabin still learns its day-1 values inside the timed phase.
+//!   declared Cabin still learns its day-1 values inside the timed phase;
+//!   `open`'s `INSERT` with the zero-row symbol on an id above the day's,
+//!   each execution in a transaction rolled back.
 
 use super::*;
 use std::sync::Mutex;
@@ -245,7 +254,7 @@ struct GroupOut {
 }
 
 /// `ops` once, in order: each recorded, its answer folded into the digest.
-fn run_ops(e: &mut dyn Engine, ops: &Ops, write: bool, mut rec: Option<&mut Recorder>) -> GroupOut {
+fn run_ops(e: &mut dyn Engine, ops: &[(Stmt, Vec<Val>)], write: bool, mut rec: Option<&mut Recorder>) -> GroupOut {
     let mut out = GroupOut { digest: FNV_OFF, ..Default::default() };
     let mut rows = Rows::new();
     for (s, p) in ops {
@@ -345,7 +354,15 @@ pub fn run(ctx: &mut Ctx) {
 
     // (group, write, timed ops per arm, warm-up ops per arm)
     let mut groups: Vec<(String, bool, Vec<Ops>, Vec<Ops>)> = Vec::new();
-    groups.push(("open".into(), true, st.iter().map(|s| day.open_rows.iter().map(|r| (s.insert, r.clone())).collect()).collect(), vec![]));
+    // `open`'s warm-up is the INSERT on an id above the day's and the
+    // zero-row symbol, each in a transaction rolled back (`run` below).
+    let open_warm = vec![Val::I64(1 << 40), Val::from(ZERO_ROW_SYMBOL), Val::I64(1), Val::I64(100)];
+    groups.push((
+        "open".into(),
+        true,
+        st.iter().map(|s| day.open_rows.iter().map(|r| (s.insert, r.clone())).collect()).collect(),
+        st.iter().map(|s| (0..warmup).map(|_| (s.insert, open_warm.clone())).collect()).collect(),
+    ));
     groups.push(("board".into(), false, st.iter().map(|s| sym_ops(s.board, &day.board)).collect(), st.iter().map(|s| zero_ops(s.board)).collect()));
     for (i, (_, tag)) in TAPES.iter().enumerate() {
         groups.push((
@@ -372,9 +389,20 @@ pub fn run(ctx: &mut Ctx) {
     for (group, write, timed, warm) in &groups {
         for (ai, a) in arms.iter().enumerate() {
             if let Some(w) = warm.get(ai) {
-                let wo = run_ops(engines[0].as_mut(), w, false, None);
-                if wo.refused > 0 {
-                    eprintln!("s4: {} refusals in {group}[{}]'s warm-up", wo.refused, a.name);
+                let e = engines[0].as_mut();
+                let mut refused = 0;
+                for op in w {
+                    // A write's warm-up is rolled back, one transaction each.
+                    if *write {
+                        e.begin().unwrap();
+                    }
+                    refused += run_ops(e, std::slice::from_ref(op), *write, None).refused;
+                    if *write {
+                        e.rollback().unwrap();
+                    }
+                }
+                if refused > 0 {
+                    eprintln!("s4: {refused} refusals in {group}[{}]'s warm-up", a.name);
                 }
             }
             let ops = &timed[ai];

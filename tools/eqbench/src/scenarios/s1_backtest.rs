@@ -40,7 +40,9 @@
 //!
 //! Every phase of reads is preceded by `warmup` unrecorded executions of
 //! its statements; a cold cell's warm-up uses one argument it reserves, so
-//! no cold argument is seen twice.
+//! no cold argument is seen twice. Every phase of writes (the loads,
+//! `result-insert`, the write sweep) is preceded by six executions of its
+//! `INSERT`, each in a transaction rolled back, on an id nothing writes.
 //!
 //! ## What differs from the Python, and why
 //!
@@ -560,6 +562,9 @@ fn warm(e: &mut dyn Engine, s: Stmt, args: &[Vec<Val>]) {
     }
 }
 
+/// An id no load or sweep writes: a write warm-up's row.
+const WARM_ID: i64 = 1 << 40;
+
 fn args1(v: impl IntoIterator<Item = i64>) -> Vec<Vec<Val>> {
     v.into_iter().map(|x| vec![Val::I64(x)]).collect()
 }
@@ -586,6 +591,11 @@ impl Problems {
 /// transaction (0: each row its own autocommit). A row's latency is its
 /// `INSERT`; the `BEGIN`/`COMMIT` are in the wall clock.
 fn load_phase(ctx: &mut Ctx, engines: &mut [Box<dyn Engine>], name: &str, ins: Stmt, rows: &[Vec<Val>], batch: usize) {
+    if let Some(first) = rows.first() {
+        let mut w = first.clone();
+        w[0] = Val::I64(WARM_ID);
+        warm_writes(engines[0].as_mut(), &[(ins, &w)]);
+    }
     ctx.phase(name, engines, |_, e, r| {
         let mut open = false;
         let mut n = 0;
@@ -1110,6 +1120,7 @@ pub fn run(ctx: &mut Ctx) {
     // it opens or closes; batch 1 is autocommit.
     let mut next_id = 1i64;
     let mut written = 0i64;
+    warm_writes(engines[0].as_mut(), &[(ins_probe, &[WARM_ID, 0, 0, 0, 0].map(Val::I64))]);
     for &size in &write_batches {
         let size = size.max(1) as usize;
         let first = next_id;

@@ -292,6 +292,25 @@ pub fn analyze(e: &mut dyn Engine, tables: &[&str]) {
     }
 }
 
+/// Executions of a write before its phase - each statement's first
+/// executions (Oracle's hard parse at the first execute, a PostgreSQL
+/// backend's custom plans and first touch of the relation) - kept out of
+/// the timing: `WARMUP_WRITES` times, each in a transaction rolled back, so
+/// nothing stays written. A refusal is reported and the warm-up goes on.
+pub const WARMUP_WRITES: usize = 6;
+
+pub fn warm_writes(e: &mut dyn Engine, ws: &[(Stmt, &[Val])]) {
+    for _ in 0..WARMUP_WRITES {
+        e.begin().unwrap();
+        for (s, p) in ws {
+            if let Err(err) = e.exec(*s, p) {
+                eprintln!("write warm-up refused: {err}");
+            }
+        }
+        e.rollback().unwrap();
+    }
+}
+
 /// Loads `rows` through one prepared single-row `INSERT`, `batch` rows a
 /// transaction: the same statements on every engine.
 pub fn load(e: &mut dyn Engine, table: &str, ncols: usize, rows: impl Iterator<Item = Vec<Val>>, batch: usize) {

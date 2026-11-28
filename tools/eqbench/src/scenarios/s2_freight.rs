@@ -75,8 +75,9 @@
 //! `credit_headroom` 1.0, `verify` 100 (I1 and I2 on 100 voyages, I3 on 100 customers, I4 on
 //! 100 freights: 400 checks),
 //! `manifest` 1, `manifest_passes` 5, `manifest_voyages` 20,
-//! `manifest_customers` 10, `warmup` 50 (read-only bookings each booker runs
-//! and rolls back before the phase).
+//! `manifest_customers` 10, `warmup` 50 (bookings each booker runs and
+//! rolls back before the phase: the four reads, and under `txn=1` the four
+//! writes on ids no booking issues).
 //!
 //! **Left out, and why**:
 //! - the load's and the DDL's timed phases (`ddl`, `load-*`): the matched
@@ -889,6 +890,20 @@ pub fn run(ctx: &mut Ctx) {
             b.query(st.capacity, &[Val::I64(op.id)], &mut rows).unwrap_or_else(|err| panic!("warm-up: {err}"));
             b.query(st.recipe, &[Val::I64(c.ctype)], &mut rows).unwrap_or_else(|err| panic!("warm-up: {err}"));
             if txn {
+                // The four writes too, inside the transaction rolled back, on
+                // ids no booking issues: their first executions (Oracle's
+                // hard parse, a PostgreSQL backend's first touch of the
+                // relation) stay out of the phase.
+                let warm = 1i64 << 40;
+                let op_upd: Vec<Val> = if scan { vec![0.into(), op.id.into()] } else { vec![0.into(), 0.into(), op.id.into()] };
+                for (s, p) in [
+                    (st.freight, [warm, op.id, op.ship, c.id, c.cbm, BASE_RATE_PER_CBM, DAY0].map(Val::I64).to_vec()),
+                    (st.charge, [warm, warm, 1, 0, DAY0].map(Val::I64).to_vec()),
+                    (st.op_upd, op_upd),
+                    (st.org_upd, [0, c.org].map(Val::I64).to_vec()),
+                ] {
+                    b.exec(s, &p).unwrap_or_else(|err| panic!("warm-up: {err}"));
+                }
                 b.rollback().unwrap();
             }
         }
@@ -1090,6 +1105,9 @@ pub fn run(ctx: &mut Ctx) {
                 continue;
             }
             if b.is_empty() {
+                // A voyage the bookers wrote has no row: a failure, not a skip.
+                note("I1", Some(false), format!("operation {op}: no s2_operations row"));
+                note("I2", Some(false), format!("operation {op}: no s2_operations row"));
                 continue;
             }
             let (ledger, column) = (sum0(&a), b[0][0].i());
@@ -1120,6 +1138,7 @@ pub fn run(ctx: &mut Ctx) {
                 continue;
             }
             if b.is_empty() {
+                note("I3", Some(false), format!("organization {org}: no s2_organizations row"));
                 continue;
             }
             let stored = b[0][0].i();

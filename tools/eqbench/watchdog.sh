@@ -8,21 +8,30 @@ set -u
 out=$1; stall=$2; shift 3
 pass=timed; prev=""
 for a in "$@"; do [ "$prev" = "--pass" ] 2>/dev/null && pass=$a; prev=$a; done
+launches=0
 launch() {
+  launches=$((launches + 1))
+  if [ "$launches" -gt 6 ]; then
+    echo "$(date -u +%FT%TZ) launched 6 times; giving up" >> "$out/watchdog.log"
+    exit 1
+  fi
   nohup python3 "$(dirname "$0")/matrix.py" "$@" >> "$out/matrix.log" 2>&1 &
   echo "$(date -u +%FT%TZ) launched $!" >> "$out/watchdog.log"
 }
+# The pid file's process is the matrix only while its command line says so:
+# a pid the kernel reused for something else is "gone", never killed.
+alive() { kill -0 "$1" 2>/dev/null && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q 'matrix\.py'; }
 mkdir -p "$out"
 [ -e "$out/$pass.done" ] && exit 0
 pid=$(cat "$out/matrix.pid" 2>/dev/null || echo 0)
-kill -0 "$pid" 2>/dev/null || launch "$@"
+alive "$pid" || launch "$@"
 while true; do
   sleep 60
   [ -e "$out/$pass.done" ] && { echo "$(date -u +%FT%TZ) done" >> "$out/watchdog.log"; exit 0; }
   pid=$(cat "$out/matrix.pid" 2>/dev/null || echo 0)
   newest=$(stat -c %Y "$out/status" "$out/status.cell" 2>/dev/null | sort -n | tail -1)
   age=$(( $(date +%s) - ${newest:-0} ))
-  if ! kill -0 "$pid" 2>/dev/null; then
+  if ! alive "$pid"; then
     echo "$(date -u +%FT%TZ) matrix pid $pid gone, resuming" >> "$out/watchdog.log"
     launch "$@"
   elif [ "$age" -gt $(( stall * 60 )) ]; then

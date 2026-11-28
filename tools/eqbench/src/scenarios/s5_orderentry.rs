@@ -24,10 +24,16 @@
 //! as TPC-C's does and is counted apart. A write conflict or deadlock is
 //! rolled back and retried up to 5 times, counted.
 //!
-//! Phases: `mix` (all terminals, `seconds` long: throughput and each
-//! transaction's latency) and then each transaction alone on one terminal
-//! (`new-order`, `payment`, `order-status`, `delivery`, `stock-level`), so
-//! each engine's breakdown is one transaction's.
+//! Phases: each transaction alone on one terminal first (`new-order`,
+//! `payment`, `order-status`, `delivery`, `stock-level`), on the state the
+//! load left, so each engine's breakdown is one transaction's on the same
+//! data; then `mix` (all terminals, `seconds` long: throughput and each
+//! transaction's latency). So that each alone phase does the same
+//! statements on every engine, every customer holds an order
+//! from the load (`orders` >= `customers`, both 1,000 by default: `order-status`
+//! always finds one) and a district's queue of undelivered orders (30 % of
+//! `orders`) outlasts `delivery`'s `alone` runs (each takes one order a
+//! district) at the defaults.
 //!
 //! Checks (TPC-C's consistency conditions 1, 2, 3 and 4 in spirit, and two
 //! of this schema's own): each warehouse's year to date is its districts'
@@ -677,16 +683,20 @@ pub fn run(ctx: &mut Ctx) {
         warehouses: ctx.opt("warehouses", 2) as i64,
         customers: ctx.opt("customers", 1000) as i64,
         items: ctx.opt("items", 10_000) as i64,
-        orders: ctx.opt("orders", 300) as i64,
+        orders: ctx.opt("orders", 1000) as i64,
     };
     let terminals = ctx.opt("terminals", 4) as usize;
     let seconds = ctx.opt("seconds", 60) as f64;
     let alone = ctx.opt("alone", 300) as usize;
+    let warmup = ctx.opt("warmup", 10) as usize;
     assert!(sc.orders >= 20 && sc.customers <= 99_999 && sc.items < 1_000_000 && sc.warehouses <= 99);
+    // Every customer holds an order from the load, so `order-status` runs the
+    // same statements on every engine whatever the mix placed before it.
+    assert!(sc.orders >= sc.customers, "orders ({}) below customers ({}): a customer with no order", sc.orders, sc.customers);
     ctx.set_meta("scale", serde_json::json!({
         "warehouses": sc.warehouses, "districts_per_warehouse": DISTRICTS, "customers_per_district": sc.customers,
         "items": sc.items, "initial_orders_per_district": sc.orders, "terminals": terminals, "seconds": seconds,
-        "alone_ops": alone,
+        "alone_ops": alone, "warmup_per_kind": warmup,
     }));
 
     let mut e = ctx.connect();
@@ -715,7 +725,8 @@ pub fn run(ctx: &mut Ctx) {
         hist: salt as i64 * 100_000_000,
     };
 
-    // Warm-up: every transaction kind a few times on every terminal, unrecorded.
+    // Warm-up: every transaction kind `warmup` times on every terminal,
+    // unrecorded - past PostgreSQL's five custom plans of each statement.
     std::thread::scope(|s| {
         for (t, e) in engines.iter_mut().enumerate() {
             let st = stmts[t];
@@ -724,7 +735,7 @@ pub fn run(ctx: &mut Ctx) {
             s.spawn(move || {
                 let mut r = Recorder::new();
                 let mut rows = Rows::new();
-                for k in 0..20 {
+                for k in 0..5 * warmup {
                     let tx = [Tx::NewOrder, Tx::Payment, Tx::OrderStatus, Tx::Delivery, Tx::StockLevel][k % 5];
                     run_one(tx, e.as_mut(), &st, &mut g, t, &mut r, &mut rows, counts);
                 }
@@ -735,11 +746,31 @@ pub fn run(ctx: &mut Ctx) {
         c.store(0, Ordering::Relaxed);
     }
 
-    let deadline = Instant::now() + std::time::Duration::from_secs_f64(seconds);
+    // Each transaction alone first, on one terminal, so every engine runs
+    // them on the state the load left: after the mix a faster engine's
+    // tables would be the larger.
+    for (salt, tx) in [Tx::NewOrder, Tx::Payment, Tx::OrderStatus, Tx::Delivery, Tx::StockLevel].into_iter().enumerate() {
+        ctx.phase(tx.name(), &mut engines[..1], |_, e, r| {
+            let st = stmts[0];
+            let mut g = mk_gen(0, 2 + salt as u64);
+            let mut rows = Rows::new();
+            for _ in 0..alone {
+                run_one(tx, e, &st, &mut g, 0, r, &mut rows, &counts);
+            }
+        });
+    }
+    for c in &counts {
+        c.store(0, Ordering::Relaxed);
+    }
+
+    // The mix's clock starts at its first operation, inside the phase, so
+    // the profiler's snapshot and the session lookups are not in `seconds`.
+    let start = std::sync::OnceLock::new();
     let mix = ctx.phase("mix", &mut engines, |t, e, r| {
         let st = stmts[t];
         let mut g = mk_gen(t, 1);
         let mut rows = Rows::new();
+        let deadline = *start.get_or_init(Instant::now) + std::time::Duration::from_secs_f64(seconds);
         while Instant::now() < deadline {
             let tx = Tx::pick(&mut g.rng);
             run_one(tx, e, &st, &mut g, t, r, &mut rows, &counts);
@@ -756,20 +787,7 @@ pub fn run(ctx: &mut Ctx) {
             "note": "not tpmC: not TPC-C, not audited",
         }),
     );
-
-    let mut one = engines.drain(..1).collect::<Vec<_>>();
-    drop(engines);
-    for (salt, tx) in [Tx::NewOrder, Tx::Payment, Tx::OrderStatus, Tx::Delivery, Tx::StockLevel].into_iter().enumerate() {
-        ctx.phase(tx.name(), &mut one, |_, e, r| {
-            let st = stmts[0];
-            let mut g = mk_gen(0, 2 + salt as u64);
-            let mut rows = Rows::new();
-            for _ in 0..alone {
-                run_one(tx, e, &st, &mut g, 0, r, &mut rows, &counts);
-            }
-        });
-    }
-    checks(ctx, one[0].as_mut(), &sc);
+    checks(ctx, engines[0].as_mut(), &sc);
 }
 
 fn scalar(e: &mut dyn Engine, sql: &str, params: &[Val]) -> i64 {

@@ -29,7 +29,7 @@ EQ = os.path.join(HERE, "target", "release", "eqbench")
 SERVERS = os.path.join(HERE, "servers.sh")
 SERVER_CPUS = "0-7"
 HARNESS_CPUS = "8-23"
-KDS_PORT = 15791
+KDS_PORT = 15792
 PG_PORT = 15434
 
 # (scenario, cell name, --set options, KDS durabilities). Every cell runs on
@@ -54,7 +54,12 @@ CELLS = [
     ("s5", "four-terminals", {"terminals": "4"}, ["group", "strict"]),
 ]
 # KDS-only arms of a cell: (cell suffix, extra --set) - scenario 4's Cabin arms.
-KDS_ARMS = {"s4": [("off", {"arm": "off"}), ("declared", {"arm": "declared"})]}
+# The `off` arm is the cell itself (no suffix), so report.py sets it beside
+# PostgreSQL's and Oracle's `off`, the one arm they run.
+KDS_ARMS = {"s4": [("", {"arm": "off"}), ("declared", {"arm": "declared"})]}
+# A cell started this many times without leaving a JSON (a crash or a stall
+# the watchdog killed) is recorded failed, so a resume does not loop on it.
+MAX_ATTEMPTS = 3
 
 
 def sh(*args, check=True, capture=True):
@@ -79,6 +84,20 @@ class Run:
             f.write(line + "\n")
         with open(os.path.join(self.out, "timeline"), "a") as f:
             f.write(line + "\n")
+
+    def sh_beat(self, what, *args):
+        """`sh`, writing the status every 10 s while it runs: a server's
+        start (Oracle's takes minutes) is not a stall to the watchdog."""
+        p = subprocess.Popen(list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while True:
+            try:
+                out, err = p.communicate(timeout=10)
+                break
+            except subprocess.TimeoutExpired:
+                self.st(what)
+        if p.returncode != 0:
+            raise RuntimeError(f"{args}: rc {p.returncode}: {err.strip()[-400:]}")
+        return out.strip()
 
     def quiet_gate(self, tag):
         """No build or test process, and at most 8 % of the CPUs busy over
@@ -118,6 +137,14 @@ class Run:
         if os.path.exists(out):
             return
         os.makedirs(os.path.dirname(out), exist_ok=True)
+        attempts_path = out[:-5] + ".attempts"
+        attempts = int(open(attempts_path).read() or 0) if os.path.exists(attempts_path) else 0
+        if attempts >= MAX_ATTEMPTS:
+            with open(out, "w") as f:
+                json.dump({"failed": True, "rc": f"abandoned after {attempts} attempts with no result"}, f)
+            return
+        with open(attempts_path, "w") as f:
+            f.write(str(attempts + 1))
         gate = self.quiet_gate(tag)
         self.host_record(out[:-5] + ".host.txt", gate)
         env = dict(os.environ)
@@ -135,6 +162,10 @@ class Run:
             kpid = sh(SERVERS, "kds-up", self.a.kds_bin, d, str(KDS_PORT), durability, SERVER_CPUS)
             cpu = f"pid:{kpid}"
         elif engine == "pg":
+            # A fresh PostgreSQL a cell, as KDS's is (S2 review, item 7): no
+            # cell runs on another cell's warm cache. Oracle's start takes
+            # minutes, so it is fresh a round, and the results say so.
+            self.pg_fresh(rnd, tag)
             cpu = "cgroup:" + sh(SERVERS, "cgroup", "eq-pg")
         else:
             cpu = "cgroup:" + sh(SERVERS, "cgroup", "eq-ora")
@@ -155,6 +186,11 @@ class Run:
                 if not os.path.exists(f"/proc/{kpid}"):
                     break
                 time.sleep(0.1)
+            else:
+                # Still up after 10 s: the next cell's kds-up would find the
+                # port held and stop the matrix.
+                subprocess.run(["kill", "-9", kpid])
+                time.sleep(1)
             log = os.path.join(self.a.work, "kds", "data", "kds.log")
             if os.path.exists(log):
                 subprocess.run(["cp", log, out[:-5] + ".serverlog"])
@@ -166,19 +202,21 @@ class Run:
             with open(out, "w") as f:
                 json.dump({"failed": True, "rc": rc}, f)
 
+    def pg_fresh(self, rnd, tag):
+        d = os.path.join(self.out, self.a.pass_)
+        sh(SERVERS, "pg-down")
+        mode = ["profile"] if self.a.pass_ == "profile" else []
+        v = self.sh_beat(f"{tag}: pg-up", SERVERS, "pg-up", str(PG_PORT), *mode)
+        sh(SERVERS, "pin", "eq-pg", SERVER_CPUS)
+        open(os.path.join(d, f"r{rnd}-pg-version.txt"), "w").write(v + "\n")
+
     def servers_up(self, rnd, engines):
         self.st(f"round {rnd}: servers")
         d = os.path.join(self.out, self.a.pass_)
         os.makedirs(d, exist_ok=True)
-        if "pg" in engines:
-            sh(SERVERS, "pg-down")
-            mode = ["profile"] if self.a.pass_ == "profile" else []
-            v = sh(SERVERS, "pg-up", str(PG_PORT), *mode)
-            sh(SERVERS, "pin", "eq-pg", SERVER_CPUS)
-            open(os.path.join(d, f"r{rnd}-pg-version.txt"), "w").write(v + "\n")
         if "oracle" in engines:
             sh(SERVERS, "ora-down")
-            v = sh(SERVERS, "ora-up", self.a.ora_secret)
+            v = self.sh_beat(f"round {rnd}: ora-up", SERVERS, "ora-up", self.a.ora_secret)
             sh(SERVERS, "pin", "eq-ora", SERVER_CPUS)
             open(os.path.join(d, f"r{rnd}-oracle-version.txt"), "w").write(v + "\n")
 
@@ -197,7 +235,8 @@ class Run:
             self.servers_up(rnd, engines)
             # Engine order rotates a round, so no engine always runs first
             # or always after another engine's cell.
-            order = engines[rnd - 1:] + engines[:rnd - 1]
+            k = (rnd - 1) % len(engines)
+            order = engines[k:] + engines[:k]
             for scenario, name, sets, durs in cells:
                 for engine in order:
                     if engine == "kds":
@@ -209,8 +248,10 @@ class Run:
                     else:
                         self.cell(rnd, engine, scenario, name, sets, None)
             open(os.path.join(self.out, self.a.pass_, f"r{rnd}.done"), "w").write("")
-        sh(SERVERS, "pg-down")
-        sh(SERVERS, "ora-down")
+        if "pg" in engines:
+            sh(SERVERS, "pg-down")
+        if "oracle" in engines:
+            sh(SERVERS, "ora-down")
         self.st("ALL DONE")
         open(os.path.join(self.out, f"{self.a.pass_}.done"), "w").write("")
 

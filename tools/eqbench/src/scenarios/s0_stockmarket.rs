@@ -42,7 +42,9 @@
 //!   the `txn` phase's wall clock and errors, and no server CPU, client CPU
 //!   or breakdown (those are the `txn` phase's, which they are part of).
 //!   The reporter's scan is warmed before the phase (32 unrecorded
-//!   executions on other users) so its parse and plan are not in it.
+//!   executions on other users) so its parse and plan are not in it, and
+//!   every write statement on its own connection (6 executions, each in a
+//!   transaction rolled back, on ids no terminal issues).
 //!
 //! **Retries.** Partitions are disjoint, so no two traders write one
 //! account and the Python retries nothing. Here a refusal classed
@@ -114,6 +116,8 @@ const SIDE_SELL: i64 = 1;
 const MAX_ATTEMPTS: u32 = 100;
 /// Unrecorded executions of the reporter's scan before the phase.
 const WARMUP: usize = 32;
+/// Rolled-back executions of each write statement before the phase: past
+/// PostgreSQL's five custom plans.
 
 const USERS: Table = Table {
     name: "s0_users",
@@ -355,9 +359,17 @@ pub fn run(ctx: &mut Ctx) {
     let ins_profit_sql = "INSERT INTO s0_user_periodic_profit VALUES (?, ?, ?, ?, ?)";
     let mut engines: Vec<Box<dyn Engine>> = Vec::new();
     let mut stmts = Vec::new();
-    for _ in 0..n_traders {
+    for i in 0..n_traders {
         let mut t = ctx.connect();
-        stmts.push((t.prepare(ins_trade_sql).unwrap(), t.prepare(upd_sql).unwrap()));
+        let (ins, upd) = (t.prepare(ins_trade_sql).unwrap(), t.prepare(upd_sql).unwrap());
+        // The writes' first executions (Oracle's hard parse, a PostgreSQL
+        // backend's first touch of the relation) out of the phase: rolled
+        // back, on an id no trader issues and the trader's own first account.
+        let acct = i as i64 + 1;
+        let leg = [((i as i64) << 40) + (1 << 39), acct, 1, SIDE_BUY, 1, 1_000, 0].map(Val::I64);
+        let opening = [OPENING_BALANCE, 0, 0, acct].map(Val::I64);
+        warm_writes(t.as_mut(), &[(ins, &leg), (upd, &opening)]);
+        stmts.push((ins, upd));
         engines.push(t);
     }
     let mut rep_stmts = None;
@@ -370,6 +382,7 @@ pub fn run(ctx: &mut Ctx) {
         for _ in 0..WARMUP {
             t.query(scan, &[Val::I64(warm.range(1, n_users as i64))], &mut rows).unwrap();
         }
+        warm_writes(t.as_mut(), &[(ins, &[1 << 40, 1, 0, 0, 0].map(Val::I64))]);
         rep_stmts = Some((scan, ins));
         engines.push(t);
     }
@@ -474,7 +487,7 @@ pub fn run(ctx: &mut Ctx) {
                     // client's as soon as it is accepted, so a torn
                     // transaction leaves the client matching the store.
                     ok = true;
-                    let mut written = 0;
+                    let (mut written, mut applied) = (0, 0);
                     for step in 0..4 {
                         let mut attempt = 0;
                         let res = loop {
@@ -490,10 +503,14 @@ pub fn run(ctx: &mut Ctx) {
                             }
                         };
                         match res {
-                            Ok(_) if step < 2 => written += 1,
+                            Ok(_) if step < 2 => {
+                                written += 1;
+                                applied += 1;
+                            }
                             Ok(_) => {
                                 let (a, v) = moves[step - 2];
                                 state.insert(a, v);
+                                applied += 1;
                             }
                             Err(err) => {
                                 note(&mut out, r, &err);
@@ -502,7 +519,10 @@ pub fn run(ctx: &mut Ctx) {
                         }
                     }
                     out.legs += written;
-                    if !ok && written > 0 {
+                    // Torn: some statement applied and some did not - an
+                    // update alone moves the balances off the conserved sums
+                    // as surely as a leg alone does.
+                    if !ok && applied > 0 {
                         out.torn += 1;
                     }
                 }
