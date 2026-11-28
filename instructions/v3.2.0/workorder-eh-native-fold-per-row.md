@@ -165,7 +165,9 @@ inside AG1 as written is EH-Q3's.
 - **EH-R1. Every answer is byte-identical**, groups in first-seen order
   (AG6): the aggregate contract suite stays green, one test per numbered
   item, and the PostgreSQL differential (`scripts/bs/difftest.py`) is
-  run over the folds.
+  run over the folds. **The waystone and cabin contract suites stay
+  green too**: a change to how a row reaches the fold is a change beside
+  the recording and the probes AG10 calls unchanged.
 - **EH-R2. Visibility is decided per row at the statement's snapshot,
   before any cell is read.** A fold that counts a version its snapshot
   does not see, or skips one it does, is `[quiet-wrong]`.
@@ -180,6 +182,15 @@ inside AG1 as written is EH-Q3's.
 - **EH-R6. Measured in server CPU, through equal clients**
   (`kwp.Connection.query`), interleaved A/B in `build-release`, the
   server pinned.
+- **EH-R7. A fold that yields owns its accumulator.** The dispatcher has
+  one `Aggregator`, reused across statements and pointed at each
+  statement's spec by `Reset`
+  (`include/kds/server/command_dispatcher.hpp:3292-3300`, spot-read); it
+  is safe today because a fold never gives its core back. Once one does
+  (EH-Q2 (a)), another session's aggregate on that core would reset it
+  mid-fold: `[quiet-wrong]`. The stage that adds the slice gives each
+  running fold its own state and measures what that costs a point
+  statement (about 4 µs when built per statement, by that comment).
 - The standing rules, as DT's order lists them.
 
 ## 4. Items for the operator (EH-Q), CLA's proposals

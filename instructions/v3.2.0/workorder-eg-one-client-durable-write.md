@@ -137,8 +137,11 @@ runs
 - **Every sync covers every live segment**
   (`docs/inflight/known-gaps.md:490`, spot-read), about 50 µs a segment
   beyond the first by that entry. Its breadth is DY's (DY-Q2), not EG's.
-- **Not found**: bytes written per commit, images per commit, or the
-  number of live segments during any cell above.
+- **Not measured**: bytes written per commit, images per commit, or the
+  number of live segments during any cell above. The images are
+  countable: `sys.meta` carries `pool_fetch_images` and
+  `pool_fetch_image_bytes` (`src/server/command_dispatcher.cpp:2600`, as
+  the review read it), which S0 reads before and after a cell.
 - **Two documents disagree with the code**: `wal.md` §6, whose heading is
   marked `[PROPOSED]`, describes in its items 2 and 3 a flush future and a
   phase-5 drain through `IoBackend`, where the code is synchronous
@@ -195,7 +198,7 @@ runs
 | stage | what | ends in |
 |---|---|---|
 | **EG-S0** | `result-insert` on `main`, `strict` and `group`, beside PostgreSQL; the split of §2; one cell at eight bookers for EG-Q3 | the difference attributed or shown inside the spread; EG-Q1 read |
-| **EG-S1** | The inline sync booked (EG-Q2 (a)); a cell pinning that a one-core `strict` commit shows its sync under `commit.wal_flush` | the suite; `wait-events.md` |
+| **EG-S1** | The inline sync booked (EG-Q2 (a)); a cell pinning that a one-core `strict` commit shows its sync under `commit.wal_flush` in `sys.wait_stats` and `sys.session_waits` (`sys.ash` samples between polls and cannot see a blocking call on its reactor, booked or not; `wait-events.md` says so) | the suite; `wait-events.md` |
 | **EG-S2** | (gated) The cut S0 names | its measured delta at one core and none at eight; the suite |
 | **EG-S3** | The close: the documents of EG-Q4, `known-gaps.md`, the overhead measurement | the operator's word on landing |
 

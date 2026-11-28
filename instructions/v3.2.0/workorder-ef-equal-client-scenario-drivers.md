@@ -12,7 +12,7 @@ server path of §1.3 was read by a research pass of this session and its
 lines were not re-read by CLA.
 
 Tags: `[operator]`, `[source-read]`, `[measured]`, `[design]`,
-`[assumed]`, as in DT's order.
+`[assumed]`, `[quiet-wrong]`, as in DT's order.
 
 Related: `bench/v3.5.0/comparison-pg-kds-scenarios-v3.4.17-166-g6c98f7c32.md`
 (the reading EF answers);
@@ -193,6 +193,13 @@ move.
   (`CLAUDE.md`, Working Rules).
 - **EF-R6. This host is pinned** (server on the P-cores), and the results
   file says so.
+- **EF-R7. Two of §1.3's costs are checks, and S3 cuts neither.**
+  `StillOwned`'s two page reads are what refuses a statement whose
+  relation is no longer there (`src/exec/step_vm.cpp:318-338`), and
+  `MintReadView`'s first ceiling read is its announce before it takes
+  (`src/txn/manager.cpp:112-124`). A statement that skips either can
+  answer from a relation or a view it does not hold: `[quiet-wrong]`.
+  S3 may make one cheaper only with the check it performs shown intact.
 - The standing rules, as DT's order lists them.
 
 ## 4. Items for the operator (EF-Q), CLA's proposals
@@ -206,6 +213,7 @@ move.
 | EF-Q4 | The PostgreSQL side of S2 | (a) run again in S2's window, interleaved by round with KDS; (b) the control run of 2026-11-28 reused | (a) |
 | EF-Q5 | S2's time | (a) the 20-minute stage budget lifted for S2 alone (estimate: 45 to 60 minutes, basis: the `v3.5.0` run's 44 minutes plus PostgreSQL's 14, confidence: medium); (b) cut to fit: one round a cell, scenario 4 and the size sweeps left out | (a) |
 | EF-Q6 | The compiled chain | (a) stays where CX-Q37 (a) and EA-Q3 (a) left it: S3 may measure its share again and may not build its reuse without the operator's word; (b) reopened inside S3 | (a) |
+| EF-Q7 | Scenario 1, whose twin already decodes as the KDS client does (§1.1) | (a) left on its equal-decode pair, named a `values` phase throughout, and S1 moves scenarios 2 to 4 only; (b) both of its sides moved to `count`, a second series break | (a) |
 
 ## 5. Stages
 
