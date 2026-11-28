@@ -278,7 +278,7 @@ landed (§16):
 | | |
 |---|---|
 | **Word** | *"and commit and push no verify after milestone closed"*, given while EP's close was being measured |
-| **Mark** | On EP's close: commit, one `--no-ff` merge of `worktree-ep-undo-chain-revisit` over `origin/main`, pushed with `--no-verify` |
+| **Mark** | **EP lands on `main`** in one `--no-ff` merge of `worktree-ep-undo-chain-revisit`, `d0acb68ce`, over `origin/main` at `48da811fc`, pushed with `--no-verify` |
 | **Skipped, on the word** | the pre-push hook. The suite was last run at `21dc920b4`, the last commit with a build input: 5,442 of 5,446, the four failures each passing 3 of 3 alone (one a `/tmp` quota error). It was not a green run, and this push does not report it as one |
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; EP's landed column in `instructions/milestones.md` |
