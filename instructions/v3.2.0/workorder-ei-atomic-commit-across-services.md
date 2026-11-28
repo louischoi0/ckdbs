@@ -31,8 +31,14 @@ distributed transaction - no two-phase commit, no XA**.
 document of the tree: `CLAUDE.md` ("What This Project Is") states the
 purpose as OLTP for financial systems, settled as CF-Q6 (b), and no file
 under `docs/`, `manual/` or `CLAUDE.md` carries the word "microservice"
-(`grep -rni microservice`, 0 lines, at `72580aa04`). EI rests on the word
-and moves no purpose statement (EI-Q5).
+(`grep -rni microservice`, 0 lines, at `72580aa04`). **It entered the
+tree the same day by another session**: `origin/main` at `3aa8a141e`,
+merged into this branch at `843484413`, carries a working rule in
+`CLAUDE.md` - "a feature is built and improved for the concept KDS is: a
+high-performance OLTP engine that guarantees consistency, optimized for
+modern software environments such as a microservice architecture", with
+"'What This Project Is' bounds the scope". EI rests on the word and that
+rule, and moves no purpose statement (EI-Q5).
 
 `[design]` A service that owns its data and must change it together with
 another service's has three shapes in the field: a coordinator's two-phase
@@ -167,7 +173,7 @@ None is designed past what S0 needs to judge it.
 | EI-Q2 | The null hypothesis | (a) N stands unless S0 names a service shape that neither a saga over EL's token nor an outbox over EJ's feed can make atomic; (b) P is the target and S0 only sizes it | (a) |
 | EI-Q3 | A prepared transaction against the lifetime ceiling, if P or B is ever taken | (a) not decided by this order: S0 lays out exempt, bounded and refused with what each breaks; (b) decided now | (a) |
 | EI-Q4 | The proof of concept S1, if S0's verdict admits one | (a) in the simulation harness only: one in-doubt transaction carried across a crash, EI-R1 and EI-R2 as its oracle, no client surface; (b) with a KWP surface | (a) |
-| EI-Q5 | The operator's premise and the purpose statement | (a) the premise is recorded as the word that opened EI, EJ, EK and EL and `CLAUDE.md`'s purpose statement is not touched; (b) the purpose statement gains the service environment, in the operator's wording | (a) |
+| EI-Q5 | The operator's premise and the purpose statement | (a) as `CLAUDE.md` stands at `3aa8a141e`: the concept is a working rule, "What This Project Is" bounds the scope and is not touched; (b) the purpose statement itself gains the service environment, in the operator's wording | (a) |
 
 ## 5. Stages
 
