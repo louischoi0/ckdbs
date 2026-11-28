@@ -213,3 +213,13 @@ landed (§16):
 | **Skipped, on the word** | the pre-push hook. No full suite was run on this tree: EO changed no build input (`git diff e571ae574..` over `src`, `include`, CMake, `tests` and `scripts` is empty), and the push does not report a suite as passed |
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; EO's landed row in `instructions/milestones.md` |
+
+## 22. EM opened on the standing go-ahead; EM-Q0..Q9 adopted, EM-Q10 and EM-Q11 written and adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone EM`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*, the milestone named EM |
+| **Mark** | **EM is opened** on worktree `em-front-end-reuse` (branch `worktree-em-front-end-reuse`) from `b46ac5140` (`v3.5.1-69-gb46ac5140`). **EM-Q0..Q9 are adopted as CLA proposed** ((a) in each but EM-Q9, (b)), **and EM-Q10 (a), EM-Q11 (a) and EM-Q12 (a) `[quiet-wrong]`, written at EM-S0 and S1, likewise, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)**. These are CLA's proposals, not per-item marks by the operator |
+| **CLA's, not the operator's** | G0's verdicts at EM-S0: C1, C3 and C4 admitted; C2 dropped (its re-parse is 0.02 % of a slice); C5 dropped (no shape class repeats its literals); C1 as first written found dearer than the text path it replaces, and admitted only with EM-Q11's zero-hole path and EM-Q10's kept failure |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; which refusal byte a statement with leading whitespace should name (`docs/inflight/bugs/kept-parse-refusal-byte-counts-leading-whitespace.md`) |
+| **Recorded at** | this file; EM's order (header, §5's mark column, §8); EM's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

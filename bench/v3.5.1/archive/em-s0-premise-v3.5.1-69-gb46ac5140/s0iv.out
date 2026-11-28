@@ -1,0 +1,26 @@
+SAME 'SELECT * FROM t WHERE nosuch = 1'
+DIFF '  SELECT * FROM t WHERE nosuch = 1'
+   text : no relation in scope has a column 'nosuch' at byte 22
+   named: no relation in scope has a column 'nosuch' at byte 24
+SAME 'SELECT nosuch FROM t WHERE id = 1'
+DIFF '  SELECT nosuch FROM t WHERE id = 1'
+   text : no relation in scope has a column 'nosuch' at byte 7
+   named: no relation in scope has a column 'nosuch' at byte 9
+SAME 'UPDATE t SET nosuch = 1 WHERE id = 1'
+DIFF '  UPDATE t SET nosuch = 1 WHERE id = 1'
+   text : unknown column 'nosuch' at byte 13
+   named: unknown column 'nosuch' at byte 15
+SAME "UPDATE t SET v = 'x' WHERE id = 1"
+SAME "  UPDATE t SET v = 'x' WHERE id = 1"
+SAME 'DELETE FROM nosuch WHERE id = 1'
+DIFF '  DELETE FROM nosuch WHERE id = 1'
+   text : no relation named 'nosuch' (byte 12)
+   named: no relation named 'nosuch' (byte 14)
+SAME "INSERT INTO t VALUES (1, 'x', 3)"
+DIFF "  INSERT INTO t VALUES (1, 'x', 3)"
+   text : column 'v' expects an integer (byte 25)
+   named: column 'v' expects an integer (byte 27)
+SAME "SELECT * FROM t WHERE v = 'x'"
+DIFF "  SELECT * FROM t WHERE v = 'x'"
+   text : column 'v' literal at byte 26: expects an integer literal - unquoted, with no fraction
+   named: column 'v' literal at byte 28: expects an integer literal - unquoted, with no fraction
