@@ -295,6 +295,47 @@ const std::vector<std::string>& Queries() {
         "SELECT id, owner FROM b ORDER BY owner DESC, id DESC LIMIT 15",
         "SELECT id, code FROM b ORDER BY code DESC LIMIT 6",
         "SELECT id, code FROM b WHERE code BETWEEN 10 AND 200 ORDER BY code DESC LIMIT 5",
+
+        // ---- An open or a strict end (EB-S1) ---------------------------------
+        //
+        // A strict two-sided window is an index range at the last rank, each
+        // strict end read inclusively with the residual dropping its equal
+        // entries - on an integer key, the unique key and the truncated
+        // string key; an open end seeds an ordered walk under a LIMIT, after
+        // no prefix and after an equality prefix; and an open tuple key
+        // bound is a range of the walk's own leaves. Under `indexes = off`
+        // and in `plain` each is the walk or the sort.
+        "SELECT id FROM b WHERE owner > 0 AND owner < 3",
+        "SELECT id FROM b WHERE owner > 1 AND owner <= 9",
+        "SELECT id, code FROM b WHERE code > 14 AND code < 1000",
+        "SELECT id FROM b WHERE sym > 's0' AND sym < 's2'",
+        "SELECT id FROM b WHERE sym >= 's1' AND sym < 's2'",
+        "SELECT id FROM b WHERE owner > 4 AND owner < 4",
+        "SELECT id, owner FROM b WHERE owner >= 2 ORDER BY owner, id LIMIT 9",
+        "SELECT id, owner FROM b WHERE owner > 1 ORDER BY owner, id LIMIT 30",
+        "SELECT id, owner, qty FROM b WHERE owner > 1 ORDER BY owner, qty, id LIMIT 7 OFFSET 2",
+        "SELECT id, code FROM b WHERE code > 20 ORDER BY code LIMIT 5",
+        "SELECT id, code FROM b WHERE code < 100 ORDER BY code DESC LIMIT 5",
+        "SELECT id, qty FROM b WHERE owner = 0 AND qty > 0 ORDER BY qty, id LIMIT 20",
+        "SELECT id, qty FROM b WHERE owner = 1 AND qty < 3 ORDER BY qty DESC, id DESC LIMIT 20",
+        "SELECT id FROM b WHERE owner >= NULL ORDER BY owner LIMIT 3",
+        "SELECT id FROM b WHERE id >= 30",
+        "SELECT id FROM b WHERE id > 30 ORDER BY id LIMIT 3",
+        "SELECT id FROM b WHERE id < 10 ORDER BY id DESC LIMIT 4",
+        "SELECT id FROM b WHERE id >= 10 AND owner > 0 AND owner < 2",
+
+        // ---- A join by a whole key (EB-S2) -----------------------------------
+        //
+        // The composite index entered per outer row by both its columns, by
+        // the outer row alone and by a literal with the outer row; the moved
+        // key, the covered column's move and the deleted row are each where
+        // a whole-key descent must not find more or fewer rows than the walk.
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.owner = a.owner WHERE c.qty = a.qty "
+        "AND a.id BETWEEN 1 AND 12 ORDER BY a.id, c.id",
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.qty = a.qty WHERE c.owner = 2 "
+        "AND a.id BETWEEN 1 AND 12 ORDER BY a.id, c.id",
+        "SELECT a.id, c.id FROM b AS a JOIN b AS c ON c.qty = a.owner WHERE c.owner = a.qty "
+        "ORDER BY a.id, c.id",
     };
     return kQueries;
 }

@@ -630,11 +630,70 @@ TEST_F(EmbeddedKeyRelationTest, WhatARowWritesAsItsKeyidentityMustBeItsKeysId) {
     Refused("INSERT INTO e (a, v) VALUES (1, 0)", "");  // a key column left out
 }
 
+// **The embedded key arbitrates an upsert** (EB-S4): no target, or the key's
+// columns in any order, is the tuple key arbiter, at the id the row's key
+// encodes to; another unique index arbitrates by its own key.
+TEST_F(EmbeddedKeyRelationTest, OnConflictArbitratesByTheEmbeddedKey) {
+    Fill();
+    Ok("INSERT INTO e VALUES (1, 2, 99), (5, 5, 55) ON CONFLICT DO NOTHING", "INSERTED");
+    Ok("INSERT INTO e VALUES (1, 1, 99), (6, 6, 66), (6, 6, 67), (-3, 7, 0) "
+       "ON CONFLICT (b, a) DO NOTHING",
+       "INSERTED");
+    EXPECT_EQ(Rows("SELECT a, b, v FROM e WHERE v >= 11 AND v <= 99 ORDER BY a, b").rows,
+              (Table{{"1", "-5", "15"}, {"1", "1", "11"}, {"1", "2", "12"}, {"2", "-1", "29"},
+                     {"2", "1", "21"}, {"5", "5", "55"}, {"6", "6", "66"}}));
+    Ok("INSERT INTO e VALUES (1, 2, 7), (7, 7, 77) ON CONFLICT (a, b) DO UPDATE SET v = v + "
+       "EXCLUDED.v",
+       "INSERTED");
+    EXPECT_EQ(Rows("SELECT v FROM e WHERE a = 1 AND b = 2").rows, (Table{{"19"}}));
+    EXPECT_EQ(Rows("SELECT v FROM e WHERE a = 7 AND b = 7").rows, (Table{{"77"}}));
+    Refused("INSERT INTO e VALUES (8, 8, 1), (8, 8, 2) ON CONFLICT (a, b) DO UPDATE SET v = 0",
+            "would update one row twice");
+    // A key column is never assigned (K2), and one column of the key is no
+    // arbiter.
+    Refused("INSERT INTO e VALUES (1, 2, 0) ON CONFLICT (a, b) DO UPDATE SET a = 3", "");
+    Refused("INSERT INTO e VALUES (1, 2, 0) ON CONFLICT (a) DO NOTHING", "NOT_IMPLEMENTED");
+    // A NULL key column is the insert's own refusal, and so is a
+    // `keyidentity` that is not the key's id - with or without the clause,
+    // a held key's or a free one's, never skipped or updated in its place.
+    Refused("INSERT INTO e VALUES (NULL, 1, 0) ON CONFLICT DO NOTHING", "NULL");
+    for (const char* tail : {"", " ON CONFLICT DO NOTHING",
+                             " ON CONFLICT (a, b) DO UPDATE SET v = EXCLUDED.v"}) {
+        Refused(std::string("INSERT INTO e (keyidentity, a, b, v) VALUES (5, 1, 2, 0)") + tail,
+                "is not this row's");
+        Refused(std::string("INSERT INTO e (keyidentity, a, b, v) VALUES (5, 40, 40, 0)") + tail,
+                "is not this row's");
+    }
+    EXPECT_EQ(Rows("SELECT v FROM e WHERE a = 1 AND b = 2").rows, (Table{{"19"}}));
+    // The refusal's byte is the key's, where the key is not the row's first
+    // value.
+    Refused("INSERT INTO e (v, b, a) VALUES (1, 8, 8), (2, 8, 8) ON CONFLICT (a, b) DO UPDATE "
+            "SET v = 0",
+            "(byte 49)");
+    // Another unique index arbitrates by its key.
+    Ok("CREATE UNIQUE INDEX e_v ON e (v)", "CREATED");
+    Ok("INSERT INTO e VALUES (9, 9, 55) ON CONFLICT (v) DO NOTHING", "INSERTED");
+    EXPECT_TRUE(Rows("SELECT v FROM e WHERE a = 9 AND b = 9").rows.empty());
+}
+
+// The indexed form: a composite primary key's `$pkey` index arbitrates by
+// its columns in any order (EB-S4).
+TEST_F(BtreePrimaryKeyTest, OnConflictArbitratesByAnIndexedPrimaryKey) {
+    Ok("CREATE TABLE w (k varchar(40), n int64, v int64, PRIMARY KEY (k, n))", "CREATED");
+    Ok("INSERT INTO w VALUES ('a', 1, 10), ('a', 2, 20)", "INSERTED");
+    Ok("INSERT INTO w VALUES ('a', 1, 5), ('b', 1, 7) ON CONFLICT (n, k) DO UPDATE SET v = v + "
+       "EXCLUDED.v",
+       "INSERTED");
+    EXPECT_EQ(Rows("SELECT k, n, v FROM w WHERE k = 'a' AND n = 1").rows,
+              (Table{{"a", "1", "15"}}));
+    EXPECT_EQ(Rows("SELECT k, n, v FROM w WHERE k = 'b' AND n = 1").rows,
+              (Table{{"b", "1", "7"}}));
+    Ok("INSERT INTO w VALUES ('a', 2, 0) ON CONFLICT (k, n) DO NOTHING", "INSERTED");
+    EXPECT_EQ(Rows("SELECT v FROM w WHERE k = 'a' AND n = 2").rows, (Table{{"20"}}));
+}
+
 TEST_F(EmbeddedKeyRelationTest, WhatIsNotBuiltOnAnEmbeddedKeyIsRefusedByName) {
     Fill();
-    Refused("INSERT INTO e VALUES (1, 2, 0) ON CONFLICT DO NOTHING", "NOT_IMPLEMENTED");
-    Refused("INSERT INTO e VALUES (1, 2, 0) ON CONFLICT (a) DO UPDATE SET v = 1",
-            "NOT_IMPLEMENTED");
     Refused("ALTER TABLE e DROP COLUMN a", "part of the primary key");
     Ok("ALTER TABLE e DROP COLUMN v", "DROPPED");
     EXPECT_EQ(Rows("SELECT b FROM e WHERE a = 1 AND b = 2").rows, (Table{{"2"}}));

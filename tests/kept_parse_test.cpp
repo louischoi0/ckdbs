@@ -167,8 +167,9 @@ std::string Dump(const Statement& stmt) {
             D(o, ve.expr);
         }
         o << (i->select != nullptr) << "'" << i->select_text << "'" << i->on_conflict_do_nothing
-          << (i->conflict_target.has_value() ? i->conflict_target->name : "-")
-          << i->on_conflict_do_update;
+          << (i->conflict_target.empty() ? "-" : "");
+        for (const IndexColumnRef& t : i->conflict_target) o << t.name << ",";
+        o << i->on_conflict_do_update;
         for (const Assignment& a : i->conflict_assignments) D(o, a);
         D(o, i->returning);
         o << ")";

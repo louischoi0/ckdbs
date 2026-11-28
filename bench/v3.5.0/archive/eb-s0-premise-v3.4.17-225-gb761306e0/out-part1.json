@@ -1,0 +1,2142 @@
+{
+ "binary_sha256": "c4ad5c210a12130abd264a5e7efa8750056be9a207a595377a60f76d48a34c84",
+ "binary_mtime": 1795816184.7514474,
+ "reps": 3,
+ "stmts": 40,
+ "runs": [
+  {
+   "rows": 100000,
+   "cells": [
+    {
+     "name": "R1 page forward, btree tuple key",
+     "family": "S1",
+     "sql": {
+      "T": "SELECT id, v FROM bt WHERE id >= 17612 ORDER BY id LIMIT 100",
+      "B": "SELECT id, v FROM bt WHERE id >= 17612 AND id <= 281474976710655 ORDER BY id LIMIT 100"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 502.3,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 72.0,
+        "p25_us": 324.3,
+        "p50_us": 552.7,
+        "p75_us": 832.3,
+        "p99_us": 1265.2,
+        "max_us": 1270.5
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1464 1240407",
+        "1.67 4.52 2.73 1/1464 1240407",
+        "1.67 4.52 2.73 1/1464 1240407"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 16.3,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 61.3,
+        "p25_us": 69.5,
+        "p50_us": 73.7,
+        "p75_us": 79.2,
+        "p99_us": 84.8,
+        "max_us": 98.4
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1464 1240407",
+        "1.67 4.52 2.73 1/1464 1240407",
+        "1.67 4.52 2.73 1/1464 1240407"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 497.1,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 74.9,
+        "p25_us": 310.5,
+        "p50_us": 526.3,
+        "p75_us": 791.7,
+        "p99_us": 1038.6,
+        "max_us": 1049.7
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1464 1240407",
+        "1.67 4.52 2.73 1/1464 1240407",
+        "1.67 4.52 2.73 2/1464 1240407"
+       ]
+      }
+     },
+     "ratio_T_over_B": 30.82
+    },
+    {
+     "name": "R2 page backward, btree tuple key",
+     "family": "S1",
+     "sql": {
+      "T": "SELECT id, v FROM bt WHERE id < 17811 ORDER BY id DESC LIMIT 20",
+      "B": "SELECT id, v FROM bt WHERE id >= 1 AND id <= 17810 ORDER BY id DESC LIMIT 20"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 529.1,
+       "rows_per_stmt": 20.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 42.0,
+        "p25_us": 271.3,
+        "p50_us": 587.3,
+        "p75_us": 849.0,
+        "p99_us": 1139.8,
+        "max_us": 1153.9
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240407"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 10.5,
+       "rows_per_stmt": 20.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 46.8,
+        "p25_us": 48.8,
+        "p50_us": 59.4,
+        "p75_us": 62.6,
+        "p99_us": 78.0,
+        "max_us": 83.8
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240407"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 529.8,
+       "rows_per_stmt": 20.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 39.9,
+        "p25_us": 284.2,
+        "p50_us": 589.5,
+        "p75_us": 844.1,
+        "p99_us": 1127.8,
+        "max_us": 1146.5
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240407"
+       ]
+      }
+     },
+     "ratio_T_over_B": 50.39
+    },
+    {
+     "name": "R3 page forward, heap Keystone",
+     "family": "S1",
+     "sql": {
+      "T": "SELECT keyidentity, v FROM hp WHERE keyidentity >= 17612 ORDER BY keyidentity LIMIT 100",
+      "B": "SELECT keyidentity, v FROM hp WHERE keyidentity IN (17612, 17613, 17614, 17615, 17616, 17617, 17618, 17619, 17620, 17621, 17622, 17623, 17624, 17625, 17626, 17627, 17628, 17629, 17630, 17631, 17632, 17633, 17634, 17635, 17636, 17637, 17638, 17639, 17640, 17641, 17642, 17643, 17644, 17645, 17646, 176"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 2339.7,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1066.8,
+        "p25_us": 1737.4,
+        "p50_us": 2445.4,
+        "p75_us": 3173.8,
+        "p99_us": 4098.4,
+        "max_us": 4154.6
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 1/1463 1240409",
+        "1.67 4.52 2.73 1/1463 1240409"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 121.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 135.1,
+        "p25_us": 145.7,
+        "p50_us": 154.6,
+        "p75_us": 162.4,
+        "p99_us": 520.3,
+        "max_us": 640.3
+       },
+       "load": [
+        "1.67 4.52 2.73 3/1463 1240407",
+        "1.67 4.52 2.73 2/1463 1240409",
+        "1.67 4.52 2.73 3/1502 1240462"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 2338.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1021.5,
+        "p25_us": 1609.4,
+        "p50_us": 2390.9,
+        "p75_us": 3111.6,
+        "p99_us": 3767.9,
+        "max_us": 3861.5
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1463 1240407",
+        "1.67 4.52 2.73 2/1463 1240408",
+        "1.67 4.52 2.73 3/1502 1240462"
+       ]
+      }
+     },
+     "ratio_T_over_B": 19.26
+    },
+    {
+     "name": "R3s strict window, heap Keystone",
+     "family": "S1",
+     "sql": {
+      "T": "SELECT keyidentity, v FROM hp WHERE keyidentity > 17611 AND keyidentity < 17712",
+      "B": "SELECT keyidentity, v FROM hp WHERE keyidentity >= 17612 AND keyidentity <= 17711"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 1053.1,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1012.7,
+        "p25_us": 1055.9,
+        "p50_us": 1097.3,
+        "p75_us": 1136.0,
+        "p99_us": 1199.8,
+        "max_us": 1219.8
+       },
+       "load": [
+        "1.67 4.52 2.73 4/1508 1240591",
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240615"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 29.9,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 61.9,
+        "p25_us": 63.8,
+        "p50_us": 64.5,
+        "p75_us": 65.5,
+        "p99_us": 100.0,
+        "max_us": 115.2
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240615"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 1049.8,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1005.0,
+        "p25_us": 1048.2,
+        "p50_us": 1099.6,
+        "p75_us": 1129.7,
+        "p99_us": 1172.5,
+        "max_us": 1177.8
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240615"
+       ]
+      }
+     },
+     "ratio_T_over_B": 35.22
+    },
+    {
+     "name": "R4s strict window, index leading key",
+     "family": "S1",
+     "sql": {
+      "T": "SELECT id, k FROM bt WHERE k > 17611 AND k < 17712",
+      "B": "SELECT id, k FROM bt WHERE k >= 17612 AND k <= 17711"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 1468.2,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1099.6,
+        "p25_us": 1394.5,
+        "p50_us": 1537.2,
+        "p75_us": 1665.3,
+        "p99_us": 1758.9,
+        "max_us": 1761.5
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 3/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240616"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 55.8,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 88.1,
+        "p25_us": 90.1,
+        "p50_us": 91.2,
+        "p75_us": 92.9,
+        "p99_us": 124.6,
+        "max_us": 137.0
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 2/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240616"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 1466.4,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1109.8,
+        "p25_us": 1389.3,
+        "p50_us": 1542.9,
+        "p75_us": 1662.5,
+        "p99_us": 1762.5,
+        "max_us": 1767.0
+       },
+       "load": [
+        "1.67 4.52 2.73 2/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240615",
+        "1.67 4.52 2.73 1/1465 1240616"
+       ]
+      }
+     },
+     "ratio_T_over_B": 26.31
+    },
+    {
+     "name": "R4 page forward, index leading key",
+     "family": "S1",
+     "sql": {
+      "T": "SELECT id, k FROM bt WHERE k >= 17612 ORDER BY k LIMIT 100",
+      "B": "SELECT id, k FROM bt WHERE k IN (17612, 17613, 17614, 17615, 17616, 17617, 17618, 17619, 17620, 17621, 17622, 17623, 17624, 17625, 17626, 17627, 17628, 17629, 17630, 17631, 17632, 17633, 17634, 17635, 17636, 17637, 17638, 17639, 17640, 17641, 17642, 17643, 17644, 17645, 17646, 17647, 17648, 17649, 1"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 2766.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1144.1,
+        "p25_us": 2030.3,
+        "p50_us": 3107.9,
+        "p75_us": 3545.8,
+        "p99_us": 3957.3,
+        "max_us": 4966.2
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240616",
+        "1.67 4.52 2.73 1/1465 1240617",
+        "1.67 4.52 2.73 1/1465 1240617"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 205.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 174.5,
+        "p25_us": 210.4,
+        "p50_us": 244.1,
+        "p75_us": 275.5,
+        "p99_us": 325.9,
+        "max_us": 372.5
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240617",
+        "1.67 4.52 2.73 1/1465 1240617",
+        "1.67 4.52 2.73 1/1458 1240617"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 2756.4,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 1136.5,
+        "p25_us": 2045.1,
+        "p50_us": 3094.0,
+        "p75_us": 3546.7,
+        "p99_us": 3957.6,
+        "max_us": 3965.8
+       },
+       "load": [
+        "1.67 4.52 2.73 1/1465 1240617",
+        "1.67 4.52 2.73 1/1465 1240617",
+        "1.67 4.52 2.73 2/1458 1240617"
+       ]
+      }
+     },
+     "ratio_T_over_B": 13.46
+    },
+    {
+     "name": "J1 join by a whole composite index key",
+     "family": "S2",
+     "sql": {
+      "T": "SELECT o.id, c.v FROM o JOIN c ON c.a = o.a WHERE c.b = o.b",
+      "B": "SELECT o.id, c1.v FROM o JOIN c1 ON c1.b = o.b WHERE c1.a = o.a"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 240429.8,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 39,
+        "p0_us": 239060.4,
+        "p25_us": 239819.3,
+        "p50_us": 240667.1,
+        "p75_us": 241393.6,
+        "p99_us": 243662.4,
+        "max_us": 243662.4
+       },
+       "load": [
+        "1.61 4.46 2.72 1/1472 1240636",
+        "1.56 4.40 2.71 1/1477 1241042",
+        "1.52 4.35 2.70 1/1462 1241066"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 187.0,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 149.9,
+        "p25_us": 156.1,
+        "p50_us": 178.0,
+        "p75_us": 319.9,
+        "p99_us": 578.5,
+        "max_us": 596.2
+       },
+       "load": [
+        "1.61 4.46 2.72 2/1484 1240664",
+        "1.56 4.40 2.71 3/1477 1241041",
+        "1.48 4.29 2.69 1/1455 1241213"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 240614.2,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 39,
+        "p0_us": 239296.8,
+        "p25_us": 240171.7,
+        "p50_us": 240675.2,
+        "p75_us": 241587.0,
+        "p99_us": 245003.2,
+        "max_us": 245003.2
+       },
+       "load": [
+        "1.61 4.46 2.72 3/1484 1240664",
+        "1.56 4.40 2.71 4/1485 1240824",
+        "1.48 4.29 2.69 2/1455 1241213"
+       ]
+      }
+     },
+     "ratio_T_over_B": 1285.72
+    },
+    {
+     "name": "J2 join by a whole embedded key",
+     "family": "S2",
+     "sql": {
+      "T": "SELECT o.id, e.v FROM o JOIN e ON e.a = o.ea WHERE e.b = o.eb",
+      "B": "SELECT o.id, bt.v FROM o JOIN bt ON bt.id = o.x"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 223135.5,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 42,
+        "p0_us": 222271.0,
+        "p25_us": 222930.2,
+        "p50_us": 223150.2,
+        "p75_us": 223700.5,
+        "p99_us": 226398.4,
+        "max_us": 226398.4
+       },
+       "load": [
+        "1.48 4.29 2.69 1/1456 1241232",
+        "1.40 4.18 2.67 1/1467 1241617",
+        "1.37 4.13 2.66 1/1482 1241847"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 49.0,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 78.3,
+        "p25_us": 80.0,
+        "p50_us": 81.3,
+        "p75_us": 83.1,
+        "p99_us": 221.6,
+        "max_us": 237.4
+       },
+       "load": [
+        "1.44 4.24 2.68 1/1449 1241445",
+        "1.40 4.18 2.67 1/1467 1241617",
+        "1.34 4.08 2.65 1/1489 1241862"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 223201.9,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 42,
+        "p0_us": 222479.4,
+        "p25_us": 222968.4,
+        "p50_us": 223376.9,
+        "p75_us": 223592.9,
+        "p99_us": 225313.9,
+        "max_us": 225313.9
+       },
+       "load": [
+        "1.44 4.24 2.68 1/1449 1241445",
+        "1.40 4.18 2.67 1/1456 1241463",
+        "1.34 4.08 2.65 1/1489 1241862"
+       ]
+      }
+     },
+     "ratio_T_over_B": 4553.79
+    },
+    {
+     "name": "J3 embedded key, literal prefix and a joined column",
+     "family": "S2",
+     "sql": {
+      "T": "SELECT o.id, e.v FROM o JOIN e ON e.b = o.eb WHERE e.a = 50",
+      "B": "SELECT o.id, bt.v FROM o JOIN bt ON bt.id = o.x"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 127.0,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 158.5,
+        "p25_us": 161.4,
+        "p50_us": 163.0,
+        "p75_us": 164.9,
+        "p99_us": 181.7,
+        "max_us": 183.6
+       },
+       "load": [
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 1/1481 1242018"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 45.9,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 78.6,
+        "p25_us": 79.6,
+        "p50_us": 80.4,
+        "p75_us": 81.7,
+        "p99_us": 110.7,
+        "max_us": 116.4
+       },
+       "load": [
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 2/1481 1242018"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 127.0,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 157.8,
+        "p25_us": 161.2,
+        "p50_us": 163.2,
+        "p75_us": 165.3,
+        "p99_us": 179.9,
+        "max_us": 183.5
+       },
+       "load": [
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 1/1481 1242018"
+       ]
+      }
+     },
+     "ratio_T_over_B": 2.77
+    },
+    {
+     "name": "O1 order by an embedded key",
+     "family": "S3",
+     "sql": {
+      "T": "SELECT a, b, v FROM e ORDER BY a, b LIMIT 100",
+      "B": "SELECT id, v FROM bt ORDER BY id LIMIT 100"
+     },
+     "arms": {
+      "T": {
+       "server_cpu_us_per_stmt": 3887.3,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 3878.4,
+        "p25_us": 3922.3,
+        "p50_us": 3938.8,
+        "p75_us": 3953.9,
+        "p99_us": 4063.1,
+        "max_us": 4071.3
+       },
+       "load": [
+        "1.34 4.08 2.65 1/1481 1242018",
+        "1.34 4.08 2.65 2/1481 1242020",
+        "1.34 4.08 2.65 2/1481 1242020"
+       ]
+      },
+      "B": {
+       "server_cpu_us_per_stmt": 14.8,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 46.5,
+        "p25_us": 47.7,
+        "p50_us": 48.4,
+        "p75_us": 49.5,
+        "p99_us": 80.4,
+        "max_us": 80.6
+       },
+       "load": [
+        "1.34 4.08 2.65 1/1481 1242019",
+        "1.34 4.08 2.65 1/1481 1242020",
+        "1.34 4.08 2.65 1/1480 1242020"
+       ]
+      },
+      "T2": {
+       "server_cpu_us_per_stmt": 3881.4,
+       "rows_per_stmt": 100.0,
+       "latency": {
+        "n": 120,
+        "p0_us": 3892.8,
+        "p25_us": 3917.9,
+        "p50_us": 3927.9,
+        "p75_us": 3946.6,
+        "p99_us": 4009.4,
+        "max_us": 4013.4
+       },
+       "load": [
+        "1.34 4.08 2.65 1/1481 1242019",
+        "1.34 4.08 2.65 1/1481 1242020",
+        "1.34 4.08 2.65 1/1480 1242020"
+       ]
+      }
+     },
+     "ratio_T_over_B": 262.66
+    }
+   ],
+   "refusals": [
+    {
+     "family": "S4",
+     "sql": "INSERT INTO c VALUES (1, 1, 1, 0) ON CONFLICT (a, b) DO NOTHING",
+     "answer": "refused: a conflict target of more than one column is not supported (byte 48); the tuple key is the one conflict there is"
+    },
+    {
+     "family": "S4",
+     "sql": "INSERT INTO e VALUES (1, 1, 0) ON CONFLICT (a, b) DO NOTHING",
+     "answer": "refused: a conflict target of more than one column is not supported (byte 45); the tuple key is the one conflict there is"
+    },
+    {
+     "family": "S4",
+     "sql": "INSERT INTO e VALUES (1, 1, 0) ON CONFLICT DO NOTHING",
+     "answer": "refused: ON CONFLICT at byte 31 on a relation whose primary key is its Keystone id is not built"
+    },
+    {
+     "family": "S4",
+     "sql": "INSERT INTO hp (keyidentity, k, v) VALUES (1, 1, 0) ON CONFLICT (keyidentity) DO NOTHING",
+     "answer": "INSERTED oid=4004 rows=0 (0 rows)"
+    }
+   ],
+   "analyze": {
+    "R1 page forward, btree tuple key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=17711 pages=107 opens=1 pattern_id=0x5037357d44b3dded fetch_id=0x8844f63aced94db"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan bt"
+     ],
+     [
+      "  filter 0:0.0 >= 17612"
+     ],
+     [
+      "project id=0:0.0, v=0:0.2"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan bt opens=1 examined=17711 matched=100 sel=0% pages=107"
+     ],
+     [
+      "DB time 0.26 ms = CPU 0.26"
+     ]
+    ],
+    "R1 page forward, btree tuple key / B": [
+     [
+      "analyze rows=100 class=RangeSelect steps=1 examined=115 pages=1 opens=1 pattern_id=0xece6de69f30eb8f7 fetch_id=0x9315e06305ba58c5"
+     ],
+     [
+      "class=RangeSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Range bt range=[17612, 281474976710655]"
+     ],
+     [
+      "  filter 0:0.0 >= 17612"
+     ],
+     [
+      "  filter 0:0.0 <= 281474976710655"
+     ],
+     [
+      "project id=0:0.0, v=0:0.2"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Range bt opens=1 examined=115 matched=100 sel=86% pages=1"
+     ],
+     [
+      "DB time 0.02 ms = CPU 0.02"
+     ]
+    ],
+    "R2 page backward, btree tuple key / T": [
+     [
+      "analyze rows=20 class=JoinSelect steps=1 examined=82210 pages=496 opens=1 pattern_id=0xef5b9ea569a9630c fetch_id=0xfd889038161921c2"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan bt order=tuple_key_desc"
+     ],
+     [
+      "  filter 0:0.0 < 17811"
+     ],
+     [
+      "project id=0:0.0, v=0:0.2"
+     ],
+     [
+      "quota limit=20"
+     ],
+     [
+      "step 0 Scan bt opens=1 examined=82210 matched=20 sel=0% pages=496"
+     ],
+     [
+      "DB time 0.91 ms = CPU 0.91"
+     ]
+    ],
+    "R2 page backward, btree tuple key / B": [
+     [
+      "analyze rows=20 class=RangeSelect steps=1 examined=20 pages=1 opens=1 pattern_id=0xc3b5b5ba1db8ed5 fetch_id=0x38410ac816c11e2f"
+     ],
+     [
+      "class=RangeSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Range bt range=[1, 17810] order=tuple_key_desc"
+     ],
+     [
+      "  filter 0:0.0 >= 1"
+     ],
+     [
+      "  filter 0:0.0 <= 17810"
+     ],
+     [
+      "project id=0:0.0, v=0:0.2"
+     ],
+     [
+      "quota limit=20"
+     ],
+     [
+      "step 0 Range bt opens=1 examined=20 matched=20 sel=100% pages=1"
+     ],
+     [
+      "DB time 0.01 ms = CPU 0.01"
+     ]
+    ],
+    "R3 page forward, heap Keystone / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 sorted=100 pattern_id=0xef775e5f69752938 fetch_id=0xa6ef5f5eccc3b61"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan hp"
+     ],
+     [
+      "  filter 0:0.0 >= 17612"
+     ],
+     [
+      "project keyidentity=0:0.0, v=0:0.2"
+     ],
+     [
+      "sort 0:0.0 asc"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan hp opens=1 examined=100000 matched=82389 sel=82% pages=603"
+     ],
+     [
+      "DB time 3.38 ms = CPU 3.38"
+     ]
+    ],
+    "R3 page forward, heap Keystone / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=100 opens=1 sorted=100 pattern_id=0xb63dae7a29a64f6b fetch_id=0x555abec6dbd4b004"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Lookup hp key_set=100"
+     ],
+     [
+      "  filter bool (0:0.0 = 17612 OR 0:0.0 = 17613 OR 0:0.0 = 17614 OR 0:0.0 = 17615 OR 0:0.0 = 17616 OR 0:0.0 = 17617 OR 0:0.0 = 17618 OR 0:0.0 = 17619 OR 0:0.0 = 17620 OR 0:0.0 = 17621 OR 0:0.0 = 17622 OR 0:0.0 = 17623 OR 0:0.0 = 17624 OR 0:0.0 = 17625 OR 0:0.0 = 17626 OR 0:0.0 = 17627 OR 0:0.0 = 17628 OR 0:0.0 = 17629 OR 0:0.0 = 17630 OR 0:0.0 = 17631 OR 0:0.0 = 17632 OR 0:0.0 = 17633 OR 0:0.0 = 17634 OR 0:0.0 = 17635 OR 0:0.0 = 17636 OR 0:0.0 = 17637 OR 0:0.0 = 17638 OR 0:0.0 = 17639 OR 0:0.0 = 17640 OR 0:0.0 = 17641 OR 0:0.0 = 17642 OR 0:0.0 = 17643 OR 0:0.0 = 17644 OR 0:0.0 = 17645 OR 0:0.0 = 17646 OR 0:0.0 = 17647 OR 0:0.0 = 17648 OR 0:0.0 = 17649 OR 0:0.0 = 17650 OR 0:0.0 = 17651 OR 0:0.0 = 17652 OR 0:0.0 = 17653 OR 0:0.0 = 17654 OR 0:0.0 = 17655 OR 0:0.0 = 17656 OR 0:0.0 = 17657 OR 0:0.0 = 17658 OR 0:0.0 = 17659 OR 0:0.0 = 17660 OR 0:0.0 = 17661 OR 0:0.0 = 17662 OR 0:0.0 = 17663 OR 0:0.0 = 17664 OR 0:0.0 = 17665 OR 0:0.0 = 17666 OR 0:0.0 = 17667 OR 0:0.0 = 17668 OR 0:0.0 = 17669 OR 0:0.0 = 17670 OR 0:0.0 = 17671 OR 0:0.0 = 17672 OR 0:0.0 = 17673 OR 0:0.0 = 17674 OR 0:0.0 = 17675 OR 0:0.0 = 17676 OR 0:0.0 = 17677 OR 0:0.0 = 17678 OR 0:0.0 = 17679 OR 0:0.0 = 17680 OR 0:0.0 = 17681 OR 0:0.0 = 17682 OR 0:0.0 = 17683 OR 0:0.0 = 17684 OR 0:0.0 = 17685 OR 0:0.0 = 17686 OR 0:0.0 = 17687 OR 0:0.0 = 17688 OR 0:0.0 = 17689 OR 0:0.0 = 17690 OR 0:0.0 = 17691 OR 0:0.0 = 17692 OR 0:0.0 = 17693 OR 0:0.0 = 17694 OR 0:0.0 = 17695 OR 0:0.0 = 17696 OR 0:0.0 = 17697 OR 0:0.0 = 17698 OR 0:0.0 = 17699 OR 0:0.0 = 17700 OR 0:0.0 = 17701 OR 0:0.0 = 17702 OR 0:0.0 = 17703 OR 0:0.0 = 17704 OR 0:0.0 = 17705 OR 0:0.0 = 17706 OR 0:0.0 = 17707 OR 0:0.0 = 17708 OR 0:0.0 = 17709 OR 0:0.0 = 17710 OR 0:0.0 = 17711)"
+     ],
+     [
+      "project keyidentity=0:0.0, v=0:0.2"
+     ],
+     [
+      "sort 0:0.0 asc"
+     ],
+     [
+      "step 0 Lookup hp opens=1 examined=100 matched=100 sel=100% pages=100"
+     ],
+     [
+      "DB time 0.17 ms = CPU 0.17"
+     ]
+    ],
+    "R3s strict window, heap Keystone / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 pattern_id=0x7eafb3f30949e1e1 fetch_id=0x980c030bf5bb9d98"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan hp"
+     ],
+     [
+      "  filter 0:0.0 > 17611"
+     ],
+     [
+      "  filter 0:0.0 < 17712"
+     ],
+     [
+      "project keyidentity=0:0.0, v=0:0.2"
+     ],
+     [
+      "step 0 Scan hp opens=1 examined=100000 matched=100 sel=0% pages=603"
+     ],
+     [
+      "DB time 1.30 ms = CPU 1.30"
+     ]
+    ],
+    "R3s strict window, heap Keystone / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=101 opens=1 pattern_id=0x21629301099fd371 fetch_id=0x996557993b39ebf8"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 IndexRange hp"
+     ],
+     [
+      "  filter 0:0.0 >= 17612"
+     ],
+     [
+      "  filter 0:0.0 <= 17711"
+     ],
+     [
+      "project keyidentity=0:0.0, v=0:0.2"
+     ],
+     [
+      "step 0 IndexRange hp opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100"
+     ],
+     [
+      "DB time 0.16 ms = CPU 0.16"
+     ]
+    ],
+    "R4s strict window, index leading key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 pattern_id=0x1b605a49183df60b fetch_id=0x19bd5201de7d54b2"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan bt"
+     ],
+     [
+      "  filter 0:0.1 > 17611"
+     ],
+     [
+      "  filter 0:0.1 < 17712"
+     ],
+     [
+      "project id=0:0.0, k=0:0.1"
+     ],
+     [
+      "step 0 Scan bt opens=1 examined=100000 matched=100 sel=0% pages=603"
+     ],
+     [
+      "DB time 1.63 ms = CPU 1.63"
+     ]
+    ],
+    "R4s strict window, index leading key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=101 opens=1 pattern_id=0x40e3a2f8d96a04ff fetch_id=0x59750d5fa69c187e"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 IndexRange bt"
+     ],
+     [
+      "  filter 0:0.1 >= 17612"
+     ],
+     [
+      "  filter 0:0.1 <= 17711"
+     ],
+     [
+      "project id=0:0.0, k=0:0.1"
+     ],
+     [
+      "step 0 IndexRange bt opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100"
+     ],
+     [
+      "DB time 0.09 ms = CPU 0.09"
+     ]
+    ],
+    "R4 page forward, index leading key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=603 opens=1 sorted=100 pattern_id=0x7968780131687a7a fetch_id=0xdf7998fccd8ddbcb"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan bt"
+     ],
+     [
+      "  filter 0:0.1 >= 17612"
+     ],
+     [
+      "project id=0:0.0, k=0:0.1"
+     ],
+     [
+      "sort 0:0.1 asc"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan bt opens=1 examined=100000 matched=82389 sel=82% pages=603"
+     ],
+     [
+      "DB time 3.67 ms = CPU 3.67"
+     ]
+    ],
+    "R4 page forward, index leading key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=200 opens=1 sorted=100 pattern_id=0x70dd4a217cb50aa5 fetch_id=0x92632100c91177c6"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 IndexProbe bt key_set=100"
+     ],
+     [
+      "  filter bool (0:0.1 = 17612 OR 0:0.1 = 17613 OR 0:0.1 = 17614 OR 0:0.1 = 17615 OR 0:0.1 = 17616 OR 0:0.1 = 17617 OR 0:0.1 = 17618 OR 0:0.1 = 17619 OR 0:0.1 = 17620 OR 0:0.1 = 17621 OR 0:0.1 = 17622 OR 0:0.1 = 17623 OR 0:0.1 = 17624 OR 0:0.1 = 17625 OR 0:0.1 = 17626 OR 0:0.1 = 17627 OR 0:0.1 = 17628 OR 0:0.1 = 17629 OR 0:0.1 = 17630 OR 0:0.1 = 17631 OR 0:0.1 = 17632 OR 0:0.1 = 17633 OR 0:0.1 = 17634 OR 0:0.1 = 17635 OR 0:0.1 = 17636 OR 0:0.1 = 17637 OR 0:0.1 = 17638 OR 0:0.1 = 17639 OR 0:0.1 = 17640 OR 0:0.1 = 17641 OR 0:0.1 = 17642 OR 0:0.1 = 17643 OR 0:0.1 = 17644 OR 0:0.1 = 17645 OR 0:0.1 = 17646 OR 0:0.1 = 17647 OR 0:0.1 = 17648 OR 0:0.1 = 17649 OR 0:0.1 = 17650 OR 0:0.1 = 17651 OR 0:0.1 = 17652 OR 0:0.1 = 17653 OR 0:0.1 = 17654 OR 0:0.1 = 17655 OR 0:0.1 = 17656 OR 0:0.1 = 17657 OR 0:0.1 = 17658 OR 0:0.1 = 17659 OR 0:0.1 = 17660 OR 0:0.1 = 17661 OR 0:0.1 = 17662 OR 0:0.1 = 17663 OR 0:0.1 = 17664 OR 0:0.1 = 17665 OR 0:0.1 = 17666 OR 0:0.1 = 17667 OR 0:0.1 = 17668 OR 0:0.1 = 17669 OR 0:0.1 = 17670 OR 0:0.1 = 17671 OR 0:0.1 = 17672 OR 0:0.1 = 17673 OR 0:0.1 = 17674 OR 0:0.1 = 17675 OR 0:0.1 = 17676 OR 0:0.1 = 17677 OR 0:0.1 = 17678 OR 0:0.1 = 17679 OR 0:0.1 = 17680 OR 0:0.1 = 17681 OR 0:0.1 = 17682 OR 0:0.1 = 17683 OR 0:0.1 = 17684 OR 0:0.1 = 17685 OR 0:0.1 = 17686 OR 0:0.1 = 17687 OR 0:0.1 = 17688 OR 0:0.1 = 17689 OR 0:0.1 = 17690 OR 0:0.1 = 17691 OR 0:0.1 = 17692 OR 0:0.1 = 17693 OR 0:0.1 = 17694 OR 0:0.1 = 17695 OR 0:0.1 = 17696 OR 0:0.1 = 17697 OR 0:0.1 = 17698 OR 0:0.1 = 17699 OR 0:0.1 = 17700 OR 0:0.1 = 17701 OR 0:0.1 = 17702 OR 0:0.1 = 17703 OR 0:0.1 = 17704 OR 0:0.1 = 17705 OR 0:0.1 = 17706 OR 0:0.1 = 17707 OR 0:0.1 = 17708 OR 0:0.1 = 17709 OR 0:0.1 = 17710 OR 0:0.1 = 17711)"
+     ],
+     [
+      "project id=0:0.0, k=0:0.1"
+     ],
+     [
+      "sort 0:0.1 asc"
+     ],
+     [
+      "step 0 IndexProbe bt opens=1 examined=100 matched=100 sel=100% pages=200 index_scanned=100 index_resolved=100"
+     ],
+     [
+      "DB time 0.27 ms = CPU 0.27"
+     ]
+    ],
+    "J1 join by a whole composite index key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=1000100 pages=1000101 opens=101 pattern_id=0x66ed12d46395fc15 fetch_id=0x307f0c8f5f39c619"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=written gen=0 switch=1 est=0:100000,1:1"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 IndexProbe c key=0:0.2"
+     ],
+     [
+      "  filter 0:1.1 = 0:0.2"
+     ],
+     [
+      "  filter 0:1.2 = 0:0.3"
+     ],
+     [
+      "project o.id=0:0.0, c.v=0:1.3"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 IndexProbe c opens=100 examined=1000000 matched=100 sel=0% pages=1000100 index_scanned=1000000 index_resolved=1000000"
+     ],
+     [
+      "DB time 257.48 ms = CPU 257.48"
+     ]
+    ],
+    "J1 join by a whole composite index key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=200 pages=201 opens=101 pattern_id=0x11960358b7ca757b fetch_id=0xe0716029fcfe3b8f"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=written gen=0 switch=1 est=0:100000,1:1"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 IndexProbe c1 key=0:0.3"
+     ],
+     [
+      "  filter 0:1.2 = 0:0.3"
+     ],
+     [
+      "  filter 0:1.1 = 0:0.2"
+     ],
+     [
+      "project o.id=0:0.0, c1.v=0:1.3"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 IndexProbe c1 opens=100 examined=100 matched=100 sel=100% pages=200 index_scanned=100 index_resolved=100"
+     ],
+     [
+      "DB time 0.26 ms = CPU 0.26"
+     ]
+    ],
+    "J2 join by a whole embedded key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=10000100 pages=57901 opens=101 pattern_id=0xba581b840ed466d5 fetch_id=0xf347de775206e1b7"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=written gen=1 switch=1 est=0:91,1:0"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 Scan e"
+     ],
+     [
+      "  filter 0:1.1 = 0:0.4"
+     ],
+     [
+      "  filter 0:1.2 = 0:0.5"
+     ],
+     [
+      "project o.id=0:0.0, e.v=0:1.3"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 Scan e opens=100 examined=10000000 matched=100 sel=0% pages=57900"
+     ],
+     [
+      "DB time 224.17 ms = CPU 224.17"
+     ]
+    ],
+    "J2 join by a whole embedded key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=200 pages=101 opens=101 pattern_id=0x19e55adfe10dde8e fetch_id=0x34a29bb317425f8c"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=written gen=1 switch=1 est=0:91,1:91"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 Probe bt key=0:0.1"
+     ],
+     [
+      "  filter 0:1.0 = 0:0.1"
+     ],
+     [
+      "project o.id=0:0.0, bt.v=0:1.2"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 Probe bt opens=100 examined=100 matched=100 sel=100% pages=100"
+     ],
+     [
+      "DB time 0.13 ms = CPU 0.13"
+     ]
+    ],
+    "J3 embedded key, literal prefix and a joined column / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=1238 pages=105 opens=1001 pattern_id=0x2013b079dd018c9f fetch_id=0xf08948c379eb9e75"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0 reordered=1"
+     ],
+     [
+      "planned order=planned gen=2 switch=0.0112047 est=1:655,0:1"
+     ],
+     [
+      "step 1 Range e range=[140737491632129, 140737491697664]"
+     ],
+     [
+      "  filter 0:0.1 = 50"
+     ],
+     [
+      "step 0 Scan o build on=col5 key=0:0.2"
+     ],
+     [
+      "  filter 0:0.2 = 0:1.5"
+     ],
+     [
+      "project o.id=0:1.0, e.v=0:0.3"
+     ],
+     [
+      "step 1 Range e opens=1 examined=1038 matched=1000 sel=96% pages=7 range_stopped_early=1"
+     ],
+     [
+      "step 0 Scan o opens=1000 examined=200 matched=100 sel=50% pages=98 inner_built=1 build_rows=100 build_probes=999"
+     ],
+     [
+      "DB time 0.19 ms = CPU 0.19"
+     ]
+    ],
+    "J3 embedded key, literal prefix and a joined column / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=2 examined=200 pages=101 opens=101 pattern_id=0x19e55adfe10dde8e fetch_id=0x34a29bb317425f8c"
+     ],
+     [
+      "class=JoinSelect steps=2 hoisted=0"
+     ],
+     [
+      "planned order=memo gen=2 switch=1 est=0:91,1:91"
+     ],
+     [
+      "step 0 Scan o"
+     ],
+     [
+      "step 1 Probe bt key=0:0.1"
+     ],
+     [
+      "  filter 0:1.0 = 0:0.1"
+     ],
+     [
+      "project o.id=0:0.0, bt.v=0:1.2"
+     ],
+     [
+      "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "step 1 Probe bt opens=100 examined=100 matched=100 sel=100% pages=100"
+     ],
+     [
+      "DB time 0.11 ms = CPU 0.11"
+     ]
+    ],
+    "O1 order by an embedded key / T": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100000 pages=579 opens=1 sorted=100 pattern_id=0xfab4ce5c26eedf09 fetch_id=0xb2324fb23944ca34"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan e"
+     ],
+     [
+      "project a=0:0.1, b=0:0.2, v=0:0.3"
+     ],
+     [
+      "sort 0:0.1 asc, 0:0.2 asc"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan e opens=1 examined=100000 matched=100000 sel=100% pages=579"
+     ],
+     [
+      "DB time 3.91 ms = CPU 3.91"
+     ]
+    ],
+    "O1 order by an embedded key / B": [
+     [
+      "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=1 opens=1 pattern_id=0xa6085769bb82e981 fetch_id=0x500a764810fc141b"
+     ],
+     [
+      "class=JoinSelect steps=1 hoisted=0"
+     ],
+     [
+      "step 0 Scan bt"
+     ],
+     [
+      "project id=0:0.0, v=0:0.2"
+     ],
+     [
+      "quota limit=100"
+     ],
+     [
+      "step 0 Scan bt opens=1 examined=100 matched=100 sel=100% pages=1"
+     ],
+     [
+      "DB time 0.02 ms = CPU 0.02"
+     ]
+    ]
+   }
+  }
+ ],
+ "runs_partial": {
+  "rows": 1000000,
+  "cells": [
+   {
+    "name": "R1 page forward, btree tuple key",
+    "family": "S1",
+    "sql": {
+     "T": "SELECT id, v FROM bt WHERE id >= 140892 ORDER BY id LIMIT 100",
+     "B": "SELECT id, v FROM bt WHERE id >= 140892 AND id <= 281474976710655 ORDER BY id LIMIT 100"
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 5070.2,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 137.1,
+       "p25_us": 2246.1,
+       "p50_us": 5431.3,
+       "p75_us": 7693.9,
+       "p99_us": 10671.4,
+       "max_us": 10881.6
+      },
+      "load": [
+       "2.81 3.99 2.71 3/1488 1243927",
+       "2.81 3.99 2.71 1/1481 1244069",
+       "2.81 3.99 2.71 1/1481 1244069"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 20.7,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 52.4,
+       "p25_us": 54.3,
+       "p50_us": 55.4,
+       "p75_us": 56.8,
+       "p99_us": 108.3,
+       "max_us": 109.3
+      },
+      "load": [
+       "2.81 3.99 2.71 2/1480 1243929",
+       "2.81 3.99 2.71 1/1481 1244069",
+       "2.81 3.99 2.71 1/1481 1244069"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 5102.8,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 137.1,
+       "p25_us": 2235.2,
+       "p50_us": 5306.4,
+       "p75_us": 7779.2,
+       "p99_us": 10818.2,
+       "max_us": 10962.5
+      },
+      "load": [
+       "2.81 3.99 2.71 1/1480 1243929",
+       "2.81 3.99 2.71 1/1481 1243930",
+       "2.81 3.99 2.71 1/1481 1244069"
+      ]
+     }
+    },
+    "ratio_T_over_B": 244.94
+   },
+   {
+    "name": "R2 page backward, btree tuple key",
+    "family": "S1",
+    "sql": {
+     "T": "SELECT id, v FROM bt WHERE id < 141091 ORDER BY id DESC LIMIT 20",
+     "B": "SELECT id, v FROM bt WHERE id >= 1 AND id <= 141090 ORDER BY id DESC LIMIT 20"
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 5984.5,
+      "rows_per_stmt": 20.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 236.9,
+       "p25_us": 2899.9,
+       "p50_us": 5831.1,
+       "p75_us": 9422.8,
+       "p99_us": 12306.7,
+       "max_us": 12356.3
+      },
+      "load": [
+       "2.81 3.99 2.71 2/1488 1244079",
+       "2.81 3.99 2.71 1/1488 1244079",
+       "2.81 3.99 2.71 1/1487 1244081"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 15.3,
+      "rows_per_stmt": 20.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 24.6,
+       "p25_us": 26.0,
+       "p50_us": 27.1,
+       "p75_us": 53.0,
+       "p99_us": 311.5,
+       "max_us": 415.5
+      },
+      "load": [
+       "2.81 3.99 2.71 1/1488 1244079",
+       "2.81 3.99 2.71 1/1488 1244079",
+       "2.81 3.99 2.71 1/1524 1244133"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 5925.0,
+      "rows_per_stmt": 20.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 299.5,
+       "p25_us": 2881.5,
+       "p50_us": 5641.1,
+       "p75_us": 9349.3,
+       "p99_us": 12033.8,
+       "max_us": 12203.0
+      },
+      "load": [
+       "2.81 3.99 2.71 1/1488 1244079",
+       "2.81 3.99 2.71 1/1488 1244079",
+       "2.81 3.99 2.71 1/1524 1244133"
+      ]
+     }
+    },
+    "ratio_T_over_B": 391.14
+   },
+   {
+    "name": "R3 page forward, heap Keystone",
+    "family": "S1",
+    "sql": {
+     "T": "SELECT keyidentity, v FROM hp WHERE keyidentity >= 140892 ORDER BY keyidentity LIMIT 100",
+     "B": "SELECT keyidentity, v FROM hp WHERE keyidentity IN (140892, 140893, 140894, 140895, 140896, 140897, 140898, 140899, 140900, 140901, 140902, 140903, 140904, 140905, 140906, 140907, 140908, 140909, 140910, 140911, 140912, 140913, 140914, 140915, 140916, 140917, 140918, 140919, 140920, 140921, 140922, "
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 25257.3,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 11126.3,
+       "p25_us": 18064.7,
+       "p50_us": 25398.4,
+       "p75_us": 32930.5,
+       "p99_us": 39753.5,
+       "max_us": 40611.8
+      },
+      "load": [
+       "2.81 3.99 2.71 1/1517 1244133",
+       "2.74 3.95 2.71 1/1456 1244157",
+       "2.74 3.95 2.71 1/1450 1244301"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 153.7,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 133.8,
+       "p25_us": 153.4,
+       "p50_us": 175.5,
+       "p75_us": 286.9,
+       "p99_us": 447.1,
+       "max_us": 515.7
+      },
+      "load": [
+       "2.81 3.99 2.71 1/1471 1244137",
+       "2.74 3.95 2.71 1/1456 1244157",
+       "2.74 3.95 2.71 3/1450 1244303"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 24927.0,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 11061.2,
+       "p25_us": 17610.7,
+       "p50_us": 24007.4,
+       "p75_us": 32660.9,
+       "p99_us": 38988.5,
+       "max_us": 39088.6
+      },
+      "load": [
+       "2.81 3.99 2.71 1/1471 1244137",
+       "2.74 3.95 2.71 1/1457 1244148",
+       "2.74 3.95 2.71 2/1450 1244303"
+      ]
+     }
+    },
+    "ratio_T_over_B": 164.33
+   },
+   {
+    "name": "R3s strict window, heap Keystone",
+    "family": "S1",
+    "sql": {
+     "T": "SELECT keyidentity, v FROM hp WHERE keyidentity > 140891 AND keyidentity < 140992",
+     "B": "SELECT keyidentity, v FROM hp WHERE keyidentity >= 140892 AND keyidentity <= 140991"
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 11415.4,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 10655.4,
+       "p25_us": 11089.3,
+       "p50_us": 11509.8,
+       "p75_us": 11851.1,
+       "p99_us": 12303.2,
+       "max_us": 12492.6
+      },
+      "load": [
+       "2.74 3.95 2.71 1/1450 1244305",
+       "2.60 3.91 2.70 1/1443 1244322",
+       "2.60 3.91 2.70 1/1443 1244322"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 34.8,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 63.6,
+       "p25_us": 65.6,
+       "p50_us": 66.8,
+       "p75_us": 75.0,
+       "p99_us": 137.7,
+       "max_us": 139.1
+      },
+      "load": [
+       "2.74 3.95 2.71 1/1450 1244318",
+       "2.60 3.91 2.70 1/1443 1244322",
+       "2.60 3.91 2.70 1/1436 1244324"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 11368.5,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 10637.4,
+       "p25_us": 11072.4,
+       "p50_us": 11411.1,
+       "p75_us": 11811.4,
+       "p99_us": 12202.2,
+       "max_us": 12299.8
+      },
+      "load": [
+       "2.74 3.95 2.71 1/1450 1244318",
+       "2.60 3.91 2.70 1/1450 1244320",
+       "2.60 3.91 2.70 1/1436 1244324"
+      ]
+     }
+    },
+    "ratio_T_over_B": 328.03
+   },
+   {
+    "name": "R4s strict window, index leading key",
+    "family": "S1",
+    "sql": {
+     "T": "SELECT id, k FROM bt WHERE k > 140891 AND k < 140992",
+     "B": "SELECT id, k FROM bt WHERE k >= 140892 AND k <= 140991"
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 15436.9,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 11411.8,
+       "p25_us": 14489.2,
+       "p50_us": 15771.3,
+       "p75_us": 16899.1,
+       "p99_us": 17903.3,
+       "max_us": 18043.0
+      },
+      "load": [
+       "2.60 3.91 2.70 1/1436 1244324",
+       "2.60 3.91 2.70 1/1443 1244537",
+       "2.60 3.91 2.70 1/1436 1244539"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 97.8,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 117.1,
+       "p25_us": 124.9,
+       "p50_us": 132.1,
+       "p75_us": 141.4,
+       "p99_us": 212.7,
+       "max_us": 217.6
+      },
+      "load": [
+       "2.60 3.91 2.70 1/1443 1244478",
+       "2.60 3.91 2.70 1/1443 1244537",
+       "2.47 3.86 2.69 2/1437 1244543"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 15396.5,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 11425.9,
+       "p25_us": 14403.3,
+       "p50_us": 15794.3,
+       "p75_us": 16917.6,
+       "p99_us": 17843.3,
+       "max_us": 18147.1
+      },
+      "load": [
+       "2.60 3.91 2.70 1/1443 1244478",
+       "2.60 3.91 2.70 1/1443 1244481",
+       "2.47 3.86 2.69 1/1437 1244543"
+      ]
+     }
+    },
+    "ratio_T_over_B": 157.84
+   },
+   {
+    "name": "R4 page forward, index leading key",
+    "family": "S1",
+    "sql": {
+     "T": "SELECT id, k FROM bt WHERE k >= 140892 ORDER BY k LIMIT 100",
+     "B": "SELECT id, k FROM bt WHERE k IN (140892, 140893, 140894, 140895, 140896, 140897, 140898, 140899, 140900, 140901, 140902, 140903, 140904, 140905, 140906, 140907, 140908, 140909, 140910, 140911, 140912, 140913, 140914, 140915, 140916, 140917, 140918, 140919, 140920, 140921, 140922, 140923, 140924, 140"
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 28080.1,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 11635.6,
+       "p25_us": 20708.1,
+       "p50_us": 29571.4,
+       "p75_us": 35634.0,
+       "p99_us": 39064.8,
+       "max_us": 39185.8
+      },
+      "load": [
+       "2.47 3.86 2.69 1/1430 1244545",
+       "2.47 3.86 2.69 1/1437 1244701",
+       "2.44 3.83 2.69 1/1444 1244712"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 236.2,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 213.9,
+       "p25_us": 242.2,
+       "p50_us": 271.8,
+       "p75_us": 297.7,
+       "p99_us": 401.7,
+       "max_us": 434.7
+      },
+      "load": [
+       "2.47 3.86 2.69 1/1437 1244556",
+       "2.47 3.86 2.69 1/1437 1244701",
+       "2.44 3.83 2.69 2/1458 1244728"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 28073.5,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 11693.4,
+       "p25_us": 20741.9,
+       "p50_us": 29579.0,
+       "p75_us": 35565.9,
+       "p99_us": 39055.3,
+       "max_us": 39263.7
+      },
+      "load": [
+       "2.47 3.86 2.69 1/1437 1244556",
+       "2.47 3.86 2.69 1/1438 1244559",
+       "2.44 3.83 2.69 2/1458 1244728"
+      ]
+     }
+    },
+    "ratio_T_over_B": 118.88
+   },
+   {
+    "name": "J1 join by a whole composite index key",
+    "family": "S2",
+    "sql": {
+     "T": "SELECT o.id, c.v FROM o JOIN c ON c.a = o.a WHERE c.b = o.b",
+     "B": "SELECT o.id, c1.v FROM o JOIN c1 ON c1.b = o.b WHERE c1.a = o.a"
+    },
+    "arms": {
+     "T": {
+      "server_cpu_us_per_stmt": 2767185.7,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 9,
+       "p0_us": 2751537.7,
+       "p25_us": 2755558.1,
+       "p50_us": 2765598.8,
+       "p75_us": 2781639.5,
+       "p99_us": 2792639.7,
+       "max_us": 2792639.7
+      },
+      "load": [
+       "2.36 3.76 2.68 2/1485 1245142",
+       "2.01 3.57 2.64 1/1481 1246004",
+       "2.01 3.55 2.64 1/1466 1246379"
+      ]
+     },
+     "B": {
+      "server_cpu_us_per_stmt": 135.5,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 120,
+       "p0_us": 156.3,
+       "p25_us": 159.8,
+       "p50_us": 162.1,
+       "p75_us": 166.4,
+       "p99_us": 450.9,
+       "max_us": 453.8
+      },
+      "load": [
+       "2.41 3.75 2.68 3/1463 1245399",
+       "2.01 3.57 2.64 1/1481 1246004",
+       "2.02 3.50 2.63 2/1445 1246618"
+      ]
+     },
+     "T2": {
+      "server_cpu_us_per_stmt": 2775806.7,
+      "rows_per_stmt": 100.0,
+      "latency": {
+       "n": 9,
+       "p0_us": 2756980.3,
+       "p25_us": 2768900.1,
+       "p50_us": 2780933.8,
+       "p75_us": 2786193.9,
+       "p99_us": 2791036.9,
+       "max_us": 2791036.9
+      },
+      "load": [
+       "2.41 3.75 2.68 1/1463 1245399",
+       "2.20 3.66 2.66 2/1452 1245791",
+       "2.02 3.50 2.63 1/1445 1246618"
+      ]
+     }
+    },
+    "ratio_T_over_B": 20422.03
+   }
+  ],
+  "refusals": [
+   {
+    "family": "S4",
+    "sql": "INSERT INTO c VALUES (1, 1, 1, 0) ON CONFLICT (a, b) DO NOTHING",
+    "answer": "refused: a conflict target of more than one column is not supported (byte 48); the tuple key is the one conflict there is"
+   },
+   {
+    "family": "S4",
+    "sql": "INSERT INTO e VALUES (1, 1, 0) ON CONFLICT (a, b) DO NOTHING",
+    "answer": "refused: a conflict target of more than one column is not supported (byte 45); the tuple key is the one conflict there is"
+   },
+   {
+    "family": "S4",
+    "sql": "INSERT INTO e VALUES (1, 1, 0) ON CONFLICT DO NOTHING",
+    "answer": "refused: ON CONFLICT at byte 31 on a relation whose primary key is its Keystone id is not built"
+   },
+   {
+    "family": "S4",
+    "sql": "INSERT INTO hp (keyidentity, k, v) VALUES (1, 1, 0) ON CONFLICT (keyidentity) DO NOTHING",
+    "answer": "INSERTED oid=4004 rows=0 (0 rows)"
+   }
+  ],
+  "analyze": {
+   "R1 page forward, btree tuple key / T": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=140991 pages=850 opens=1 pattern_id=0x5037357d44b3dded fetch_id=0x8844f63aced94db"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Scan bt"
+    ],
+    [
+     "  filter 0:0.0 >= 140892"
+    ],
+    [
+     "project id=0:0.0, v=0:0.2"
+    ],
+    [
+     "quota limit=100"
+    ],
+    [
+     "step 0 Scan bt opens=1 examined=140991 matched=100 sel=0% pages=850"
+    ],
+    [
+     "DB time 1.61 ms = CPU 1.61"
+    ]
+   ],
+   "R1 page forward, btree tuple key / B": [
+    [
+     "analyze rows=100 class=RangeSelect steps=1 examined=223 pages=2 opens=1 pattern_id=0xece6de69f30eb8f7 fetch_id=0x9315e06305ba58c5"
+    ],
+    [
+     "class=RangeSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Range bt range=[140892, 281474976710655]"
+    ],
+    [
+     "  filter 0:0.0 >= 140892"
+    ],
+    [
+     "  filter 0:0.0 <= 281474976710655"
+    ],
+    [
+     "project id=0:0.0, v=0:0.2"
+    ],
+    [
+     "quota limit=100"
+    ],
+    [
+     "step 0 Range bt opens=1 examined=223 matched=100 sel=44% pages=2"
+    ],
+    [
+     "DB time 0.03 ms = CPU 0.03"
+    ]
+   ],
+   "R2 page backward, btree tuple key / T": [
+    [
+     "analyze rows=20 class=JoinSelect steps=1 examined=858930 pages=5176 opens=1 pattern_id=0xef5b9ea569a9630c fetch_id=0xfd889038161921c2"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Scan bt order=tuple_key_desc"
+    ],
+    [
+     "  filter 0:0.0 < 141091"
+    ],
+    [
+     "project id=0:0.0, v=0:0.2"
+    ],
+    [
+     "quota limit=20"
+    ],
+    [
+     "step 0 Scan bt opens=1 examined=858930 matched=20 sel=0% pages=5176"
+    ],
+    [
+     "DB time 16.78 ms = CPU 16.78"
+    ]
+   ],
+   "R2 page backward, btree tuple key / B": [
+    [
+     "analyze rows=20 class=RangeSelect steps=1 examined=20 pages=1 opens=1 pattern_id=0xc3b5b5ba1db8ed5 fetch_id=0x38410ac816c11e2f"
+    ],
+    [
+     "class=RangeSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Range bt range=[1, 141090] order=tuple_key_desc"
+    ],
+    [
+     "  filter 0:0.0 >= 1"
+    ],
+    [
+     "  filter 0:0.0 <= 141090"
+    ],
+    [
+     "project id=0:0.0, v=0:0.2"
+    ],
+    [
+     "quota limit=20"
+    ],
+    [
+     "step 0 Range bt opens=1 examined=20 matched=20 sel=100% pages=1"
+    ],
+    [
+     "DB time 0.04 ms = CPU 0.04"
+    ]
+   ],
+   "R3 page forward, heap Keystone / T": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=1000000 pages=6025 opens=1 sorted=100 pattern_id=0xef775e5f69752938 fetch_id=0xa6ef5f5eccc3b61"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Scan hp"
+    ],
+    [
+     "  filter 0:0.0 >= 140892"
+    ],
+    [
+     "project keyidentity=0:0.0, v=0:0.2"
+    ],
+    [
+     "sort 0:0.0 asc"
+    ],
+    [
+     "quota limit=100"
+    ],
+    [
+     "step 0 Scan hp opens=1 examined=1000000 matched=859109 sel=85% pages=6025"
+    ],
+    [
+     "DB time 35.22 ms = CPU 35.22"
+    ]
+   ],
+   "R3 page forward, heap Keystone / B": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=100 opens=1 sorted=100 pattern_id=0xb63dae7a29a64f6b fetch_id=0x555abec6dbd4b004"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Lookup hp key_set=100"
+    ],
+    [
+     "  filter bool (0:0.0 = 140892 OR 0:0.0 = 140893 OR 0:0.0 = 140894 OR 0:0.0 = 140895 OR 0:0.0 = 140896 OR 0:0.0 = 140897 OR 0:0.0 = 140898 OR 0:0.0 = 140899 OR 0:0.0 = 140900 OR 0:0.0 = 140901 OR 0:0.0 = 140902 OR 0:0.0 = 140903 OR 0:0.0 = 140904 OR 0:0.0 = 140905 OR 0:0.0 = 140906 OR 0:0.0 = 140907 OR 0:0.0 = 140908 OR 0:0.0 = 140909 OR 0:0.0 = 140910 OR 0:0.0 = 140911 OR 0:0.0 = 140912 OR 0:0.0 = 140913 OR 0:0.0 = 140914 OR 0:0.0 = 140915 OR 0:0.0 = 140916 OR 0:0.0 = 140917 OR 0:0.0 = 140918 OR 0:0.0 = 140919 OR 0:0.0 = 140920 OR 0:0.0 = 140921 OR 0:0.0 = 140922 OR 0:0.0 = 140923 OR 0:0.0 = 140924 OR 0:0.0 = 140925 OR 0:0.0 = 140926 OR 0:0.0 = 140927 OR 0:0.0 = 140928 OR 0:0.0 = 140929 OR 0:0.0 = 140930 OR 0:0.0 = 140931 OR 0:0.0 = 140932 OR 0:0.0 = 140933 OR 0:0.0 = 140934 OR 0:0.0 = 140935 OR 0:0.0 = 140936 OR 0:0.0 = 140937 OR 0:0.0 = 140938 OR 0:0.0 = 140939 OR 0:0.0 = 140940 OR 0:0.0 = 140941 OR 0:0.0 = 140942 OR 0:0.0 = 140943 OR 0:0.0 = 140944 OR 0:0.0 = 140945 OR 0:0.0 = 140946 OR 0:0.0 = 140947 OR 0:0.0 = 140948 OR 0:0.0 = 140949 OR 0:0.0 = 140950 OR 0:0.0 = 140951 OR 0:0.0 = 140952 OR 0:0.0 = 140953 OR 0:0.0 = 140954 OR 0:0.0 = 140955 OR 0:0.0 = 140956 OR 0:0.0 = 140957 OR 0:0.0 = 140958 OR 0:0.0 = 140959 OR 0:0.0 = 140960 OR 0:0.0 = 140961 OR 0:0.0 = 140962 OR 0:0.0 = 140963 OR 0:0.0 = 140964 OR 0:0.0 = 140965 OR 0:0.0 = 140966 OR 0:0.0 = 140967 OR 0:0.0 = 140968 OR 0:0.0 = 140969 OR 0:0.0 = 140970 OR 0:0.0 = 140971 OR 0:0.0 = 140972 OR 0:0.0 = 140973 OR 0:0.0 = 140974 OR 0:0.0 = 140975 OR 0:0.0 = 140976 OR 0:0.0 = 140977 OR 0:0.0 = 140978 OR 0:0.0 = 140979 OR 0:0.0 = 140980 OR 0:0.0 = 140981 OR 0:0.0 = 140982 OR 0:0.0 = 140983 OR 0:0.0 = 140984 OR 0:0.0 = 140985 OR 0:0.0 = 140986 OR 0:0.0 = 140987 OR 0:0.0 = 140988 OR 0:0.0 = 140989 OR 0:0.0 = 140990 OR 0:0.0 = 140991)"
+    ],
+    [
+     "project keyidentity=0:0.0, v=0:0.2"
+    ],
+    [
+     "sort 0:0.0 asc"
+    ],
+    [
+     "step 0 Lookup hp opens=1 examined=100 matched=100 sel=100% pages=100"
+    ],
+    [
+     "DB time 0.15 ms = CPU 0.15"
+    ]
+   ],
+   "R3s strict window, heap Keystone / T": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=1000000 pages=6025 opens=1 pattern_id=0x7eafb3f30949e1e1 fetch_id=0x980c030bf5bb9d98"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Scan hp"
+    ],
+    [
+     "  filter 0:0.0 > 140891"
+    ],
+    [
+     "  filter 0:0.0 < 140992"
+    ],
+    [
+     "project keyidentity=0:0.0, v=0:0.2"
+    ],
+    [
+     "step 0 Scan hp opens=1 examined=1000000 matched=100 sel=0% pages=6025"
+    ],
+    [
+     "DB time 11.91 ms = CPU 11.91"
+    ]
+   ],
+   "R3s strict window, heap Keystone / B": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=101 opens=1 pattern_id=0x21629301099fd371 fetch_id=0x996557993b39ebf8"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 IndexRange hp"
+    ],
+    [
+     "  filter 0:0.0 >= 140892"
+    ],
+    [
+     "  filter 0:0.0 <= 140991"
+    ],
+    [
+     "project keyidentity=0:0.0, v=0:0.2"
+    ],
+    [
+     "step 0 IndexRange hp opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100"
+    ],
+    [
+     "DB time 0.25 ms = CPU 0.25"
+    ]
+   ],
+   "R4s strict window, index leading key / T": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=1000000 pages=6025 opens=1 pattern_id=0x1b605a49183df60b fetch_id=0x19bd5201de7d54b2"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Scan bt"
+    ],
+    [
+     "  filter 0:0.1 > 140891"
+    ],
+    [
+     "  filter 0:0.1 < 140992"
+    ],
+    [
+     "project id=0:0.0, k=0:0.1"
+    ],
+    [
+     "step 0 Scan bt opens=1 examined=1000000 matched=100 sel=0% pages=6025"
+    ],
+    [
+     "DB time 15.72 ms = CPU 15.72"
+    ]
+   ],
+   "R4s strict window, index leading key / B": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=101 opens=1 pattern_id=0x40e3a2f8d96a04ff fetch_id=0x59750d5fa69c187e"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 IndexRange bt"
+    ],
+    [
+     "  filter 0:0.1 >= 140892"
+    ],
+    [
+     "  filter 0:0.1 <= 140991"
+    ],
+    [
+     "project id=0:0.0, k=0:0.1"
+    ],
+    [
+     "step 0 IndexRange bt opens=1 examined=100 matched=100 sel=100% pages=101 index_scanned=100 index_resolved=100"
+    ],
+    [
+     "DB time 0.15 ms = CPU 0.15"
+    ]
+   ],
+   "R4 page forward, index leading key / T": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=1000000 pages=6025 opens=1 sorted=100 pattern_id=0x7968780131687a7a fetch_id=0xdf7998fccd8ddbcb"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 Scan bt"
+    ],
+    [
+     "  filter 0:0.1 >= 140892"
+    ],
+    [
+     "project id=0:0.0, k=0:0.1"
+    ],
+    [
+     "sort 0:0.1 asc"
+    ],
+    [
+     "quota limit=100"
+    ],
+    [
+     "step 0 Scan bt opens=1 examined=1000000 matched=859109 sel=85% pages=6025"
+    ],
+    [
+     "DB time 37.12 ms = CPU 37.12"
+    ]
+   ],
+   "R4 page forward, index leading key / B": [
+    [
+     "analyze rows=100 class=JoinSelect steps=1 examined=100 pages=200 opens=1 sorted=100 pattern_id=0x70dd4a217cb50aa5 fetch_id=0x92632100c91177c6"
+    ],
+    [
+     "class=JoinSelect steps=1 hoisted=0"
+    ],
+    [
+     "step 0 IndexProbe bt key_set=100"
+    ],
+    [
+     "  filter bool (0:0.1 = 140892 OR 0:0.1 = 140893 OR 0:0.1 = 140894 OR 0:0.1 = 140895 OR 0:0.1 = 140896 OR 0:0.1 = 140897 OR 0:0.1 = 140898 OR 0:0.1 = 140899 OR 0:0.1 = 140900 OR 0:0.1 = 140901 OR 0:0.1 = 140902 OR 0:0.1 = 140903 OR 0:0.1 = 140904 OR 0:0.1 = 140905 OR 0:0.1 = 140906 OR 0:0.1 = 140907 OR 0:0.1 = 140908 OR 0:0.1 = 140909 OR 0:0.1 = 140910 OR 0:0.1 = 140911 OR 0:0.1 = 140912 OR 0:0.1 = 140913 OR 0:0.1 = 140914 OR 0:0.1 = 140915 OR 0:0.1 = 140916 OR 0:0.1 = 140917 OR 0:0.1 = 140918 OR 0:0.1 = 140919 OR 0:0.1 = 140920 OR 0:0.1 = 140921 OR 0:0.1 = 140922 OR 0:0.1 = 140923 OR 0:0.1 = 140924 OR 0:0.1 = 140925 OR 0:0.1 = 140926 OR 0:0.1 = 140927 OR 0:0.1 = 140928 OR 0:0.1 = 140929 OR 0:0.1 = 140930 OR 0:0.1 = 140931 OR 0:0.1 = 140932 OR 0:0.1 = 140933 OR 0:0.1 = 140934 OR 0:0.1 = 140935 OR 0:0.1 = 140936 OR 0:0.1 = 140937 OR 0:0.1 = 140938 OR 0:0.1 = 140939 OR 0:0.1 = 140940 OR 0:0.1 = 140941 OR 0:0.1 = 140942 OR 0:0.1 = 140943 OR 0:0.1 = 140944 OR 0:0.1 = 140945 OR 0:0.1 = 140946 OR 0:0.1 = 140947 OR 0:0.1 = 140948 OR 0:0.1 = 140949 OR 0:0.1 = 140950 OR 0:0.1 = 140951 OR 0:0.1 = 140952 OR 0:0.1 = 140953 OR 0:0.1 = 140954 OR 0:0.1 = 140955 OR 0:0.1 = 140956 OR 0:0.1 = 140957 OR 0:0.1 = 140958 OR 0:0.1 = 140959 OR 0:0.1 = 140960 OR 0:0.1 = 140961 OR 0:0.1 = 140962 OR 0:0.1 = 140963 OR 0:0.1 = 140964 OR 0:0.1 = 140965 OR 0:0.1 = 140966 OR 0:0.1 = 140967 OR 0:0.1 = 140968 OR 0:0.1 = 140969 OR 0:0.1 = 140970 OR 0:0.1 = 140971 OR 0:0.1 = 140972 OR 0:0.1 = 140973 OR 0:0.1 = 140974 OR 0:0.1 = 140975 OR 0:0.1 = 140976 OR 0:0.1 = 140977 OR 0:0.1 = 140978 OR 0:0.1 = 140979 OR 0:0.1 = 140980 OR 0:0.1 = 140981 OR 0:0.1 = 140982 OR 0:0.1 = 140983 OR 0:0.1 = 140984 OR 0:0.1 = 140985 OR 0:0.1 = 140986 OR 0:0.1 = 140987 OR 0:0.1 = 140988 OR 0:0.1 = 140989 OR 0:0.1 = 140990 OR 0:0.1 = 140991)"
+    ],
+    [
+     "project id=0:0.0, k=0:0.1"
+    ],
+    [
+     "sort 0:0.1 asc"
+    ],
+    [
+     "step 0 IndexProbe bt opens=1 examined=100 matched=100 sel=100% pages=200 index_scanned=100 index_resolved=100"
+    ],
+    [
+     "DB time 0.30 ms = CPU 0.30"
+    ]
+   ],
+   "J1 join by a whole composite index key / T": [
+    [
+     "analyze rows=100 class=JoinSelect steps=2 examined=10000100 pages=10000101 opens=101 pattern_id=0x66ed12d46395fc15 fetch_id=0x307f0c8f5f39c619"
+    ],
+    [
+     "class=JoinSelect steps=2 hoisted=0"
+    ],
+    [
+     "planned order=written gen=0 switch=1 est=0:100000,1:1"
+    ],
+    [
+     "step 0 Scan o"
+    ],
+    [
+     "step 1 IndexProbe c key=0:0.2"
+    ],
+    [
+     "  filter 0:1.1 = 0:0.2"
+    ],
+    [
+     "  filter 0:1.2 = 0:0.3"
+    ],
+    [
+     "project o.id=0:0.0, c.v=0:1.3"
+    ],
+    [
+     "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+    ],
+    [
+     "step 1 IndexProbe c opens=100 examined=10000000 matched=100 sel=0% pages=10000100 index_scanned=10000000 index_resolved=10000000"
+    ],
+    [
+     "DB time 2995.33 ms = CPU 2995.33"
+    ]
+   ],
+   "J1 join by a whole composite index key / B": [
+    [
+     "analyze rows=100 class=JoinSelect steps=2 examined=200 pages=201 opens=101 pattern_id=0x11960358b7ca757b fetch_id=0xe0716029fcfe3b8f"
+    ],
+    [
+     "class=JoinSelect steps=2 hoisted=0"
+    ],
+    [
+     "planned order=written gen=1 switch=1 est=0:91,1:0"
+    ],
+    [
+     "step 0 Scan o"
+    ],
+    [
+     "step 1 IndexProbe c1 key=0:0.3"
+    ],
+    [
+     "  filter 0:1.2 = 0:0.3"
+    ],
+    [
+     "  filter 0:1.1 = 0:0.2"
+    ],
+    [
+     "project o.id=0:0.0, c1.v=0:1.3"
+    ],
+    [
+     "step 0 Scan o opens=1 examined=100 matched=100 sel=100% pages=1"
+    ],
+    [
+     "step 1 IndexProbe c1 opens=100 examined=100 matched=100 sel=100% pages=200 index_scanned=100 index_resolved=100"
+    ],
+    [
+     "DB time 0.33 ms = CPU 0.33"
+    ]
+   ]
+  }
+ }
+}

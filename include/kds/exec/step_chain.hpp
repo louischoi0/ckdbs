@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "kds/base/cold_box.hpp"
 #include "kds/base/status.hpp"
 #include "kds/catalog/oid.hpp"
 #include "kds/exec/functions.hpp"
@@ -251,6 +252,14 @@ struct RangeBounds {
     std::uint64_t high = 0;
 };
 
+// One correlated column of an index probe's prefix (EB-S2,
+// `Step::index_key_from`): the key column's position in the index, and the
+// earlier step's or enclosing chain's column its value is read from.
+struct IndexKeyFrom {
+    std::uint8_t at = 0;
+    ColumnRef from;
+};
+
 // What a kCabinProbe step probes: which Cabin, and with which value.
 //
 // A **hint on top of the residual**, exactly as RangeBounds is. The equality
@@ -369,17 +378,9 @@ struct IndexProbe {
     std::vector<std::uint16_t> key_cols;
     std::vector<std::uint16_t> covered_cols;
 
-    // The correlated form (docs/spec/index.md §8a): the leading key
-    // column's value comes from an *earlier step's row* - a join key - so
-    // it cannot be encoded at compile time. When set, `eq_prefix == 1`,
-    // `ranged == false`, and `low`/`high` above are pure padding templates
-    // (all 0x00 / all 0xFF): the executor copies them and encodes this
-    // column's frame value into the leading width per outer row, which is
-    // the one exception to "no per-row key building" - priced at one
-    // fixed-width encode against the full inner walk it replaces. The
-    // single authority for the key source: the plan printer renders it,
-    // and `Step::key` keeps its two-kind contract.
-    std::optional<ColumnRef> key_from;
+    // The correlated form (docs/spec/index.md §8a) is `Step::index_key_from`,
+    // held on the step's cold side so this struct, which sits among the hot
+    // fields, keeps its size (EB's close).
 
     // **A hashed primary key's home** (DR-S3f, `exec/hashed_key.hpp`): set
     // on a literal `kIndexProbe` over a hashed relation whose residual pins
@@ -808,6 +809,13 @@ struct Step {
     // `arm=plan`.
     bool arm_pinned = false;
 
+    // A `kRange` whose one end is the key space's own, not the statement's
+    // (EB-S1): the range a bound written at one end alone stands for. The
+    // join planner prices it as a bound, not by the window's width, which
+    // says nothing (`join_order.cpp`). Beside `arm_pinned`, in its padding,
+    // so no hot field moves (EB's close).
+    bool range_open = false;
+
     // The function conjuncts placed at this step (see FunctionPredicate).
     // Below the hot fields with `build`, for `build`'s reason: most steps
     // carry none, and the evaluation sites test for empty first.
@@ -821,6 +829,41 @@ struct Step {
     // (see KeySet). Cold, with `build`.
     std::optional<KeySet> key_set;
 
+    // **What an outer row's values key** (EB-S2), one box for the two forms,
+    // empty on every other step: one pointer on the step, because the step's
+    // size is a measured cost (`base/cold_box.hpp`).
+    //
+    // `index`: **the correlated form of an index probe** (docs/spec/index.md
+    // §8a, IX17) - the prefix columns of `Step::index` that take their value
+    // from an *earlier step's row*, one entry a column, in key order. With
+    // it, the probe's prefix is `eq_prefix` columns each pinned by an
+    // equality - a literal's encoded into `low`/`high` at compile, as any
+    // probe's, or an entry here - `ranged == false`, and every byte past the
+    // prefix padding: the executor copies the templates and encodes each
+    // entry's frame value into its column's width per outer row, the one
+    // exception to "no per-row key building", priced at a fixed-width encode
+    // a column against the inner walk it replaces.
+    //
+    // `embedded`: **an embedded primary key's id, computed per outer row**,
+    // on `kProbe` with no `key` - one operand a key column, in key order,
+    // each a literal (as the residual's lowering coerced it) or an earlier
+    // step's or an enclosing chain's column of the same descriptor. The
+    // executor computes the id by `exec::EmbeddedKeyId`, the encoder
+    // `CREATE TABLE`'s form fixed and every insert calls (EB-R3), and descends
+    // by it; a key that does not encode - a NULL, the one key 48 bits cannot
+    // name - is no match. A step carrying one records and replays no trail
+    // (EB-Q10 (a)).
+    //
+    // Either way the equalities stay in the residual, and these are the
+    // single authority for the key source: the plan printer renders them,
+    // and `Step::key` keeps its two-kind contract. Read through
+    // `IndexKeyFromOf` and `EmbeddedProbeOf`.
+    struct FromRow {
+        std::vector<IndexKeyFrom> index;
+        std::vector<Operand> embedded;
+    };
+    ColdBox<FromRow> from_row;
+
     // The order this step emits in where a statement's `ORDER BY` rests on
     // it (CV, `parser-v2.md` I11): set by the compiler on the driving step
     // only, and only where it dropped the chain's `sort_keys` for it.
@@ -832,8 +875,22 @@ struct Step {
 // (`IsTrailReplayableKind`), and no key set - a set is a search over its
 // values, so a step carrying one records and replays no trail whatever its
 // kind (CU-Q4, invariant 9). **The one form a reader of a step may ask.**
+// A step's correlated index columns, or nullptr (`Step::from_row`).
+inline const std::vector<IndexKeyFrom>* IndexKeyFromOf(const Step& step) noexcept {
+    return step.from_row.has_value() && !step.from_row->index.empty() ? &step.from_row->index
+                                                                     : nullptr;
+}
+
+// A step's embedded key operands, or nullptr (`Step::from_row`).
+inline const std::vector<Operand>* EmbeddedProbeOf(const Step& step) noexcept {
+    return step.from_row.has_value() && !step.from_row->embedded.empty()
+               ? &step.from_row->embedded
+               : nullptr;
+}
+
 inline bool IsTrailReplayable(const Step& step) noexcept {
-    return IsTrailReplayableKind(step.kind) && !step.key_set.has_value();
+    return IsTrailReplayableKind(step.kind) && !step.key_set.has_value() &&
+           EmbeddedProbeOf(step) == nullptr;
 }
 
 // Execution shape, dispatched on by a `switch` - there is no plan

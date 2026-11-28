@@ -3531,11 +3531,6 @@ Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
   the subtree's right part, per step. Correct (the rig cell grows a level
   under the walk), not measured; a LIMIT keeps it short, and a filter that
   matches nothing walks it whole.
-- **A one-sided bound does not seed the reverse walk**: `WHERE id < ?
-  ORDER BY id DESC LIMIT 20` - keyset pagination - starts at the relation's
-  top and filters every row above the bound, because a one-sided bound is
-  no tuple key range (`TupleKeyRangeOf`). `BETWEEN` seeds it.
-
 - **A reverse walk's leaf miss is a blocking read on its reactor.** DE
   gives the forward walk's leaf fetch a read off the reactor and a park
   (`page.md` §12); the reverse walk (O2) fetches each leaf, and makes each
@@ -3924,11 +3919,14 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
   UPDATE by key 4 %. The 20-50 us btree cells' control spread (-20 % to
   +45 %) leaves a few percent there unresolved.
 
-- **A Keystone range is a full scan.** `WHERE keyidentity > 2` (or a range on
-  a declared Keystone) is answered by the walk with the range in the
-  residual; the Keystone index is not chosen for it, so a heap's key range
-  costs the relation, where `heap-and-tuple.md` §3.1b's index range walk
-  would cost the range.
+- **A heap's Keystone bounded at one end, with no order to stop it, is a
+  walk** (EB-S1, verified on `eb-key-forms-in-the-executor` over
+  `e2dec50f7`): `WHERE keyidentity > 2`
+  alone resolves no entry through the Keystone index, because a range open
+  at one end would resolve entry after entry where the walk reads in page
+  order. A window bounded at both ends, strict or inclusive, is the index's
+  range, and `ORDER BY keyidentity [DESC] LIMIT n` walks the index from the
+  bound (`index.md` IX9).
 - **A heap has no sampled planner prior.** `plan_stats`' descent-sampled
   prior reads no data page, so a heap is priced at constant fill and a join
   block holding one is not captured under `join_order = fixed`; `GATHER
@@ -3937,13 +3935,6 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
   declines (a set operation, a derived table, an outer join) answers
   `unknown column 'keyidentity'`: the layer's walk emits no hidden column.
   A refusal, never a wrong answer.
-- **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is admitted,
-  against `heap-and-tuple.md` §3.1b** ("`ON CONFLICT (<column>)` cannot name
-  a hidden Keystone"): `ResolveConflictArbiter` resolves the name through
-  `Schema::FindColumn` to column 0 and takes the tuple key as the arbiter
-  (`src/server/command_dispatcher.cpp:8263`); no test covers it. Whether the
-  code refuses it or the spec admits it is not decided. Read at `2403b86d`,
-  2026-11-22.
 - **Partly filled pages are abandoned at each restart.** The placement hints
   are memory only (DN-Q23): after a restart a core fills from the head and
   up to `cores` partly filled pages wait for a release to find their free
@@ -4164,12 +4155,18 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   host).
 - **The btree's walked `UPDATE` reads 5.9 % cheaper than at the commit DR
   opened from**, in 15 of 15 rounds, and nothing in DR accounts for it.
-- **A page by key is a walk on every structure** (DR-Q17): `WHERE key >= x
-  ORDER BY key LIMIT n` is a filtered scan from the head on a btree's tuple
-  key (1.0 ms at 100,000 rows) and a scan and a sort on a heap's Keystone
-  and on any index (5.8 ms to 9.0 ms), because a one-sided bound is a range
-  to no arm of the ladder. Served only behind an equality prefix (CV). Not
-  a primary key's gap, and its own order.
+- **A page by key keeps its cost beside a conjunct on another column**
+  (EB-S1, verified on `eb-key-forms-in-the-executor` over `e2dec50f7`):
+  `WHERE k >= x ORDER BY k LIMIT n` is a range of the tuple key's leaves
+  from `x` on a btree, and the Keystone index or any index walked from `x`
+  on a heap or an index key (DR-Q17's shapes,
+  `bench/v3.5.0/results-eb-s0-premise-v3.4.17-225-gb761306e0.md`). Beside
+  another conjunct it is not: on an index key the sort stays, because the
+  walk would resolve entry after entry at random to find its rows
+  (`index.md` IX9, CV-Q3 (a)); on a btree's tuple key an equality on an
+  unindexed column is a filter scan from the head, which the open range,
+  at the last rank, does not displace (the operator's ruling (a) of
+  2026-10-15). An index bounded at one end with no `ORDER BY` is no range.
 - **A moved key's old entry is purged only beside a retired slot, unless
   `index_purge_driver` is on** (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
   one, which a reader's residual drops and the unique check passes over.
@@ -4182,13 +4179,23 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   `0c2092df8`; at `f85aa3042` the driver counts the updates that appended
   an entry, `key_updates`, and walks a heap, `index.md` §2.3); the key is
   off by default, and with it off nothing runs it.
-- **A join key enters an index by its leading column only**
-  (`CorrelatedIndexProbeOf`): a join on every column of a composite key
-  probes the first and filters the rest, so its cost follows the first
-  column's run, not the key's.
-- **A multi-column `ON CONFLICT` target is refused by the parser**, so a
-  composite primary key arbitrates no upsert (P2c, its own order,
-  DR-Q5 (a)).
+- **`ON CONFLICT DO NOTHING` on the tuple key skips a row whose key is held
+  before the row's own refusals are asked** (found by EB-S4's review,
+  verified on `eb-key-forms-in-the-executor` over `88164d7fb`; not EB's
+  change): `INSERT INTO t VALUES (1, NULL) ON CONFLICT DO NOTHING` into a
+  `NOT NULL` column, or a value of the wrong type, answers `rows=0` where
+  key 1 is held and is refused where it is free. PostgreSQL 18 refuses the
+  row before it asks the arbiter. The tuple key arm decides every row up
+  front (BU-Q18), before the row is encoded; a row that names a
+  `keyidentity` an embedded key does not encode to is refused either way
+  (EB-S4). A refusal turned into a skip, never a wrong row written.
+- **A point read costs about 1 % more server CPU since EB** (EB-Q11 (a),
+  `bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`, measured at
+  `4ab5d55d5`): +1.1 % on a heap's and an embedded key's, +1.2 % on a hashed
+  key's, +0.3 % on a btree's tuple key - 0.02 to 0.10 us of 6.5 to 8 us -
+  and writes inside noise. Not located (no profiler on the host). What was
+  located is gone: `Step`'s size (48 bytes cost about 2 %) and the whole-key
+  arms' work on a literal read.
 - **A string key's cost grows with the keys sharing its first 32 bytes**
   (DR-Q3 (a)): 0.25 us a key of the run on a read and 0.66 us on an insert,
   1.0 ms and 2.7 ms at a run of 4,096. A limit, stated in the spec.
@@ -4226,26 +4233,24 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
 - **A row may name another key's home**: `INSERT ... (keyidentity, ...)`
   on a hashed relation places the row at the id it wrote. It costs the
   home's own key its place and no answer.
-- **An embedded key's join is not keyed.** A join whose key is every
-  column of an embedded primary key is no lookup: the id is computed from
-  literals at compile, and nothing computes it from an outer row. The step
-  takes the statement-local build or a walk. Answers are right
-  (`btree_primary_key_test.cpp`); the cost is not measured.
-- **`ORDER BY` an embedded key is sorted, not elided.** The rows of such a
-  relation are in key order, and a range by the key reads them so, but the
-  elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
-  with no range is a walk and a top-N.
-- **`ON CONFLICT` on a relation whose key is embedded is refused
-  `NotImplemented`**, whatever its target - a column of another unique
-  index included, which the insert path could serve: no arbiter computes
-  the id the row's key encodes to, and the refusal is not narrowed to the
-  targets that need it.
-- **An embedded key's literal prefix on a joined relation is a range per
-  outer row.** `... JOIN e ON e.b = o.x WHERE e.a = 1` takes the tuple key
-  range of `a = 1` on `e`'s step, ahead of a correlated index probe and
-  the statement-local build, and walks that range once per outer row. It
-  is the rank an inclusive tuple key range has always had; answers are
-  right, the cost is not measured.
+- **A descending prefix of an embedded key is sorted** (EB-Q8 (a); EB-S3,
+  verified on `eb-key-forms-in-the-executor` over `78f98354b`): the key's
+  columns in key order all ascending, whole or a prefix, are elided, and the
+  whole key all descending is the reverse walk under a `LIMIT` over a walk,
+  a filter scan or a range, but `ORDER BY a DESC LIMIT n` on a key `(a, b)`
+  keeps its top-N,
+  because the reverse walk would return its ties by descending `b` where
+  the sort returns them ascending. So do mixed directions, the key's
+  columns out of key order, and a column past the key.
+- **An embedded key's literal prefix with a join on a column past the key
+  is a range per outer row** (EB-S2 narrowed it; verified on
+  `eb-key-forms-in-the-executor` over `cf3f5bb87`). Where every key column
+  is pinned - by literals and the outer row together, `... JOIN e ON e.b =
+  o.x WHERE e.a = 1` on a key `(a, b)` - the step descends by the id the
+  outer row's values encode to. Where only a prefix is pinned, the tuple key
+  range of the literal prefix still ranks ahead of a correlated index probe
+  and the statement-local build, and is walked once per outer row; answers
+  are right, the cost is not measured.
 - **`PURGE` on an embedded key names a live key by its id**: the refusal
   of a one-key window over a live row says `tuple key N is live`, not the
   key the statement wrote.
