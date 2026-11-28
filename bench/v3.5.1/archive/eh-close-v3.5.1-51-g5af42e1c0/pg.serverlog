@@ -1,0 +1,142 @@
+********************************************************************************
+WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
+         anyone with access to the Postgres port to access your database without
+         a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
+         documentation about "trust":
+         https://www.postgresql.org/docs/current/auth-trust.html
+         In Docker's default configuration, this is effectively any other
+         container on the same system.
+
+         It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
+         it with "-e POSTGRES_PASSWORD=password" instead to set a password in
+         "docker run".
+********************************************************************************
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "C".
+The default text search configuration will be set to "english".
+
+Data page checksums are enabled.
+
+fixing permissions on existing directory /var/lib/postgresql/18/docker ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default "max_connections" ... 100
+selecting default "shared_buffers" ... 128MB
+selecting default time zone ... Etc/UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+
+
+Success. You can now start the database server using:
+
+    pg_ctl -D /var/lib/postgresql/18/docker -l logfile start
+
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+waiting for server to start....2026-11-28 05:10:25.073 UTC [50] LOG:  starting PostgreSQL 18.7 (Debian 18.7-1.pgdg13+5) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-28 05:10:25.074 UTC [50] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-11-28 05:10:25.080 UTC [56] LOG:  database system was shut down at 2026-11-28 05:10:24 UTC
+2026-11-28 05:10:25.082 UTC [50] LOG:  database system is ready to accept connections
+ done
+server started
+CREATE DATABASE
+
+
+/usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+
+waiting for server to shut down...2026-11-28 05:10:25.230 UTC [50] LOG:  received fast shutdown request
+.2026-11-28 05:10:25.231 UTC [50] LOG:  aborting any active transactions
+2026-11-28 05:10:25.232 UTC [50] LOG:  background worker "logical replication launcher" (PID 59) exited with exit code 1
+2026-11-28 05:10:25.232 UTC [54] LOG:  shutting down
+2026-11-28 05:10:25.233 UTC [54] LOG:  checkpoint starting: shutdown immediate
+2026-11-28 05:10:25.260 UTC [54] LOG:  checkpoint complete: wrote 952 buffers (5.8%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.019 s, total=0.028 s; sync files=303, longest=0.002 s, average=0.001 s; distance=4427 kB, estimate=4427 kB; lsn=0/1BC6D18, redo lsn=0/1BC6D18
+2026-11-28 05:10:25.265 UTC [50] LOG:  database system is shut down
+ done
+server stopped
+
+PostgreSQL init process complete; ready for start up.
+
+2026-11-28 05:10:25.356 UTC [1] LOG:  starting PostgreSQL 18.7 (Debian 18.7-1.pgdg13+5) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-28 05:10:25.356 UTC [1] LOG:  listening on IPv4 address "127.0.0.1", port 15434
+2026-11-28 05:10:25.358 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.15434"
+2026-11-28 05:10:25.360 UTC [72] LOG:  database system was shut down at 2026-11-28 05:10:25 UTC
+2026-11-28 05:10:25.362 UTC [1] LOG:  database system is ready to accept connections
+2026-11-28 05:10:25.869 UTC [77] FATAL:  role "root" does not exist
+2026-11-28 05:10:31.633 UTC [80] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:10:31.633 UTC [80] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:10:31.633 UTC [80] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:10:31.633 UTC [80] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:10:31.633 UTC [80] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:10:31.633 UTC [80] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:10:40.642 UTC [81] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:10:40.642 UTC [81] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:10:40.643 UTC [81] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:10:40.643 UTC [81] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:10:40.643 UTC [81] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:10:40.643 UTC [81] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:10:49.491 UTC [82] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:10:49.491 UTC [82] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:10:49.492 UTC [82] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:10:49.492 UTC [82] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:10:49.492 UTC [82] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:10:49.492 UTC [82] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:10:58.712 UTC [84] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:10:58.712 UTC [84] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:10:58.712 UTC [84] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:10:58.712 UTC [84] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:10:58.712 UTC [84] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:10:58.712 UTC [84] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:07.726 UTC [85] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:07.726 UTC [85] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:07.726 UTC [85] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:07.726 UTC [85] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:07.726 UTC [85] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:07.726 UTC [85] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:16.737 UTC [87] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:16.737 UTC [87] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:16.737 UTC [87] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:16.737 UTC [87] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:16.737 UTC [87] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:16.737 UTC [87] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:25.566 UTC [88] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:25.566 UTC [88] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:25.566 UTC [88] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:25.566 UTC [88] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:25.566 UTC [88] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:25.566 UTC [88] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:32.394 UTC [89] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:32.394 UTC [89] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:32.394 UTC [89] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:32.394 UTC [89] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:32.394 UTC [89] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:32.394 UTC [89] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:39.246 UTC [91] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:39.246 UTC [91] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:39.246 UTC [91] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:39.246 UTC [91] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:39.246 UTC [91] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:39.246 UTC [91] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:47.003 UTC [92] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:47.003 UTC [92] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:47.004 UTC [92] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:47.004 UTC [92] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:47.004 UTC [92] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:47.004 UTC [92] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:11:54.935 UTC [93] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:11:54.935 UTC [93] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:11:54.935 UTC [93] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:11:54.935 UTC [93] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:11:54.935 UTC [93] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:11:54.935 UTC [93] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:12:02.033 UTC [95] ERROR:  table "pb_bars" does not exist
+2026-11-28 05:12:02.033 UTC [95] STATEMENT:  DROP TABLE pb_bars
+2026-11-28 05:12:02.034 UTC [95] ERROR:  table "pb_symbols" does not exist
+2026-11-28 05:12:02.034 UTC [95] STATEMENT:  DROP TABLE pb_symbols
+2026-11-28 05:12:02.034 UTC [95] ERROR:  table "pb_exchanges" does not exist
+2026-11-28 05:12:02.034 UTC [95] STATEMENT:  DROP TABLE pb_exchanges
+2026-11-28 05:15:25.693 UTC [70] LOG:  checkpoint starting: time
+2026-11-28 05:16:17.932 UTC [70] LOG:  checkpoint complete: wrote 522 buffers (3.2%), wrote 4 SLRU buffers; 0 WAL file(s) added, 0 removed, 9 recycled; write=52.213 s, sync=0.017 s, total=52.239 s; sync files=209, longest=0.001 s, average=0.001 s; distance=142950 kB, estimate=142950 kB; lsn=0/A7605B0, redo lsn=0/A760520

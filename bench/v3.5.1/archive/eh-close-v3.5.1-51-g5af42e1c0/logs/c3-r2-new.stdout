@@ -1,0 +1,6 @@
+KDS idle server CPU: 17,353 µs per second
+
+| shape | rows/op | KDS p50 | PG p50 | KDS/PG qps | KDS server CPU (net of idle) | PG backend CPU | KDS/PG server CPU | KDS client CPU | PG client CPU |
+|---|---|---|---|---|---|---|---|---|---|
+| pk-lookup | 1 rows | 19.4 µs | 21.3 µs | 1.11x | 7.1 µs (6.8 µs) | 10.7 µs | 0.63x | 8.7 µs | 7.8 µs |
+| day-slice | 8 rows | 672.1 µs | 959.1 µs | 1.47x | 600.9 µs (589.5 µs) | 888.3 µs | 0.66x | 59.9 µs | 76.7 µs |
