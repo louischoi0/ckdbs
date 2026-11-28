@@ -1,0 +1,49 @@
+phase load-exchanges: 1 ops, mean 1490.7 us, p50 1490.7 us, p99 1490.7 us, 481 ops/s, errors {}
+phase load-symbols: 1 ops, mean 877.5 us, p50 877.5 us, p99 877.5 us, 927 ops/s, errors {}
+phase load-sessions: 252 ops, mean 21.5 us, p50 15.7 us, p99 164.4 us, 39943 ops/s, errors {}
+phase load-bars: 252 ops, mean 19.5 us, p50 17.0 us, p99 44.5 us, 42944 ops/s, errors {}
+phase load-stats: 252 ops, mean 28.4 us, p50 18.0 us, p99 280.3 us, 28579 ops/s, errors {}
+phase load-models: 8 ops, mean 512.8 us, p50 370.2 us, p99 1371.1 us, 1893 ops/s, errors {}
+phase backtest-read: 12 ops, mean 63.5 us, p50 27.2 us, p99 429.0 us, 10616 ops/s, errors {}
+check cross-section-matches-generated: ok 12 cross-sections, every row as generated
+phase result-insert: 88 ops, mean 379.4 us, p50 369.1 us, p99 682.8 us, 2604 ops/s, errors {}
+phase backtest-replay: 12 ops, mean 157.3 us, p50 57.1 us, p99 985.2 us, 5125 ops/s, errors {}
+phase compare-all: 1 ops, mean 583.9 us, p50 583.9 us, p99 583.9 us, 1344 ops/s, errors {}
+check verify: ok all 8 models' P&L read back through the comparison join matches what was accumulated
+phase compare-one: 32 ops, mean 69.2 us, p50 24.0 us, p99 337.6 us, 13348 ops/s, errors {}
+phase read-bar-lookup: 200 ops, mean 27.9 us, p50 15.6 us, p99 323.9 us, 34613 ops/s, errors {}
+phase read-bar-range: 200 ops, mean 169.7 us, p50 140.0 us, p99 422.1 us, 5798 ops/s, errors {}
+phase read-symbol-history: 10 ops, mean 371.6 us, p50 377.7 us, p99 661.8 us, 2572 ops/s, errors {}
+phase read-day-slice: 200 ops, mean 23.8 us, p50 19.2 us, p99 195.0 us, 40362 ops/s, errors {}
+phase read-join-point: 200 ops, mean 21.7 us, p50 16.4 us, p99 231.2 us, 43351 ops/s, errors {}
+phase read-join-exists: 10 ops, mean 42.2 us, p50 24.9 us, p99 196.0 us, 16596 ops/s, errors {}
+phase agg-global: 10 ops, mean 54.6 us, p50 36.4 us, p99 270.7 us, 16044 ops/s, errors {}
+phase agg-by-symbol: 10 ops, mean 42.2 us, p50 26.2 us, p99 180.6 us, 20171 ops/s, errors {}
+phase agg-by-session: 10 ops, mean 203.9 us, p50 139.7 us, p99 616.8 us, 4501 ops/s, errors {}
+phase agg-day-slice: 200 ops, mean 25.6 us, p50 21.0 us, p99 151.0 us, 37431 ops/s, errors {}
+phase agg-distinct: 10 ops, mean 238.2 us, p50 275.9 us, p99 334.0 us, 3921 ops/s, errors {}
+phase qps-bar-lookup-cold: 100 ops, mean 24.6 us, p50 15.8 us, p99 135.7 us, 35876 ops/s, errors {}
+phase qps-bar-lookup-warm: 100 ops, mean 21.1 us, p50 16.0 us, p99 174.7 us, 43379 ops/s, errors {}
+phase qps-bar-range-cold: 51 ops, mean 219.3 us, p50 140.8 us, p99 664.8 us, 4522 ops/s, errors {}
+phase qps-bar-range-warm: 100 ops, mean 194.2 us, p50 139.0 us, p99 586.9 us, 5094 ops/s, errors {}
+phase qps-day-slice-cold: 100 ops, mean 32.4 us, p50 19.3 us, p99 344.6 us, 29376 ops/s, errors {}
+phase qps-day-slice-warm: 100 ops, mean 20.1 us, p50 18.9 us, p99 21.7 us, 47831 ops/s, errors {}
+phase qps-symbol-history-cold: 0 ops, mean 0.0 us, p50 0.0 us, p99 0.0 us, 0 ops/s, errors {}
+phase qps-symbol-history-warm: 100 ops, mean 305.7 us, p50 248.5 us, p99 564.4 us, 3258 ops/s, errors {}
+phase qps-cross-join-cold: 100 ops, mean 31.8 us, p50 24.5 us, p99 278.0 us, 29671 ops/s, errors {}
+phase qps-cross-join-warm: 100 ops, mean 27.6 us, p50 24.3 us, p99 37.8 us, 34151 ops/s, errors {}
+phase qps-point-join-cold: 100 ops, mean 18.7 us, p50 16.4 us, p99 57.0 us, 50634 ops/s, errors {}
+phase qps-point-join-warm: 100 ops, mean 29.2 us, p50 16.4 us, p99 311.5 us, 33296 ops/s, errors {}
+phase qps-model-join-cold: 7 ops, mean 76.2 us, p50 24.2 us, p99 372.5 us, 10455 ops/s, errors {}
+phase qps-model-join-warm: 100 ops, mean 27.5 us, p50 26.1 us, p99 29.9 us, 35146 ops/s, errors {}
+phase write-batch-1: 2000 ops, mean 315.6 us, p50 294.0 us, p99 731.1 us, 3164 ops/s, errors {}
+phase write-batch-10: 2000 ops, mean 99.1 us, p50 15.6 us, p99 386.4 us, 10058 ops/s, errors {}
+phase write-batch-100: 2000 ops, mean 22.5 us, p50 15.6 us, p99 262.7 us, 44079 ops/s, errors {}
+phase write-batch-1000: 2000 ops, mean 16.4 us, p50 15.4 us, p99 21.5 us, 60265 ops/s, errors {}
+phase join-conn-1: 200 ops, mean 27.4 us, p50 24.1 us, p99 169.8 us, 34550 ops/s, errors {}
+phase join-conn-2: 200 ops, mean 60.4 us, p50 29.9 us, p99 431.9 us, 31392 ops/s, errors {}
+phase join-conn-4: 200 ops, mean 57.9 us, p50 25.5 us, p99 918.4 us, 52109 ops/s, errors {}
+phase join-conn-8: 200 ops, mean 83.9 us, p50 26.3 us, p99 978.1 us, 54789 ops/s, errors {}
+check read-shapes-rows: ok every read shape returned the rows and values the generated data gives
+check row-counts: ok s1_exchanges 1/1, s1_symbols 1/1, s1_sessions 252/252, s1_daily_bars 252/252, s1_daily_stats 252/252, s1_models 8/8, s1_model_results 88/88, s1_write_probe 8000/8000
+check no-refusals: ok 44 phases

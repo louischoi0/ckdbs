@@ -127,7 +127,7 @@ Every file you write or revise under `bench/` follows all of them.
 
    **Oracle Database Free is a second control beside PostgreSQL**
    (operator, 2026-11-28): a floor at its defaults, for internal analysis
-   only and never committed (`bench/private/`). `bench/README.md`'s "The
+   only, its figures committed under `bench/private/`. `bench/README.md`'s "The
    Oracle control", "Three engines on one client" and "What a relation is
    stored as" bind every run.
 

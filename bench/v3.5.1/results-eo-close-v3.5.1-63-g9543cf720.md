@@ -39,8 +39,9 @@ no claim.
 
 **An Oracle Database Free control was run in the same window, and no Oracle
 figure is in this file.** Its results are for internal analysis only, never
-marketing, and are kept uncommitted under `bench/private/` on the host
-that ran them (`bench/README.md`, "The Oracle control").
+marketing, and are in
+`bench/private/results-eo-close-three-engines-v3.5.1-63-g9543cf720.md`
+(`bench/README.md`, "The Oracle control").
 
 **It opens a new series.** This is the first harness measurement
 (`tools/eqbench/`, EO), with each scenario's relations given their own
