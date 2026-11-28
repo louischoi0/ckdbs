@@ -48,3 +48,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Mark** | **Three orders are written and none is opened**, on worktree `pg-kds-comparison-orders` from `b95be2e86` (`v3.4.17-255-gb95be2e86`), documents only: **EF** (the scenario drivers on an equal client, the matched cells measured again, a short read's server cost only behind a gate), **EG** (one client's durable write beyond its sync: `result-insert` attributed, the one-core inline sync booked, a cut only behind a gate) and **EH** (what the native fold pays for a row) |
 | **Does not settle** | whether any of the three is opened, or in what order; any `-Q` item, each of which stands as CLA's proposal; EF-Q5's lift of the stage budget; a push of the orders, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; each order's header; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 6. EI written: the statement front end's repeated work, cut only where no cut can change an answer; not opened
+
+| | |
+|---|---|
+| **Word** | After CLA's reading of which SQL layers are cached, whether globally unique table names would help, and whether parsing could stop repeating: *"write a milestone that explores only the improvements here with no quiet-wrong risk, proves the concept, and implements once the gates pass"* |
+| **Mark** | **EI is written and not opened**, on worktree `front-end-parse-reuse-order` from `72580aa04` (`v3.5.1-6-g72580aa04`), documents only: five candidates (C1 one lex for the unnamed text statement, C2 a parked statement's parse kept, C3 a multi-variant plan's arguments from the parse, C4 a positive namespace name cache, C5 a whole-text parse cache explored only), an admission test under which a candidate's worst failure is a refusal, a slower plan or a debug abort, and gates G0 (admission), G1 (proof of concept), G2 (implementation) and G3 (close) |
+| **CLA's, not the operator's** | the candidates, the admission test (EI-Q2), the bar (EI-Q1), what §0.1 excludes (auto-prepare by shape, a compiled-chain cache, skipping the first compile, globally unique names) |
+| **Does not settle** | whether EI is opened; any EI-Q item, each of which stands as CLA's proposal; a merge to `main`, a push, a tag or a version |
+| **Recorded at** | this file; EI's header; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

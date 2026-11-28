@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| EI | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | the statement front end's repeated work, cut only where no cut can change an answer | v3.2.0/workorder-ei-front-end-reuse-without-quiet-wrong.md |
 | EH | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | what the native fold pays for a row: an aggregate over a whole relation | v3.2.0/workorder-eh-native-fold-per-row.md |
 | EG | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | one client's durable write beyond its sync: an insert left unattributed, a one-core commit the wait statistics do not see | v3.2.0/workorder-eg-one-client-durable-write.md |
 | EF | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | the scenario drivers on an equal client, and a short read's fixed cost only if one is left behind it | v3.2.0/workorder-ef-equal-client-scenario-drivers.md |
