@@ -1,0 +1,80 @@
+{
+ "args": {
+  "engine": "pg",
+  "host": "127.0.0.1",
+  "port": 15434,
+  "pid": 0,
+  "database": "bench",
+  "ops": 500,
+  "load_rows": 90000,
+  "load_batch": 500,
+  "max_load_rows": 4000000,
+  "settle": 12.0,
+  "json": "/home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/eg-s0/json/r1-insert-pg.json"
+ },
+ "loaded_rows": 90000,
+ "load_s": 0.3461829489970114,
+ "settled_s": 12.0002344789973,
+ "cells": [
+  {
+   "cell": "idle",
+   "ops": 500,
+   "mean_us": 146.1596458539134,
+   "p0_us": 132.28099851403385,
+   "p25_us": 135.2520048385486,
+   "p50_us": 138.41599866282195,
+   "p95_us": 172.64000052819028,
+   "p99_us": 293.97600155789405,
+   "max_us": 570.163996599149,
+   "before": {
+    "wal_append_lsn": 29350264
+   },
+   "after": {
+    "wal_append_lsn": 29463760
+   },
+   "loadavg": "0.41",
+   "d_wal_append_lsn": 113496,
+   "wal_bytes_per_op": 226.992
+  },
+  {
+   "cell": "after-load",
+   "ops": 500,
+   "mean_us": 144.2151079827454,
+   "p0_us": 129.00800356874242,
+   "p25_us": 139.62799857836217,
+   "p50_us": 140.77900414122269,
+   "p95_us": 163.98500156356022,
+   "p99_us": 184.472999535501,
+   "max_us": 625.6499982555397,
+   "before": {
+    "wal_append_lsn": 44822992
+   },
+   "after": {
+    "wal_append_lsn": 44928064
+   },
+   "loadavg": "0.41",
+   "d_wal_append_lsn": 105072,
+   "wal_bytes_per_op": 210.144
+  },
+  {
+   "cell": "recycled",
+   "ops": 500,
+   "mean_us": 180.24347578466404,
+   "p0_us": 138.34099809173495,
+   "p25_us": 140.85300063015893,
+   "p50_us": 147.0500064897351,
+   "p95_us": 353.39000169187784,
+   "p99_us": 652.8829981107265,
+   "max_us": 1399.4679975439794,
+   "before": {
+    "wal_append_lsn": 44928064
+   },
+   "after": {
+    "wal_append_lsn": 45033136
+   },
+   "loadavg": "0.35",
+   "d_wal_append_lsn": 105072,
+   "wal_bytes_per_op": 210.144
+  }
+ ]
+}

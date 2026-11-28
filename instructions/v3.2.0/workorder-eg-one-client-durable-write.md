@@ -1,10 +1,15 @@
 # Work order EG - one client's durable write beyond its sync: an insert left unattributed, and a one-core commit the wait statistics do not see
 
-Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
+Status: **CLOSED 2026-11-28 after EG-S1, the cut (S2) not opened** (§7, "EG-S3"; `raft-marks-2026-11-28.md` §13): the insert's gap is the breadth of a sync, which is DY's; the one-core `strict` commit's inline sync is booked under `commit.wal_flush`. Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree `eg-one-client-durable-write`
+(branch `worktree-eg-one-client-durable-write`) from `d50d304f8`
+(`v3.5.1-26-gd50d304f8`), the close of EF's work branch, which is not
+landed; under the operator's standing go-ahead of 2026-11-28
+(`raft-marks-2026-11-28.md` §12): every EG-Q item is **adopted on that
+go-ahead, never marked by the operator item by item** (§4, "Marks").
+Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
-2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EG-S0
-waits for the operator's word and for the marks on §4's items. A
+2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). EG-S0 has run (§7). A
 `[source-read]` claim with a `path:line` was read at `b95be2e86`. **Two
 readers stand behind them**: the figures of §1.1 were computed by CLA from
 the archived JSON, and the lines of §1.2 marked "spot-read" were re-read
@@ -30,8 +35,9 @@ PostgreSQL is 16 % to 19 % faster". **That premise is false for the
 commit**: with one booker at one core, `strict`, the commit is 135.5 µs
 on KDS against 138.2 µs on PostgreSQL (§1.1), and the booking's 16 % sits
 in its four reads, which are EF's. What the comparison leaves without a
-cause is one cell: scenario 1's `result-insert`, an autocommit insert at
-`group`, at 0.81x.
+cause is one cell: scenario 1's `result-insert`, an autocommit insert, at
+0.81x (read at `group` in the comparison; EF-S2 resolved it at `strict`
+and at 60,480 bars only).
 
 `[source-read]` Reading the path for that premise turned up a second
 matter that is the engine's whatever a comparison says: **at one core a
@@ -72,7 +78,8 @@ runs
 - **The sync is at parity and so are the writes.** An autocommit insert
   at `strict` is not slower than PostgreSQL's.
 - **The reads carry the booking's gap**, and they are the statements the
-  unequal clients bear on (EF §1.1). `recipe-read` is also an index on
+  unequal clients bear on (EF §1.1; measured at EF-S0: the KDS client
+  adds 16.6 µs a statement where the twin's decoding read adds 0.8 µs). `recipe-read` is also an index on
   PostgreSQL and a walk of 93 rows on KDS, by the drivers' design.
 - **`result-insert` is the open cell**: 4,859.0 qps (205.8 µs, spread
   1.7 %) on KDS at `6c98f7c32`, `cores = 1`, `group`, against 5,981 qps
@@ -192,6 +199,25 @@ runs
 | EG-Q3 | The reactor in `fdatasync` at one core while other sessions wait | (a) outside EG: measured at eight bookers in S0 and recorded, no premise shows it costs a cell; (b) inside: the sync handed to the WAL writer at one core as above one | (a) |
 | EG-Q4 | The two documents of §1.3 | (a) corrected at EG's close whatever the gate; (b) left to their owners | (a) |
 | EG-Q5 | S0's PostgreSQL side | (a) run in S0's window; (b) the control run reused | (a) |
+| EG-Q6 | (written at EG-S1's review) EG-R3 says "one core only; the path above one core is not changed", and the booking is on every commit that syncs inline, which above one core is a `strict` DDL's, a synchronous dispatcher's and the own-transaction insert's | (a) EG-R3 bounds the commit path, not its statistics: the scope stays where the sync is, and those commits' sync time moves from CPU time to `commit.wal_flush` on any core count; (b) the scope gated on the core count, more code for a narrower truth | (a) |
+
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-28 (go-ahead-achieving-milestone)** (`raft-marks-2026-11-28.md`
+§10, §12), and none is the operator's own mark on the item. No EG-Q item
+is tagged `[quiet-wrong]`; EG-R1, which is, is a rule, and S1 is to be
+read against it before it is built.
+
+| | adopted | note |
+|---|---|---|
+| EG-Q0 | (a) | S0 and S1, S2 behind EG-Q1 |
+| EG-Q1 | (a) | **S2 does not open, by CLA's resolution of a collision the order did not foresee**: taken alone, (a)'s condition is met - the insert is behind by more than the spread and its cause is in the engine - but the cause is the breadth of a sync, which EG-R2 forbids EG to touch. CLA reads the rule as bounding the item; the operator may read it the other way, and the narrowed sync is then DY-Q2's or a stage of its own |
+| EG-Q2 | (a) | the one-core inline sync booked as `commit.wal_flush`, timed in place |
+| EG-Q3 | (a) | measured at eight bookers in S0 and recorded; not built |
+| EG-Q4 | (a) | the two documents corrected at the close |
+| EG-Q5 | (a) | PostgreSQL run in S0's window |
+| EG-Q6 | (a) | written at EG-S1's review and adopted on the same go-ahead: no decision and no timing of a commit changes above one core, only where three kinds of commit book their sync |
 
 ## 5. Stages
 
@@ -211,6 +237,161 @@ runs
 - Nothing of a read's cost (EF) or a fold's (EH).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EG-S3 (2026-11-28): the close
+
+- **Built**: one engine change (`WalManager::Commit`'s `strict` arm
+  books its sync), three cells, `tools/eg_s0_premise.py`, and the
+  documents EG-Q4 names. **Not built**: a cut of the insert's cost
+  (EG-Q1; the cause is DY's), the deferred path at one core (EG-Q3 (a)).
+- **The close's measurement** (`ck-tester`, interleaved A/B, Release,
+  the engine EG opened from against `9830e6bb0`, whose `src/` is
+  `01bd189f4`'s; `bench/v3.5.1/results-eg-close-v3.5.1-33-g01bd189f4.md`,
+  03:23:46 to 03:29:18 UTC, 40 cells, five rounds a binary): **no cost
+  that can be told from the run's noise on any cell.** One booker at one
+  core, `strict`: 2,098 (old) against 2,108 (new) bookings a second and a `commit`
+  of 134.6 µs against 134.8 µs, inside spreads of 1.6 % and 2.4 % - the
+  tightest cell, which bounds the scope's cost to about 2 % of a commit.
+  The control the change cannot reach is inside its spread on its two
+  longer reads, and its 27 µs `pk-user` carries no claim (spreads 20 %
+  to 39 %). **Two cells carry no claim**: the one-client insert (156.5 µs against 146.1 µs
+  idle; one round ran slow in both arms, spreads over 20 %) and eight
+  bookers on eight cores (9,507 against 9,636; two of the old binary's
+  rounds ran at half speed). So **EG-R3's "a cell at eight cores shows
+  it did not move" is not shown by the rule**; the full-speed rounds of
+  the two arms overlap, and the read of the code is that a deferred
+  `strict` commit does not pass through the changed arm.
+- **The intended effect, measured**: 0 waits booked by the old binary
+  and 500 by the new over 500 commits, 121 µs a wait.
+- **The suite at the closing code** (`9830e6bb0`): 5,420 of 5,420.
+- **The durable content**: `docs/spec/wal.md` §6 (the write path as
+  built), `docs/spec/wait-events.md` (`commit.wal_flush`'s second
+  site), `manual/server/server.md` (the durability rungs),
+  `docs/inflight/known-gaps.md` ("WAL": the second price of the sync's
+  breadth; a one-core `strict` commit on its reactor), `CLAUDE.md`'s
+  Observability row.
+- **What EG hands on**: to DY-Q2's reader, the narrowed sync's price
+  against a commit (about 60 µs a commit for a second live segment,
+  traced); to the operator, the reading of EG-Q1 against EG-R2 and of
+  EG-R3 (EG-Q6).
+
+### EG-S1 (2026-11-28): the inline sync booked, on `eg-one-client-durable-write` from `8f0058f4a`
+
+- **The change** (`src/wal/manager.cpp`, `WalManager::Commit`): the
+  `strict` arm opens a `WaitScope` on `commit.wal_flush` - the commit's
+  LSN and its rung as the event's parameters - around the `Sync()` it
+  runs on the caller's stack. Nothing else moves. It covers every commit
+  that syncs there: a one-core instance's `strict` commits, a DDL's on
+  any instance, a caller's with no reactor.
+- **EG-R1 re-read before it was built** (`[quiet-wrong]`): the scope
+  opens after the commit record is appended and closes when `Sync()` has
+  returned; the acknowledgement still follows the sync, and a failed sync
+  still returns its refusal with `strict_commits` not counted. The scope
+  decides nothing.
+- **EG-R4**: the booking is the calling core's own words and the polled
+  task's session, with no latch and no park; a scope opened with no task
+  being polled books to the thread's totals.
+- **Nesting**: a `WaitScope` inside another asserts in a debug build,
+  but only where a task is being polled - the check follows the no-task
+  return (`src/sched/wait_state.cpp`) - so the suite's silence shows
+  nothing: the cells that reach this arm (the two below, every
+  synchronous `Dispatch` on a test thread) poll no task, and a deferred
+  `strict` commit does not pass it. What holds is read from the tree
+  (review, at `8b5b2587a`): every `WaitScope` in `src/` spans a
+  `co_await` alone or a call that commits nothing (`DrainForPressure`, a
+  page read), every commit is reached from the dispatcher's `EndWrite`,
+  `CommitLocal` or own-transaction insert, none of them under a scope,
+  and `Sync()` opens none and does not suspend.
+- **Cells**: `WalManagerTest.StrictCommitBooksItsSyncAsCommitWalFlush`
+  (a `strict` commit books one wait, a staged `group` and a `relaxed`
+  one none, a failed sync one all the same) and
+  `StrictCommitWaitTest.AOneCoreStrictCommitBooksItsSyncUnderCommitWalFlush`
+  (through a simulator instance's dispatcher: an `INSERT` and an
+  `UPDATE` at `strict` book one each, a `SELECT` none). **The second
+  reads the thread's totals, not `sys.wait_stats`**: the simulator binds
+  no core, and a view row is a bound core's; the view on a running server
+  is read in the close's measurement. The session's row
+  (`sys.session_waits`) is not pinned by a cell: no fixture here polls a
+  statement as a task at `strict` on one core. **Neither is S1's
+  `sys.wait_stats`, so the stage's "ends in" is not met by a cell**
+  (review). The two-core rig polls a session's statements as its tasks
+  on bound reactors (`statement_cost_rig_test.cpp`'s
+  `SubmitAsItsSession`), and a `strict` DDL there commits through this
+  arm on either core, since a DDL is never deferred: the fixture a cell
+  pinning both views, and the nesting check, would take.
+- **`docs/spec/wait-events.md`**: `commit.wal_flush` gains its second
+  site, and says `sys.ash` does not show it.
+- **The suite**: 5,418 of 5,419 at this tree (`ctest -LE bs-nightly
+  -j4`, 178.9 s). The one failure is
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the
+  two-core `group` rig `known-gaps.md` ("Testing") names as intermittent
+  on this host: alone it failed 3 of 12 here, its recorded rate, and the
+  `strict` arm is not on its path.
+- Overhead not measured; measured at the milestone's close.
+- **After the review (`a44fd2adb`)**: a third cell,
+  `WalManagerTest.StrictCommitInsideAPolledTaskBooksToItsSession`, runs
+  the commit inside a polled task with a session - how a server's
+  statement reaches it - and pins the session's booking, the core's, and
+  that the scope closed; it is the first cell in which the nesting
+  assert is evaluated on this arm. The suite on that tree: **5,420 of
+  5,420** (`ctest -LE bs-nightly -j4`, 196.9 s). The code comment is cut to four
+  lines, the event's rung is spelled `kStrict`, and the simulator cell is
+  renamed for what it runs (a synchronous dispatcher). EG-Q6 records the
+  reading of EG-R3 the review asked for. **On a running Release server**
+  at `8b5b2587a`: 500 `strict` commits on one core book 500 waits and
+  122.9 µs an insert under `commit.wal_flush` in `sys.wait_stats`
+  (EG-S0 read 0), and `sys.session_waits` carries the session's row.
+
+### EG-S0 (2026-11-28): the insert attributed, on `eg-one-client-durable-write` from `d50d304f8`
+
+`[measured]` on `main`'s engine (EF's binary; no engine source differs),
+`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`, three
+rounds, every cell through the quiet gate at once:
+
+- **The insert is at PostgreSQL's cost with one live segment and 65 µs
+  to 70 µs dearer with two.** Idle: 145.8 µs (`strict`) and 146.8 µs
+  (`group`) against 143.8 µs. At once after a bulk load that rolled the
+  log: 210.6 µs and 217.1 µs against 145.1 µs (0.69x, 0.67x). After the
+  checkpoint removed the old segment, 9.7 s later: 158.6 µs and
+  156.1 µs. One sync an insert in every state; server CPU 12.8 µs to
+  15.6 µs and 808.7 B to 864.5 B logged an insert across them. **At one
+  relation size the second segment is 52.0 µs (`strict`) and 61.0 µs
+  (`group`)**, after-load less settled; the settled state stays 12.8 µs
+  and 9.3 µs above idle, just outside the spreads, and that residual is
+  not attributed (review of EG-S0).
+- **That is `result-insert`**: scenario 1's 60,480-bar run rolled its
+  log once (`wal_rolls` 1) and its insert read 215.2 µs, p50 202.4 µs.
+  The counters were read at the run's end, so that two segments were
+  live during `result-insert` itself is inferred from the figures, not
+  read.
+- **The cause is `known-gaps.md`'s "Every sync covers every live
+  segment"** (`src/wal/file_log_device.cpp`), whose narrowing is BQ's
+  rung 3 and DY-Q2, `[quiet-wrong]` with its proof unwritten.
+- **EG-Q1 read: S2 does not open.** An engine cause is named, and it is
+  one EG-R2 forbids EG to touch. The new price - a one-client commit at
+  0.67x to 0.69x of PostgreSQL's rate between a roll and the checkpoint
+  after it - is written into that `known-gaps.md` entry for DY-Q2's
+  reader; whether the narrowed sync is reopened is the operator's.
+- **The candidates S0 was to split** (§2): the statement, no (13 µs to
+  16 µs of server CPU in every state, and level with PostgreSQL idle);
+  the `group` rung's park against `strict`'s inline call, no (145.8 µs
+  against 146.8 µs); bytes and images in the commit's write, no (809 B
+  to 865 B an insert across the states, no image in the dear cells); the
+  live segments under the sync, yes.
+- **EG-Q2's premise confirmed on a running server**: 500 `strict`
+  commits, 0 booked under `commit.wal_flush`; `group` books 500.
+- **EG-Q3's record**: eight bookers on one core, 3,325.2 bookings a
+  second at `strict` (commit p99 2,114.5 µs) against 4,191.9 at `group`
+  (p99 413.1 µs), one run each.
+- **Also seen, not EG's**: KDS logs 815 B for an insert PostgreSQL logs
+  227 B for.
+- The suite was not executed: no build input changed.
+- **Traced after the review** (`strace -T -e trace=fdatasync`, the
+  results file's "The sync, traced"): with two live segments every
+  commit issues two `fdatasync` calls on the reactor, 506 pairs over
+  the cell, and the one on the old segment - a file nothing has written
+  to since the roll - takes about 60 µs. The attribution is measured,
+  not inferred.
 
 ### Written 2026-11-28
 

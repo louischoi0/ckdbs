@@ -1,0 +1,48 @@
+
+postgresql benchmark - 34 columns, 10000 rows resident, 1 connection
+server 127.0.0.1:15434  table users_r2_pg_s3_n10000_all, books_r2_pg_s3_n10000_all, reservations_r2_pg_s3_n10000_all, loans_r2_pg_s3_n10000_all
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0    1584.9    619.2    619.2    627.4   4037.8   4037.8    4037.8     0
+load                     19000         0     305.6    126.6    139.2    141.6    176.6    336.8  548511.1     0
+create-index                12         0    2111.4    598.2    700.2   1582.3   6782.2   6782.2    6782.2     0
+pk-user                    200         0      44.4     32.3     33.0     33.4     65.5    105.3     214.7     0
+loans-by-user              200         0      37.5     26.6     31.3     34.9     56.2     64.3     140.2     0
+loans-by-book              200         0      51.9     21.1     26.9     29.0    256.8    370.2     413.1     0
+resv-by-user               200         0      25.9     19.8     22.3     23.5     30.0     68.2     218.3     0
+books-by-author            200         0      27.5     21.0     25.2     26.6     33.8     39.1      79.0     0
+books-by-genre             200         0     144.9    126.8    138.0    142.2    152.6    192.0     352.8     0
+loans-by-daterange         200         0     653.1    341.6    550.5    674.6    810.8    855.8     882.6     0
+overdue                    200         0     450.1     33.4    362.0    475.4    599.9    648.4     674.7     0
+join-loan-user             200         0      41.0     32.0     35.0     36.6     43.2    230.3     292.0     0
+join-no-literal            200         0     141.2    137.9    139.8    140.5    144.1    148.6     217.8     0
+exists-correlated          200         0      83.4     80.8     82.1     82.5     87.3     93.6     121.1     0
+count-by-user              200         0      24.5     23.0     24.0     24.2     25.2     26.9      66.5     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - index scan on the pk, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON l.user_id = u.id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans WHERE user_id = users.id), 20 outer rows
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), analyze on
+  sizes: users=2000, books=2000, reservations=5000, loans=10000
+  no Cabin equivalent exists here - a --cabin ckdbs run has no twin column in the comparison
+  EXPLAIN:
+      loans-by-user: Index Only Scan using loans_user_cov_r2_pg_s3_n10000_all on loans_r2_pg_s3_n10000_all  (cost=0.29..8.37 rows=5 width=8) /   Index Cond: (user_id = 1)
+      books-by-genre: Bitmap Heap Scan on books_r2_pg_s3_n10000_all  (cost=5.29..31.93 rows=131 width=13) /   Recheck Cond: (genre = 3) /   ->  Bitmap Index Scan on books_genre_r2_pg
+      overdue: Bitmap Heap Scan on loans_r2_pg_s3_n10000_all  (cost=29.51..147.15 rows=1351 width=8) /   Recheck Cond: ((status = 2) AND (due_day >= 19700) AND (due_day <= 200
+      join-no-literal: Nested Loop  (cost=0.56..111.36 rows=80 width=17) /   ->  Index Scan using users_r2_pg_s3_n10000_all_pkey on users_r2_pg_s3_n10000_all u  (cost=0.28..8.60 rows=
+      exists-correlated: Nested Loop Semi Join  (cost=0.56..44.46 rows=20 width=8) /   ->  Index Only Scan using users_r2_pg_s3_n10000_all_pkey on users_r2_pg_s3_n10000_all  (cost=0.28.
+  wrote /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s2b/json/r2-pg-s3-n10000-all.json

@@ -1,0 +1,6 @@
+2026-11-28T01:54:30Z master=1884717 alive=y status_age=5s 2026-11-28T01:54:25Z pg up
+2026-11-28T01:55:30Z master=1884717 alive=y status_age=5s 2026-11-28T01:55:25Z s2-b1-c1-s-new-r2
+2026-11-28T01:56:30Z end: /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s1/done
+2026-11-28T01:57:45Z master=1893432 alive=y status_age=5s 2026-11-28T01:57:40Z pg up
+2026-11-28T01:58:45Z master=1893432 alive=y status_age=0s 2026-11-28T01:58:45Z s2-b1-c1-s-new-r5
+2026-11-28T01:59:45Z end: /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s1/done2

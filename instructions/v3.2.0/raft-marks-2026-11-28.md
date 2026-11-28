@@ -76,3 +76,82 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **CLA's, not the operator's** | the candidates, the admission test (EM-Q2), the bar (EM-Q1), what §0.1 excludes (auto-prepare by shape, a compiled-chain cache, skipping the first compile, globally unique names) |
 | **Does not settle** | whether EM is opened; any EM-Q item, each of which stands as CLA's proposal; a merge to `main`, a push, a tag or a version |
 | **Recorded at** | this file; EM's header; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 9. EF, EG and EH pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, at CLA's push gate for the three orders |
+| **Mark** | **The orders landed on `main` at `72580aa04`** (`v3.5.1-6-g72580aa04`), merged `--no-ff` from `worktree-pg-kds-comparison-orders` and pushed with `--no-verify`: the three orders, their index and register rows, this file's §2 to §5 and the comparison file's corrected claim about scenario 1's twin |
+| **Skipped, on the word** | the pre-push hook; no suite ran on the tree; documents only, no build input |
+| **Does not settle** | whether any of the three is opened (§10 does) |
+
+## 10. EF, EG and EH taken up in that order on the standing go-ahead; EF opened, EF-Q0..Q7 adopted
+
+| | |
+|---|---|
+| **Word** | *"Proceed with the milestones in order, as proposed, with /go-ahead-achieving-milestone"*. The skill it names carries the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* "The order proposed" is CLA's recommendation of the preceding report: EF first, then EG, then EH |
+| **Mark** | **EF is opened** on worktree `ef-equal-client-scenario-drivers` (branch `worktree-ef-equal-client-scenario-drivers`) from `72580aa04` (`v3.5.1-6-g72580aa04`). **EF-Q0..Q7 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator. **EF-Q5 (a) lifts the 20-minute stage budget for EF-S2 by that adoption**, which is not the operator's own word for that measurement; the order's "Marks" says so. EG and EH follow EF's close, each opened and recorded when it is reached |
+| **CLA's reading** | the skill's scope is one milestone; the operator's word names three in an order, and CLA reads it as the skill run once per milestone in that order, each stopping at its own push gate |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; any item of EG or EH before it is opened |
+| **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks"); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 11. EF closed on the standing go-ahead; EF-Q8 written and adopted, S3 not opened
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10; no further word |
+| **Mark** | **EF is closed on the work branch at EF-S2, with EF-S3 not opened**: EF-Q1 (a)'s condition - `pk` or the 200-row tape behind PostgreSQL by more than the larger spread, through equal clients on `main` - is not met on the matched run (`bench/v3.5.1/results-ef-s2-matched-v3.5.1-6-g72580aa04.md`). **EF-Q8 was written at EF-S2 and adopted (b) on the same go-ahead**: scenario 1's KDS statements go through `ServerConnection.rendered`, which revises EF-Q7 (a) for that side; CLA's proposal, not the operator's mark |
+| **CLA's, not the operator's** | the reading of the gate (the 200-row tape it names carries no claim, PostgreSQL's runs spreading 49.4 %, KDS the faster in every round; `pk` is inside the spread; a booking's point reads and scenario 1's lookup are read beside them, and two short reads outside the gate - `cargo-lookup` at `strict`, `books-by-genre` over 200 unindexed loans - are behind by under 1 µs, less than the client CPU EF-R1 leaves unequal); the three runs in place of one and the 36 minutes they took under EF-Q5 (a); timed writes moved to the counting client after the stage's review; the rule added to `bench/README.md` |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the opening of EG, which follows under §10's word |
+| **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks", §7); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 12. EG opened on the standing go-ahead, on EF's unlanded close; EG-Q0..Q5 adopted
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10, which names EG after EF; no further word |
+| **Mark** | **EG is opened** on worktree `eg-one-client-durable-write` (branch `worktree-eg-one-client-durable-write`) from `d50d304f8` (`v3.5.1-26-gd50d304f8`), the close of EF's work branch. **EG-Q0..Q5 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator |
+| **CLA's reading, revised from §10** | §10 said each milestone stops at its own push gate. **EF's gate is not waited at**: the word names three milestones to be worked in order in one session, so EG is opened on a branch from EF's close and EF's push gate is reported with the others at the end. Nothing is pushed or merged to `main` by this |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DY-Q2, which EG-S0 gives a new price and does not decide |
+| **Recorded at** | this file; `workorder-eg-one-client-durable-write.md` (header, §4 "Marks", §7); EG's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 13. EG closed on the standing go-ahead after EG-S1; EG-Q6 written and adopted, no cut opened
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10; no further word |
+| **Mark** | **EG is closed on the work branch**: EG-S0 attributed scenario 1's `result-insert` to the breadth of a sync while a bulk load's segment stays live (traced: two `fdatasync` calls a commit, about 60 µs on the untouched segment); EG-S1 booked the one-core `strict` commit's inline sync under `commit.wal_flush`; the close's A/B found no cost it can tell from noise. **EG-Q6 was written at EG-S1's review and adopted (a)**: EG-R3 bounds the commit path, not its statistics |
+| **CLA's, not the operator's** | **the reading of EG-Q1**: its condition is met taken alone (the insert is behind and the cause is in the engine), and CLA let EG-R2 bound it, so no cut was built and the narrowed sync stays DY-Q2's with a new price beside it; the reading of EG-R3 (EG-Q6); the close with two A/B cells carrying no claim, one of them the eight-core cell EG-R3 asks for |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DY-Q2; the opening of EH, which follows under §10's word |
+| **Recorded at** | this file; `workorder-eg-one-client-durable-write.md` (header, §4 "Marks", §7); EG's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 14. EH opened on the standing go-ahead, on EG's unlanded close; EH-Q0..Q6 adopted
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10, which names EH after EG; no further word |
+| **Mark** | **EH is opened** on worktree `eh-native-fold-per-row` (branch `worktree-eh-native-fold-per-row`) from `01c6c741c` (`v3.5.1-35-g01c6c741c`), the close of EG's work branch. **EH-Q0..Q6 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator. The premises of its three `[quiet-wrong]` rules (EH-R2, EH-R3, EH-R7) were re-read against the tree before the opening, as the order's "Marks" records |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-eh-native-fold-per-row.md` (header, §4 "Marks"); EH's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 15. EH closed on the standing go-ahead after S1, S2 and Sy
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10; no further word |
+| **Mark** | **EH is closed on the work branch** at `8db2923d4` (`v3.5.1-53-g8db2923d4`): a global fold takes its rows from the page's bytes (S1), the group table is one arena under an open-addressing table (S2), and an aggregated walk yields on an aggregator of its own (Sy). EH-Q1's bar is met within the spread |
+| **CLA's, not the operator's** | **a regression of CLA's own, found by the close and removed before it**: the pool size bound added at the Sy review's advice cost a 60,480-group fold 1.6x; the pool is now bounded by count alone, and the closing binary is measured again against the opening one with no shape dearer. The reviews' cuts not taken are recorded in the order |
+| **Does not settle** | a push, a merge to `main`, a tag or a version, for EF, EG or EH |
+| **Recorded at** | this file; `workorder-eh-native-fold-per-row.md` (header, §4 "Marks", §7); EH's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 16. EF, EG and EH pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, at CLA's push gate for the three milestones |
+| **Mark** | **EF, EG and EH land on `main`** in one `--no-ff` merge of `worktree-eh-native-fold-per-row`, which carries EF's and EG's branches beneath EH's, pushed with `--no-verify` |
+| **Skipped, on the word** | the pre-push hook. The suite was last run at `8db2923d4`, the last commit with a build input: 5,437 of 5,438, the one failure the two-core insert rig the stage logs name; it was not a green run, and the push does not report it as one |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; the three orders' landed rows in `instructions/milestones.md` |
+

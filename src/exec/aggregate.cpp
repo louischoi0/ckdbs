@@ -56,12 +56,19 @@ Status Aggregator::Reset(const AggregateSpec& spec, std::span<const std::string>
     limits_ = limits;
 
     // `clear()` throughout, never a fresh container: every one of these
-    // keeps its capacity, which is the whole point of reusing the object.
+    // keeps its capacity, which is the whole point of reusing the object -
+    // all but `table_`, which `FileGroup` regrows from 64 slots by doubling
+    // into a fresh vector each statement.
     groups_.clear();
-    index_.clear();
+    table_.clear();
+    key_spans_.clear();
+    key_arena_.clear();
     key_scratch_.clear();
     out_scratch_.clear();
     distinct_entries_ = 0;
+    bytes_schema_ = nullptr;
+    bytes_layout_ = nullptr;
+    bytes_columns_ = 0;
 
     Aggregator& agg = *this;
 
@@ -220,118 +227,234 @@ Status Aggregator::FoldInto(Group& group, const ChainFrame& frame) {
         if (!frame.CanResolve(item.ref)) {
             return Status::InvalidArgument("aggregate reads a column the frame cannot resolve");
         }
-        const parser::AstValue& value = frame.Get(item.ref);
+        if (Status s = FoldValue(group, i, frame.Get(item.ref)); !s.ok()) return s;
+    }
+    return Status::OK();
+}
 
-        // §3.1: every aggregate skips NULLs. `COUNT(col)` counts the rows
-        // whose value is not NULL; SUM/MIN/MAX fold over the non-NULL
-        // values and answer NULL for a group that had none.
-        if (value.type == parser::ValueType::kNull) continue;
+Status Aggregator::FoldValue(Group& group, std::size_t i, const parser::AstValue& value) {
+    const AggregateItem& item = spec_->items[i];
+    ItemState& state = group.items[i];
 
-        // ---- DISTINCT (§3.2) -----------------------------------------
-        //
-        // **Before the fold, and after the NULL test.** A repeated value is
-        // dropped here and reaches no counter, which is the whole of what
-        // the word means; and a NULL was already skipped, so no set ever
-        // holds one and `COUNT(DISTINCT col)` cannot count it.
-        if (state.distinct != nullptr) {
-            value_scratch_.clear();
-            if (Status s = EncodeValue(value, value_scratch_); !s.ok()) return s;
+    // §3.1: every aggregate skips NULLs. `COUNT(col)` counts the rows
+    // whose value is not NULL; SUM/MIN/MAX fold over the non-NULL
+    // values and answer NULL for a group that had none.
+    if (value.type == parser::ValueType::kNull) return Status::OK();
 
-            // A hit allocates nothing: the set is probed with a
-            // `std::string` that is already there, and only a miss builds
-            // a node.
-            if (state.distinct->find(value_scratch_) != state.distinct->end()) continue;
+    // ---- DISTINCT (§3.2) -----------------------------------------
+    //
+    // **Before the fold, and after the NULL test.** A repeated value is
+    // dropped here and reaches no counter, which is the whole of what
+    // the word means; and a NULL was already skipped, so no set ever
+    // holds one and `COUNT(DISTINCT col)` cannot count it.
+    if (state.distinct != nullptr) {
+        value_scratch_.clear();
+        if (Status s = EncodeValue(value, value_scratch_); !s.ok()) return s;
 
-            if (distinct_entries_ >= limits_.max_distinct) {
-                return Status::ResourceExhausted(
-                    "this statement exceeded aggregate_max_distinct (" +
-                    std::to_string(limits_.max_distinct) + ") in " + LabelOf(i) +
-                    "; no partial answer is emitted, because a truncated distinct set counts "
-                    "too few and is a wrong answer with a right answer's shape");
-            }
-            state.distinct->insert(value_scratch_);
-            ++distinct_entries_;
+        // A hit allocates nothing: the set is probed with a
+        // `std::string` that is already there, and only a miss builds
+        // a node.
+        if (state.distinct->find(value_scratch_) != state.distinct->end()) return Status::OK();
+
+        if (distinct_entries_ >= limits_.max_distinct) {
+            return Status::ResourceExhausted(
+                "this statement exceeded aggregate_max_distinct (" +
+                std::to_string(limits_.max_distinct) + ") in " + LabelOf(i) +
+                "; no partial answer is emitted, because a truncated distinct set counts "
+                "too few and is a wrong answer with a right answer's shape");
         }
+        state.distinct->insert(value_scratch_);
+        ++distinct_entries_;
+    }
 
-        switch (item.func) {
-            case parser::AggFunc::kCount:
-                ++state.count;
-                state.has_value = true;
-                break;
+    switch (item.func) {
+        case parser::AggFunc::kCount:
+            ++state.count;
+            state.has_value = true;
+            break;
 
-            case parser::AggFunc::kSum:
-            // AVG is the `(sum, count)` pair AG-M reserved the shape for:
-            // it folds exactly as SUM does, counts beside it, and the
-            // divide happens once, in `Finish`. One arm for both keeps the
-            // overflow discipline in one place.
-            case parser::AggFunc::kAvg: {
-                // AG3 restricted the argument to a signed integer column at
-                // compile, so `int_val` *is* the value - no conversion, and
-                // no digit-text path, which is exactly why `uint64` is
-                // refused up there rather than approximated down here.
-                //
-                // A `DECIMAL` joins on the same terms and needs no arm of
-                // its own: its `int_val` is the unscaled integer, every row
-                // of one column carries the same scale, and so the sum of
-                // the unscaled values is the unscaled sum (types.md
-                // §3.2). The scale is re-attached once, in `Finish`. The
-                // wide decimal folds beside them into its own int128
-                // accumulator - the int64 one is a product contract and
-                // does not widen.
-                if (value.type == parser::ValueType::kDecimalWide) {
-                    if (__builtin_add_overflow(state.sum_wide,
-                                               Int128FromHalves(value.dec_hi, value.int_val),
-                                               &state.sum_wide)) {
-                        return Status::OutOfRange(
-                            "SUM overflow in " + LabelOf(i) + DescribeGroup(group.keys) +
-                            "; the accumulator is int128 and a wrapped sum is wrong in a way "
-                            "no reader can detect");
-                    }
-                    if (item.func == parser::AggFunc::kAvg) ++state.count;
-                    state.has_value = true;
-                    break;
-                }
-                if (value.type != parser::ValueType::kInt &&
-                    value.type != parser::ValueType::kDecimal) {
-                    return Status::InvalidArgument(LabelOf(i) + " read a non-numeric value");
-                }
-                // Checked, always. A wrapped sum is the one output this
-                // feature must never produce: it is wrong in a way no
-                // reader can detect, which is the same argument the trail
-                // trust model rests on.
-                if (__builtin_add_overflow(state.sum, value.int_val, &state.sum)) {
-                    return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
-                                              DescribeGroup(group.keys) +
-                                              "; the accumulator is int64 and a wrapped sum is "
-                                              "wrong in a way no reader can detect");
+        case parser::AggFunc::kSum:
+        // AVG is the `(sum, count)` pair AG-M reserved the shape for:
+        // it folds exactly as SUM does, counts beside it, and the
+        // divide happens once, in `Finish`. One arm for both keeps the
+        // overflow discipline in one place.
+        case parser::AggFunc::kAvg: {
+            // AG3 restricted the argument to a signed integer column at
+            // compile, so `int_val` *is* the value - no conversion, and
+            // no digit-text path, which is exactly why `uint64` is
+            // refused up there rather than approximated down here.
+            //
+            // A `DECIMAL` joins on the same terms and needs no arm of
+            // its own: its `int_val` is the unscaled integer, every row
+            // of one column carries the same scale, and so the sum of
+            // the unscaled values is the unscaled sum (types.md
+            // §3.2). The scale is re-attached once, in `Finish`. The
+            // wide decimal folds beside them into its own int128
+            // accumulator - the int64 one is a product contract and
+            // does not widen.
+            if (value.type == parser::ValueType::kDecimalWide) {
+                if (__builtin_add_overflow(state.sum_wide,
+                                           Int128FromHalves(value.dec_hi, value.int_val),
+                                           &state.sum_wide)) {
+                    return Status::OutOfRange(
+                        "SUM overflow in " + LabelOf(i) + DescribeGroup(group.keys) +
+                        "; the accumulator is int128 and a wrapped sum is wrong in a way "
+                        "no reader can detect");
                 }
                 if (item.func == parser::AggFunc::kAvg) ++state.count;
                 state.has_value = true;
                 break;
             }
+            if (value.type != parser::ValueType::kInt &&
+                value.type != parser::ValueType::kDecimal) {
+                return Status::InvalidArgument(LabelOf(i) + " read a non-numeric value");
+            }
+            // Checked, always. A wrapped sum is the one output this
+            // feature must never produce: it is wrong in a way no
+            // reader can detect, which is the same argument the trail
+            // trust model rests on.
+            if (__builtin_add_overflow(state.sum, value.int_val, &state.sum)) {
+                return Status::OutOfRange("SUM overflow in " + LabelOf(i) +
+                                          DescribeGroup(group.keys) +
+                                          "; the accumulator is int64 and a wrapped sum is "
+                                          "wrong in a way no reader can detect");
+            }
+            if (item.func == parser::AggFunc::kAvg) ++state.count;
+            state.has_value = true;
+            break;
+        }
 
-            case parser::AggFunc::kMin:
-            case parser::AggFunc::kMax: {
-                if (!state.has_value) {
-                    state.extreme = value;
-                    state.has_value = true;
-                    break;
-                }
-                // Through `CompareValues` with the item's own `type_val`,
-                // which is what makes MIN/MAX over a uint64 above
-                // INT64_MAX exact: that path compares digit text rather
-                // than a signed reading that cannot hold the value.
-                const parser::CompareOp op = item.func == parser::AggFunc::kMin
-                                                 ? parser::CompareOp::kLt
-                                                 : parser::CompareOp::kGt;
-                if (CompareValues(item.type_val, value, state.extreme, op)) {
-                    state.extreme = value;
-                }
+        case parser::AggFunc::kMin:
+        case parser::AggFunc::kMax: {
+            if (!state.has_value) {
+                state.extreme = value;
+                state.has_value = true;
                 break;
             }
+            // Through `CompareValues` with the item's own `type_val`,
+            // which is what makes MIN/MAX over a uint64 above
+            // INT64_MAX exact: that path compares digit text rather
+            // than a signed reading that cannot hold the value.
+            const parser::CompareOp op = item.func == parser::AggFunc::kMin
+                                             ? parser::CompareOp::kLt
+                                             : parser::CompareOp::kGt;
+            if (CompareValues(item.type_val, value, state.extreme, op)) {
+                state.extreme = value;
+            }
+            break;
         }
     }
     return Status::OK();
+}
+
+bool Aggregator::PrepareBytesFold(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                                  std::uint16_t rel_slot) {
+    bytes_schema_ = nullptr;
+    if (spec_ == nullptr || !spec_->group_keys.empty()) return false;
+    std::uint64_t columns = 0;
+    for (const AggregateItem& item : spec_->items) {
+        if (!item.is_aggregate) return false;
+        if (item.star_arg) continue;
+        if (NeedsDistinct(item)) return false;  // a set grows by allocating; not under a leaf's hold
+        if (item.ref.up != 0 || item.ref.rel_slot != rel_slot) return false;
+        // The decode mask names 64 columns, as `Step::read_columns` does.
+        if (item.ref.col_pos >= schema.columns.size() || item.ref.col_pos >= 64) return false;
+        // A `varchar` value may be a spill: resolving it is a var-heap fetch.
+        if (schema.columns[item.ref.col_pos].type_val == catalog::kTypeValVarchar) return false;
+        columns |= std::uint64_t{1} << item.ref.col_pos;
+    }
+    bytes_slots_.resize(schema.columns.size());
+    bytes_schema_ = &schema;
+    bytes_layout_ = &layout;
+    bytes_columns_ = columns;
+    return true;
+}
+
+Status Aggregator::AccumulateBytes(std::span<const std::byte> payload) {
+    // The row decoder the frame's path uses, over the columns the items
+    // read and nothing else; a bare `COUNT(*)` reads none and decodes none.
+    // No spill can be pending: `PrepareBytesFold` admitted no `varchar`.
+    if (bytes_columns_ != 0) {
+        if (Status s = DecodeColumnsInto(*bytes_schema_, *bytes_layout_, payload, bytes_slots_,
+                                         bytes_columns_, nullptr, DecodeChecks::kPayloadOnly);
+            !s.ok()) {
+            return s;
+        }
+    }
+    Group& group = groups_[0];
+    for (std::size_t i = 0; i < spec_->items.size(); ++i) {
+        const AggregateItem& item = spec_->items[i];
+        if (item.star_arg) {
+            ++group.items[i].count;
+            continue;
+        }
+        if (Status s = FoldValue(group, i, bytes_slots_[item.ref.col_pos]); !s.ok()) return s;
+    }
+    return Status::OK();
+}
+
+// ---- The group table (EH-S2) -------------------------------------------
+//
+// A 64-bit hash of the encoded key, eight bytes a step: the key is a few
+// dozen bytes of `EncodeValue` output at most, and `std::hash` over a
+// `string_view` was 11 % of a 7,560-group fold's time at EH-S0. Its quality
+// decides only how long a probe runs - two keys with one hash are told apart
+// by their bytes - so no answer depends on it.
+std::uint64_t Aggregator::HashKey(std::string_view key) noexcept {
+    constexpr std::uint64_t kMul = 0x9E3779B97F4A7C15ull;
+    std::uint64_t h = 0xCBF29CE484222325ull ^ (key.size() * kMul);
+    std::size_t at = 0;
+    for (; at + 8 <= key.size(); at += 8) {
+        std::uint64_t word = 0;
+        std::memcpy(&word, key.data() + at, 8);
+        h = (h ^ word) * kMul;
+        h ^= h >> 29;
+    }
+    if (at < key.size()) {
+        std::uint64_t word = 0;
+        std::memcpy(&word, key.data() + at, key.size() - at);
+        h = (h ^ word) * kMul;
+        h ^= h >> 29;
+    }
+    h *= kMul;
+    return h ^ (h >> 32);
+}
+
+std::size_t Aggregator::FindGroup(std::string_view key, std::uint64_t hash) const noexcept {
+    if (table_.empty()) return groups_.size();
+    const std::size_t mask = table_.size() - 1;
+    for (std::size_t slot = hash & mask;; slot = (slot + 1) & mask) {
+        const GroupSlot& probe = table_[slot];
+        if (probe.group_plus_one == 0) return groups_.size();
+        if (probe.hash != hash) continue;
+        const KeySpan span = key_spans_[probe.group_plus_one - 1];
+        if (std::string_view(key_arena_).substr(span.at, span.length) == key) {
+            return probe.group_plus_one - 1;
+        }
+    }
+}
+
+void Aggregator::FileGroup(std::string_view key, std::uint64_t hash) {
+    // The group was just appended to `groups_`; its span and its slot follow.
+    const std::size_t group = groups_.size() - 1;
+    key_spans_.push_back({key_arena_.size(), key.size()});
+    key_arena_.append(key);
+    // At most half full, so a probe ends at an empty slot and stays short.
+    if (2 * groups_.size() > table_.size()) {
+        std::vector<GroupSlot> grown(table_.empty() ? 64 : 2 * table_.size());
+        const std::size_t mask = grown.size() - 1;
+        for (const GroupSlot& old : table_) {
+            if (old.group_plus_one == 0) continue;
+            std::size_t slot = old.hash & mask;
+            while (grown[slot].group_plus_one != 0) slot = (slot + 1) & mask;
+            grown[slot] = old;
+        }
+        table_ = std::move(grown);
+    }
+    const std::size_t mask = table_.size() - 1;
+    std::size_t slot = hash & mask;
+    while (table_[slot].group_plus_one != 0) slot = (slot + 1) & mask;
+    table_[slot] = {hash, group + 1};
 }
 
 Status Aggregator::Accumulate(const ChainFrame& frame) {
@@ -348,10 +471,11 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
         if (Status s = EncodeValue(frame.Get(key), key_scratch_); !s.ok()) return s;
     }
 
-    // Heterogeneous, so the probe never materialises a string. This is the
-    // one lookup on the per-row path and it must stay allocation-free.
-    if (auto it = index_.find(std::string_view(key_scratch_)); it != index_.end()) {
-        return FoldInto(groups_[it->second], frame);
+    // Probed with the scratch key's bytes, so nothing is materialised. This
+    // is the one lookup on the per-row path and it must stay allocation-free.
+    const std::uint64_t hash = HashKey(key_scratch_);
+    if (const std::size_t at = FindGroup(key_scratch_, hash); at != groups_.size()) {
+        return FoldInto(groups_[at], frame);
     }
 
     // ---- A new group. The only place this class allocates. ------------
@@ -374,7 +498,7 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
 
     const std::size_t at = groups_.size();
     groups_.push_back(std::move(group));
-    index_.emplace(key_scratch_, at);
+    FileGroup(key_scratch_, hash);
     return FoldInto(groups_[at], frame);
 }
 
@@ -646,8 +770,8 @@ Status Aggregator::Merge(Aggregator&& other) {
     // **In `other`'s own group order**, which is what makes the merged
     // result's order defined: this side keeps its groups where they are and
     // the far side's newcomers arrive behind them, in the order that side
-    // founded them. Iterating the far side's *index* instead would append in
-    // hash order and make the output depend on a seed.
+    // founded them. Iterating the far side's *table* instead would append in
+    // slot order and make the output depend on the hash.
     for (Group& incoming : other.groups_) {
         std::size_t at = 0;
         if (!spec_->group_keys.empty()) {
@@ -658,8 +782,9 @@ Status Aggregator::Merge(Aggregator&& other) {
                 if (Status s = EncodeValue(value, key_scratch_); !s.ok()) return s;
             }
 
-            if (auto it = index_.find(std::string_view(key_scratch_)); it != index_.end()) {
-                at = it->second;
+            const std::uint64_t hash = HashKey(key_scratch_);
+            if (const std::size_t found = FindGroup(key_scratch_, hash); found != groups_.size()) {
+                at = found;
             } else {
                 if (groups_.size() >= limits_.max_groups) {
                     return Status::ResourceExhausted(
@@ -670,7 +795,7 @@ Status Aggregator::Merge(Aggregator&& other) {
                 Group fresh = NewGroup();
                 fresh.keys = incoming.keys;
                 groups_.push_back(std::move(fresh));
-                index_.emplace(key_scratch_, at);
+                FileGroup(key_scratch_, hash);
             }
         }
         if (Status s = MergeGroup(groups_[at], incoming); !s.ok()) return s;
@@ -680,7 +805,9 @@ Status Aggregator::Merge(Aggregator&& other) {
     // have been folded elsewhere must not be finishable, and an empty one
     // that is asked to finish emits nothing instead of a duplicate.
     other.groups_.clear();
-    other.index_.clear();
+    other.table_.clear();
+    other.key_spans_.clear();
+    other.key_arena_.clear();
     other.distinct_entries_ = 0;
     return Status::OK();
 }

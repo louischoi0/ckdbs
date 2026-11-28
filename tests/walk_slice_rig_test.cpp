@@ -493,6 +493,79 @@ TEST_F(WalkSliceRigTest, AnAnalyticWalkYieldsFourTimesAsOftenAsANormalOne) {
     EXPECT_GE(polls[1], 3 * polls[0]) << "normal " << polls[0] << " polls, analytic " << polls[1];
 }
 
+// ---- EH-Sy: an aggregated walk is handed to the slices too ---------------
+
+// A fold over the whole relation yields as a plain walk does, so a point
+// read on its core is answered before the fold ends. **The mutation**: route
+// every aggregated statement back to `RunAggregated` and the point read
+// waits for the whole fold.
+TEST_F(WalkSliceRigTest, APointReadSharingACoreWithALongFoldIsAnsweredInsideIt) {
+    Load(1, 1, kRows);
+    Script fold{&long_, {"SELECT COUNT(*), SUM(id), MIN(id), MAX(id) FROM t"}};
+    Script point{&other_, {"SELECT id FROM t WHERE id = 5"}};
+    std::atomic<bool> fold_done_at_point{true};
+    point.after = [&] { fold_done_at_point.store(fold.done.load() == 1); };
+    RunBoth(fold, point);
+
+    EXPECT_FALSE(fold_done_at_point.load())
+        << "the point read waited for the whole fold: nothing yielded";
+    EXPECT_EQ(Ids(point.outs[0].response), std::vector<std::int64_t>{5});
+    const std::string want = "count(*),sum(id),min(id),max(id)\\n" + std::to_string(kRows) + "," +
+                             std::to_string(std::int64_t{kRows} * (kRows + 1) / 2) + ",1," +
+                             std::to_string(kRows);
+    EXPECT_EQ(fold.outs[0].response, want);
+}
+
+// **EH-R7, `[quiet-wrong]`**: two folds parked on one core at once, each in
+// the other's suspension, must each answer as it would alone. Each owns its
+// accumulator; on the dispatcher's one shared aggregator the second fold's
+// `Reset` would point the first's state at another statement mid-walk.
+// Different shapes on purpose - a global fold over the whole relation, which
+// takes its rows from their bytes, and a grouped fold over its first half,
+// which takes them through the frame - so a fold fed the other's rows or
+// spec answers visibly wrong; the second is half the first's walk, so it
+// ends inside it.
+TEST_F(WalkSliceRigTest, TwoFoldsInterleavedOnOneCoreEachAnswerAsAlone) {
+    Load(1, 1, kRows);
+    const std::string global = "SELECT COUNT(*), SUM(id), MAX(id) FROM t";
+    const std::string grouped =
+        "SELECT name, COUNT(*), SUM(id) FROM t WHERE id <= " + std::to_string(kRows / 2) +
+        " GROUP BY name";
+    const std::string global_alone = d().Dispatch(global).response;
+    const std::string grouped_alone = d().Dispatch(grouped).response;
+    ASSERT_EQ(grouped_alone.rfind("ERR", 0), std::string::npos) << grouped_alone;
+
+    SliceTheReadWalkFiner();  // `long_` yields every 16 pages
+    ASSERT_EQ(d().Dispatch("SET PRIORITY analytic", &other_).response, "SET priority=analytic");
+    Script first{&long_, {global}};
+    Script second{&other_, {grouped}};
+    std::atomic<bool> first_done_at_second{true};
+    second.after = [&] { first_done_at_second.store(first.done.load() == 1); };
+    RunBoth(first, second);
+
+    EXPECT_FALSE(first_done_at_second.load())
+        << "the second fold ran after the first ended: the two never shared the core";
+    EXPECT_EQ(first.outs[0].response, global_alone);
+    EXPECT_EQ(second.outs[0].response, grouped_alone);
+}
+
+// A cancel ends a fold at its next slice boundary as it ends a walk.
+TEST_F(WalkSliceRigTest, ACancelEndsAFoldAtItsNextBoundary) {
+    Load(1, 1, kRows);
+    Script fold{&long_, {"BEGIN", "SELECT COUNT(*), SUM(id) FROM t"}};
+    Script canceller{&other_, {}};
+    std::atomic<bool> fold_running{false};
+    canceller.after = [&] {
+        fold_running.store(fold.done.load() == 1);
+        long_.RequestCancel();
+    };
+    RunBoth(fold, canceller);
+
+    ASSERT_TRUE(fold_running.load()) << "the fold ended before the cancel: nothing yielded";
+    EXPECT_EQ(fold.outs[1].status.code(), StatusCode::kCancelled) << fold.outs[1].response;
+    EXPECT_TRUE(long_.failed()) << "a cancelled statement leaves its transaction failed";
+}
+
 TEST_F(WalkSliceRigTest, ACoreTornDownWithAWalkBetweenSlicesReleasesItFirst) {
     // A peer's walk, run by hand to its first boundary and left queued; the
     // rig is then destroyed with it there. The scheduler goes last of the

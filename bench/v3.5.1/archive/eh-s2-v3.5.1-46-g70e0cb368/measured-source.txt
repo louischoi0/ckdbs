@@ -1,0 +1,1 @@
+measured S2 binary: git archive b36deb576 plus measured-source.diff, which is 70e0cb368's src/exec/aggregate.cpp and include/kds/exec/aggregate.hpp

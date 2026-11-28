@@ -8,6 +8,7 @@
 #include "kds/base/status.hpp"
 #include "kds/catalog/catalog.hpp"
 #include "kds/exec/budget.hpp"
+#include "kds/exec/bytes_fold.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/exec/trail_collector.hpp"
@@ -82,6 +83,10 @@ struct StepStats {
     // the kernel ran, and printed nowhere, so `ANALYZE` reads the same with
     // `scan_kernel` on and off.
     std::uint64_t rows_kernel_rejected = 0;
+    // Of `rows_matched`, the ones a `BytesFold` took from the page's bytes
+    // (EH-S1) and the row sink never saw. Not printed by `ANALYZE`: it says
+    // which path a row took, never what the statement answered.
+    std::uint64_t rows_folded_in_place = 0;
     std::uint64_t sub_chain_runs = 0;  // sub-chain evaluations, hoisted or per row
 
     // V19's meters.
@@ -321,7 +326,8 @@ Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepC
                const RowSink& sink, ExecStats* stats = nullptr,
                const Budget& budget = Budget(), TrailCollector* trail = nullptr,
                const TrailReplay* replay = nullptr, stats::CabinStore* cabins = nullptr,
-               const txn::Snapshot* snapshot = nullptr, bool indexes = true);
+               const txn::Snapshot* snapshot = nullptr, bool indexes = true,
+               BytesFold* fold = nullptr);
 
 // **A statement's walk yields every `pages_per_slice` pages** (BA-S15,
 // BA-R12): the outermost walk, at the bottom of its page loop - its one
@@ -376,7 +382,7 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         const SlicePolicy& slice);
+                         const SlicePolicy& slice, BytesFold* fold = nullptr);
 
 // Evaluates one step's whole conjunct list - ordinary predicates *and*
 // sub-chains - against a frame already holding that step's row. **The

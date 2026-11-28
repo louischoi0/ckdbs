@@ -1,0 +1,753 @@
+{
+  "meta": {
+    "engine": "ckdbs",
+    "scenario": "backtest",
+    "columns": 49,
+    "rows": 765,
+    "host": "127.0.0.1",
+    "port": 15791,
+    "table": "7 relations, suffix _r2_s1s_n252_c1_g",
+    "clustered": "btree",
+    "years": 1,
+    "symbols": 1,
+    "sessions": 252,
+    "bars": 252,
+    "rebalance": 21,
+    "periods": 11,
+    "top_k": 3,
+    "replay": 1,
+    "compare_rounds": 4,
+    "batch": 200,
+    "cabin": false,
+    "fk": false,
+    "seed": 1,
+    "accelerator": "cabin",
+    "durability": null,
+    "ranking": [
+      {
+        "model_id": 5,
+        "name": "vol-low",
+        "family": "volatility",
+        "periods": 11,
+        "total_bp": 5119,
+        "mean_bp": 465.3636363636364,
+        "stdev_bp": 1407.8930274916145,
+        "best_bp": 3599,
+        "worst_bp": -1800,
+        "win_rate": 0.5454545454545454,
+        "risk_adj": 0.3305390589175342,
+        "trades": 1
+      },
+      {
+        "model_id": 6,
+        "name": "vol-high",
+        "family": "volatility",
+        "periods": 11,
+        "total_bp": 5119,
+        "mean_bp": 465.3636363636364,
+        "stdev_bp": 1407.8930274916145,
+        "best_bp": 3599,
+        "worst_bp": -1800,
+        "win_rate": 0.5454545454545454,
+        "risk_adj": 0.3305390589175342,
+        "trades": 1
+      },
+      {
+        "model_id": 2,
+        "name": "mom-20",
+        "family": "momentum",
+        "periods": 11,
+        "total_bp": 5058,
+        "mean_bp": 459.8181818181818,
+        "stdev_bp": 1114.380122692091,
+        "best_bp": 3599,
+        "worst_bp": -592,
+        "win_rate": 0.36363636363636365,
+        "risk_adj": 0.4126223830225586,
+        "trades": 5
+      },
+      {
+        "model_id": 7,
+        "name": "vol-tgt",
+        "family": "volatility",
+        "periods": 11,
+        "total_bp": 4477,
+        "mean_bp": 407.0,
+        "stdev_bp": 1063.3539562928406,
+        "best_bp": 3599,
+        "worst_bp": -482,
+        "win_rate": 0.2727272727272727,
+        "risk_adj": 0.38275119737074165,
+        "trades": 3
+      },
+      {
+        "model_id": 3,
+        "name": "mom-60",
+        "family": "momentum",
+        "periods": 11,
+        "total_bp": 3693,
+        "mean_bp": 335.72727272727275,
+        "stdev_bp": 1322.223340432119,
+        "best_bp": 3599,
+        "worst_bp": -1800,
+        "win_rate": 0.2727272727272727,
+        "risk_adj": 0.253911168000977,
+        "trades": 3
+      },
+      {
+        "model_id": 4,
+        "name": "mom-120",
+        "family": "momentum",
+        "periods": 11,
+        "total_bp": 1894,
+        "mean_bp": 172.1818181818182,
+        "stdev_bp": 599.389662024754,
+        "best_bp": 1970,
+        "worst_bp": -482,
+        "win_rate": 0.18181818181818182,
+        "risk_adj": 0.28726190838891597,
+        "trades": 1
+      },
+      {
+        "model_id": 1,
+        "name": "mom-5",
+        "family": "momentum",
+        "periods": 11,
+        "total_bp": 1645,
+        "mean_bp": 149.54545454545453,
+        "stdev_bp": 454.4657930194454,
+        "best_bp": 1172,
+        "worst_bp": -482,
+        "win_rate": 0.18181818181818182,
+        "risk_adj": 0.3290576691193475,
+        "trades": 6
+      },
+      {
+        "model_id": 8,
+        "name": "vol-break",
+        "family": "volatility",
+        "periods": 11,
+        "total_bp": 0,
+        "mean_bp": 0.0,
+        "stdev_bp": 0.0,
+        "best_bp": 0,
+        "worst_bp": 0,
+        "win_rate": 0.0,
+        "risk_adj": 0.0,
+        "trades": 0
+      }
+    ],
+    "verify_problems": [],
+    "qps_sweep": [
+      {
+        "shape": "bar-lookup",
+        "detail": "pk equality, a btree descent",
+        "cabin_on": "pk - a cabin on the pk column is refused",
+        "cold_ops": 100,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 42405.0,
+          "mean_us": 23.5,
+          "p50_us": 23.5,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 42825.8,
+          "mean_us": 23.2,
+          "p50_us": 23.3,
+          "errors": 0
+        },
+        "cabin": null,
+        "dropped": null
+      },
+      {
+        "shape": "bar-range",
+        "detail": "pk BETWEEN, 200 wide - a Range step",
+        "cabin_on": "pk - a cabin on the pk column is refused",
+        "cold_ops": 52,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 1757.0,
+          "mean_us": 569.0,
+          "p50_us": 529.0,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 1756.7,
+          "mean_us": 569.1,
+          "p50_us": 520.2,
+          "errors": 0
+        },
+        "cabin": null,
+        "dropped": null
+      },
+      {
+        "shape": "day-slice",
+        "detail": "one session's features - a FilterScan",
+        "cabin_on": "daily_stats.session_no",
+        "cold_ops": 100,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 35585.5,
+          "mean_us": 28.0,
+          "p50_us": 27.2,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 37321.4,
+          "mean_us": 26.7,
+          "p50_us": 26.8,
+          "errors": 0
+        },
+        "cabin": {
+          "qps": 41387.2,
+          "mean_us": 24.0,
+          "p50_us": 24.2,
+          "errors": 0
+        },
+        "dropped": {
+          "qps": 31601.7,
+          "mean_us": 31.5,
+          "p50_us": 26.6,
+          "errors": 0
+        }
+      },
+      {
+        "shape": "symbol-history",
+        "detail": "one symbol's whole 30 years - a FilterScan",
+        "cabin_on": "daily_stats.symbol_id",
+        "cold_ops": 1,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 1077.7,
+          "mean_us": 927.6,
+          "p50_us": 927.6,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 1053.4,
+          "mean_us": 949.1,
+          "p50_us": 944.4,
+          "errors": 0
+        },
+        "cabin": {
+          "qps": 1073.0,
+          "mean_us": 931.9,
+          "p50_us": 943.1,
+          "errors": 0
+        },
+        "dropped": {
+          "qps": 1122.0,
+          "mean_us": 891.1,
+          "p50_us": 909.6,
+          "errors": 0
+        }
+      },
+      {
+        "shape": "cross-join",
+        "detail": "the backtest read - FilterScan + Probe + Probe",
+        "cabin_on": "daily_stats.session_no",
+        "cold_ops": 100,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 20051.2,
+          "mean_us": 49.8,
+          "p50_us": 44.1,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 22755.2,
+          "mean_us": 43.8,
+          "p50_us": 43.7,
+          "errors": 0
+        },
+        "cabin": {
+          "qps": 24146.5,
+          "mean_us": 41.3,
+          "p50_us": 41.3,
+          "errors": 0
+        },
+        "dropped": {
+          "qps": 22381.3,
+          "mean_us": 44.6,
+          "p50_us": 44.1,
+          "errors": 0
+        }
+      },
+      {
+        "shape": "point-join",
+        "detail": "bar -> symbol -> exchange, anchored on a pk",
+        "cabin_on": "pk - a cabin on the pk column is refused",
+        "cold_ops": 100,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 37534.0,
+          "mean_us": 26.5,
+          "p50_us": 26.3,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 38137.0,
+          "mean_us": 26.1,
+          "p50_us": 26.1,
+          "errors": 0
+        },
+        "cabin": null,
+        "dropped": null
+      },
+      {
+        "shape": "model-join",
+        "detail": "one model's results joined to its model",
+        "cabin_on": "model_results.model_id",
+        "cold_ops": 8,
+        "warm_ops": 100,
+        "cold": {
+          "qps": 20004.3,
+          "mean_us": 49.9,
+          "p50_us": 45.9,
+          "errors": 0
+        },
+        "warm": {
+          "qps": 22212.0,
+          "mean_us": 44.9,
+          "p50_us": 44.8,
+          "errors": 0
+        },
+        "cabin": {
+          "qps": 22485.1,
+          "mean_us": 44.4,
+          "p50_us": 44.3,
+          "errors": 0
+        },
+        "dropped": {
+          "qps": 22478.1,
+          "mean_us": 44.4,
+          "p50_us": 44.1,
+          "errors": 0
+        }
+      }
+    ],
+    "write_sweep": [
+      {
+        "batch": 1,
+        "ops": 2000,
+        "qps": 5950.8,
+        "errors": 0
+      },
+      {
+        "batch": 10,
+        "ops": 2000,
+        "qps": 30492.3,
+        "errors": 0
+      },
+      {
+        "batch": 100,
+        "ops": 2000,
+        "qps": 47386.5,
+        "errors": 0
+      },
+      {
+        "batch": 1000,
+        "ops": 2000,
+        "qps": 53744.2,
+        "errors": 0
+      }
+    ],
+    "concurrency_sweep": [
+      {
+        "connections": 1,
+        "ops": 200,
+        "qps": 24748.7,
+        "errors": 0
+      },
+      {
+        "connections": 2,
+        "ops": 200,
+        "qps": 39825.2,
+        "errors": 0
+      },
+      {
+        "connections": 4,
+        "ops": 200,
+        "qps": 44754.3,
+        "errors": 0
+      },
+      {
+        "connections": 8,
+        "ops": 200,
+        "qps": 36077.2,
+        "errors": 0
+      }
+    ]
+  },
+  "phases": [
+    {
+      "phase": "load-exchanges",
+      "detail": "venues",
+      "ops": 1,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000635,
+      "qps": 1576.0,
+      "mean_us": 634.5,
+      "p0_us": 634.5,
+      "p25_us": 634.5,
+      "p50_us": 634.5,
+      "p95_us": 634.5,
+      "p99_us": 634.5,
+      "max_us": 634.5
+    },
+    {
+      "phase": "load-symbols",
+      "detail": "instruments",
+      "ops": 1,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000309,
+      "qps": 3239.3,
+      "mean_us": 308.7,
+      "p0_us": 308.7,
+      "p25_us": 308.7,
+      "p50_us": 308.7,
+      "p95_us": 308.7,
+      "p99_us": 308.7,
+      "max_us": 308.7
+    },
+    {
+      "phase": "load-sessions",
+      "detail": "252 business days",
+      "ops": 252,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.008211,
+      "qps": 30690.7,
+      "mean_us": 32.6,
+      "p0_us": 27.7,
+      "p25_us": 28.3,
+      "p50_us": 28.8,
+      "p95_us": 53.2,
+      "p99_us": 63.3,
+      "max_us": 119.9
+    },
+    {
+      "phase": "load-bars",
+      "detail": "OHLCV, one row per (symbol, session)",
+      "ops": 252,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005402,
+      "qps": 46651.4,
+      "mean_us": 21.4,
+      "p0_us": 17.9,
+      "p25_us": 20.3,
+      "p50_us": 20.5,
+      "p95_us": 21.9,
+      "p99_us": 38.6,
+      "max_us": 221.4
+    },
+    {
+      "phase": "load-stats",
+      "detail": "derived features, one row per bar",
+      "ops": 252,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005,
+      "qps": 50396.8,
+      "mean_us": 19.8,
+      "p0_us": 16.8,
+      "p25_us": 18.3,
+      "p50_us": 20.3,
+      "p95_us": 21.4,
+      "p99_us": 31.3,
+      "max_us": 50.7
+    },
+    {
+      "phase": "load-models",
+      "detail": "8 strategies",
+      "ops": 8,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.001276,
+      "qps": 6268.3,
+      "mean_us": 159.5,
+      "p0_us": 156.6,
+      "p25_us": 156.7,
+      "p50_us": 158.1,
+      "p95_us": 167.5,
+      "p99_us": 167.5,
+      "max_us": 167.5
+    },
+    {
+      "phase": "backtest-read",
+      "detail": "3-relation join, one cross-section per rebalance",
+      "ops": 12,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000946,
+      "qps": 12679.1,
+      "mean_us": 78.9,
+      "p0_us": 54.3,
+      "p25_us": 55.6,
+      "p50_us": 57.2,
+      "p95_us": 282.6,
+      "p99_us": 282.6,
+      "max_us": 282.6
+    },
+    {
+      "phase": "result-insert",
+      "detail": "8 rows per rebalance, one per model",
+      "ops": 88,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.012327,
+      "qps": 7138.8,
+      "mean_us": 140.1,
+      "p0_us": 131.2,
+      "p25_us": 133.4,
+      "p50_us": 134.5,
+      "p95_us": 159.6,
+      "p99_us": 161.6,
+      "max_us": 161.6
+    },
+    {
+      "phase": "backtest-replay",
+      "detail": "the same cross-sections re-read, x1",
+      "ops": 12,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000558,
+      "qps": 21506.5,
+      "mean_us": 46.5,
+      "p0_us": 43.8,
+      "p25_us": 44.8,
+      "p50_us": 45.1,
+      "p95_us": 56.0,
+      "p99_us": 56.0,
+      "max_us": 56.0
+    },
+    {
+      "phase": "compare-all",
+      "detail": "every result row, joined to its model",
+      "ops": 1,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000268,
+      "qps": 3730.4,
+      "mean_us": 268.1,
+      "p0_us": 268.1,
+      "p25_us": 268.1,
+      "p50_us": 268.1,
+      "p95_us": 268.1,
+      "p99_us": 268.1,
+      "max_us": 268.1
+    },
+    {
+      "phase": "compare-one",
+      "detail": "one model's history joined to its model, x4",
+      "ops": 32,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.0015,
+      "qps": 21328.9,
+      "mean_us": 46.9,
+      "p0_us": 44.4,
+      "p25_us": 45.2,
+      "p50_us": 45.4,
+      "p95_us": 53.0,
+      "p99_us": 74.2,
+      "max_us": 74.2
+    },
+    {
+      "phase": "read-bar-lookup",
+      "detail": "pk equality on daily_bars",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.004801,
+      "qps": 41658.7,
+      "mean_us": 24.0,
+      "p0_us": 22.5,
+      "p25_us": 23.7,
+      "p50_us": 23.9,
+      "p95_us": 24.6,
+      "p99_us": 25.9,
+      "max_us": 46.1
+    },
+    {
+      "phase": "read-bar-range",
+      "detail": "pk BETWEEN on daily_bars, 200 wide",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.122658,
+      "qps": 1630.5,
+      "mean_us": 613.3,
+      "p0_us": 518.2,
+      "p25_us": 532.2,
+      "p50_us": 634.7,
+      "p95_us": 727.1,
+      "p99_us": 789.5,
+      "max_us": 834.3
+    },
+    {
+      "phase": "read-symbol-history",
+      "detail": "FilterScan, one symbol's whole run",
+      "ops": 10,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.00931,
+      "qps": 1074.1,
+      "mean_us": 931.0,
+      "p0_us": 822.1,
+      "p25_us": 864.2,
+      "p50_us": 883.9,
+      "p95_us": 1050.1,
+      "p99_us": 1050.1,
+      "max_us": 1050.1
+    },
+    {
+      "phase": "read-day-slice",
+      "detail": "FilterScan, one session's features",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.006063,
+      "qps": 32989.4,
+      "mean_us": 30.3,
+      "p0_us": 25.9,
+      "p25_us": 26.4,
+      "p50_us": 27.1,
+      "p95_us": 28.8,
+      "p99_us": 197.9,
+      "max_us": 254.8
+    },
+    {
+      "phase": "read-join-point",
+      "detail": "bar -> symbol -> exchange, by pk",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005173,
+      "qps": 38662.5,
+      "mean_us": 25.9,
+      "p0_us": 24.6,
+      "p25_us": 25.1,
+      "p50_us": 25.9,
+      "p95_us": 26.7,
+      "p99_us": 27.8,
+      "max_us": 52.4
+    },
+    {
+      "phase": "read-join-exists",
+      "detail": "semi-join: symbols with a bar",
+      "ops": 10,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.00026,
+      "qps": 38502.6,
+      "mean_us": 26.0,
+      "p0_us": 22.5,
+      "p25_us": 22.8,
+      "p50_us": 23.8,
+      "p95_us": 44.5,
+      "p99_us": 44.5,
+      "max_us": 44.5
+    },
+    {
+      "phase": "agg-global",
+      "detail": "whole-relation fold, no GROUP BY",
+      "ops": 10,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000351,
+      "qps": 28507.2,
+      "mean_us": 35.1,
+      "p0_us": 32.3,
+      "p25_us": 32.5,
+      "p50_us": 33.0,
+      "p95_us": 51.3,
+      "p99_us": 51.3,
+      "max_us": 51.3
+    },
+    {
+      "phase": "agg-by-symbol",
+      "detail": "GROUP BY symbol_id - 8 groups",
+      "ops": 10,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.000386,
+      "qps": 25938.9,
+      "mean_us": 38.6,
+      "p0_us": 36.1,
+      "p25_us": 37.1,
+      "p50_us": 37.5,
+      "p95_us": 49.0,
+      "p99_us": 49.0,
+      "max_us": 49.0
+    },
+    {
+      "phase": "agg-by-session",
+      "detail": "GROUP BY session_no - one per day",
+      "ops": 10,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.003136,
+      "qps": 3188.8,
+      "mean_us": 313.6,
+      "p0_us": 305.4,
+      "p25_us": 307.1,
+      "p50_us": 311.6,
+      "p95_us": 339.1,
+      "p99_us": 339.1,
+      "max_us": 339.1
+    },
+    {
+      "phase": "agg-day-slice",
+      "detail": "one session's cross section, grouped",
+      "ops": 200,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.005044,
+      "qps": 39647.2,
+      "mean_us": 25.2,
+      "p0_us": 23.9,
+      "p25_us": 24.3,
+      "p50_us": 24.6,
+      "p95_us": 26.5,
+      "p99_us": 42.1,
+      "max_us": 48.0
+    },
+    {
+      "phase": "agg-distinct",
+      "detail": "COUNT(DISTINCT symbol_id) over the run",
+      "ops": 10,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.00034,
+      "qps": 29395.7,
+      "mean_us": 34.0,
+      "p0_us": 31.5,
+      "p25_us": 32.8,
+      "p50_us": 32.9,
+      "p95_us": 44.1,
+      "p99_us": 44.1,
+      "max_us": 44.1
+    },
+    {
+      "phase": "sync",
+      "detail": "SYNC after the run",
+      "ops": 1,
+      "errors": 0,
+      "first_error": null,
+      "elapsed_s": 0.001313,
+      "qps": 761.8,
+      "mean_us": 1312.6,
+      "p0_us": 1312.6,
+      "p25_us": 1312.6,
+      "p50_us": 1312.6,
+      "p95_us": 1312.6,
+      "p99_us": 1312.6,
+      "max_us": 1312.6
+    }
+  ]
+}

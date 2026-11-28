@@ -1,0 +1,11 @@
+--- ../../close/src/src/server/command_dispatcher.cpp	2026-11-28 00:08:26.000000000 -0500
++++ src/server/command_dispatcher.cpp	2026-11-28 00:23:04.616180438 -0500
+@@ -7763,7 +7763,7 @@
+         // folds is a few small ones' whatever the peak of folds parked at
+         // once and the largest one ever run (EH-Sy's review).
+         constexpr std::size_t kPooledAggregators = 8;
+-        constexpr std::size_t kPooledGroupsAtMost = 4096;
++        constexpr std::size_t kPooledGroupsAtMost = SIZE_MAX;  // variant: no size bound
+         if (aggregator_ != nullptr && d_.aggregator_pool_.size() < kPooledAggregators &&
+             aggregator_->group_count() <= kPooledGroupsAtMost) {
+             d_.aggregator_pool_.push_back(std::move(aggregator_));

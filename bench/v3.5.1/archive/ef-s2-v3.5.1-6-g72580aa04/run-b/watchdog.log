@@ -1,0 +1,11 @@
+2026-11-28T02:23:35Z master=none alive=n status_age=0s 
+2026-11-28T02:23:35Z ORPHAN: launching
+2026-11-28T02:24:35Z master=1961179 alive=y status_age=2s 2026-11-28T02:24:33Z r1-pg-s3-n10000-none
+2026-11-28T02:25:35Z master=1961179 alive=y status_age=2s 2026-11-28T02:25:33Z r2-s3-n1000-none
+2026-11-28T02:26:35Z master=1961179 alive=y status_age=5s 2026-11-28T02:26:30Z r3-pg-s2-b1
+2026-11-28T02:27:35Z master=1961179 alive=y status_age=1s 2026-11-28T02:27:34Z r2-s4
+2026-11-28T02:28:35Z master=1961179 alive=y status_age=61s 2026-11-28T02:27:34Z r2-s4
+2026-11-28T02:29:35Z master=1961179 alive=y status_age=121s 2026-11-28T02:27:34Z r2-s4
+2026-11-28T02:30:35Z master=1961179 alive=y status_age=181s 2026-11-28T02:27:34Z r2-s4
+2026-11-28T02:31:35Z master=1961179 alive=y status_age=241s 2026-11-28T02:27:34Z r2-s4
+2026-11-28T02:32:35Z end: /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s2b/done/ALL

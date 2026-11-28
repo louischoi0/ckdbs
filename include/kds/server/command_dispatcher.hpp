@@ -2568,6 +2568,15 @@ public:
     }
 
 private:
+    // The fold's output description (wire types and fields), sent to the
+    // sink before the walk; and its rows, emitted from `aggregator` after it.
+    // Shared by the fold that runs in one turn and the one the sliced walk
+    // runs, so the two describe and emit alike.
+    Status DescribeAggregate(ResultSink& sink, const exec::StepChain& chain,
+                             std::vector<std::uint32_t>& wire_types);
+    Status EmitAggregate(ResultSink& sink, exec::Aggregator& aggregator,
+                         std::span<const std::uint32_t> wire_types, std::uint64_t& rows);
+
     // The aggregated SELECT path (docs/spec/aggregate.md AG1): the same
     // execution, with an `Aggregator` in the sink and the fold's output
     // emitted after it. `header` is the column-heading line the caller
@@ -3342,6 +3351,12 @@ private:
         exec::ExecStats stats;
     };
     std::vector<std::unique_ptr<SelectScratch>> select_scratch_pool_;
+    // **A fold that may give its core back owns its aggregator** (EH-R7):
+    // `aggregator_` above serves the folds that run to their end in one
+    // turn, and a fold handed to the sliced walk takes one of these, held by
+    // its `SelectRun` and returned when it ends - reused, so a fold pays the
+    // buffers' allocation once per pooled aggregator, not per statement.
+    std::vector<std::unique_ptr<exec::Aggregator>> aggregator_pool_;
     friend class SelectRun;
     friend class SuspensionHold;
     friend class BuildRun;

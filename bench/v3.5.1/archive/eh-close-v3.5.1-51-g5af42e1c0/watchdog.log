@@ -1,0 +1,7 @@
+2026-11-28T05:10:29Z end: /home/ukjin/bench-runs/eh-close-v3.5.1-51-g5af42e1c0/done:
+2026-11-28T05:13:54Z master=2419857 alive=y status_age=5s 2026-11-28T05:13:49Z c2-new-1
+2026-11-28T05:14:54Z master=2419857 alive=y status_age=65s 2026-11-28T05:13:49Z c2-new-1
+2026-11-28T05:15:54Z master=2419857 alive=y status_age=29s 2026-11-28T05:15:25Z c2-new-2
+2026-11-28T05:16:55Z master=2419857 alive=y status_age=90s 2026-11-28T05:15:25Z c2-new-2
+2026-11-28T05:17:55Z master=2419857 alive=y status_age=54s 2026-11-28T05:17:01Z c2-old-2
+2026-11-28T05:18:55Z end: /home/ukjin/bench-runs/eh-close-v3.5.1-51-g5af42e1c0/done/ALL

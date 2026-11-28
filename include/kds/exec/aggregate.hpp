@@ -7,12 +7,12 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
+#include "kds/exec/bytes_fold.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/ast.hpp"
@@ -72,7 +72,7 @@ struct AggregateLimits {
     std::size_t max_distinct = 1048576;
 };
 
-class Aggregator {
+class Aggregator final : public BytesFold {
 public:
     // `spec` and `labels` are **borrowed** and must outlive the aggregator.
     // Both live on the `StepChain` the statement is executing, which the
@@ -113,6 +113,21 @@ public:
     // sink, once per row the chain emits.
     Status Accumulate(const ChainFrame& frame);
 
+    // **The same fold from a row's bytes** (`bytes_fold.hpp`, EH-S1), for the
+    // global form over one relation: no GROUP BY, no DISTINCT, and every
+    // argument a column of that relation whose value lies whole in the row -
+    // which is every type but `varchar`, whose value may be a spill and
+    // would need a fetch the leaf's hold forbids. `PrepareBytesFold` answers
+    // whether this statement is that; `AccumulateBytes` decodes the cells
+    // the items read with the row decoder the frame's path uses
+    // (`DecodeColumnsInto`) and folds each through `FoldValue`, the one body
+    // both paths share, so the two cannot answer differently. A row may come
+    // by either path within one statement: the first row, and any whose
+    // visible version is in the undo log, come through `Accumulate`.
+    bool PrepareBytesFold(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                          std::uint16_t rel_slot) override;
+    Status AccumulateBytes(std::span<const std::byte> payload) override;
+
     // Emits the output rows in **first-seen order** - the order the chain's
     // deterministic row stream founded each group (AG6). Hash-iteration
     // order would vary by seed and growth history, which the
@@ -137,11 +152,11 @@ public:
     std::size_t group_count() const noexcept { return groups_.size(); }
 
 private:
-    // Heterogeneous lookup, which is the whole reason the index is keyed by
+    // Heterogeneous lookup for the DISTINCT sets, which are keyed by
     // `std::string` and probed by `std::string_view`: without
     // `is_transparent` every probe would materialise a string, and the
     // per-row allocation this class exists to avoid would be back. The
-    // DISTINCT sets use it for the same reason.
+    // group table below has its own hash (`HashKey`).
     struct KeyHash {
         using is_transparent = void;
         std::size_t operator()(std::string_view v) const noexcept {
@@ -230,6 +245,9 @@ private:
 
     // Folds one row into one group's item states.
     Status FoldInto(Group& group, const ChainFrame& frame);
+    // One non-`*` aggregate item's fold of one value: the NULL test, DISTINCT
+    // and the function's arm. The whole of what a value does to a group.
+    Status FoldValue(Group& group, std::size_t i, const parser::AstValue& value);
 
     // The label an error message names an item by.
     std::string LabelOf(std::size_t item_index) const;
@@ -238,10 +256,34 @@ private:
     std::span<const std::string> labels_;
     AggregateLimits limits_;
 
-    // First-seen order, by construction. `index_` maps an encoded key to a
-    // position in here.
+    // First-seen order, by construction. The group table below finds a
+    // position in here by its encoded key.
     std::vector<Group> groups_;
-    std::unordered_map<std::string, std::size_t, KeyHash, std::equal_to<>> index_;
+    // **The group table** (EH-S2): a group's encoded key, found by an
+    // open-addressing table over one arena of key bytes. Founding a group
+    // appends its key to the arena and its index to a slot: no node, no
+    // string of its own, so the table allocates only when it grows. A slot
+    // holds the group's index plus one (0: empty) beside the key's hash,
+    // and a probe compares the hash before the bytes. **The table decides
+    // which group a row folds into and nothing else**: the groups live in
+    // `groups_` in the order they were founded, which is the emit order
+    // (AG6), and no iteration ever walks the table.
+    struct GroupSlot {
+        std::uint64_t hash = 0;
+        std::size_t group_plus_one = 0;  // 0: empty
+    };
+    struct KeySpan {
+        std::size_t at = 0;
+        std::size_t length = 0;
+    };
+    std::vector<GroupSlot> table_;     // a power of two, at most half full
+    std::vector<KeySpan> key_spans_;   // one a group, in `groups_` order
+    std::string key_arena_;
+    // The group `key` names, or `groups_.size()` if none does.
+    std::size_t FindGroup(std::string_view key, std::uint64_t hash) const noexcept;
+    // Files `key` under the group just appended to `groups_`.
+    void FileGroup(std::string_view key, std::uint64_t hash);
+    static std::uint64_t HashKey(std::string_view key) noexcept;
 
     // Reused across every row. `clear()` keeps the capacity, so the encode
     // allocates on the first row of a statement and never again.
@@ -255,6 +297,15 @@ private:
     // be one bug away; both are reused and neither allocates after the
     // first row.
     std::string value_scratch_;
+
+    // `PrepareBytesFold`'s answer for this statement: the relation, the
+    // columns the items read (a decode mask) and the slots they are decoded
+    // into, indexed by column position as the row decoder writes them. Null
+    // `bytes_schema_` means the statement folds through the frame alone.
+    const catalog::Schema* bytes_schema_ = nullptr;
+    const catalog::RowLayout* bytes_layout_ = nullptr;
+    std::uint64_t bytes_columns_ = 0;
+    std::vector<parser::AstValue> bytes_slots_;
 
     // Entries across every DISTINCT set in this statement, against
     // `AggregateLimits::max_distinct`. Summed rather than per set, because

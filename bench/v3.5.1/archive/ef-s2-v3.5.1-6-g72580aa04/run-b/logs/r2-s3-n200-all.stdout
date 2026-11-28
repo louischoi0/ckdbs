@@ -1,0 +1,61 @@
+
+ckdbs benchmark - 34 columns, 200 rows resident, 1 connection
+server 127.0.0.1:15791  table users_r2_s3_n200_all, books_r2_s3_n200_all, reservations_r2_s3_n200_all, loans_r2_s3_n200_all
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                          4         0     408.4    182.1    182.1    282.4    746.1    746.1     746.1     0
+load                       380         0     147.9    130.3    132.9    134.2    174.1    384.2     544.6     0
+create-index                 8         0     339.9    208.9    209.7    283.2    534.4    534.4     534.4     0
+pk-user                    200         0      24.5     20.0     20.7     21.4     23.2     25.8     624.3     0
+loans-by-user              200         0      34.6     19.8     25.9     28.9     48.7    261.5     279.4     0
+loans-by-book              200         0      26.6     20.0     24.5     26.8     31.1     32.4      35.9     0
+resv-by-user               200         0      22.8     17.7     21.6     22.7     25.2     26.1      50.8     0
+books-by-author            200         0      25.0     20.4     22.7     24.4     29.0     32.1      39.5     0
+books-by-genre             200         0      23.0     20.2     21.6     22.7     25.7     26.4      33.4     0
+loans-by-daterange         200         0      30.9     24.7     28.5     30.4     36.0     38.9      51.6     0
+overdue                    200         0      27.5     20.0     26.1     27.9     31.9     33.2      38.8     0
+join-loan-user             200         0      31.2     24.3     29.1     31.0     35.4     37.6      65.7     0
+join-no-literal            200         0     100.2     96.8     98.7     99.6    103.0    112.8     148.9     0
+exists-correlated          200         0      52.7     50.4     51.8     52.7     54.0     56.3      78.0     0
+count-by-user              200         0      21.4     19.2     20.7     21.3     23.0     23.5      37.7     0
+
+  ddl: CREATE TABLE x4
+  load: INSERT x all four relations
+  create-index: --index-mode all
+  pk-user: WHERE id = ? - Lookup, the control
+  loans-by-user: WHERE user_id = ? - ~5 matches
+  loans-by-book: WHERE book_id = ? - ~5 matches
+  resv-by-user: WHERE user_id = ? on reservations
+  books-by-author: WHERE author_id = ? - middle selectivity
+  books-by-genre: WHERE genre = ? - 1/16 of the relation
+  loans-by-daterange: WHERE loaned_day BETWEEN ? AND ? - 30 days
+  overdue: WHERE status = ? AND due_day BETWEEN ? AND ?
+  join-loan-user: loans JOIN users ON user_id = id
+  join-no-literal: JOIN ON user_id, u.id BETWEEN 1 AND 16 - no literal to propagate
+  exists-correlated: EXISTS(loans.user_id = users.id), 20 outer rows - under --cabin the mean mixes the observation charge
+  count-by-user: SELECT COUNT(*) ... WHERE user_id = ?
+
+  index mode all (after load), cabin off, server indexes on
+  sizes: users=40, books=40, reservations=100, loans=200
+  ANALYZE (the access kind each shape compiled to):
+      loans-by-user: IndexProbe
+      loans-by-book: IndexProbe
+      resv-by-user: IndexProbe
+      books-by-author: IndexProbe
+      books-by-genre: IndexProbe
+      loans-by-daterange: Scan
+      overdue: IndexRange
+      join-no-literal: Range, IndexProbe
+      exists-correlated: Range, IndexProbe
+  SHOW INDEXES:
+      index_oid,name,rel_oid,namespace,rel_name,keys,covering,root_page,key_width,entry_width,height,entries,unique,probes,ranges,entries_scanned,rows_resolved,last_used,leaf_divisions
+      1,loans_user_r2_s3_n200_all,4029,public,loans_r2_s3_n200_all,user_id,NULL,148,9,17,1,200,0,7898,0,39139,23181,2026-11-28 02:25:27.101984,0
+      2,loans_book_r2_s3_n200_all,4029,public,loans_r2_s3_n200_all,book_id,NULL,149,9,17,1,200,0,201,0,1045,1045,2026-11-28 02:25:27.099977,0
+      3,resv_user_r2_s3_n200_all,4021,public,reservations_r2_s3_n200_all,user_id,NULL,150,9,17,1,100,0,201,0,471,471,2026-11-28 02:25:27.100026,0
+      4,books_author_r2_s3_n200_all,4010,public,books_r2_s3_n200_all,author_id,NULL,151,9,17,1,40,0,201,0,805,805,2026-11-28 02:25:27.100065,0
+      5,books_genre_r2_s3_n200_all,4010,public,books_r2_s3_n200_all,genre,NULL,152,5,13,1,40,0,201,0,521,521,2026-11-28 02:25:27.100103,0
+      6,loans_status_due_r2_s3_n200_all,4029,public,loans_r2_s3_n200_all,status,due_day,NULL,153,10,18,1,200,0,0,201,958,958,2026-11-28 02:25:27.100186,0
+      7,books_branch_genre_r2_s3_n200_all,4010,public,books_r2_s3_n200_all,branch_id,genre,NULL,154,10,18,1,40,0,0,0,0,0,NULL,0
+      8,loans_user_cov_r2_s3_n200_all,4029,public,loans_r2_s3_n200_all,user_id,book_id,due_day,status,155,9,33,1,200,0,0,0,0,0,NULL,0
+  wrote /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s2b/json/r2-s3-n200-all.json

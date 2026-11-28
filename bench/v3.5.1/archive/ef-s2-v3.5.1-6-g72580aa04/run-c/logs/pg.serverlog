@@ -1,0 +1,81 @@
+********************************************************************************
+WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
+         anyone with access to the Postgres port to access your database without
+         a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
+         documentation about "trust":
+         https://www.postgresql.org/docs/current/auth-trust.html
+         In Docker's default configuration, this is effectively any other
+         container on the same system.
+
+         It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
+         it with "-e POSTGRES_PASSWORD=password" instead to set a password in
+         "docker run".
+********************************************************************************
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "C".
+The default text search configuration will be set to "english".
+
+Data page checksums are enabled.
+
+fixing permissions on existing directory /var/lib/postgresql/18/docker ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default "max_connections" ... 100
+selecting default "shared_buffers" ... 128MB
+selecting default time zone ... Etc/UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+
+
+Success. You can now start the database server using:
+
+    pg_ctl -D /var/lib/postgresql/18/docker -l logfile start
+
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+waiting for server to start....2026-11-28 02:33:26.210 UTC [50] LOG:  starting PostgreSQL 18.7 (Debian 18.7-1.pgdg13+5) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-28 02:33:26.211 UTC [50] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-11-28 02:33:26.214 UTC [56] LOG:  database system was shut down at 2026-11-28 02:33:26 UTC
+2026-11-28 02:33:26.215 UTC [50] LOG:  database system is ready to accept connections
+ done
+server started
+CREATE DATABASE
+
+
+/usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+
+waiting for server to shut down....2026-11-28 02:33:26.365 UTC [50] LOG:  received fast shutdown request
+2026-11-28 02:33:26.367 UTC [50] LOG:  aborting any active transactions
+2026-11-28 02:33:26.368 UTC [50] LOG:  background worker "logical replication launcher" (PID 59) exited with exit code 1
+2026-11-28 02:33:26.368 UTC [54] LOG:  shutting down
+2026-11-28 02:33:26.368 UTC [54] LOG:  checkpoint starting: shutdown immediate
+2026-11-28 02:33:26.394 UTC [54] LOG:  checkpoint complete: wrote 952 buffers (5.8%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.020 s, total=0.027 s; sync files=303, longest=0.002 s, average=0.001 s; distance=4427 kB, estimate=4427 kB; lsn=0/1BC6D18, redo lsn=0/1BC6D18
+2026-11-28 02:33:26.402 UTC [50] LOG:  database system is shut down
+ done
+server stopped
+
+PostgreSQL init process complete; ready for start up.
+
+2026-11-28 02:33:26.491 UTC [1] LOG:  starting PostgreSQL 18.7 (Debian 18.7-1.pgdg13+5) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-28 02:33:26.491 UTC [1] LOG:  listening on IPv4 address "127.0.0.1", port 15434
+2026-11-28 02:33:26.493 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.15434"
+2026-11-28 02:33:26.496 UTC [72] LOG:  database system was shut down at 2026-11-28 02:33:26 UTC
+2026-11-28 02:33:26.498 UTC [1] LOG:  database system is ready to accept connections
+2026-11-28 02:33:27.001 UTC [77] FATAL:  role "root" does not exist
+2026-11-28 02:33:27.117 UTC [79] FATAL:  role "root" does not exist
+2026-11-28 02:34:13.072 UTC [84] FATAL:  role "root" does not exist
+2026-11-28 02:34:38.496 UTC [104] FATAL:  role "root" does not exist
+2026-11-28 02:34:47.463 UTC [122] FATAL:  role "root" does not exist
+2026-11-28 02:34:58.824 UTC [141] FATAL:  role "root" does not exist
+2026-11-28 02:35:05.603 UTC [159] FATAL:  role "root" does not exist
+2026-11-28 02:36:07.308 UTC [180] FATAL:  role "root" does not exist
+2026-11-28 02:36:16.202 UTC [198] FATAL:  role "root" does not exist
+2026-11-28 02:36:25.354 UTC [217] FATAL:  role "root" does not exist
+2026-11-28 02:37:21.052 UTC [238] FATAL:  role "root" does not exist
+2026-11-28 02:37:46.375 UTC [257] FATAL:  role "root" does not exist
+2026-11-28 02:37:56.565 UTC [276] FATAL:  role "root" does not exist
+2026-11-28 02:38:07.875 UTC [294] FATAL:  role "root" does not exist

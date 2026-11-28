@@ -111,7 +111,66 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   unreferenced value the mount sweep collects, not a slot redo never built.
   Owned by `docs/spec/eviction.md` (§3.3).
 
+## The native fold (EH)
+
+- **A grouped fold still takes every row through the frame**: at 7,560
+  groups it is 64.4 ns of server CPU a row against PostgreSQL 18.7's
+  59.7 ns (1.08x), the key encoded from decoded values and probed
+  (`bench/v3.5.1/results-eh-close-v3.5.1-51-g5af42e1c0.md`, verified on
+  `eh-native-fold-per-row` at `8db2923d4`). A fold behind a predicate, over
+  a `varchar`, with `DISTINCT`, over a join or over a step that decodes
+  every column takes the frame too (`aggregate.md` §1), and `ANALYZE` of a
+  bytes-eligible fold runs the frame's path.
+- **The group table is reallocated every grouped statement** (`table_`
+  grows from empty after `Reset`); keeping it needs a fill at `Reset`, a
+  measured trade not taken.
+- **A core keeps up to eight pooled aggregators' capacity**, each the size
+  of the largest fold it ran; before EH it kept one. Owner:
+  `docs/spec/aggregate.md`.
+
 ## Testing
+
+- **A scenario driver's latency is the engine's plus a Python client's,
+  and three parts of the client's are still not equal to the PostgreSQL
+  twin's** (EF, verified on `ef-equal-client-scenario-drivers` at
+  `ed8564eb4`; `bench/README.md`, "A ratio against another engine names
+  both clients").
+  - **A decoded read charges KDS about 2.9 µs more client CPU a
+    statement** (11.5 µs against 8.6 µs on a lookup,
+    `bench/v3.5.1/results-ef-s1-drivers-v3.5.1-6-g72580aa04.md`, pass
+    D2), not attributed. It is the size of the two short reads the
+    matched run reads behind PostgreSQL (`cargo-lookup` at `strict`,
+    0.97x; `books-by-genre` over 200 unindexed loans, 0.96x).
+  - **A returned row costs the KDS client a typed render** that
+    PostgreSQL's text rows do not ask of its client: 1.4 µs to 1.7 µs
+    against 0.7 µs to 0.8 µs a row of 8 columns. A read of thousands of
+    rows through a decoding or rendering pair reads behind for it
+    (`read-symbol-history` 0.88x) where two counting clients read the
+    shape 1.50x.
+  - **The twins are not the same workload in three places, by their own
+    design**: scenario 2's twin rejects fewer bookings from the same seed
+    (340 against 402 of 3,402), so its phases run fewer operations;
+    its `manifest-scan` reads an index where KDS walks; and scenario 4's
+    twin has no index on `symbol` and one unpaced day.
+  - `ServerConnection.send_command` still builds four frames and decodes
+    the row description on every statement (16.6 µs a statement on the
+    EF host). It is the path of verification and of every A/B between
+    two KDS binaries, where both arms pay it; rebuilding it over `fetch`
+    would move every series under `bench/` at once (EF-Q8 (c), not
+    taken).
+
+  Owner: `bench/README.md`, `tools/ckdbs_cli.py`.
+
+- **An indexed `books-by-genre` is slower than the unindexed one at
+  10,000 loans** (found by EF-S2's review at `6e356bdfa`, not
+  attributed): 164.6 µs indexed against 148.5 µs unindexed on KDS, and
+  0.88x of PostgreSQL's indexed rate, in
+  `bench/v3.5.1/results-ef-s2-matched-v3.5.1-6-g72580aa04.md`. The
+  shape returns about a sixteenth of `books`; whether the index should
+  have been declined for it is the access ladder's question. To check:
+  `ANALYZE` of the statement in both modes, and the planner's priced
+  arms. Owner: `docs/spec/index.md`, `docs/spec/plan-stats.md`.
+
 
 - **Two rig cells fail intermittently on a 24-CPU host, at `60dc593af` as
   at `6e43ec8c0`** (found during DT, 2026-11-26; neither is DT's).
@@ -521,9 +580,60 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   proof unwritten) was recorded unable to meet BQ's bar and not built
   (BQ-Q6 (a), `instructions/v3.0.0/workorder-bq-wal-segment-roll.md` §7).
   The breadth stays and so does the comment forbidding the narrowing.
+  **Priced a second time at EG-S0, 2026-11-28, on `eg-one-client-durable-write`
+  at `d50d304f8`, against a commit and not a roll**: one client's
+  autocommit insert is 145.8 µs with one live segment and 210.6 µs with
+  two (`strict`; 146.8 µs and 217.1 µs at `group`), where PostgreSQL 18.7
+  is 143.8 µs and 145.1 µs - 0.67x to 0.69x of its rate, measured at
+  once after the roll; the old segment was removed 9.7 s later, at the
+  default 5 s cadence, and the insert was then 158.6 µs and 156.1 µs, so
+  the second segment's own price at one relation size is 52.0 µs and
+  61.0 µs (`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`).
+  Scenario 1's `result-insert` at 60,480 bars (215.2 µs, a run that
+  rolled once) matches the two-segment figure; its live count during
+  that phase was not read. BQ's bar was the roll's hold, and DY-Q2 is
+  unmarked with CLA's proposal revised to (b), left, at DY-S0; neither
+  had this price. EG did not narrow the sync (EG-R2).
   Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
+
+- **Two inline syncs are still booked to no wait event** (found by the
+  review of EG's close at `01c6c741c`, read in code, not measured): a
+  DDL with no transaction of its own syncs on the statement's stack
+  through `AwaitDdlDurability` and `SyncAll`
+  (`src/server/command_dispatcher.cpp`), at `strict` and at `group`; and
+  a `group` commit on a dispatcher that cannot park drains and waits
+  inline rather than parking. EG-S1 booked the `strict` arm of
+  `WalManager::Commit` alone, so these two read as their statement's CPU
+  time. Also from that review: `docs/spec/wal.md` §2 and §16 still say
+  every WAL write goes through `IoBackend`, where the log's seam is
+  `LogDevice` (§6 was corrected), and §6's heading still reads
+  `[PROPOSED]` over text that describes the code as built; and
+  `bench/v3.5.1/results-eg-close-v3.5.1-33-g01bd189f4.md` carries bare
+  numbers under unit-bearing headings, against `bench/README.md`'s rule.
+  Owner: `docs/spec/wait-events.md`, `docs/spec/wal.md`.
+
+- **On a one-core instance a `strict` commit syncs on its reactor, so
+  every other session waits out each commit's sync** (EG-S0, recorded on
+  `eg-one-client-durable-write` at `d50d304f8`, not built: EG-Q3 (a)).
+  Nothing defers the commit there - the instance's wake registry is built
+  above one core only, so at one core the WAL writer kicks no parked
+  committer (`src/server/expeditor.cpp`; the page reader's one-entry wake
+  table there is not given to it) and `DefersCommit`
+  (`src/server/command_dispatcher.cpp`) answers false - and
+  `WalManager::Commit` calls `Sync()` on the statement's stack; `group`
+  parks its committers and the reactor's post-task hook covers one
+  iteration's commits with one sync. Eight bookers on one core, one run
+  each: 3,325.2 bookings a second at `strict` with a commit p99 of
+  2,114.5 µs, against 4,191.9 and 413.1 µs at `group`
+  (`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`). Since
+  EG-S1 the inline sync is at least visible: booked under
+  `commit.wal_flush` in `sys.wait_stats` and `sys.session_waits`
+  (`docs/spec/wait-events.md`), though never in `sys.ash`. To build:
+  the deferred path at one core, which needs the writer to kick a
+  one-core reactor or a park the hook's drain resumes. Owner:
+  `docs/spec/wal.md` §6.
 - **A segment roll does I/O inside the instance's append latch, and at
   `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
   `WalStream::Append` rolls under the stream latch; `Roll` reaches

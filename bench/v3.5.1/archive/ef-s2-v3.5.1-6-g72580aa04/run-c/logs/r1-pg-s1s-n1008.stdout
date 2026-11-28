@@ -1,0 +1,144 @@
+loading: 1 years x 252 sessions x 4 symbols = 1,008 bars, 1,008 feature rows  (tables suffixed _r1_pg_s1s_n1008)  [200-row transactions]
+  sessions        252 rows
+  symbol 1/4: 252 bars
+  symbol 2/4: 252 bars
+  symbol 3/4: 252 bars
+  symbol 4/4: 252 bars
+  models            8 rows   (load took 0.1s)
+backtesting: 8 models over 12 rebalance periods (21 sessions apart)
+  11 periods scored in 0.0s
+QPS sweep:
+  sweeping bar-lookup...
+  sweeping bar-range...
+  sweeping day-slice...
+  sweeping symbol-history...
+  sweeping cross-join...
+  sweeping point-join...
+  sweeping model-join...
+write sweep:
+  batch     1:      5,808 rows/s
+  batch    10:     28,990 rows/s
+  batch   100:     47,391 rows/s
+  batch  1000:     49,040 rows/s
+concurrency sweep:
+    1 connection(s):      7,584 q/s
+    2 connection(s):     10,512 q/s
+    4 connection(s):     13,781 q/s
+    8 connection(s):     16,643 q/s
+
+postgresql benchmark - 49 columns, 2280 rows resident, btree-clustered, 1 connection
+server 127.0.0.1:15434  table 7 relations, suffix _r1_pg_s1s_n1008
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load-exchanges               2     4,084     244.8    173.6    173.6    173.6    316.1    316.1     316.1     0
+load-symbols                 4     5,512     181.4    155.9    155.9    166.9    232.7    232.7     232.7     0
+load-sessions              252    47,055      21.3     19.2     20.6     20.8     22.2     29.9      77.3     0
+load-bars                 1008    34,739      28.8     23.3     24.7     24.9     29.2    188.4     395.1     0
+load-stats                1008    35,792      27.9     24.4     25.7     25.9     27.5     67.7     314.0     0
+load-models                  8     6,554     152.6    138.0    140.0    140.0    221.5    221.5     221.5     0
+backtest-read               12     6,064     164.9    138.1    141.3    150.3    341.6    341.6     341.6     0
+result-insert               88     6,641     150.6    136.1    138.0    143.3    178.2    206.2     206.2     0
+backtest-replay             12     8,298     120.5    114.3    115.0    117.9    140.5    140.5     140.5     0
+compare-all                  1     3,775     264.9    264.9    264.9    264.9    264.9    264.9     264.9     0
+compare-one                 32    19,321      51.8     48.9     50.0     50.4     57.3     83.4      83.4     0
+read-bar-lookup            200    40,726      24.6     22.8     23.9     24.0     25.1     46.5      66.7     0
+read-bar-range             200     1,720     581.6    465.7    496.0    606.6    647.5    664.3     692.1     0
+read-symbol-history         10     1,225     816.5    700.4    814.6    829.6    866.3    866.3     866.3     0
+read-day-slice             200    16,966      58.9     48.7     50.5     50.8     63.2    248.0     291.2     0
+read-join-point            200    20,232      49.4     47.1     48.5     48.8     50.5     58.8     127.3     0
+read-join-exists            10    14,515      68.9     65.4     66.0     66.5     80.3     80.3      80.3     0
+agg-global                  10    15,043      66.5     57.0     57.6     57.9    136.6    136.6     136.6     0
+agg-by-symbol               10    11,508      86.9     84.6     84.7     85.1     99.0     99.0      99.0     0
+agg-by-session              10     2,273     440.0    379.2    393.5    395.5    554.4    554.4     554.4     0
+agg-day-slice              200    19,806      50.5     46.3     47.8     48.1     52.3     86.2     248.9     0
+agg-distinct                10    17,524      57.1     52.8     54.1     54.8     77.7     77.7      77.7     0
+
+  load-exchanges: venues
+  load-symbols: instruments
+  load-sessions: 252 business days
+  load-bars: OHLCV, one row per (symbol, session)
+  load-stats: derived features, one row per bar
+  load-models: 8 strategies
+  backtest-read: 3-relation join, one cross-section per rebalance
+  result-insert: 8 rows per rebalance, one per model
+  backtest-replay: the same cross-sections re-read, x1
+  compare-all: every result row, joined to its model
+  compare-one: one model's history joined to its model, x4
+  read-bar-lookup: pk equality on daily_bars
+  read-bar-range: pk BETWEEN on daily_bars, 200 wide
+  read-symbol-history: seqscan, one symbol's whole run
+  read-day-slice: seqscan, one session's features
+  read-join-point: bar -> symbol -> exchange, by pk
+  read-join-exists: semi-join: symbols with a bar
+  agg-global: whole-relation fold, no GROUP BY
+  agg-by-symbol: GROUP BY symbol_id - 8 groups
+  agg-by-session: GROUP BY session_no - one per day
+  agg-day-slice: one session's cross section, grouped
+  agg-distinct: COUNT(DISTINCT symbol_id) over the run
+
+  ingest: 1,008 bars + 1,008 feature rows, batched 200 per transaction
+  backtest-read is the same 3-relation join the ckdbs run issues, written identically and in the same order
+  daily_stats and model_results carry no index, matching the ckdbs run's HEAP relations - which is what the sweep's index column adds
+  no aggregates: the model comparison is reduced client-side, because the other engine's grammar has none
+  every row is decoded and formatted client-side, as the ckdbs client does, so neither side is handed a client-cost advantage
+
+QPS by read shape and case - 100 statements per cell, 8 distinct arguments in the warm cases
+shape                  cold       warm      index    dropped  warm/cold  index/warm   notes
+-------------------------------------------------------------------------------------------------------------------
+bar-lookup           40,974     41,685          -          -      1.02x           -   pk - already indexed by the primary key
+bar-range             1,718      1,733          -          -      1.01x           -   pk - already indexed by the primary key
+day-slice            15,398     19,696     26,982     19,324      1.28x       1.37x   daily_stats.session_no
+symbol-history        1,335      1,216      1,137      1,227      0.91x       0.93x   daily_stats.symbol_id
+cross-join            7,994      8,897     10,002      8,723      1.11x       1.12x   daily_stats.session_no
+point-join           20,354     20,705          -          -      1.02x           -   pk - already indexed by the primary key
+model-join           18,331     20,131     20,870     21,380      1.10x       1.04x   model_results.model_id
+
+  symbol-history: cold ran 4 of 100 - the shape has fewer distinct arguments than that, and repeating one would have made it a warm case
+  model-join: cold ran 8 of 100 - the shape has fewer distinct arguments than that, and repeating one would have made it a warm case
+
+  cold    every argument seen for the first time: nothing of it is in
+          shared_buffers or the OS page cache.
+  warm    the same few arguments cycled. warm/cold is what repetition
+          alone buys - here, almost entirely the buffer cache.
+  index   warm, with a btree index on the filter column, created at
+          runtime and ANALYZEd. It is `-` where the filter is the
+          primary key, which already has one - the same reason the
+          ckdbs side prints `-` there for a Cabin.
+  dropped warm again straight after DROP INDEX, which is what makes
+          the third column an isolated measurement of the index and
+          not of whatever else warmed up while it existed.
+
+INSERT QPS by transaction batch size
+rows/transaction          ops      rows/s   vs autocommit   err
+---------------------------------------------------------------
+1 (autocommit)          2,000       5,808           1.00x     0
+10                      2,000      28,990           4.99x     0
+100                     2,000      47,391           8.16x     0
+1,000                   2,000      49,040           8.44x     0
+
+  every row is one round trip in every case; what changes is how
+  many durability points they cost. A batch of one is a batch.
+
+QPS by connection count - the backtest's 3-relation join
+connections         ops         q/s   vs 1 conn   per conn   err
+----------------------------------------------------------------
+1                   200       7,584       1.00x      7,584     0
+2                   200      10,512       1.39x      5,256     0
+4                   200      13,781       1.82x      3,445     0
+8                   200      16,643       2.19x      2,080     0
+
+  PostgreSQL runs a backend process per connection, so a rising
+  aggregate here is genuine parallel execution and not only
+  round-trip overlap - which is the one line of this comparison
+  where the two engines' numbers mean structurally different
+  things. Read it against the ckdbs table's flat curve as an
+  architectural difference, not a defect in either measurement.
+
+models: 8 scored from the comparison join over 12.0 periods/year  (--show-models for the full table)
+  momentum     4 models, total 8,899 bp, best 3,389 bp, worst 1,316 bp
+  volatility   4 models, total 8,375 bp, best 3,233 bp, worst 511 bp
+
+verify: OK - all 8 models' P&L read back through the comparison join matches what was accumulated
+  wrote /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s2c/json/r1-pg-s1s-n1008.json
+  dropped the run's tables (--keep to leave them)

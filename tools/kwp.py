@@ -409,6 +409,10 @@ class Connection:
         self.capabilities = 0
         self.server_info = ""
         self._next_portal = 0
+        # `fetch`: row description bytes -> (renderers, header line, whether it
+        # is one diagnostic-line column), and the last statement's entry or None.
+        self._renderers = {}
+        self.last_shape = None
         try:
             if tls is not None:
                 # Direct TLS: the first byte on the wire is the ClientHello
@@ -689,6 +693,53 @@ class Connection:
                 error = self._error(payload)
             elif ftype == S_READY:
                 return tag, rows, payload_bytes, error
+            elif ftype not in (S_PARSE_OK, S_BIND_OK, S_NOTICE):
+                raise ConnectionError("unexpected server frame type %d" % ftype)
+
+    def fetch(self, sql):
+        """Runs one statement and returns `(rows, tag, error)`: each row a
+        list with one **rendered** string per value (None for NULL), sent as
+        `query` sends - PARSE and one constant tail.
+
+        The counterpart of `pg_wire.PgConnection.fetch` plus a decode, for a
+        driver that needs its values (EF-S1). Two things `execute` and
+        `render_value` do per statement are done here once per result shape:
+        a row description is decoded, and its renderers resolved, the first
+        time its bytes are seen and looked up by those bytes after. A
+        PostgreSQL client has no such step - its values arrive as text - so
+        paying it per statement charged KDS about 10 us of client CPU a
+        statement that says nothing about either server (EF-S1's passes D
+        and D2: 21.3 us against 11.5 us on a lookup). A
+        refusal is returned, not raised, as `query` returns it.
+        """
+        self.sock.sendall(frame(C_PARSE, _Writer().s("").text(sql).take())
+                          + _QUERY_TAIL)
+        renderers, rows, tag, error = (), [], "", None
+        self.last_shape = None
+        while True:
+            ftype, _, payload = self._recv_frame()
+            if ftype == S_ROW_BATCH:
+                for raw_row in self._row_batch(payload, len(renderers)):
+                    rows.append([None if raw is None else render(raw)
+                                 for render, raw in zip(renderers, raw_row)])
+            elif ftype == S_ROW_DESC:
+                shape = self._renderers.get(payload)
+                if shape is None:
+                    if len(self._renderers) >= 1024:
+                        self._renderers.clear()
+                    fields = self._row_desc(payload)
+                    shape = (tuple(renderer_for(f) for f in fields),
+                             ",".join(f["name"] for f in fields),
+                             len(fields) == 1 and bool(fields[0]["flags"] & FIELD_DIAGNOSTIC_LINE))
+                    self._renderers[payload] = shape
+                renderers = shape[0]
+                self.last_shape = shape
+            elif ftype == S_COMPLETE:
+                tag = _Reader(payload).text()
+            elif ftype == S_ERROR:
+                error = self._error(payload)
+            elif ftype == S_READY:
+                return rows, tag, error
             elif ftype not in (S_PARSE_OK, S_BIND_OK, S_NOTICE):
                 raise ConnectionError("unexpected server frame type %d" % ftype)
 

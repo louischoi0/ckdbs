@@ -1,0 +1,112 @@
+********************************************************************************
+WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
+         anyone with access to the Postgres port to access your database without
+         a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
+         documentation about "trust":
+         https://www.postgresql.org/docs/current/auth-trust.html
+         In Docker's default configuration, this is effectively any other
+         container on the same system.
+
+         It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
+         it with "-e POSTGRES_PASSWORD=password" instead to set a password in
+         "docker run".
+********************************************************************************
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "C".
+The default text search configuration will be set to "english".
+
+Data page checksums are enabled.
+
+fixing permissions on existing directory /var/lib/postgresql/18/docker ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default "max_connections" ... 100
+selecting default "shared_buffers" ... 128MB
+selecting default time zone ... Etc/UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+
+Success. You can now start the database server using:
+
+    pg_ctl -D /var/lib/postgresql/18/docker -l logfile start
+
+waiting for server to start....2026-11-28 02:00:25.938 UTC [50] LOG:  starting PostgreSQL 18.7 (Debian 18.7-1.pgdg13+5) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-28 02:00:25.939 UTC [50] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2026-11-28 02:00:25.943 UTC [56] LOG:  database system was shut down at 2026-11-28 02:00:25 UTC
+2026-11-28 02:00:25.945 UTC [50] LOG:  database system is ready to accept connections
+ done
+server started
+CREATE DATABASE
+
+
+/usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+
+waiting for server to shut down....2026-11-28 02:00:26.103 UTC [50] LOG:  received fast shutdown request
+2026-11-28 02:00:26.104 UTC [50] LOG:  aborting any active transactions
+2026-11-28 02:00:26.105 UTC [50] LOG:  background worker "logical replication launcher" (PID 59) exited with exit code 1
+2026-11-28 02:00:26.105 UTC [54] LOG:  shutting down
+2026-11-28 02:00:26.106 UTC [54] LOG:  checkpoint starting: shutdown immediate
+2026-11-28 02:00:26.132 UTC [54] LOG:  checkpoint complete: wrote 952 buffers (5.8%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.018 s, total=0.028 s; sync files=303, longest=0.001 s, average=0.001 s; distance=4427 kB, estimate=4427 kB; lsn=0/1BC6D18, redo lsn=0/1BC6D18
+2026-11-28 02:00:26.139 UTC [50] LOG:  database system is shut down
+ done
+server stopped
+
+PostgreSQL init process complete; ready for start up.
+
+2026-11-28 02:00:26.223 UTC [1] LOG:  starting PostgreSQL 18.7 (Debian 18.7-1.pgdg13+5) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2026-11-28 02:00:26.223 UTC [1] LOG:  listening on IPv4 address "127.0.0.1", port 15434
+2026-11-28 02:00:26.226 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.15434"
+2026-11-28 02:00:26.229 UTC [72] LOG:  database system was shut down at 2026-11-28 02:00:26 UTC
+2026-11-28 02:00:26.233 UTC [1] LOG:  database system is ready to accept connections
+2026-11-28 02:00:26.756 UTC [77] FATAL:  role "root" does not exist
+2026-11-28 02:00:26.868 UTC [79] FATAL:  role "root" does not exist
+2026-11-28 02:00:43.104 UTC [83] FATAL:  role "root" does not exist
+2026-11-28 02:00:52.397 UTC [86] FATAL:  role "root" does not exist
+2026-11-28 02:00:59.235 UTC [90] FATAL:  role "root" does not exist
+2026-11-28 02:01:06.341 UTC [93] FATAL:  role "root" does not exist
+2026-11-28 02:01:13.698 UTC [96] FATAL:  role "root" does not exist
+2026-11-28 02:01:23.995 UTC [100] FATAL:  role "root" does not exist
+2026-11-28 02:01:42.931 UTC [104] FATAL:  role "root" does not exist
+2026-11-28 02:02:30.516 UTC [109] FATAL:  role "root" does not exist
+2026-11-28 02:02:56.092 UTC [128] FATAL:  role "root" does not exist
+2026-11-28 02:03:05.617 UTC [147] FATAL:  role "root" does not exist
+2026-11-28 02:03:17.911 UTC [166] FATAL:  role "root" does not exist
+2026-11-28 02:05:26.310 UTC [70] LOG:  checkpoint starting: time
+2026-11-28 02:07:32.322 UTC [70] LOG:  checkpoint complete: wrote 1258 buffers (7.7%), wrote 35 SLRU buffers; 0 WAL file(s) added, 0 removed, 3 recycled; write=125.980 s, sync=0.027 s, total=126.013 s; sync files=369, longest=0.001 s, average=0.001 s; distance=51162 kB, estimate=51162 kB; lsn=0/4DBD978, redo lsn=0/4DBD8E8
+2026-11-28 02:08:00.993 UTC [198] FATAL:  role "root" does not exist
+2026-11-28 02:08:05.605 UTC [201] FATAL:  role "root" does not exist
+2026-11-28 02:08:25.808 UTC [205] FATAL:  role "root" does not exist
+2026-11-28 02:08:32.607 UTC [208] FATAL:  role "root" does not exist
+2026-11-28 02:08:39.515 UTC [212] FATAL:  role "root" does not exist
+2026-11-28 02:08:46.909 UTC [215] FATAL:  role "root" does not exist
+2026-11-28 02:08:54.248 UTC [218] FATAL:  role "root" does not exist
+2026-11-28 02:09:12.267 UTC [222] FATAL:  role "root" does not exist
+2026-11-28 02:09:32.652 UTC [226] FATAL:  role "root" does not exist
+2026-11-28 02:10:26.423 UTC [70] LOG:  checkpoint starting: time
+2026-11-28 02:10:35.840 UTC [247] FATAL:  role "root" does not exist
+2026-11-28 02:10:44.764 UTC [266] FATAL:  role "root" does not exist
+2026-11-28 02:10:53.998 UTC [284] FATAL:  role "root" does not exist
+2026-11-28 02:11:07.757 UTC [303] FATAL:  role "root" does not exist
+2026-11-28 02:13:05.305 UTC [70] LOG:  checkpoint complete: wrote 1587 buffers (9.7%), wrote 31 SLRU buffers; 0 WAL file(s) added, 0 removed, 3 recycled; write=158.849 s, sync=0.029 s, total=158.883 s; sync files=421, longest=0.001 s, average=0.001 s; distance=48014 kB, estimate=50848 kB; lsn=0/8AC4098, redo lsn=0/7CA1358
+2026-11-28 02:16:00.513 UTC [321] FATAL:  role "root" does not exist
+2026-11-28 02:16:10.357 UTC [324] FATAL:  role "root" does not exist
+2026-11-28 02:16:17.332 UTC [328] FATAL:  role "root" does not exist
+2026-11-28 02:16:24.375 UTC [331] FATAL:  role "root" does not exist
+2026-11-28 02:16:31.736 UTC [334] FATAL:  role "root" does not exist
+2026-11-28 02:16:42.105 UTC [338] FATAL:  role "root" does not exist
+2026-11-28 02:16:55.608 UTC [341] FATAL:  role "root" does not exist
+2026-11-28 02:17:47.460 UTC [347] FATAL:  role "root" does not exist
+2026-11-28 02:17:56.650 UTC [349] LOG:  skipping vacuum of "daily_stats_r3_pg_s1" --- lock not available
+2026-11-28 02:18:13.252 UTC [366] FATAL:  role "root" does not exist
+2026-11-28 02:18:22.271 UTC [385] FATAL:  role "root" does not exist
+2026-11-28 02:18:33.744 UTC [403] FATAL:  role "root" does not exist
+2026-11-28 02:20:26.471 UTC [70] LOG:  checkpoint starting: time
+2026-11-28 02:23:17.385 UTC [70] LOG:  checkpoint complete: wrote 1708 buffers (10.4%), wrote 35 SLRU buffers; 0 WAL file(s) added, 0 removed, 4 recycled; write=170.880 s, sync=0.028 s, total=170.914 s; sync files=383, longest=0.002 s, average=0.001 s; distance=65271 kB, estimate=65271 kB; lsn=0/BC5F2A8, redo lsn=0/BC5F218
+2026-11-28 02:23:18.460 UTC [436] FATAL:  role "root" does not exist

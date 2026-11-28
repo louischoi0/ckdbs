@@ -1,0 +1,9 @@
+pid 2031902's current affinity list: 0-7 postgres -c port=15434 -c listen_addresses=127.0.0.1 
+pid 2032029's current affinity list: 0-7 postgres: io worker 0                                
+pid 2032030's current affinity list: 0-7 postgres: io worker 1                                
+pid 2032031's current affinity list: 0-7 postgres: io worker 2                                
+pid 2032032's current affinity list: 0-7 postgres: checkpointer                               
+pid 2032033's current affinity list: 0-7 postgres: background writer                          
+pid 2032035's current affinity list: 0-7 postgres: walwriter                                  
+pid 2032036's current affinity list: 0-7 postgres: autovacuum launcher                        
+pid 2032037's current affinity list: 0-7 postgres: logical replication launcher               

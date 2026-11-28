@@ -1,0 +1,4 @@
+idle        mean   361.8 us  p50   173.4 us  wal   815.5 B/op live 1->1  syncs 500
+after-load  mean   409.0 us  p50   245.5 us  wal   864.5 B/op live 2->2  syncs 500
+recycled    mean   154.5 us  p50   144.0 us  wal   808.7 B/op live 1->1  syncs 500
+loaded 90,000 rows in 1.1 s; settled in 8.6 s

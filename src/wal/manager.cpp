@@ -489,15 +489,23 @@ StatusOr<Lsn> WalManager::Commit(std::uint64_t txn_id, DurabilityClass durabilit
     }
 
     switch (durability) {
-        case DurabilityClass::kStrict:
+        case DurabilityClass::kStrict: {
             // D1 and D2 share a durability point; only the batching
             // differs, so this is the same sync the drain would do - just
             // now, on this task's stack, instead of at the next tick.
+            //
+            // **The commit's durability wait, taken without a park**: booked
+            // here because the dispatcher's park, the other `commit.wal_flush`
+            // site, is never reached by a commit that syncs inline (EG-S1).
+            // The scope waits on nothing and decides nothing.
+            sched::WaitScope wait(stats::WaitEvent::kCommitWalFlush, lsn.value(),
+                                  static_cast<std::uint32_t>(DurabilityClass::kStrict));
             if (Status s = Sync(); !s.ok()) {
                 return s;
             }
             ++stats_.strict_commits;
             break;
+        }
 
         case DurabilityClass::kGroup:
             ++pending_group_commits_;

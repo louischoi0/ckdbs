@@ -1,0 +1,65 @@
+/home/ukjin/bench-runs/eh-close-v3.5.1-51-g5af42e1c0/tools/scenario4_cabinopt_days.py:581: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  "started_utc": datetime.datetime.utcfromtimestamp(run_t0)
+
+ckdbs benchmark - id int64, symbol varchar, qty int64, price int64 columns, boards 2x10000, tapes 200/1000/10000 rows resident, BTREE-clustered, 1 connection
+server 127.0.0.1:15651/15652/15653  table board_*/tape_*_a
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load[off]                31200    57,206      17.5     15.4     16.8     17.0     17.8     34.1     391.8     0
+load[on]                 31200    55,987      17.9     15.5     17.0     17.2     18.6     29.5    1142.8     0
+load[declared]           31200    59,151      16.9     15.1     15.8     16.6     17.5     27.6     333.7     0
+d1-open[off]               240     6,466     154.7    130.1    133.4    141.4    181.9    472.3     506.1     0
+d1-open[on]                240     6,119     163.4    128.7    142.5    148.5    226.8    442.3     736.0     0
+d1-open[declared]          240     5,922     168.9    130.3    138.6    153.0    316.6    398.9     490.9     0
+d1-board[off]             2400     4,634     215.8    130.0    142.7    150.1    597.0   1443.0    1960.7     0
+d1-tape200[off]            396    37,915      26.4     23.8     25.1     25.9     29.1     35.9      38.1     0
+d1-tape1k[off]             396    28,834      34.7     32.1     33.6     34.5     37.4     40.0      42.6     0
+d1-tape10k[off]            396     7,471     133.9    125.6    130.0    131.0    150.7    176.1     277.3     0
+d1-pk[off]                 240    48,870      20.5     17.7     19.0     19.4     28.6     44.6      65.9     0
+d1-board[on]              2400     6,726     148.7    127.7    137.4    141.4    164.5    346.8     723.0     0
+d1-tape200[on]             396    38,581      25.9     23.6     24.8     25.1     30.6     32.1      41.9     0
+d1-tape1k[on]              396    28,743      34.8     31.8     33.1     33.8     40.2     41.7      45.7     0
+d1-tape10k[on]             396     7,138     140.1    124.5    127.5    131.8    174.5    295.1     342.9     0
+d1-pk[on]                  240    49,267      20.3     17.6     18.9     19.1     25.1     31.6     171.8     0
+d1-board[declared]        2400    12,075      82.8     23.0     32.0     33.1    297.7    325.7     974.0     0
+d1-tape200[declared]       396    41,272      24.2     22.4     23.4     23.8     29.5     32.5      47.2     0
+d1-tape1k[declared]        396    36,684      27.3     22.2     23.5     23.9     50.2     53.1      57.6     0
+d1-tape10k[declared]       396    14,294      70.0     22.3     23.6     24.1    292.5    320.2     368.5     0
+d1-pk[declared]            240    51,750      19.3     17.7     18.7     19.1     20.8     25.4      27.0     0
+d1-close[off]               12     1,135     880.9    296.6    419.4    628.2   2681.2   2681.2    2681.2     0
+d1-close[on]                12     1,368     730.8    281.8    397.3    652.8   1856.8   1856.8    1856.8     0
+d1-close[declared]          12     1,687     592.7    280.5    286.2    389.7   1593.7   1593.7    1593.7     0
+
+  load[off]: setup, txn batches of 500
+  load[on]: setup, txn batches of 500
+  load[declared]: setup, txn batches of 500
+  d1-open[off]: 240 inserts, board_a_a
+  d1-open[on]: 240 inserts, board_a_a
+  d1-open[declared]: 240 inserts, board_a_a
+  d1-board[off]: hot equality on board_a_a, 8 hot syms
+  d1-tape200[off]: 200 rows, rotating hot values
+  d1-tape1k[off]: 1000 rows, rotating hot values
+  d1-tape10k[off]: 10000 rows, rotating hot values
+  d1-pk[off]: control: touches no Cabin
+  d1-board[on]: hot equality on board_a_a, 8 hot syms
+  d1-tape200[on]: 200 rows, rotating hot values
+  d1-tape1k[on]: 1000 rows, rotating hot values
+  d1-tape10k[on]: 10000 rows, rotating hot values
+  d1-pk[on]: control: touches no Cabin
+  d1-board[declared]: hot equality on board_a_a, 8 hot syms
+  d1-tape200[declared]: 200 rows, rotating hot values
+  d1-tape1k[declared]: 1000 rows, rotating hot values
+  d1-tape10k[declared]: 10000 rows, rotating hot values
+  d1-pk[declared]: control: touches no Cabin
+  d1-close[off]: COUNT/SUM/GROUP BY full scans
+  d1-close[on]: COUNT/SUM/GROUP BY full scans
+  d1-close[declared]: COUNT/SUM/GROUP BY full scans
+
+per-arm busy-time TPS (timed ops / summed latencies):
+  day 1 [declared ]  ops=  4080  busy=   0.30s  tps=   13640
+  day 1 [off      ]  ops=  4080  busy=   0.65s  tps=    6299
+  day 1 [on       ]  ops=  4080  busy=   0.49s  tps=    8340
+
+verify (byte-identical replies across arms, per day): PASS
+json -> /home/ukjin/bench-runs/eh-close-v3.5.1-51-g5af42e1c0/json/c2-old-1.json

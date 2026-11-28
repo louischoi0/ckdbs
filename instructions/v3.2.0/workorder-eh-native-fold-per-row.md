@@ -1,6 +1,12 @@
 # Work order EH - what the native fold pays for a row: an aggregate over a whole relation
 
-Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
+Status: **CLOSED 2026-11-28 after EH-S1, EH-S2 and EH-Sy** (§7, "EH-Sz"; `raft-marks-2026-11-28.md` §15): a global fold from the row's bytes, the group table over one arena, and a fold that yields. Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree `eh-native-fold-per-row`
+(branch `worktree-eh-native-fold-per-row`) from `01c6c741c`
+(`v3.5.1-35-g01c6c741c`), the close of EG's work branch, which is not
+landed; under the operator's standing go-ahead of 2026-11-28
+(`raft-marks-2026-11-28.md` §14): every EH-Q item is **adopted on that
+go-ahead, never marked by the operator item by item** (§4, "Marks").
+Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
 2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EH-S0
@@ -205,6 +211,28 @@ inside AG1 as written is EH-Q3's.
 | EH-Q5 | The query layer's fold | (a) outside EH; (b) inside | (a) |
 | EH-Q6 | Scenario 4's `close` | (a) the driver times each of its four statements as its own phase from S0 on, on EF's equal client if EF-S1 has landed and on `kwp.Connection.query` directly if not; (b) left as one phase | (a) |
 
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-28 (go-ahead-achieving-milestone)** (`raft-marks-2026-11-28.md`
+§10, §14), and none is the operator's own mark on the item. No EH-Q item
+is tagged `[quiet-wrong]` itself; three rules are (EH-R2, EH-R3, EH-R7),
+and the premise of each was re-read against the tree at `01c6c741c`
+before the opening: visibility is decided per row by `txn::Classify`
+under the leaf's hold (`src/exec/step_vm.cpp`), a cell is read today only
+from the copied payload, and the dispatcher has one `Aggregator` reused
+across statements (`include/kds/server/command_dispatcher.hpp`).
+
+| | adopted | note |
+|---|---|---|
+| EH-Q0 | (a) | S0, then the candidates S0 ranks, one a stage |
+| EH-Q1 | (a) | the bar: a global fold's server CPU a row at or below PostgreSQL's on S0's host; EH closes on what was measured either way |
+| EH-Q2 | (a) | the slices as EH's last stage, under EH-R7 |
+| EH-Q3 | (a) | AG1 read as "the chain's steps and its row stream are identical" |
+| EH-Q4 | (a) | no `COUNT(*)` from a structure's counts |
+| EH-Q5 | (a) | the query layer's fold outside EH |
+| EH-Q6 | (a) | S0 measures the fold shape by shape through counting clients; scenario 4's `close` split is left to the close |
+
 ## 5. Stages
 
 | stage | what | ends in |
@@ -224,6 +252,210 @@ inside AG1 as written is EH-Q3's.
 - Nothing of a read's fixed cost (EF) or a commit's (EG).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EH-Sz (2026-11-28): the close
+
+- **EH-Q1's bar is met**: a global fold of four aggregates is 27.5 ns of
+  server CPU a row against 38.4 ns when EH opened and PostgreSQL 18.7's
+  28.0 ns, inside the spread; `COUNT(*)` 10.4 ns against 19.1 ns and
+  12.1 ns (`bench/v3.5.1/results-eh-close-v3.5.1-51-g5af42e1c0.md`, "After
+  this file").
+- **The close's measurement found a regression, and CLA's own**: the pool
+  size bound added at `5af42e1c0` on the Sy review's advice made a fold of
+  60,480 groups 1.6x dearer than at S2 (280.1 ns a row against 170.9 ns).
+  Localised in nine rounds against S2's binary and a variant without the
+  bound (177 ns), and removed at `8db2923d4`: the pool is bounded by count,
+  eight aggregators. Measured again from the opening binary to the closing
+  one, **no shape is dearer**; `group-60480` is 173.9 ns against 234.7 ns
+  and PostgreSQL's 192.0 ns.
+- **Scenario 4's `close`** (`ck-tester`'s cell 2, on `5af42e1c0`, whose
+  difference from the closing commit is the pool bound): 1.18x to 1.24x
+  faster on every arm, through the counting client both sides time.
+- **EH-R5**: a point read and a filtered walk are inside their spreads of
+  the opening binary (1.02x and 1.00x server CPU).
+- **The suite at the closing code** (`8db2923d4`): 5,437 of 5,438; the
+  failure is the two-core insert rig named under EH-S2 (3 of 10 alone).
+- **The durable content**: `docs/spec/aggregate.md` §1 (the bytes path,
+  what AG1 still promises, `ANALYZE` on the frame's path) and §7 (slices);
+  `docs/spec/sched.md` §3 (an aggregated walk yields, on an aggregator of
+  its own); `CLAUDE.md`'s Aggregation row; `known-gaps.md` (what is left).
+- **Built**: §2's (a), (b), (c) and (d). **Not built**: the group
+  table's reserve from the planner's prior; a fold behind a predicate, over
+  a `varchar`, `DISTINCT` or a join from bytes; the grouped probe through
+  bytes - the frame is still every grouped fold's path, 1.08x of
+  PostgreSQL's at 7,560 groups.
+
+### EH-Sy (2026-11-28): the fold given slices, on `eh-native-fold-per-row` from `c3a4cff4c`
+
+- **The change.** `SelectBody` hands an aggregated statement to the sliced
+  driver where it may park and its first step is not a tuple key descent,
+  as it hands a plain walk; `SelectRun` takes an `Aggregator` of its own
+  from a dispatcher pool (`aggregator_pool_`), resets it, describes the
+  output to the sink, and its `Execute` folds through `ExecuteAsync` -
+  which now takes the `BytesFold` too - then emits after the walk.
+  `RunAggregated` keeps the one-turn folds on the dispatcher's
+  `aggregator_`, and the two share `DescribeAggregate` and `EmitAggregate`.
+  **EH-R7** (`[quiet-wrong]`), re-read before it was built: the premise -
+  one aggregator reused across statements, safe only while a fold never
+  gives its core back - holds at `c3a4cff4c`; the pooled aggregator is
+  the rule as written. Its cost - a fresh aggregator a statement, about
+  4 µs by AP03's comment - is paid once per pooled aggregator, not per
+  statement.
+- **Cells** (`walk_slice_rig_test.cpp`): a point read on the core of a
+  long fold is answered inside it; **two folds parked on one core at once -
+  a global one from bytes, a grouped one through the frame - each answer
+  as alone**, and with the three edits that share the dispatcher's
+  aggregator put back by hand the cell fails both answers (`x,2336,...`
+  where `1600,...` is right): it kills the mutant EH-R7 names; a cancel
+  ends a fold at its boundary and fails its transaction.
+- `docs/spec/sched.md` §3 and `docs/spec/aggregate.md` §7 say a fold
+  yields and owns its aggregator.
+- **The suite**: 5,438 of 5,438 (`ctest -LE bs-nightly -j4`, 176.5 s).
+- **After the review** (`da1f786c3`, comments only; and this commit): no
+  defect. **Applied**: the pool is bounded - eight aggregators at most, and
+  one that ran more than 4,096 groups is let go rather than pooled - so a
+  core no longer keeps the capacity of its largest fold for every fold that
+  was ever parked at once. **Not applied**: `table_`'s reallocation per
+  grouped statement (reusing it needs a fill at `Reset`, a measured trade
+  not taken); retiring `RunAggregated` for `RunInline` over a pooled
+  aggregator, and folding `FinishAggregate` into `Finish` (about 75 lines
+  between them, against a coroutine frame on every point aggregate that
+  EH-R5's pair would have to price first, and a DE miss-refusal change of
+  behaviour); a test seam for two keys of one hash.
+  **The suite at this tree**: 5,437 of 5,438; the failure is
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the two-core
+  rig named above, which failed 6 of 20 on EG's build in this window.
+- Overhead not measured; measured at the milestone's close.
+
+### EH-S2 (2026-11-28): the group table, on `eh-native-fold-per-row` from `b36deb576`
+
+- **The change** (§2's (c), less the reserve): `Aggregator`'s
+  `std::unordered_map<std::string, size_t>` is replaced by an
+  open-addressing table of `(hash, group + 1)` slots over one arena of key
+  bytes, kept at most half full; founding a group appends its key to the
+  arena and fills one slot, so no map node and no key string is allocated a
+  group, and the table allocates only when it doubles. The hash is a 64-bit
+  multiply-and-shift over the encoded key eight bytes a step, replacing
+  `std::hash<std::string_view>` (11 % of a 7,560-group fold at EH-S0); a
+  probe compares the hash and then the bytes, so no answer depends on its
+  quality. `Accumulate` and `Merge` find and file groups through the same two
+  helpers. **The emit order is untouched** (AG6): groups stay in `groups_`
+  in the order they were founded, and nothing walks the table. **Not built**:
+  the reserve from the planner's prior - it needs a prior plumbed to the
+  aggregator for a saving the doubling already amortises.
+- **Cells**: the aggregate contract suite and every cell naming an
+  aggregate, `GROUP BY` or `DISTINCT`, 211 of 211, unchanged - they pin
+  first-seen order, the cap, merge and every grouped answer.
+- **The suite at this tree**: 5,433 of 5,435 (`ctest -LE bs-nightly -j4`,
+  219.3 s). The two failures are the host's two-core flakes
+  (`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`); run 20 times
+  each, interleaved with EG's build of the same window, which has no
+  aggregate change, they failed 3 and 6 times here against 5 and 8 there.
+  The suite run before it was **voided**: CLA rebuilt the test binary while
+  it ran.
+- **Measured** (`bench/v3.5.1/results-eh-s2-group-table-v3.5.1-46-g70e0cb368.md`,
+  interleaved against EH-S1's binary): a fold founding 7,560 groups is
+  63.3 ns of server CPU a row against 76.5 ns before and PostgreSQL's
+  59.0 ns; with a `SUM`, 74.7 ns against 88.1 ns and PostgreSQL's 76.5 ns,
+  inside the spread. A group a row: 173.7 ns against PostgreSQL's 193.0 ns.
+- Overhead not measured; measured at the milestone's close.
+
+### EH-S1 (2026-11-28): a global fold from the row's bytes, on `eh-native-fold-per-row` from `1f7ef7c84`
+
+- **The change.** `exec/bytes_fold.hpp` is the seam: a consumer the
+  executor may hand a visible version's payload under the leaf's hold.
+  `ChainRunner::AcceptTupleAt` hands it, in the `kVisible` arm, when the
+  statement has a fold, the chain is one step that keeps every visible row
+  (`KeepsEveryVisibleRow`: no conjunct of any kind, no sub-chain, no index
+  order, no trail-replayable step; no Cabin recording live, tested per row),
+  the fold admitted the relation at the step's first visible row - after
+  BM-R6's checks, as the kernel is armed - and the payload is the layout's
+  length. The row is examined, charged and matched in the full path's
+  order. `Aggregator` is the consumer: `PrepareBytesFold` admits a global
+  fold with no `DISTINCT` whose arguments are columns of the step's
+  relation other than `varchar`, and `AccumulateBytes` decodes those cells
+  with `DecodeColumnsInto` into its own slots and folds each through
+  `FoldValue`, the per-value body `FoldInto` now calls too. The dispatcher
+  passes its aggregator to `exec::Execute`. §2's (a) and (b) together: no
+  copy, no frame decode, no `std::function` call, for that shape.
+- **The `[quiet-wrong]` rules, read against the code as built**:
+  EH-R2 - the arm is inside `txn::Classify`'s `kVisible` case; a
+  `kNeedsUndoWalk` version takes the copied path and the sink. EH-R3 -
+  `AccumulateBytes` decodes into the aggregator's own slots inside the call
+  and keeps no span; no `varchar` is admitted, so no spill is pending and no
+  fetch happens under the hold. EH-R7 does not arise: nothing yields.
+- **Cells.** In `scan_row_walk_test.cpp`, the executor's contract with a
+  consumer of the test's own: every row but the first is handed over and
+  counted as the sink's would be; a conjunct, a second step or a declining
+  fold hands nothing; the row-touch budget refuses on the same row with the
+  same words; a fold's refusal ends the statement on its row. In the new
+  `bytes_fold_equivalence_test.cpp`, the fold's contract (EH-R1, EH-R4):
+  42 select lists over ten column types - every fixed-width type, `char`,
+  `varchar` and `uint64` among them - answer byte for byte the same bare and
+  behind a conjunct that keeps every row, empty, at one row, over 700 rows
+  with every third row NULL, after deletes and updates, over a column of
+  NULLs, beside an undecided writer's update and delete and after its
+  commit, and with an overflowing `SUM` refused in the same words.
+- **The suite**: 5,431 of 5,432 (`ctest -LE bs-nightly -j4`); the failure
+  is `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`,
+  the two-core rig `known-gaps.md` names as intermittent here (3 of 20
+  alone at this tree), which folds nothing.
+- **`docs/spec/aggregate.md` §1** states the bytes path and what AG1 still
+  promises (EH-Q3 (a)).
+- **After the review** (`6e55671ef`, `e2f13279d`, and this commit): **one
+  defect, fixed by the reviewer** - a step whose decode is every column
+  (`read_columns` is `kAllColumns`: a chain with a hoisted sub-chain, a
+  relation over 64 columns) refuses a corrupt `varchar` cell on the frame's
+  path even where the statement reads no such column, and the bytes path
+  answered instead (EH-R4); the fold is no longer armed there, and a cell
+  pins it by mutation. Two cells added: the remaining fixed-width types
+  (`int8`, `bool`, `decimal(30,4)`, `uint64` above `INT64_MAX`) and a
+  writer's own uncommitted rows and a `REPEATABLE READ` view across a
+  commit, both paths. The arm returns from inside the span's scope. **Not
+  taken from the review**: `ANALYZE` passing the fold - its sink counts and
+  caps the rows it reports, so a fold that bypassed it would change what
+  `ANALYZE` prints; `aggregate.md` says `ANALYZE` runs the frame's path.
+  The shared item loop between `FoldInto` and `AccumulateBytes` (four lines
+  twice, against a template for both) and the probably-dead clauses
+  (`!recording_here`, the trail test), kept as the cheap guard each is.
+- **Measured** (`bench/v3.5.1/results-eh-s1-in-place-v3.5.1-41-g6142f32f1.md`,
+  interleaved against the engine EH opened from): a global fold of four
+  aggregates is 29.1 ns of server CPU a row against 38.8 ns before and
+  PostgreSQL's 28.0 ns; `COUNT(*)` 11.4 ns against 19.2 ns and 12.1 ns.
+  **EH-Q1's bar is met within the spread** (1.04x on PostgreSQL's 5.1 %).
+  Every grouped shape is inside its spread of the old binary.
+- Overhead not measured; measured at the milestone's close.
+
+### EH-S0 (2026-11-28): the premise and the ranking, on `eh-native-fold-per-row` from `01c6c741c`
+
+`[measured]` on `main`'s engine (EG's closing binary; no engine source
+differs), counting clients on both sides,
+`bench/v3.5.1/results-eh-s0-premise-v3.5.1-35-g01c6c741c.md`:
+
+- **The premise holds on `main`**: a global fold of four aggregates is
+  39.0 ns of server CPU a row against PostgreSQL 18.7's 28.0 ns (1.39x;
+  0.71x of its rate). EH-Q1's figure is 28.0 ns a row for that shape and
+  12.1 ns for a bare `COUNT(*)`.
+- **The ranking, by subtraction between eleven shapes and by 150 stack
+  samples a fold**:
+  1. **the path from a visible row to the fold**: a rejected row costs
+     10.9 ns (PostgreSQL 17.5 ns), a counted one 19.2 ns (12.1 ns) - the
+     copy, the general row's checks, the `std::function`, the fold's loop;
+  2. **decode and fold of a fixed-width cell**: 8.4 ns for the first
+     cell, 19.8 ns for four aggregates over two; `FoldInto` 34.5 % and
+     `DecodeAndResolve` 30.3 % of a global fold's samples;
+  3. **founding a group**: about 230 ns against about 160 ns, in the
+     `std::string`-keyed map and the allocator (52 % of a 7,560-group
+     fold's samples between them);
+  4. the probe is no deficit (23.5 ns against 26.2 ns a row).
+- **So S1 is §2's (a) and (b) together, for the fold the ranking's first
+  two items decide**: a global fold with no predicate, accumulated from
+  the visible row's bytes under the leaf's hold. §2's (c), the group
+  table, is S2's if S1 lands.
+- **No instruction-level profile**: the host has neither `perf` nor
+  `valgrind`.
+- The suite was not executed: no build input changed.
 
 ### Written 2026-11-28
 
