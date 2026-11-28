@@ -47,7 +47,7 @@ Reading a wait: `sys.wait_stats` (cumulative, per core), `sys.wait_histogram`
 - **Meaning:** A committing statement waits for its record to reach the durable point.
 - **Usual causes:** A slow log device sync; many commits queued behind one sync; `strict` durability.
 - **Remedies:** A faster log device; `SET DURABILITY group` where the application allows; fewer, larger transactions.
-- **Sites:** The commit park in the dispatcher; and the `strict` arm of `WalManager::Commit`, around the sync a commit that is not deferred runs on its own stack - every `strict` commit of a one-core instance, a DDL's on any, a caller's with no reactor (EG-S1). The second site does not park: it books the time to `sys.wait_stats` and to the session of the task being polled, and `sys.ash`, which samples between polls, never shows it.
+- **Sites:** The commit park in the dispatcher; and the `strict` arm of `WalManager::Commit`, around the sync a commit that is not deferred runs on its own stack - every `strict` commit of a one-core instance, a DDL's on any, a caller's with no reactor (EG-S1). The second site does not park: it books the time to its core's `sys.wait_stats` row and to the session of the task being polled - a thread bound to no core keeps it in totals no view reads - and `sys.ash`, which samples between polls, never shows it.
 
 ### commit.ceiling_wait
 

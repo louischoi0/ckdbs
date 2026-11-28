@@ -252,10 +252,17 @@ read against it before it is built.
 - **EG-R4**: the booking is the calling core's own words and the polled
   task's session, with no latch and no park; a scope opened with no task
   being polled books to the thread's totals.
-- **Nesting**: a `WaitScope` inside another asserts in a debug build.
-  The suite is a debug build and no cell tripped it, so no path of the
-  suite reaches a `strict` commit with a scope open; `Sync()` itself
-  opens none.
+- **Nesting**: a `WaitScope` inside another asserts in a debug build,
+  but only where a task is being polled - the check follows the no-task
+  return (`src/sched/wait_state.cpp`) - so the suite's silence shows
+  nothing: the cells that reach this arm (the two below, every
+  synchronous `Dispatch` on a test thread) poll no task, and a deferred
+  `strict` commit does not pass it. What holds is read from the tree
+  (review, at `8b5b2587a`): every `WaitScope` in `src/` spans a
+  `co_await` alone or a call that commits nothing (`DrainForPressure`, a
+  page read), every commit is reached from the dispatcher's `EndWrite`,
+  `CommitLocal` or own-transaction insert, none of them under a scope,
+  and `Sync()` opens none and does not suspend.
 - **Cells**: `WalManagerTest.StrictCommitBooksItsSyncAsCommitWalFlush`
   (a `strict` commit books one wait, a staged `group` and a `relaxed`
   one none, a failed sync one all the same) and
@@ -266,7 +273,13 @@ read against it before it is built.
   no core, and a view row is a bound core's; the view on a running server
   is read in the close's measurement. The session's row
   (`sys.session_waits`) is not pinned by a cell: no fixture here polls a
-  statement as a task at `strict` on one core.
+  statement as a task at `strict` on one core. **Neither is S1's
+  `sys.wait_stats`, so the stage's "ends in" is not met by a cell**
+  (review). The two-core rig polls a session's statements as its tasks
+  on bound reactors (`statement_cost_rig_test.cpp`'s
+  `SubmitAsItsSession`), and a `strict` DDL there commits through this
+  arm on either core, since a DDL is never deferred: the fixture a cell
+  pinning both views, and the nesting check, would take.
 - **`docs/spec/wait-events.md`**: `commit.wal_flush` gains its second
   site, and says `sys.ash` does not show it.
 - **The suite**: 5,418 of 5,419 at this tree (`ctest -LE bs-nightly
