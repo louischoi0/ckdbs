@@ -409,6 +409,7 @@ class Connection:
         self.capabilities = 0
         self.server_info = ""
         self._next_portal = 0
+        self._renderers = {}     # row description bytes -> its renderers (`fetch`)
         try:
             if tls is not None:
                 # Direct TLS: the first byte on the wire is the ClientHello
@@ -689,6 +690,46 @@ class Connection:
                 error = self._error(payload)
             elif ftype == S_READY:
                 return tag, rows, payload_bytes, error
+            elif ftype not in (S_PARSE_OK, S_BIND_OK, S_NOTICE):
+                raise ConnectionError("unexpected server frame type %d" % ftype)
+
+    def fetch(self, sql):
+        """Runs one statement and returns `(rows, tag, error)`: each row a
+        list with one **rendered** string per value (None for NULL), sent as
+        `query` sends - PARSE and one constant tail.
+
+        The counterpart of `pg_wire.PgConnection.fetch` plus a decode, for a
+        driver that needs its values (EF-S1). Two things `execute` and
+        `render_value` do per statement are done here once per result shape:
+        a row description is decoded, and its renderers resolved, the first
+        time its bytes are seen and looked up by those bytes after. A
+        PostgreSQL client has no such step - its values arrive as text - so
+        paying it per statement charged KDS about 11 us of Python a
+        statement that says nothing about either server (EF-S1's pass D). A
+        refusal is returned, not raised, as `query` returns it.
+        """
+        self.sock.sendall(frame(C_PARSE, _Writer().s("").text(sql).take())
+                          + _QUERY_TAIL)
+        renderers, rows, tag, error = (), [], "", None
+        while True:
+            ftype, _, payload = self._recv_frame()
+            if ftype == S_ROW_BATCH:
+                for raw_row in self._row_batch(payload, len(renderers)):
+                    rows.append([None if raw is None else render(raw)
+                                 for render, raw in zip(renderers, raw_row)])
+            elif ftype == S_ROW_DESC:
+                renderers = self._renderers.get(payload)
+                if renderers is None:
+                    if len(self._renderers) >= 1024:
+                        self._renderers.clear()
+                    renderers = tuple(renderer_for(f) for f in self._row_desc(payload))
+                    self._renderers[bytes(payload)] = renderers
+            elif ftype == S_COMPLETE:
+                tag = _Reader(payload).text()
+            elif ftype == S_ERROR:
+                error = self._error(payload)
+            elif ftype == S_READY:
+                return rows, tag, error
             elif ftype not in (S_PARSE_OK, S_BIND_OK, S_NOTICE):
                 raise ConnectionError("unexpected server frame type %d" % ftype)
 

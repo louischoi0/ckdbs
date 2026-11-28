@@ -306,6 +306,20 @@ class Client:
                 self.first_error = f"{command}  ->  {reply}"
         return reply
 
+    def rows(self, command):
+        """`(rows, reply)`: a read's rows with each value decoded to a string,
+        or `(None, <ERR line>)`. What the twin's `rows` builds from `fetch`,
+        and no rendering of the whole reply (EF-S1)."""
+        rows, reply = self._conn.rows(command)
+        if ECHO:
+            print(f"[main] {command}  ->  {reply[:ECHO_REPLY_MAX]}",
+                  file=sys.stderr, flush=True)
+        if rows is None:
+            self.errors += 1
+            if self.first_error is None:
+                self.first_error = f"{command}  ->  {reply}"
+        return rows, reply
+
     def close(self):
         self._conn.close()
 
@@ -315,6 +329,15 @@ def send(exec_, phase, command):
     reply = exec_(command)
     phase.record(time.perf_counter() - t0, reply)
     return reply
+
+
+def rows_timed(client, phase, command):
+    """One timed read: `(rows, reply)`, `rows is None` where the server
+    refused and `reply` then its `ERR` line. The twin's `rows_timed`."""
+    t0 = time.perf_counter()
+    rows, reply = client.rows(command)
+    phase.record(time.perf_counter() - t0, reply if rows is None else "OK")
+    return rows, reply
 
 
 def inserted_id(reply):
@@ -780,10 +803,9 @@ def book_once(client, tables, state, args, phases, rng, day, axes):
 
     # 1. the cargo - a pk lookup, and the only statement that tells the
     #    booking who the customer is.
-    reply = send(client, phases["cargo-lookup"],
-                 f"SELECT org_id, cargo_type, cbm, declared_value "
-                 f"FROM {tables['cargos']} WHERE id = {cargo_id}")
-    rows = select_rows(reply)
+    rows, reply = rows_timed(client, phases["cargo-lookup"],
+                             f"SELECT org_id, cargo_type, cbm, declared_value "
+                             f"FROM {tables['cargos']} WHERE id = {cargo_id}")
     if rows is None:
         return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
     if not rows:
@@ -792,10 +814,9 @@ def book_once(client, tables, state, args, phases, rng, day, axes):
 
     # 2. the customer's credit - the second lookup, and the second row this
     #    transaction will update.
-    reply = send(client, phases["credit-lookup"],
-                 f"SELECT credit_limit, outstanding FROM "
-                 f"{tables['organizations']} WHERE id = {org_id}")
-    rows = select_rows(reply)
+    rows, reply = rows_timed(client, phases["credit-lookup"],
+                             f"SELECT credit_limit, outstanding FROM "
+                             f"{tables['organizations']} WHERE id = {org_id}")
     if rows is None:
         return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
     if not rows:
@@ -812,19 +833,17 @@ def book_once(client, tables, state, args, phases, rng, day, axes):
         # one last looked - the engine has no `SET revenue = revenue + n`,
         # so a running total can only be maintained by reading it in the
         # transaction that writes it.
-        reply = send(client, phases["capacity-read"],
-                     f"SELECT booked_cbm, revenue FROM {tables['operations']} "
-                     f"WHERE id = {op_id}")
-        rows = select_rows(reply)
+        rows, reply = rows_timed(client, phases["capacity-read"],
+                                 f"SELECT booked_cbm, revenue FROM {tables['operations']} "
+                                 f"WHERE id = {op_id}")
         if rows is None:
             return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
         booked = int(rows[0][0]) if rows else 0
         revenue = int(rows[0][1]) if rows else 0
     else:
-        reply = send(client, phases["capacity-read"],
-                     f"SELECT SUM(cbm) FROM {tables['freights']} "
-                     f"WHERE operation_id = {op_id}")
-        rows = select_rows(reply)
+        rows, reply = rows_timed(client, phases["capacity-read"],
+                                 f"SELECT SUM(cbm) FROM {tables['freights']} "
+                                 f"WHERE operation_id = {op_id}")
         if rows is None:
             return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
         booked = sum_value(rows)
@@ -839,10 +858,9 @@ def book_once(client, tables, state, args, phases, rng, day, axes):
 
     # 4. the pricing rules for this cargo type - a non-pk equality, so a
     #    FilterScan, and the statement `--cabin` serves.
-    reply = send(client, phases["recipe-read"],
-                 f"SELECT fee_id, route_code, priority, valid_from, valid_to "
-                 f"FROM {tables['recipes']} WHERE cargo_type = {cargo_type}")
-    rows = select_rows(reply)
+    rows, reply = rows_timed(client, phases["recipe-read"],
+                             f"SELECT fee_id, route_code, priority, valid_from, valid_to "
+                             f"FROM {tables['recipes']} WHERE cargo_type = {cargo_type}")
     if rows is None:
         return finish(conflict(AXIS_READ) if is_conflict(reply) else FAILED, opened)
     recipe_rows = [(int(r[0]), int(r[1]), int(r[2]), int(r[3]), int(r[4]))
@@ -1109,22 +1127,21 @@ def manifest_process(args, suffix, operations, orgs, stop_event, result_q):
             for op_id in rng.sample(op_ids, min(args.manifest_voyages, len(op_ids))):
                 if stop_event.is_set():
                     break
-                reply = send(client, phases["manifest-scan"],
-                             f"SELECT * FROM {tables['freights']} "
-                             f"WHERE operation_id = {op_id}")
-                rows = select_rows(reply)
+                rows, reply = rows_timed(client, phases["manifest-scan"],
+                                         f"SELECT * FROM {tables['freights']} "
+                                         f"WHERE operation_id = {op_id}")
                 rows_read += len(rows) if rows else 0
-                send(client, phases["voyage-rollup"],
-                     f"SELECT status, COUNT(*), SUM(cbm) FROM {tables['freights']} "
-                     f"WHERE operation_id = {op_id} GROUP BY status")
+                rows_timed(client, phases["voyage-rollup"],
+                           f"SELECT status, COUNT(*), SUM(cbm) FROM {tables['freights']} "
+                           f"WHERE operation_id = {op_id} GROUP BY status")
             for org_id in rng.sample(org_ids, min(args.manifest_customers,
                                                   len(org_ids))):
                 if stop_event.is_set():
                     break
-                send(client, phases["customer-statement"],
-                     f"SELECT c.org_id, SUM(f.cbm) FROM {tables['freights']} AS f "
-                     f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
-                     f"WHERE c.org_id = {org_id} GROUP BY c.org_id")
+                rows_timed(client, phases["customer-statement"],
+                           f"SELECT c.org_id, SUM(f.cbm) FROM {tables['freights']} AS f "
+                           f"JOIN {tables['cargos']} AS c ON f.cargo_id = c.id "
+                           f"WHERE c.org_id = {org_id} GROUP BY c.org_id")
             passes += 1
             # Sleep what is left of the interval, but wake at once when the
             # bookers finish: a reporter still running after the measured
@@ -1748,6 +1765,9 @@ def main():
                                       trust_belief=not args.contend)
 
     meta = {
+        # EF-S1: what the timed statements go through, so a results file can
+        # say it. Reads decode each value to a string, as the twin's do.
+        "timed_client": {"reads": "rows", "writes": "send_command"},
         "engine": "ckdbs",
         "scenario": "freight",
         "columns": sum(len(SCHEMA[b][0].split(",")) for b in CREATE_ORDER),

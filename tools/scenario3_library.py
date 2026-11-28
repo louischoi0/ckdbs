@@ -240,10 +240,20 @@ class Client:
         return reply
 
     def timed(self, command, phase):
+        """One timed read, its values decoded to strings and nothing more -
+        what the twin's `timed` does (`fetch` and a decode). Returns the rows,
+        or None where the server refused (EF-S1)."""
         t0 = time.perf_counter()
-        reply = self(command)
-        phase.record(time.perf_counter() - t0, reply)
-        return reply
+        rows, reply = self._conn.rows(command)
+        phase.record(time.perf_counter() - t0, reply if rows is None else "OK")
+        if ECHO:
+            print(f"[s3] {command}  ->  {reply[:96]}", file=sys.stderr,
+                  flush=True)
+        if rows is None:
+            self.errors += 1
+            if self.first_error is None:
+                self.first_error = f"{command}  ->  {reply}"
+        return rows
 
     def close(self):
         self._conn.close()
@@ -916,6 +926,8 @@ def main():
         problems = verify(client, tables, sizes, users, args.verify, rng)
 
     meta = {
+        # EF-S1: the timed reads decode each value to a string, as the twin's do.
+        "timed_client": {"reads": "rows", "writes": "send_command"},
         "engine": "ckdbs",
         "scenario": "scenario3-library",
         "columns": sum(len(SCHEMA[b][0].split(",")) for b in CREATE_ORDER),

@@ -255,9 +255,17 @@ class Arm:
         return reply
 
     def timed(self, command, phase):
+        """One timed statement, through the client that counts rows - what
+        the twin's `timed` does (`pg_wire`'s `send_command`). The replies the
+        verification compares come through `__call__`, outside the timer
+        (EF-S1)."""
         t0 = time.perf_counter()
-        reply = self(command)
+        reply = self.conn.count(command)
         dt = time.perf_counter() - t0
+        if reply.startswith("ERR"):
+            self.errors += 1
+            if self.first_error is None:
+                self.first_error = f"{command}  ->  {reply}"
         phase.record(dt, reply)
         phase.elapsed += dt          # busy time only; slot sleeps excluded
         return reply
@@ -556,6 +564,8 @@ def main():
         final[a.name]["cabins"] = capture_cabins(a)
 
     meta = {
+        # EF-S1: every timed statement goes through the client that counts, as the twin's does.
+        "timed_client": "count",
         "engine": "ckdbs",
         "driver": "scenario4_cabinopt_days.py",
         "host": args.host,

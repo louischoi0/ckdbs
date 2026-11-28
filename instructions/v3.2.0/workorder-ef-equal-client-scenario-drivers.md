@@ -275,6 +275,43 @@ rule and binds S3 only.
 
 ## 7. Stage log (CLA, appended as stages land)
 
+### EF-S1 (2026-11-28): the drivers, on `ef-equal-client-scenario-drivers` from `5df8ffe05`
+
+`[measured]` at engine `v3.5.1-6-g72580aa04`,
+`bench/v3.5.1/results-ef-s1-drivers-v3.5.1-6-g72580aa04.md`:
+
+- **Each driver's timed path is now its twin's** (EF-Q2 (a), EF-Q7 (a)):
+  scenario 2's seven reads and scenario 3's read shapes decode each
+  value to a string and render nothing (`rows_timed`, `Client.timed`);
+  scenario 4's timed statements are counted (`Arm.timed`); scenario 1 is
+  untouched. Verification and the byte comparisons still read through
+  `send_command`, outside the timer (EF-R3).
+- **`kwp.Connection.fetch`** is the values path: the request `query`
+  sends, and a row description decoded once per shape, keyed by its
+  bytes. **CLA's first form of it did not cache the description and was
+  measured still behind** (a lookup at 32.2 µs against PostgreSQL's
+  23.4 µs, pass D): a KDS client must read the description to render
+  typed values, a PostgreSQL client receives text and reads none, and in
+  Python that step cost about 10 µs a statement. Cached, the lookup is
+  22.8 µs against 22.8 µs (pass D2).
+- **The series break** (EF-Q3 (a), the overlap, three interleaved rounds
+  on the final driver): a booking's four reads are 7.4 µs to 11.7 µs
+  cheaper each, its writes and commit inside their spreads, the booking
+  rate 1,978.6 against 1,829.8 a second; ten of scenario 3's twelve read
+  shapes are 10 µs to 47 µs cheaper. The outcomes and `--verify` are
+  identical through both drivers.
+- **What stays unequal is per row and is the wire's**: a typed value is
+  rendered by the KDS client, a text value is not by PostgreSQL's
+  (`bar-range` 0.96x through the values pair, 1.74x through two counting
+  clients). EF-R1's "equal client work" is met for a statement and is
+  not for a row of a `values` phase; the results files say which mode
+  each phase ran in, from the `timed_client` entry the drivers now write.
+- **Not moved**: writes keep `send_command` (no rows, and the overlap
+  shows them unmoved). **Not run**: an overlap for scenario 4, whose
+  change is the counting client EF-S0's pass A measured.
+- The suite was not executed: no build input changed (`tools/` only).
+  Overhead not measured; nothing in the engine changed.
+
 ### EF-S0 (2026-11-28): the premise, on `ef-equal-client-scenario-drivers` from `72580aa04`
 
 `[measured]` at `v3.5.1-6-g72580aa04`, Release, both servers on CPUs 0 to

@@ -104,8 +104,9 @@ class Kds:
         # `--kds-client send_command`: the timed statements go through the
         # path the scenario drivers timed before EF-S1, on a connection of
         # its own. Loading and DDL stay on `query` either way.
+        self.client = client
         self.cli = (ckdbs_cli.ServerConnection("127.0.0.1", port, timeout=120.0)
-                    if client == "send_command" else None)
+                    if client != "query" else None)
 
     def run(self, sql):
         return self.conn.query(sql)
@@ -113,6 +114,11 @@ class Kds:
     def timed(self, sql):
         if self.cli is None:
             return self.conn.query(sql)
+        if self.client == "rows":
+            # What the drivers time around a read since EF-S1: every value
+            # decoded to a string, no rendering of the reply.
+            rows, reply = self.cli.rows(sql)
+            return ("", 0, 0, reply) if rows is None else ("", len(rows), 0, None)
         reply = ckdbs_cli.format_reply(self.cli.send_command(sql))
         if reply.startswith("ERR"):
             return "", 0, 0, reply
@@ -150,6 +156,7 @@ class Pg:
         result, error = self.conn.fetch(sql)
         if error is not None:
             return "", 0, 0, error
+        # The list is built for its cost, which is what the twins' `rows` pays.
         rows = [[None if v is None else v.decode() for v in row] for row in result]
         return "", len(rows), 0, None
 
@@ -171,15 +178,15 @@ def host_pid(pid, client_port):
         try:
             with open(f"/proc/{entry}/status") as f:
                 text = f.read()
+            if not text.startswith("Name:\tpostgres"):
+                continue
+            nspid = next((line for line in text.splitlines() if line.startswith("NSpid:")), "")
+            if not nspid or int(nspid.split()[-1]) != pid:
+                continue
             with open(f"/proc/{entry}/cmdline", "rb") as f:
-                title = f.read()
+                found.append((int(entry), f.read()))
         except OSError:
             continue
-        if not text.startswith("Name:\tpostgres"):
-            continue
-        nspid = next((line for line in text.splitlines() if line.startswith("NSpid:")), "")
-        if nspid and int(nspid.split()[-1]) == pid:
-            found.append((int(entry), title))
     if len(found) > 1:
         found = [f for f in found if f"({client_port})".encode() in f[1]]
     if len(found) != 1:
@@ -283,10 +290,11 @@ def main():
     p.add_argument("--scale", type=float, default=1.0, help="multiplies every shape's ops")
     p.add_argument("--shapes", default=",".join(SHAPES))
     p.add_argument("--seed", type=int, default=1)
-    p.add_argument("--kds-client", choices=("query", "send_command"), default="query",
+    p.add_argument("--kds-client", choices=("query", "rows", "send_command"), default="query",
                    help="the KDS client the timed statements go through: `query` counts rows as "
-                        "pg_wire's does; `send_command` decodes and renders every field, as the "
-                        "scenario drivers' timed path did before EF-S1")
+                        "pg_wire's does; `rows` decodes every value to a string, as the scenario "
+                        "2 and 3 drivers' timed reads do since EF-S1; `send_command` also renders "
+                        "the reply, as every scenario driver's timed path did before it")
     p.add_argument("--pg-client", choices=("query", "fetch"), default="query",
                    help="the PostgreSQL client the timed statements go through: `query` counts "
                         "rows; `fetch` decodes every value to a string, as the scenario 2 and 3 "

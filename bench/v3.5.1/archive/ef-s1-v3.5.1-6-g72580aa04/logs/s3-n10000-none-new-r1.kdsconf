@@ -1,0 +1,8 @@
+data_file = /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s1/data/s3-n10000-none-new-r1/kds.db
+cores = 1
+port = 15791
+durability = group
+log_dir = /home/ukjin/bench-runs/ef-v3.5.1-6-g72580aa04/s1/data/s3-n10000-none-new-r1
+log_file = kds.log
+log_level = warn
+buffer_pool_frames = 65536
