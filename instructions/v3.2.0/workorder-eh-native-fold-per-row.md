@@ -3,7 +3,7 @@
 Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
-2026-11-28 (`raft-marks-2026-11-28.md` §3, §4). No stage is started; EH-S0
+2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EH-S0
 waits for the operator's word and for the marks on §4's items. A
 `[source-read]` claim with a `path:line` was read at `b95be2e86`. **Two
 readers stand behind them**: the lines marked "spot-read" were re-read by

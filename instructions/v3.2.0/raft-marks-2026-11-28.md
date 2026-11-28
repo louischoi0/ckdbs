@@ -1,9 +1,19 @@
 # Raft marks - 2026-11-28
 
-The operator's words of 2026-11-28 (UTC), recorded in English. §1's first
-word was given on 2026-11-27 and ran on the 28th.
+The operator's words of 2026-11-28 (UTC), recorded in English.
 
-## 1. The PostgreSQL control run of scenarios 1 to 4, asked ten hours ahead; its results file landed with the hook skipped
+## 1. v3.5.1 named, tagged and pushed
+
+| | |
+|---|---|
+| **Word** | *"tag 3.5.1"*, to the report of DX's landing, then *"push 3.5.1"* |
+| **Mark** | **The version is `v3.5.1`, the operator's own word**: an annotated tag on `main` at `b95be2e86` (`origin/main` at the moment of tagging), **pushed to `origin`**. Its message states what is built since `v3.5.0` (DD, DL, DK, DN, DO, DP, DQ, BS, BG, DR, DS, DU, DT, DW, DV, DZ, EA, DX, EB; DG, DM, CW and EE abandoned), superblock 41, the suite (5,417 of 5,417 at `10cb82a27`, whose build inputs are the tagged tree's; not executed on the tagged commit itself; `tsan`, `bs-nightly` and the full `sim.sh` corpus not executed) and the gaps that bound it. **Found at the tag**: `v3.5.0` and `v3.4.18`, recorded as local tags (`raft-marks-2026-11-20.md` §25, §26), exist neither in this repository nor on `origin`, so `git describe` below `v3.5.1` reads from `v3.4.17`; they were not re-created |
+| **Does not settle** | whether `v3.5.0` and `v3.4.18` are re-created at `07f4552a` and `56d57f16` |
+| **Recorded at** | this file; `CLAUDE.md`'s version of record; this file's row in `instructions/v3.2.0/index.md` |
+
+§2's first word was given on 2026-11-27 and ran on the 28th.
+
+## 2. The PostgreSQL control run of scenarios 1 to 4, asked ten hours ahead; its results file landed with the hook skipped
 
 | | |
 |---|---|
@@ -13,7 +23,7 @@ word was given on 2026-11-27 and ran on the 28th.
 | **CLA's, not the operator's** | the choice of a container over a native server (the host has none), of PostgreSQL 18 over the 17 image already on the host, of the cells (those of `v3.3.0-33-g9682b725`'s PostgreSQL run, unchanged) and of the re-run on another port |
 | **Does not settle** | a KDS run to set beside it; a tag or a version |
 
-## 2. A PostgreSQL-KDS comparison from the existing numbers, pushed with the hook skipped, and corrected by CLA the same day
+## 3. A PostgreSQL-KDS comparison from the existing numbers, pushed with the hook skipped, and corrected by CLA the same day
 
 | | |
 |---|---|
@@ -23,14 +33,14 @@ word was given on 2026-11-27 and ran on the 28th.
 | **Skipped, on the word** | the pre-push hook, both times; no suite ran and no `critics-developer` review was run on the file; documents only |
 | **Does not settle** | whether the matched KDS cells are measured on `main` (EF-S2 proposes it) |
 
-## 3. A milestone asked for each of the comparison's three slow items
+## 4. A milestone asked for each of the comparison's three slow items
 
 | | |
 |---|---|
 | **Word** | *"and write a milestone for each of the slow issues 1, 3 and 4"* - the comparison's items 1 (a short statement's fixed cost), 3 (the durable commit path) and 4 (a full-scan aggregate), as its first version numbered them |
-| **Mark** | Three orders are to be written. Before any was, CLA's reading of the tree for their premises found items 1 and 3 unsupported (§2's correction), and CLA put the form of the three to the operator (§4) |
+| **Mark** | Three orders are to be written. Before any was, CLA's reading of the tree for their premises found items 1 and 3 unsupported (§3's correction), and CLA put the form of the three to the operator (§5) |
 
-## 4. EF, EG and EH written re-scoped; none opened
+## 5. EF, EG and EH written re-scoped; none opened
 
 | | |
 |---|---|

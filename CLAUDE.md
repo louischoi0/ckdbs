@@ -249,11 +249,12 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 ## Version Management
 
 The version of record is an **annotated git tag on `main`**. **The current
-version of record is `v3.5.0`**, taken on `main` at `07f4552a` (DI, DH,
-the audits' contained fixes and DJ since `v3.4.16`, under one minor
-version), operator-named on 2026-11-20 ("tag 3.5.0"); read its tag
-message. **The tag is local and not yet pushed** (operator: "Do not push
-the tag in the scheduled job"; `raft-marks-2026-11-20.md` §26).
+version of record is `v3.5.1`**, taken on `main` at `b95be2e86` (DD
+through EB since `v3.5.0`), operator-named on 2026-11-28 ("tag 3.5.1")
+and **pushed** on the operator's word ("push 3.5.1";
+`raft-marks-2026-11-28.md` §1); read its tag message. `v3.5.0` (`07f4552a`)
+and `v3.4.18` (`56d57f16`) were local tags that this clone does not hold,
+so `git describe` reads from `v3.4.17` below `v3.5.1`.
 
 - **The operator names the version; CLA may move only `z`.** A version is
   set by the operator saying it — *"it is version x.y.z"* — and nothing
