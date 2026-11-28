@@ -1,6 +1,12 @@
 # Work order EH - what the native fold pays for a row: an aggregate over a whole relation
 
-Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
+Status: **OPENED 2026-11-28** on worktree `eh-native-fold-per-row`
+(branch `worktree-eh-native-fold-per-row`) from `01c6c741c`
+(`v3.5.1-35-g01c6c741c`), the close of EG's work branch, which is not
+landed; under the operator's standing go-ahead of 2026-11-28
+(`raft-marks-2026-11-28.md` §14): every EH-Q item is **adopted on that
+go-ahead, never marked by the operator item by item** (§4, "Marks").
+Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
 2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EH-S0
@@ -204,6 +210,28 @@ inside AG1 as written is EH-Q3's.
 | EH-Q4 | `COUNT(*)` from a structure's counts | (a) not built: a count that is not per row at the snapshot is not the answer; (b) considered | (a) |
 | EH-Q5 | The query layer's fold | (a) outside EH; (b) inside | (a) |
 | EH-Q6 | Scenario 4's `close` | (a) the driver times each of its four statements as its own phase from S0 on, on EF's equal client if EF-S1 has landed and on `kwp.Connection.query` directly if not; (b) left as one phase | (a) |
+
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-28 (go-ahead-achieving-milestone)** (`raft-marks-2026-11-28.md`
+§10, §14), and none is the operator's own mark on the item. No EH-Q item
+is tagged `[quiet-wrong]` itself; three rules are (EH-R2, EH-R3, EH-R7),
+and the premise of each was re-read against the tree at `01c6c741c`
+before the opening: visibility is decided per row by `txn::Classify`
+under the leaf's hold (`src/exec/step_vm.cpp`), a cell is read today only
+from the copied payload, and the dispatcher has one `Aggregator` reused
+across statements (`include/kds/server/command_dispatcher.hpp`).
+
+| | adopted | note |
+|---|---|---|
+| EH-Q0 | (a) | S0, then the candidates S0 ranks, one a stage |
+| EH-Q1 | (a) | the bar: a global fold's server CPU a row at or below PostgreSQL's on S0's host; EH closes on what was measured either way |
+| EH-Q2 | (a) | the slices as EH's last stage, under EH-R7 |
+| EH-Q3 | (a) | AG1 read as "the chain's steps and its row stream are identical" |
+| EH-Q4 | (a) | no `COUNT(*)` from a structure's counts |
+| EH-Q5 | (a) | the query layer's fold outside EH |
+| EH-Q6 | (a) | S0 measures the fold shape by shape through counting clients; scenario 4's `close` split is left to the close |
 
 ## 5. Stages
 

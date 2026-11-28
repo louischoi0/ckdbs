@@ -126,3 +126,12 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version; DY-Q2; the opening of EH, which follows under §10's word |
 | **Recorded at** | this file; `workorder-eg-one-client-durable-write.md` (header, §4 "Marks", §7); EG's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
+## 14. EH opened on the standing go-ahead, on EG's unlanded close; EH-Q0..Q6 adopted
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10, which names EH after EG; no further word |
+| **Mark** | **EH is opened** on worktree `eh-native-fold-per-row` (branch `worktree-eh-native-fold-per-row`) from `01c6c741c` (`v3.5.1-35-g01c6c741c`), the close of EG's work branch. **EH-Q0..Q6 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator. The premises of its three `[quiet-wrong]` rules (EH-R2, EH-R3, EH-R7) were re-read against the tree before the opening, as the order's "Marks" records |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; `workorder-eh-native-fold-per-row.md` (header, §4 "Marks"); EH's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
