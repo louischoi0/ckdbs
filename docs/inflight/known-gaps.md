@@ -581,11 +581,30 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `wal/file_log_device.cpp`.
 
 
+- **Two inline syncs are still booked to no wait event** (found by the
+  review of EG's close at `01c6c741c`, read in code, not measured): a
+  DDL with no transaction of its own syncs on the statement's stack
+  through `AwaitDdlDurability` and `SyncAll`
+  (`src/server/command_dispatcher.cpp`), at `strict` and at `group`; and
+  a `group` commit on a dispatcher that cannot park drains and waits
+  inline rather than parking. EG-S1 booked the `strict` arm of
+  `WalManager::Commit` alone, so these two read as their statement's CPU
+  time. Also from that review: `docs/spec/wal.md` §2 and §16 still say
+  every WAL write goes through `IoBackend`, where the log's seam is
+  `LogDevice` (§6 was corrected), and §6's heading still reads
+  `[PROPOSED]` over text that describes the code as built; and
+  `bench/v3.5.1/results-eg-close-v3.5.1-33-g01bd189f4.md` carries bare
+  numbers under unit-bearing headings, against `bench/README.md`'s rule.
+  Owner: `docs/spec/wait-events.md`, `docs/spec/wal.md`.
+
 - **On a one-core instance a `strict` commit syncs on its reactor, so
   every other session waits out each commit's sync** (EG-S0, recorded on
   `eg-one-client-durable-write` at `d50d304f8`, not built: EG-Q3 (a)).
-  Nothing defers the commit there - there is no wake registry below two
-  cores (`src/server/command_dispatcher.cpp`, `DefersCommit`) - and
+  Nothing defers the commit there - the instance's wake registry is built
+  above one core only, so at one core the WAL writer kicks no parked
+  committer (`src/server/expeditor.cpp`; the page reader's one-entry wake
+  table there is not given to it) and `DefersCommit`
+  (`src/server/command_dispatcher.cpp`) answers false - and
   `WalManager::Commit` calls `Sync()` on the statement's stack; `group`
   parks its committers and the reactor's post-task hook covers one
   iteration's commits with one sync. Eight bookers on one core, one run
@@ -595,8 +614,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   EG-S1 the inline sync is at least visible: booked under
   `commit.wal_flush` in `sys.wait_stats` and `sys.session_waits`
   (`docs/spec/wait-events.md`), though never in `sys.ash`. To build:
-  the deferred path at one core, which needs a waker for a one-core
-  instance or a park the hook's drain resumes. Owner:
+  the deferred path at one core, which needs the writer to kick a
+  one-core reactor or a park the hook's drain resumes. Owner:
   `docs/spec/wal.md` §6.
 - **A segment roll does I/O inside the instance's append latch, and at
   `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
