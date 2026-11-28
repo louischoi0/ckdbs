@@ -61,13 +61,6 @@ class Kds:
     def run(self, sql):
         return self.conn.query(sql)
 
-    def batch(self, sql):
-        """A bulk-load batch: one explicit transaction, so one commit."""
-        self.cli.send_command("BEGIN")
-        error = self.conn.query(sql)[3]
-        self.cli.send_command("COMMIT")
-        return error
-
     def meta(self):
         rows, _ = self.cli.rows("SELECT * FROM sys.meta")
         fields = {r[1]: r[2] for r in rows or []}
@@ -89,9 +82,6 @@ class Pg:
 
     def run(self, sql):
         return self.conn.query(sql)
-
-    def batch(self, sql):
-        return self.conn.query(sql)[3]          # one statement, one implicit transaction
 
     def meta(self):
         lsn = self.conn.scalar("SELECT pg_current_wal_lsn() - '0/0'::pg_lsn")
@@ -152,7 +142,8 @@ def main():
     cells.append(cell(engine, "idle", next_id, args.ops))
     next_id += args.ops
 
-    # The bulk load: batches in one transaction each, until the log has rolled (KDS) or the row count is met.
+    # The bulk load: one autocommit multi-row INSERT a batch, so one transaction and one commit each, on both
+    # engines alike, until the log has rolled (KDS) or the row count is met.
     load_start, loaded = time.perf_counter(), 0
     while True:
         if args.engine == "kds":
@@ -162,7 +153,7 @@ def main():
             break
         for _ in range(20):                     # 20 batches between two looks at the log
             values = ", ".join(row(i) for i in range(next_id, next_id + args.load_batch))
-            error = engine.batch(f"INSERT INTO {TABLE} VALUES {values}")
+            error = engine.run(f"INSERT INTO {TABLE} VALUES {values}")[3]
             if error is not None:
                 sys.exit(f"load: {error}")
             next_id += args.load_batch

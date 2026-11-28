@@ -9,8 +9,7 @@ go-ahead, never marked by the operator item by item** (§4, "Marks").
 Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
-2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EG-S0
-waits for the operator's word and for the marks on §4's items. A
+2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). EG-S0 has run (§7). A
 `[source-read]` claim with a `path:line` was read at `b95be2e86`. **Two
 readers stand behind them**: the figures of §1.1 were computed by CLA from
 the archived JSON, and the lines of §1.2 marked "spot-read" were re-read
@@ -206,8 +205,8 @@ runs
 **Every row is CLA's proposal adopted on the operator's standing go-ahead
 of 2026-11-28 (go-ahead-achieving-milestone)** (`raft-marks-2026-11-28.md`
 §10, §12), and none is the operator's own mark on the item. No EG-Q item
-is tagged `[quiet-wrong]`; EG-R1, which is, is a rule, and S1 was read
-against it before it was built (§7).
+is tagged `[quiet-wrong]`; EG-R1, which is, is a rule, and S1 is to be
+read against it before it is built.
 
 | | adopted | note |
 |---|---|---|
@@ -248,10 +247,17 @@ rounds, every cell through the quiet gate at once:
   (`group`) against 143.8 µs. At once after a bulk load that rolled the
   log: 210.6 µs and 217.1 µs against 145.1 µs (0.69x, 0.67x). After the
   checkpoint removed the old segment, 9.7 s later: 158.6 µs and
-  156.1 µs. Server CPU, bytes logged and syncs per insert are the same
-  in the three states.
+  156.1 µs. One sync an insert in every state; server CPU 12.8 µs to
+  15.6 µs and 808.7 B to 864.5 B logged an insert across them. **At one
+  relation size the second segment is 52.0 µs (`strict`) and 61.0 µs
+  (`group`)**, after-load less settled; the settled state stays 12.8 µs
+  and 9.3 µs above idle, just outside the spreads, and that residual is
+  not attributed (review of EG-S0).
 - **That is `result-insert`**: scenario 1's 60,480-bar run rolled its
   log once (`wal_rolls` 1) and its insert read 215.2 µs, p50 202.4 µs.
+  The counters were read at the run's end, so that two segments were
+  live during `result-insert` itself is inferred from the figures, not
+  read.
 - **The cause is `known-gaps.md`'s "Every sync covers every live
   segment"** (`src/wal/file_log_device.cpp`), whose narrowing is BQ's
   rung 3 and DY-Q2, `[quiet-wrong]` with its proof unwritten.
@@ -263,9 +269,9 @@ rounds, every cell through the quiet gate at once:
 - **The candidates S0 was to split** (§2): the statement, no (13 µs to
   16 µs of server CPU in every state, and level with PostgreSQL idle);
   the `group` rung's park against `strict`'s inline call, no (145.8 µs
-  against 146.8 µs); bytes and images in the commit's write, no (815 B
-  an insert in every state, no image in the dear cells); the live
-  segments under the sync, yes.
+  against 146.8 µs); bytes and images in the commit's write, no (809 B
+  to 865 B an insert across the states, no image in the dear cells); the
+  live segments under the sync, yes.
 - **EG-Q2's premise confirmed on a running server**: 500 `strict`
   commits, 0 booked under `commit.wal_flush`; `group` books 500.
 - **EG-Q3's record**: eight bookers on one core, 3,325.2 bookings a

@@ -567,12 +567,16 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   at `d50d304f8`, against a commit and not a roll**: one client's
   autocommit insert is 145.8 µs with one live segment and 210.6 µs with
   two (`strict`; 146.8 µs and 217.1 µs at `group`), where PostgreSQL 18.7
-  is 143.8 µs and 145.1 µs - 0.67x to 0.69x of its rate from a roll until
-  the checkpoint after it removes the old segment, 9.7 s at the default
-  cadence (`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`).
-  It is scenario 1's `result-insert` at 60,480 bars. BQ's bar was the
-  roll's hold and DY-Q2 stands at "left"; this price was before neither.
-  EG did not narrow the sync (EG-R2).
+  is 143.8 µs and 145.1 µs - 0.67x to 0.69x of its rate, measured at
+  once after the roll; the old segment was removed 9.7 s later, at the
+  default 5 s cadence, and the insert was then 158.6 µs and 156.1 µs, so
+  the second segment's own price at one relation size is 52.0 µs and
+  61.0 µs (`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`).
+  Scenario 1's `result-insert` at 60,480 bars (215.2 µs, a run that
+  rolled once) matches the two-segment figure; its live count during
+  that phase was not read. BQ's bar was the roll's hold, and DY-Q2 is
+  unmarked with CLA's proposal revised to (b), left, at DY-S0; neither
+  had this price. EG did not narrow the sync (EG-R2).
   Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
