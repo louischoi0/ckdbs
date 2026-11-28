@@ -1,0 +1,9 @@
+phase open: 240 ops, mean 137.7 us, p50 127.5 us, p99 256.5 us, 7179 ops/s, errors {}
+phase board: 2400 ops, mean 132.4 us, p50 129.9 us, p99 199.6 us, 7456 ops/s, errors {}
+phase tape200: 396 ops, mean 21.9 us, p50 19.6 us, p99 53.6 us, 42873 ops/s, errors {}
+phase tape1k: 396 ops, mean 27.1 us, p50 24.7 us, p99 45.5 us, 35772 ops/s, errors {}
+phase tape10k: 396 ops, mean 135.7 us, p50 125.4 us, p99 261.8 us, 7281 ops/s, errors {}
+phase pk: 240 ops, mean 27.6 us, p50 25.5 us, p99 71.5 us, 33758 ops/s, errors {}
+phase close: 12 ops, mean 458.3 us, p50 363.2 us, p99 983.9 us, 2050 ops/s, errors {}
+check counts[off]: ok board_a 10240 (expect 10240), board_b 10000 (expect 10000), tape_10k 10000, zero-row probe 0 rows, pk 240 rows of 240
+check no-refusals: ok 0 statements refused over every group and arm

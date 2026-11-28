@@ -1,0 +1,410 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "name": "warehouse-ytd",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "district-next-order",
+      "ok": true
+    },
+    {
+      "detail": "662371 lines, 662371 declared",
+      "name": "order-line-count",
+      "ok": true
+    },
+    {
+      "detail": "ytd 2544339 vs ordered 2544339; count 462743 vs lines 462743",
+      "name": "stock-ytd",
+      "ok": true
+    },
+    {
+      "detail": "15455297954 vs 26612177140 - 11156879186",
+      "name": "customer-balance",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795858380,
+  "engine": "pg",
+  "harness": "eqbench",
+  "meta": {
+    "load_seconds": 4.396858324,
+    "mix": {
+      "new_order_business_rollbacks": 489,
+      "new_orders_committed": 45917,
+      "new_orders_per_minute": 45916.55354875819,
+      "note": "not tpmC: not TPC-C, not audited",
+      "transactions_failed": 0
+    },
+    "scale": {
+      "alone_ops": 300,
+      "customers_per_district": 1000,
+      "districts_per_warehouse": 10,
+      "initial_orders_per_district": 1000,
+      "items": 10000,
+      "seconds": 60.0,
+      "terminals": 1,
+      "warehouses": 2,
+      "warmup_per_kind": 10
+    }
+  },
+  "options": {
+    "terminals": "1"
+  },
+  "phases": [
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 1.4699166666666668,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 223.65483666666668,
+      "client_decode_us_per_op": 1.4699166666666668,
+      "errors": {},
+      "events": [],
+      "kinds": {
+        "new-order": {
+          "max_us": 1817.822,
+          "mean_us": 822.8906858108107,
+          "ops": 296,
+          "p0_us": 501.413,
+          "p25_us": 660.088,
+          "p50_us": 819.311,
+          "p95_us": 1093.587,
+          "p99_us": 1172.43
+        },
+        "new-order-rollback": {
+          "max_us": 872.663,
+          "mean_us": 656.29225,
+          "ops": 4,
+          "p0_us": 410.868,
+          "p25_us": 470.245,
+          "p50_us": 871.393,
+          "p95_us": 872.663,
+          "p99_us": 872.663
+        }
+      },
+      "latency": {
+        "max_us": 1817.822,
+        "mean_us": 820.6693733333333,
+        "ops": 300,
+        "p0_us": 410.868,
+        "p25_us": 659.79,
+        "p50_us": 819.311,
+        "p95_us": 1093.587,
+        "p99_us": 1172.43
+      },
+      "name": "new-order",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 294.43666666666667,
+      "terminals": 1,
+      "throughput_ops": 1217.2906841583872,
+      "wall_s": 0.246448941
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.17506666666666668,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 39.363553333333336,
+      "client_decode_us_per_op": 0.17506666666666668,
+      "errors": {},
+      "events": [],
+      "kinds": {
+        "payment": {
+          "max_us": 578.922,
+          "mean_us": 245.60362333333333,
+          "ops": 300,
+          "p0_us": 228.722,
+          "p25_us": 236.364,
+          "p50_us": 238.588,
+          "p95_us": 265.333,
+          "p99_us": 319.025
+        }
+      },
+      "latency": {
+        "max_us": 578.922,
+        "mean_us": 245.60362333333333,
+        "ops": 300,
+        "p0_us": 228.722,
+        "p25_us": 236.364,
+        "p50_us": 238.588,
+        "p95_us": 265.333,
+        "p99_us": 319.025
+      },
+      "name": "payment",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 52.03,
+      "terminals": 1,
+      "throughput_ops": 4056.0015377113027,
+      "wall_s": 0.073964469
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.40252333333333334,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 24.575096666666667,
+      "client_decode_us_per_op": 0.40252333333333334,
+      "errors": {},
+      "events": [],
+      "kinds": {
+        "order-status": {
+          "max_us": 545.95,
+          "mean_us": 80.67310333333333,
+          "ops": 300,
+          "p0_us": 71.634,
+          "p25_us": 75.273,
+          "p50_us": 77.789,
+          "p95_us": 84.461,
+          "p99_us": 159.465
+        }
+      },
+      "latency": {
+        "max_us": 545.95,
+        "mean_us": 80.67310333333333,
+        "ops": 300,
+        "p0_us": 71.634,
+        "p25_us": 75.273,
+        "p50_us": 77.789,
+        "p95_us": 84.461,
+        "p99_us": 159.465
+      },
+      "name": "order-status",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 34.13666666666666,
+      "terminals": 1,
+      "throughput_ops": 12251.38619330033,
+      "wall_s": 0.024487025
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 1.0788499999999999,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 317.30706000000004,
+      "client_decode_us_per_op": 1.0788499999999999,
+      "errors": {},
+      "events": [],
+      "kinds": {
+        "delivery": {
+          "max_us": 7789.323,
+          "mean_us": 1513.6427133333334,
+          "ops": 300,
+          "p0_us": 1390.026,
+          "p25_us": 1440.193,
+          "p50_us": 1469.071,
+          "p95_us": 1564.326,
+          "p99_us": 2554.816
+        }
+      },
+      "latency": {
+        "max_us": 7789.323,
+        "mean_us": 1513.6427133333334,
+        "ops": 300,
+        "p0_us": 1390.026,
+        "p25_us": 1440.193,
+        "p50_us": 1469.071,
+        "p95_us": 1564.326,
+        "p99_us": 2554.816
+      },
+      "name": "delivery",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 756.1033333333334,
+      "terminals": 1,
+      "throughput_ops": 660.5317461542239,
+      "wall_s": 0.454179533
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.06582666666666667,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 18.30647,
+      "client_decode_us_per_op": 0.06582666666666667,
+      "errors": {},
+      "events": [],
+      "kinds": {
+        "stock-level": {
+          "max_us": 930.955,
+          "mean_us": 187.76532,
+          "ops": 300,
+          "p0_us": 171.117,
+          "p25_us": 178.459,
+          "p50_us": 182.644,
+          "p95_us": 194.916,
+          "p99_us": 294.813
+        }
+      },
+      "latency": {
+        "max_us": 930.955,
+        "mean_us": 187.76532,
+        "ops": 300,
+        "p0_us": 171.117,
+        "p25_us": 178.459,
+        "p50_us": 182.644,
+        "p95_us": 194.916,
+        "p99_us": 294.813
+      },
+      "name": "stock-level",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 150.31666666666666,
+      "terminals": 1,
+      "throughput_ops": 5303.293030309769,
+      "wall_s": 0.056568626
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.8659207858416686,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 130.99645934131968,
+      "client_decode_us_per_op": 0.8659207858416686,
+      "errors": {},
+      "events": [],
+      "kinds": {
+        "delivery": {
+          "max_us": 21574.388,
+          "mean_us": 1573.7838131736526,
+          "ops": 4175,
+          "p0_us": 1284.867,
+          "p25_us": 1501.584,
+          "p50_us": 1532.077,
+          "p95_us": 1744.848,
+          "p99_us": 2472.831
+        },
+        "new-order": {
+          "max_us": 271879.738,
+          "mean_us": 858.219589149988,
+          "ops": 45917,
+          "p0_us": 489.314,
+          "p25_us": 657.322,
+          "p50_us": 820.524,
+          "p95_us": 1113.576,
+          "p99_us": 1493.31
+        },
+        "new-order-rollback": {
+          "max_us": 2286.382,
+          "mean_us": 658.519926380368,
+          "ops": 489,
+          "p0_us": 345.1,
+          "p25_us": 479.322,
+          "p50_us": 652.264,
+          "p95_us": 945.903,
+          "p99_us": 1122.612
+        },
+        "order-status": {
+          "max_us": 1193.986,
+          "mean_us": 104.97818717089517,
+          "ops": 4178,
+          "p0_us": 78.062,
+          "p25_us": 95.351,
+          "p50_us": 99.876,
+          "p95_us": 115.03,
+          "p99_us": 247.87
+        },
+        "payment": {
+          "max_us": 80904.992,
+          "mean_us": 270.0642040917825,
+          "ops": 44235,
+          "p0_us": 222.387,
+          "p25_us": 239.79,
+          "p50_us": 243.29,
+          "p95_us": 275.436,
+          "p99_us": 519.394
+        },
+        "stock-level": {
+          "max_us": 1284.361,
+          "mean_us": 312.5238197034912,
+          "ops": 4182,
+          "p0_us": 189.238,
+          "p25_us": 273.316,
+          "p50_us": 304.706,
+          "p95_us": 417.07,
+          "p99_us": 517.374
+        }
+      },
+      "latency": {
+        "max_us": 271879.738,
+        "mean_us": 581.4462286481352,
+        "ops": 103176,
+        "p0_us": 78.062,
+        "p25_us": 243.022,
+        "p50_us": 380.028,
+        "p95_us": 1260.54,
+        "p99_us": 1604.197
+      },
+      "name": "mix",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 206.41656005272543,
+      "terminals": 1,
+      "throughput_ops": 1719.583280319807,
+      "wall_s": 60.000583386
+    }
+  ],
+  "profile": true,
+  "scenario": "s5",
+  "seed": 1,
+  "started_unix": 1795858314
+}

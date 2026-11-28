@@ -118,11 +118,18 @@ Every file you write or revise under `bench/` follows all of them.
    nothing finer: a result is not good because it beat PostgreSQL and not
    bad because it did not. The twins still live beside the ckdbs drivers
    (`tools/pg_*.py`), the scratch cluster is still `tools/pg_setup.sh` on
-   port 15433, and its tuning still stays at PostgreSQL defaults — a
+   a chosen `PGPORT` (its default, 15433, was held by another project on
+   2026-11-28; `bench/README.md` rule 5), and its tuning still stays at PostgreSQL defaults — a
    baseline tuned by hand is not a baseline. **A missing twin is no longer
    a hole to apologise for**: say the floor was not measured for this shape
    and move on. A missing *kdbs* baseline is the one worth naming, because
    that is the series a regression hides in.
+
+   **Oracle Database Free is a second control beside PostgreSQL**
+   (operator, 2026-11-28): a floor at its defaults, for internal analysis
+   only and never committed (`bench/private/`). `bench/README.md`'s "The
+   Oracle control", "Three engines on one client" and "What a relation is
+   stored as" bind every run.
 
 4b. **Measure at the extreme, not at the comfortable middle** (operator
    direction, 2026-08-31). The two axes this engine is built on are

@@ -1,0 +1,10 @@
+phase open: 240 ops, mean 137.3 us, p50 127.0 us, p99 260.2 us, 7211 ops/s, errors {}
+phase board: 2400 ops, mean 66.8 us, p50 21.6 us, p99 285.5 us, 14703 ops/s, errors {}
+phase tape200: 396 ops, mean 19.3 us, p50 15.3 us, p99 145.5 us, 49298 ops/s, errors {}
+phase tape1k: 396 ops, mean 20.1 us, p50 15.3 us, p99 58.5 us, 47491 ops/s, errors {}
+phase tape10k: 396 ops, mean 63.4 us, p50 17.9 us, p99 330.3 us, 15430 ops/s, errors {}
+phase pk: 240 ops, mean 15.5 us, p50 14.7 us, p99 27.2 us, 62424 ops/s, errors {}
+phase close: 12 ops, mean 340.8 us, p50 208.3 us, p99 784.3 us, 2840 ops/s, errors {}
+check counts[declared]: ok board_a 10240 (expect 10240), board_b 10000 (expect 10000), tape_10k 10000, zero-row probe 0 rows, pk 240 rows of 240
+check no-refusals: ok 0 statements refused over every group and arm
+check declared-cabins-served: ok 5 Cabins on the declared arm's 5 relations; every probed one active with hits: true

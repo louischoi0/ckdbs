@@ -1,0 +1,56 @@
+1795856763 WARN [query] "DROP TABLE s2_charges" -> ERR no relation named 's2_charges' (byte 11) in 53us
+1795856763 WARN [query] "DROP TABLE s2_freights" -> ERR no relation named 's2_freights' (byte 11) in 21us
+1795856763 WARN [query] "DROP TABLE s2_recipes" -> ERR no relation named 's2_recipes' (byte 11) in 8us
+1795856763 WARN [query] "DROP TABLE s2_fees" -> ERR no relation named 's2_fees' (byte 11) in 5us
+1795856763 WARN [query] "DROP TABLE s2_cargos" -> ERR no relation named 's2_cargos' (byte 11) in 3us
+1795856763 WARN [query] "DROP TABLE s2_operations" -> ERR no relation named 's2_operations' (byte 11) in 4us
+1795856763 WARN [query] "DROP TABLE s2_ships" -> ERR no relation named 's2_ships' (byte 11) in 3us
+1795856763 WARN [query] "DROP TABLE s2_organizations" -> ERR no relation named 's2_organizations' (byte 11) in 4us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 284 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=284 is held by transaction 290 in 4us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 37 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=37 is held by transaction 324 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 204 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=204 is held by transaction 374 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 215 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=215 is held by transaction 437 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 233 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=233 is held by transaction 518 in 4us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 179 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=179 is held by transaction 599 in 4us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 62 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=62 is held by transaction 610 in 4us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 41 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=41 is held by transaction 764 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 115 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=115 is held by transaction 878 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 22 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=22 is held by transaction 1034 in 5us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 139 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=139 was written by transaction 1041 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 192 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=192 is held by transaction 1162 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 273 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=273 is held by transaction 1216 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 69 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=69 was written by transaction 1305 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 212 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=212 is held by transaction 1334 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 82 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=82 is held by transaction 1392 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 232 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=232 is held by transaction 1440 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 6 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=6 is held by transaction 1482 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 219 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=219 is held by transaction 1487 in 3us
+1795856763 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 288 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=288 is held by transaction 1550 in 3us
+1795856763 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 94 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=94 is held by transaction 1551 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 249 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=249 is held by transaction 1657 in 4us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 178 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=178 is held by transaction 1676 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 255 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=255 is held by transaction 1709 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 256 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=256 is held by transaction 1736 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 219 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=219 is held by transaction 1744 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 28 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=28 is held by transaction 1858 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 28 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=28 is held by transaction 1868 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 1 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=1 was written by transaction 1974 in 4us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 53 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=53 is held by transaction 2130 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 54 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=54 is held by transaction 2185 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 82 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=82 is held by transaction 2213 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 275 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=275 is held by transaction 2288 in 4us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 213 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=213 is held by transaction 2451 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 93 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=93 is held by transaction 2475 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 268 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=268 is held by transaction 2517 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 130 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=130 is held by transaction 2564 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 182 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=182 is held by transaction 2610 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 44 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=44 is held by transaction 2648 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 288 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=288 is held by transaction 2895 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 14 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=14 is held by transaction 2955 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 121 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=121 is held by transaction 2958 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 151 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=151 is held by transaction 3061 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 188 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=188 is held by transaction 3068 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 284 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=284 is held by transaction 3111 in 3us
+1795856764 WARN [query] "SELECT credit_limit, outstanding FROM s2_organizations WHERE id = 267 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=267 is held by transaction 3143 in 4us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 53 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=53 is held by transaction 3218 in 3us
+1795856764 WARN [query] "SELECT booked_cbm, revenue FROM s2_operations WHERE id = 9 FOR UPDATE" -> ERR TXN_CONFLICT retryable=1 row id=9 is held by transaction 3296 in 3us

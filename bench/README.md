@@ -1,8 +1,11 @@
 # `bench/` — reopened 2026-09-03 for v3.0.0
 
 Results files, by the version of record they were measured at, and the
-rules a run is invalid without. **`bench/v3.0.0/` is a fresh series and
-carries no delta against any v2.x number** (AR0 D15): every v2.x number
+rules a run is invalid without. **The oldest directory kept is
+`bench/v3.4.10/`**: `v3.0.0` through `v3.4.9` were deleted on 2026-11-28
+and are held at `e571ae574` (the table at the end). **The v3 series, from
+`bench/v3.0.0/` on, is fresh and carries no delta against any v2.x number**
+(AR0 D15): every v2.x number
 measured the engine AR0 replaces, and a per-core-WAL number set beside a
 single-stream one reads as a regression or a win that neither ran.
 
@@ -37,7 +40,10 @@ The fifth is new to v3.
    2026-09-02 and a competing build moved a colocated p99 by 12×.
 5. **The port is chosen, never defaulted.** 15432 on this box is held by an
    unrelated `kds_server` under `/home/cdkbs/autotrade`; a cell that binds
-   the default either fails or, worse, talks to that instance.
+   the default either fails or, worse, talks to that instance. On
+   2026-11-28 another project's containers held 127.0.0.1:15433 (a
+   `kds_server`, the port `tools/pg_setup.sh` defaults to), 1522 and 1523
+   (Oracle Free) as well (`podman ps`).
 
 The drivers themselves are unmodified `tools/` scripts — a driver change
 inside a measurement stage measures the driver. `bench/docs/` stays closed
@@ -71,6 +77,11 @@ meets an older table reads its heading, as that table's own commit intended.
 
 ## A ratio against another engine names both clients - since 2026-11-28 (EF)
 
+**Since EO this section governs the Python drivers' files, the
+verification paths and an A/B between two KDS binaries**; a number set
+beside another engine's comes from the harness (the next section), whose
+README names each engine's client difference.
+
 A latency timed in a Python client is the server's plus the client's, and
 the two engines' clients do different work: KWP's rows arrive typed and
 must be rendered by the client, PostgreSQL's arrive as text. Twice
@@ -100,18 +111,84 @@ of added client work on one side and 0.8 µs on the other).
   (`tools/parity_bench.py`): where a claim is about the engine, it is
   quoted beside the wall clock.
 
-## What a v3 number is measured on — BTREE only, since 2026-09-08
+## What a relation is stored as — the kind its access asks for, since 2026-11-28 (EO)
 
-The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`):
-**every relation a driver creates is `BTREE`, and a delta is taken only
-against a BTREE baseline of the same driver**. The suspension that rule was
-marked under (SUS-1) was lifted by BZ (`instructions/v3.2.0/raft-marks-2026-10-17.md`
-§1): `CREATE TABLE ... HEAP` is admitted, and since DN (superblock 39) a heap
-is a storage of its own (`docs/spec/heap-and-tuple.md` §3.1b).
+The operator's words of 2026-11-28 (`instructions/v3.2.0/raft-marks-2026-11-28.md`
+§18): *"in benchmarking lift the heap suspension, give every scenario the
+btree or heap tree type that suits it (no benchmark of KDS's internal
+difference by table type)"*. This replaces AS-Q6's BTREE-only rule of
+2026-09-08 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`).
 
-A heap number beside a btree number is two workloads. Where one commit has
-both series, the `-btree-` in the benchmark name keeps them apart, and **a
-delta is read against the `-btree-` files and never against the others.**
+- **Every relation a scenario creates is the kind its statements ask for**,
+  and the scenario's driver states each relation's kind and the reason in
+  one table (`tools/eqbench/README.md`, "Relation kinds"). The rule CLA
+  applies (EO-Q3, `[design]`): `BTREE` where the statements reach rows by
+  the tuple key - a point, a range, an order by it - since a btree answers
+  a point in one descent of its own tree, where a heap descends its
+  Keystone index and then fetches the rowid's page, and a heap's walk is
+  bounded by no tuple key range and read in no key order; `HEAP` where
+  they reach rows chiefly through a secondary index, or only append and
+  walk, since a heap's index entry carries the rowid and a probe fetches
+  the page with no second descent (`docs/spec/heap-and-tuple.md` §3.1b).
+- **No cell compares the two kinds on KDS.** A kind is a property of the
+  scenario, fixed in its driver; a run that varied it would measure a
+  question the operator declined.
+- **A delta is taken only against a run of the same driver with the same
+  kinds.** A scenario file measured before its kinds were assigned is
+  another workload, and no delta crosses that change.
+
+## Three engines on one client — since 2026-11-28 (EO)
+
+The operator's words of 2026-11-28 (§18): *"measure with a version that
+removes the cost of the kdbs measurement driver - the three, pg, oracle and
+kdbs, under client conditions as equal as possible; consider Rust too"*.
+
+- **One Rust binary drives every engine** (`tools/eqbench/`): the same
+  scenario code, the same parameter sequence from the same seed, a
+  prepared statement with bound values on every engine (KWP's named
+  statement, PostgreSQL's extended protocol, OCI's statement), and every
+  returned value decoded to a Rust value on every engine. What differs is
+  only each engine's wire protocol and its own client library, and the
+  harness's README names each difference.
+- **Each cell carries the harness's own CPU per operation**
+  (`getrusage(RUSAGE_THREAD)`) beside the server's, **counted over every
+  process and thread of the server**: KDS's one process from
+  `/proc/<pid>/task/*/schedstat` (all its threads, in nanoseconds), PostgreSQL's and Oracle's container
+  from its cgroup's `cpu.stat` (every backend and background process - a
+  walwriter, a checkpointer, a log writer). So a reader sees how far apart
+  the three clients are and what each whole server spent.
+- The Python scenario drivers stay for verification and for an A/B between
+  two KDS binaries; **a number set beside another engine's is the
+  harness's** from EO on.
+
+## The Oracle control — internal analysis only, never marketing
+
+The operator's words of 2026-11-28 (§18): *"add Oracle with the basic
+licence as a benchmark control too, and state that the comparison produces
+results only for internal analysis and will not be used for marketing
+later"*; and, asked where its results live, *"commit the drivers only"*.
+
+- **Oracle Database Free at its defaults** (Free's own limits: 2 CPU
+  threads, 2 GB of memory, 12 GB of user data), in the `gvenzl/oracle-free`
+  container image, untuned - a control tuned by hand is not a control, as
+  for PostgreSQL. Oracle is a control beside PostgreSQL, a floor and no
+  reference: the baseline stays this engine's own last run.
+- **Every Oracle comparison is for internal analysis only and is not used
+  for marketing, now or later.** No figure measured on Oracle is quoted in
+  a post, a talk, a deck, the manual or any outside-facing text.
+- **No Oracle figure is committed.** This repository is public, so a
+  committed results file is a published one. The Oracle twin's code, its
+  setup script and the harness are committed; every results file or raw
+  output that carries an Oracle figure is written under `bench/private/`,
+  which `.gitignore` excludes and which never leaves this host. A committed
+  results file sets KDS beside PostgreSQL only and says that an Oracle
+  control was run and where it is kept, giving no Oracle figure.
+- `Constraint`: Oracle's commercial licences forbid disclosing benchmark
+  results without Oracle's written consent; whether the Free Use Terms
+  and Conditions that cover Oracle Database Free carry that clause was not
+  verified (its text answered HTTP 403 on 2026-11-28). `Effect`: until it
+  is read, an Oracle figure is treated as if the clause applies, which is
+  what the rule above does.
 
 ## What was deleted, and where it is held
 
@@ -126,10 +203,13 @@ is the one to read them at:
 | 2026-09-02, ahead of the big-bang change; reopened 2026-09-03 by AL-R8 (`instructions/v3.0.0/workorder-al-m0-single-wal.md`) | everything: the five C++ microbenchmarks, the probe drivers, `bench/docs/`, the three scenario documents, every v2.x results file | `1769487` |
 | 2026-09-30, the scenario rebaseline | every results file and archive under `bench/v3.0.0/` from AL-S8 (`f6ed10c`) through AY-S11's overhead run (`0552d55`), the `f6ed10c` HEAP files and their 2026-09-08 `-btree-` re-measurement among them; each scenario driver was re-run at `9a0525d` | `9a0525d`; AY-S11's overhead file, corrected on `main` afterwards, at `a59da9c` |
 | 2026-10-12 | the rebaseline's own results: every `results-scenario*` file and `archive/scenario*` directory under `bench/v3.0.0/` (KDS at `9a0525d`, PostgreSQL 18 at `f2f1ee7`), `results-rebaseline-summary-v2.7.0-531-g9a0525d.md` and `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` | `36449d28` |
+| 2026-11-28, the operator's *"delete every benchmark result before version 3.4.9"*, 3.4.9 included on the operator's answer (`raft-marks-2026-11-28.md` §18) | every directory `bench/v3.0.0/` through `bench/v3.4.9/` (`v3.0.0`, `v3.1.0`, `v3.2.0`, `v3.3.0`, `v3.4.0`, `v3.4.3`, `v3.4.6`, `v3.4.7`, `v3.4.8`, `v3.4.9`): 19,581 files, results and archives | `e571ae574` |
 
 **A citation to a `bench/` path that is not in the working tree** resolves
 by this table:
 
+- a path under `bench/v3.0.0/` through `bench/v3.4.9/`: `e571ae574` first;
+  a file not there is one of the older deletions below;
 - a path that names no `v3.` directory: `1769487`;
 - a `bench/v3.0.0/` path: `9a0525d`;
 - AY-S11's overhead file: `a59da9c`;
@@ -139,12 +219,13 @@ by this table:
   match the same globs and are held at `9a0525d`.
 
 **The rebaseline's files stay the comparator** for a later delta of the
-same driver and shape until the scenario is re-run. A delta against any
+same Python driver and shape, with its relations' kinds unchanged, until
+the scenario is re-run; no harness number takes a delta against them. A delta against any
 deleted file names the commit that holds it and the commit it measured, and
 says how far apart the two runs are in commits and milestones. The
 `f6ed10c` HEAP files are compared against nothing.
 
-The three entries as they were last written in full, with the 2026-09-08
+The first three entries as they were last written in full, with the 2026-09-08
 re-measurement's account:
 [`bench/README.md` at `1ad75954`](https://github.com/louischoi0/ckdbs/blob/1ad759540c612efb2d96bc8c6dcc695f4001f6c8/bench/README.md),
 or `git show 1ad75954:bench/README.md`.

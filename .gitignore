@@ -36,3 +36,8 @@ kds_server
 sim-artifacts.txt
 *.sim
 Testing/
+
+# Oracle control results (bench/README.md, "The Oracle control"): this
+# repository is public and an Oracle figure is never published, so every
+# results file or raw output carrying one stays on the host that ran it.
+bench/private/

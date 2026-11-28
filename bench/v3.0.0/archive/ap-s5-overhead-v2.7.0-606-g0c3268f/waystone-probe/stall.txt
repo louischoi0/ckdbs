@@ -1,4 +1,0 @@
-A star stalls (stmt index, ms): []
-A wide stalls (stmt index, ms): []
-B star stalls (stmt index, ms): []
-B wide stalls (stmt index, ms): []

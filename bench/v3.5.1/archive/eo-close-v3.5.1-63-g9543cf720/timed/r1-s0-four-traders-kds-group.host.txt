@@ -1,0 +1,4 @@
+2026-11-28T09:00:14Z
+1.19 1.22 1.13 1/1517 2942724
+gate_wait_s 3.0
+no build or test process

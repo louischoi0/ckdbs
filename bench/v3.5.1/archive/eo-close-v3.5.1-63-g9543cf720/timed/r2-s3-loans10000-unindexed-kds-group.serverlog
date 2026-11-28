@@ -1,0 +1,4 @@
+1795858250 WARN [query] "DROP TABLE s3_loans" -> ERR no relation named 's3_loans' (byte 11) in 51us
+1795858250 WARN [query] "DROP TABLE s3_reservations" -> ERR no relation named 's3_reservations' (byte 11) in 25us
+1795858250 WARN [query] "DROP TABLE s3_books" -> ERR no relation named 's3_books' (byte 11) in 24us
+1795858250 WARN [query] "DROP TABLE s3_users" -> ERR no relation named 's3_users' (byte 11) in 6us

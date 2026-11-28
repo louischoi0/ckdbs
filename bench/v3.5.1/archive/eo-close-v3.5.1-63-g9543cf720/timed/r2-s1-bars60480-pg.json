@@ -1,0 +1,1758 @@
+{
+  "checks": [
+    {
+      "detail": "360 cross-sections, every row as generated",
+      "name": "cross-section-matches-generated",
+      "ok": true
+    },
+    {
+      "detail": "all 8 models' P&L read back through the comparison join matches what was accumulated",
+      "name": "verify",
+      "ok": true
+    },
+    {
+      "detail": "every read shape returned the rows and values the generated data gives",
+      "name": "read-shapes-rows",
+      "ok": true
+    },
+    {
+      "detail": "s1_exchanges 2/2, s1_symbols 8/8, s1_sessions 7560/7560, s1_daily_bars 60480/60480, s1_daily_stats 60480/60480, s1_models 8/8, s1_model_results 2872/2872, s1_write_probe 8000/8000",
+      "name": "row-counts",
+      "ok": true
+    },
+    {
+      "detail": "44 phases",
+      "name": "no-refusals",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795858046,
+  "engine": "pg",
+  "harness": "eqbench",
+  "meta": {
+    "bars": 60480,
+    "batch": 200,
+    "exchanges": 2,
+    "model_equity_bp": {
+      "mom-120": 54331,
+      "mom-20": 45874,
+      "mom-5": 39756,
+      "mom-60": 43441,
+      "vol-break": 1889,
+      "vol-high": 55448,
+      "vol-low": 15959,
+      "vol-tgt": 27757
+    },
+    "periods": 359,
+    "qps_sweep": [
+      {
+        "cold_ops": 100,
+        "cold_qps": 23898.60300716122,
+        "shape": "bar-lookup",
+        "warm_ops": 100,
+        "warm_over_cold": 1.4462683373882421,
+        "warm_qps": 34563.7928370687
+      },
+      {
+        "cold_ops": 100,
+        "cold_qps": 8043.417725408337,
+        "shape": "bar-range",
+        "warm_ops": 100,
+        "warm_over_cold": 1.082002521606716,
+        "warm_qps": 8702.998261227976
+      },
+      {
+        "cold_ops": 100,
+        "cold_qps": 664.8102019061158,
+        "shape": "day-slice",
+        "warm_ops": 100,
+        "warm_over_cold": 1.0950938133039887,
+        "warm_qps": 728.029539128763
+      },
+      {
+        "cold_ops": 7,
+        "cold_qps": 243.87540879179906,
+        "shape": "symbol-history",
+        "warm_ops": 100,
+        "warm_over_cold": 1.0225276373044334,
+        "warm_qps": 249.36934554853113
+      },
+      {
+        "cold_ops": 100,
+        "cold_qps": 732.4483511481619,
+        "shape": "cross-join",
+        "warm_ops": 100,
+        "warm_over_cold": 1.056516127486568,
+        "warm_qps": 773.8434955389779
+      },
+      {
+        "cold_ops": 100,
+        "cold_qps": 13914.750999705286,
+        "shape": "point-join",
+        "warm_ops": 100,
+        "warm_over_cold": 2.9357723284971735,
+        "warm_qps": 40850.54094286316
+      },
+      {
+        "cold_ops": 7,
+        "cold_qps": 2566.3248321990177,
+        "shape": "model-join",
+        "warm_ops": 100,
+        "warm_over_cold": 2.325246708948953,
+        "warm_qps": 5967.33837016474
+      }
+    ],
+    "rebalance": 21,
+    "relation_kinds": {
+      "s1_daily_bars": "Btree",
+      "s1_daily_stats": "Heap",
+      "s1_exchanges": "Btree",
+      "s1_model_results": "Heap",
+      "s1_models": "Btree",
+      "s1_sessions": "Heap",
+      "s1_symbols": "Btree",
+      "s1_write_probe": "Heap"
+    },
+    "sessions": 7560,
+    "symbols": 8,
+    "top_k": 3,
+    "years": 30
+  },
+  "options": {
+    "bars": "60480"
+  },
+  "phases": [
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 15.5435,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 220.59,
+        "mean_us": 176.545,
+        "ops": 2,
+        "p0_us": 132.5,
+        "p25_us": 132.5,
+        "p50_us": 220.59,
+        "p95_us": 220.59,
+        "p99_us": 220.59
+      },
+      "name": "load-exchanges",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 16.5,
+      "terminals": 1,
+      "throughput_ops": 4577.329402933153,
+      "wall_s": 0.000436936
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 8.7235,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 164.004,
+        "mean_us": 136.6065,
+        "ops": 8,
+        "p0_us": 128.588,
+        "p25_us": 130.178,
+        "p50_us": 133.36,
+        "p95_us": 164.004,
+        "p99_us": 164.004
+      },
+      "name": "load-symbols",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 10.0,
+      "terminals": 1,
+      "throughput_ops": 6750.9067311603285,
+      "wall_s": 0.001185026
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 4.645030423280423,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 267.241,
+        "mean_us": 13.54599417989418,
+        "ops": 7560,
+        "p0_us": 11.924,
+        "p25_us": 12.543,
+        "p50_us": 13.377,
+        "p95_us": 14.147,
+        "p99_us": 18.989
+      },
+      "name": "load-sessions",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 5.224603174603175,
+      "terminals": 1,
+      "throughput_ops": 62810.972472044465,
+      "wall_s": 0.120361136
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 4.613754100529101,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 721.653,
+        "mean_us": 14.59865763888889,
+        "ops": 60480,
+        "p0_us": 12.165,
+        "p25_us": 13.654,
+        "p50_us": 13.846,
+        "p95_us": 14.84,
+        "p99_us": 30.596
+      },
+      "name": "load-bars",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 5.8379133597883595,
+      "terminals": 1,
+      "throughput_ops": 52828.580425527245,
+      "wall_s": 1.144834851
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 4.690021362433863,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 428.871,
+        "mean_us": 14.353938607804233,
+        "ops": 60480,
+        "p0_us": 12.397,
+        "p25_us": 13.089,
+        "p50_us": 13.95,
+        "p95_us": 15.17,
+        "p99_us": 24.865
+      },
+      "name": "load-stats",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 6.072668650793651,
+      "terminals": 1,
+      "throughput_ops": 53530.62005590833,
+      "wall_s": 1.129820651
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 10.53675,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 276.023,
+        "mean_us": 170.3885,
+        "ops": 8,
+        "p0_us": 129.213,
+        "p25_us": 135.857,
+        "p50_us": 150.097,
+        "p95_us": 276.023,
+        "p99_us": 276.023
+      },
+      "name": "load-models",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 12.75,
+      "terminals": 1,
+      "throughput_ops": 5229.257170945724,
+      "wall_s": 0.001529854
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 3.284838888888889,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 31.587844444444443,
+      "client_decode_us_per_op": 3.284838888888889,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1462.473,
+        "mean_us": 1238.6564666666666,
+        "ops": 360,
+        "p0_us": 1190.639,
+        "p25_us": 1222.635,
+        "p50_us": 1235.398,
+        "p95_us": 1269.428,
+        "p99_us": 1398.841
+      },
+      "name": "backtest-read",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 2880,
+      "server_cpu_us_per_op": 1197.0916666666667,
+      "terminals": 1,
+      "throughput_ops": 806.6040328776643,
+      "wall_s": 0.446315646
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 23.767262186629527,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 30797.19,
+        "mean_us": 360.1024171309192,
+        "ops": 2872,
+        "p0_us": 137.315,
+        "p25_us": 157.373,
+        "p50_us": 176.406,
+        "p95_us": 433.226,
+        "p99_us": 4495.314
+      },
+      "name": "result-insert",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 27.688718662952645,
+      "terminals": 1,
+      "throughput_ops": 2775.3254350277202,
+      "wall_s": 1.034833596
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 1.6604472222222222,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 25.971069444444442,
+      "client_decode_us_per_op": 1.6604472222222222,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1983.442,
+        "mean_us": 1269.2606861111112,
+        "ops": 360,
+        "p0_us": 1191.532,
+        "p25_us": 1230.149,
+        "p50_us": 1246.517,
+        "p95_us": 1445.109,
+        "p99_us": 1470.422
+      },
+      "name": "backtest-replay",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 2880,
+      "server_cpu_us_per_op": 1214.3833333333334,
+      "terminals": 1,
+      "throughput_ops": 787.2143600074847,
+      "wall_s": 0.457308731
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 321.79,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 1217.183,
+      "client_decode_us_per_op": 321.79,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1415.032,
+        "mean_us": 1415.032,
+        "ops": 1,
+        "p0_us": 1415.032,
+        "p25_us": 1415.032,
+        "p50_us": 1415.032,
+        "p95_us": 1415.032,
+        "p99_us": 1415.032
+      },
+      "name": "compare-all",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 2872,
+      "server_cpu_us_per_op": 507.0,
+      "terminals": 1,
+      "throughput_ops": 607.6607794464818,
+      "wall_s": 0.001645655
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 13.489625,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 121.1859375,
+      "client_decode_us_per_op": 13.489625,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 282.744,
+        "mean_us": 170.77375,
+        "ops": 32,
+        "p0_us": 163.525,
+        "p25_us": 165.023,
+        "p50_us": 165.696,
+        "p95_us": 175.341,
+        "p99_us": 282.744
+      },
+      "name": "compare-one",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 11488,
+      "server_cpu_us_per_op": 97.3125,
+      "terminals": 1,
+      "throughput_ops": 5711.012080575242,
+      "wall_s": 0.00560321
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.07148,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 6.1874199999999995,
+      "client_decode_us_per_op": 0.07148,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 50.611,
+        "mean_us": 16.388189999999998,
+        "ops": 200,
+        "p0_us": 13.322,
+        "p25_us": 14.223,
+        "p50_us": 14.45,
+        "p95_us": 37.361,
+        "p99_us": 43.068
+      },
+      "name": "read-bar-lookup",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 200,
+      "server_cpu_us_per_op": 5.815,
+      "terminals": 1,
+      "throughput_ops": 58151.84143621092,
+      "wall_s": 0.003439272
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 7.64694,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 73.39594,
+      "client_decode_us_per_op": 7.64694,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 314.656,
+        "mean_us": 99.05146,
+        "ops": 200,
+        "p0_us": 93.624,
+        "p25_us": 96.058,
+        "p50_us": 96.858,
+        "p95_us": 100.451,
+        "p99_us": 125.058
+      },
+      "name": "read-bar-range",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 40200,
+      "server_cpu_us_per_op": 45.8,
+      "terminals": 1,
+      "throughput_ops": 10030.697444925578,
+      "wall_s": 0.019938793
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 452.93999999999994,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 3030.4808000000003,
+      "client_decode_us_per_op": 452.93999999999994,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 5542.701,
+        "mean_us": 4096.0785,
+        "ops": 10,
+        "p0_us": 3539.823,
+        "p25_us": 3767.97,
+        "p50_us": 4040.1,
+        "p95_us": 5542.701,
+        "p99_us": 5542.701
+      },
+      "name": "read-symbol-history",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 75600,
+      "server_cpu_us_per_op": 2719.2,
+      "terminals": 1,
+      "throughput_ops": 241.9907416762142,
+      "wall_s": 0.041323895
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 2.25052,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 44.84227,
+      "client_decode_us_per_op": 2.25052,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1596.803,
+        "mean_us": 1253.32645,
+        "ops": 200,
+        "p0_us": 1172.536,
+        "p25_us": 1200.314,
+        "p50_us": 1216.379,
+        "p95_us": 1477.525,
+        "p99_us": 1551.615
+      },
+      "name": "read-day-slice",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1600,
+      "server_cpu_us_per_op": 1171.18,
+      "terminals": 1,
+      "throughput_ops": 796.9113151863744,
+      "wall_s": 0.250968955
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.29622499999999996,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 21.048470000000002,
+      "client_decode_us_per_op": 0.29622499999999996,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 443.247,
+        "mean_us": 47.016235,
+        "ops": 200,
+        "p0_us": 23.287,
+        "p25_us": 31.968,
+        "p50_us": 32.363,
+        "p95_us": 73.681,
+        "p99_us": 398.78
+      },
+      "name": "read-join-point",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 200,
+      "server_cpu_us_per_op": 10.745,
+      "terminals": 1,
+      "throughput_ops": 20173.807437981934,
+      "wall_s": 0.009913845
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 3.6887,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 122.0853,
+      "client_decode_us_per_op": 3.6887,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 4378.713,
+        "mean_us": 4293.427900000001,
+        "ops": 10,
+        "p0_us": 4172.488,
+        "p25_us": 4272.747,
+        "p50_us": 4313.274,
+        "p95_us": 4378.713,
+        "p99_us": 4378.713
+      },
+      "name": "read-join-exists",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 80,
+      "server_cpu_us_per_op": 3921.0,
+      "terminals": 1,
+      "throughput_ops": 230.51430854178838,
+      "wall_s": 0.043381255
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 1.5625,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 106.7942,
+      "client_decode_us_per_op": 1.5625,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 2249.823,
+        "mean_us": 2085.6373,
+        "ops": 10,
+        "p0_us": 2044.15,
+        "p25_us": 2047.214,
+        "p50_us": 2062.934,
+        "p95_us": 2249.823,
+        "p99_us": 2249.823
+      },
+      "name": "agg-global",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 10,
+      "server_cpu_us_per_op": 1856.8,
+      "terminals": 1,
+      "throughput_ops": 467.6051783158573,
+      "wall_s": 0.021385563
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 2.1426,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 136.5757,
+      "client_decode_us_per_op": 2.1426,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 3622.236,
+        "mean_us": 3523.703,
+        "ops": 10,
+        "p0_us": 3455.697,
+        "p25_us": 3473.867,
+        "p50_us": 3512.935,
+        "p95_us": 3622.236,
+        "p99_us": 3622.236
+      },
+      "name": "agg-by-symbol",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 80,
+      "server_cpu_us_per_op": 3174.8,
+      "terminals": 1,
+      "throughput_ops": 279.64653907905176,
+      "wall_s": 0.035759427
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 232.45839999999998,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 2460.0198,
+      "client_decode_us_per_op": 232.45839999999998,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 6695.11,
+        "mean_us": 6548.3194,
+        "ops": 10,
+        "p0_us": 6431.653,
+        "p25_us": 6465.505,
+        "p50_us": 6603.236,
+        "p95_us": 6695.11,
+        "p99_us": 6695.11
+      },
+      "name": "agg-by-session",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 75600,
+      "server_cpu_us_per_op": 4761.7,
+      "terminals": 1,
+      "throughput_ops": 151.2009307808338,
+      "wall_s": 0.066137159
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 1.303625,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 58.05692,
+      "client_decode_us_per_op": 1.303625,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1935.018,
+        "mean_us": 1452.0978400000001,
+        "ops": 200,
+        "p0_us": 1193.821,
+        "p25_us": 1275.965,
+        "p50_us": 1447.847,
+        "p95_us": 1731.243,
+        "p99_us": 1793.64
+      },
+      "name": "agg-day-slice",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1600,
+      "server_cpu_us_per_op": 1276.03,
+      "terminals": 1,
+      "throughput_ops": 687.8114842432242,
+      "wall_s": 0.290777349
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.1695,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 31.5002,
+      "client_decode_us_per_op": 0.1695,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 2217.34,
+        "mean_us": 2038.0498,
+        "ops": 10,
+        "p0_us": 1954.413,
+        "p25_us": 1979.759,
+        "p50_us": 2009.346,
+        "p95_us": 2217.34,
+        "p99_us": 2217.34
+      },
+      "name": "agg-distinct",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 10,
+      "server_cpu_us_per_op": 1971.4,
+      "terminals": 1,
+      "throughput_ops": 481.4179646216529,
+      "wall_s": 0.020771971
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.27617,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 23.811790000000002,
+      "client_decode_us_per_op": 0.27617,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 173.848,
+        "mean_us": 38.8752,
+        "ops": 100,
+        "p0_us": 29.215,
+        "p25_us": 29.933,
+        "p50_us": 35.502,
+        "p95_us": 48.943,
+        "p99_us": 57.861
+      },
+      "name": "qps-bar-lookup-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 100,
+      "server_cpu_us_per_op": 6.72,
+      "terminals": 1,
+      "throughput_ops": 23898.60300716122,
+      "wall_s": 0.004184345
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.20343,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 16.04119,
+      "client_decode_us_per_op": 0.20343,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 76.161,
+        "mean_us": 27.66367,
+        "ops": 100,
+        "p0_us": 20.889,
+        "p25_us": 21.314,
+        "p50_us": 29.353,
+        "p95_us": 38.834,
+        "p99_us": 41.416
+      },
+      "name": "qps-bar-lookup-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 100,
+      "server_cpu_us_per_op": 6.02,
+      "terminals": 1,
+      "throughput_ops": 34563.7928370687,
+      "wall_s": 0.002893201
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 9.0835,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 87.90105,
+      "client_decode_us_per_op": 9.0835,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 422.929,
+        "mean_us": 122.69901,
+        "ops": 100,
+        "p0_us": 93.047,
+        "p25_us": 95.507,
+        "p50_us": 102.226,
+        "p95_us": 284.111,
+        "p99_us": 349.759
+      },
+      "name": "qps-bar-range-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 20100,
+      "server_cpu_us_per_op": 46.1,
+      "terminals": 1,
+      "throughput_ops": 8043.417725408337,
+      "wall_s": 0.012432526
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 7.63526,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 73.33309,
+      "client_decode_us_per_op": 7.63526,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 347.605,
+        "mean_us": 113.1675,
+        "ops": 100,
+        "p0_us": 92.403,
+        "p25_us": 95.085,
+        "p50_us": 96.396,
+        "p95_us": 251.618,
+        "p99_us": 313.848
+      },
+      "name": "qps-bar-range-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 20100,
+      "server_cpu_us_per_op": 50.79,
+      "terminals": 1,
+      "throughput_ops": 8702.998261227976,
+      "wall_s": 0.011490293
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 3.3145100000000003,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 89.91295,
+      "client_decode_us_per_op": 3.3145100000000003,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1742.901,
+        "mean_us": 1499.67336,
+        "ops": 100,
+        "p0_us": 1226.516,
+        "p25_us": 1435.708,
+        "p50_us": 1480.356,
+        "p95_us": 1678.147,
+        "p99_us": 1731.382
+      },
+      "name": "qps-day-slice-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 800,
+      "server_cpu_us_per_op": 1235.94,
+      "terminals": 1,
+      "throughput_ops": 664.8102019061158,
+      "wall_s": 0.150418871
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 2.42448,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 58.3863,
+      "client_decode_us_per_op": 2.42448,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1791.304,
+        "mean_us": 1369.06524,
+        "ops": 100,
+        "p0_us": 1214.225,
+        "p25_us": 1236.974,
+        "p50_us": 1255.496,
+        "p95_us": 1698.222,
+        "p99_us": 1741.717
+      },
+      "name": "qps-day-slice-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 800,
+      "server_cpu_us_per_op": 1223.29,
+      "terminals": 1,
+      "throughput_ops": 728.029539128763,
+      "wall_s": 0.137357064
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 472.7007142857143,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 3007.0941428571427,
+      "client_decode_us_per_op": 472.7007142857143,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 4998.931,
+        "mean_us": 4011.618285714286,
+        "ops": 7,
+        "p0_us": 3559.834,
+        "p25_us": 3739.893,
+        "p50_us": 3802.084,
+        "p95_us": 4998.931,
+        "p99_us": 4998.931
+      },
+      "name": "qps-symbol-history-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 52920,
+      "server_cpu_us_per_op": 2727.8571428571427,
+      "terminals": 1,
+      "throughput_ops": 243.87540879179906,
+      "wall_s": 0.028703181
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 404.27833,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 2813.8856800000003,
+      "client_decode_us_per_op": 404.27833,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 5376.246,
+        "mean_us": 4002.59997,
+        "ops": 100,
+        "p0_us": 3572.517,
+        "p25_us": 3816.952,
+        "p50_us": 4002.041,
+        "p95_us": 4254.329,
+        "p99_us": 4381.133
+      },
+      "name": "qps-symbol-history-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 756000,
+      "server_cpu_us_per_op": 2679.35,
+      "terminals": 1,
+      "throughput_ops": 249.36934554853113,
+      "wall_s": 0.401011599
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 2.62926,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 50.61728,
+      "client_decode_us_per_op": 2.62926,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1742.799,
+        "mean_us": 1360.53864,
+        "ops": 100,
+        "p0_us": 1248.546,
+        "p25_us": 1274.726,
+        "p50_us": 1292.723,
+        "p95_us": 1660.997,
+        "p99_us": 1708.468
+      },
+      "name": "qps-cross-join-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 800,
+      "server_cpu_us_per_op": 1247.3,
+      "terminals": 1,
+      "throughput_ops": 732.4483511481619,
+      "wall_s": 0.136528398
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 1.7583600000000001,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 27.36527,
+      "client_decode_us_per_op": 1.7583600000000001,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1602.623,
+        "mean_us": 1288.46139,
+        "ops": 100,
+        "p0_us": 1233.734,
+        "p25_us": 1254.518,
+        "p50_us": 1266.444,
+        "p95_us": 1452.05,
+        "p99_us": 1504.43
+      },
+      "name": "qps-cross-join-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 800,
+      "server_cpu_us_per_op": 1236.6,
+      "terminals": 1,
+      "throughput_ops": 773.8434955389779,
+      "wall_s": 0.129225096
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.41546,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 29.30165,
+      "client_decode_us_per_op": 0.41546,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 414.086,
+        "mean_us": 68.33409,
+        "ops": 100,
+        "p0_us": 42.537,
+        "p25_us": 43.523,
+        "p50_us": 43.954,
+        "p95_us": 236.006,
+        "p99_us": 394.997
+      },
+      "name": "qps-point-join-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 100,
+      "server_cpu_us_per_op": 13.77,
+      "terminals": 1,
+      "throughput_ops": 13914.750999705286,
+      "wall_s": 0.007186618
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.15094,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 10.63618,
+      "client_decode_us_per_op": 0.15094,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 54.186,
+        "mean_us": 22.65244,
+        "ops": 100,
+        "p0_us": 21.768,
+        "p25_us": 22.05,
+        "p50_us": 22.221,
+        "p95_us": 23.491,
+        "p99_us": 25.981
+      },
+      "name": "qps-point-join-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 100,
+      "server_cpu_us_per_op": 7.91,
+      "terminals": 1,
+      "throughput_ops": 40850.54094286316,
+      "wall_s": 0.002447948
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 16.693571428571428,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 154.38042857142858,
+      "client_decode_us_per_op": 16.693571428571428,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 411.642,
+        "mean_us": 354.38642857142855,
+        "ops": 7,
+        "p0_us": 266.154,
+        "p25_us": 356.866,
+        "p50_us": 380.741,
+        "p95_us": 411.642,
+        "p99_us": 411.642
+      },
+      "name": "qps-model-join-cold",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 2513,
+      "server_cpu_us_per_op": 125.71428571428571,
+      "terminals": 1,
+      "throughput_ops": 2566.3248321990177,
+      "wall_s": 0.002727636
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 13.31297,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 119.80175,
+      "client_decode_us_per_op": 13.31297,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 203.192,
+        "mean_us": 166.70985000000002,
+        "ops": 100,
+        "p0_us": 162.085,
+        "p25_us": 164.752,
+        "p50_us": 166.03,
+        "p95_us": 169.958,
+        "p99_us": 185.674
+      },
+      "name": "qps-model-join-warm",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 35900,
+      "server_cpu_us_per_op": 95.94,
+      "terminals": 1,
+      "throughput_ops": 5967.33837016474,
+      "wall_s": 0.01675789
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 10.6684585,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 603.547,
+        "mean_us": 143.843355,
+        "ops": 2000,
+        "p0_us": 126.111,
+        "p25_us": 135.465,
+        "p50_us": 136.667,
+        "p95_us": 164.264,
+        "p99_us": 272.542
+      },
+      "name": "write-batch-1",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 10.4885,
+      "terminals": 1,
+      "throughput_ops": 6941.451546021781,
+      "wall_s": 0.288124175
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 6.2506125,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 409.079,
+        "mean_us": 29.21613,
+        "ops": 2000,
+        "p0_us": 12.026,
+        "p25_us": 12.615,
+        "p50_us": 13.421,
+        "p95_us": 140.285,
+        "p99_us": 164.741
+      },
+      "name": "write-batch-10",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 6.1055,
+      "terminals": 1,
+      "throughput_ops": 34040.18399468333,
+      "wall_s": 0.058754089
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 4.587431,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 175.654,
+        "mean_us": 14.9304995,
+        "ops": 2000,
+        "p0_us": 11.915,
+        "p25_us": 12.741,
+        "p50_us": 13.272,
+        "p95_us": 14.346,
+        "p99_us": 141.809
+      },
+      "name": "write-batch-100",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 5.03,
+      "terminals": 1,
+      "throughput_ops": 66430.8063032472,
+      "wall_s": 0.030106514
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 4.423888,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1559.402,
+        "mean_us": 14.777149999999999,
+        "ops": 2000,
+        "p0_us": 11.922,
+        "p25_us": 13.213,
+        "p50_us": 13.302,
+        "p95_us": 13.774,
+        "p99_us": 29.548
+      },
+      "name": "write-batch-1000",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 4.908,
+      "terminals": 1,
+      "throughput_ops": 67002.38210218969,
+      "wall_s": 0.029849685
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 2.173565,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 42.423775,
+      "client_decode_us_per_op": 2.173565,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1679.722,
+        "mean_us": 1342.057,
+        "ops": 200,
+        "p0_us": 1231.626,
+        "p25_us": 1261.748,
+        "p50_us": 1277.552,
+        "p95_us": 1614.83,
+        "p99_us": 1653.47
+      },
+      "name": "join-conn-1",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1600,
+      "server_cpu_us_per_op": 1242.895,
+      "terminals": 1,
+      "throughput_ops": 743.9910115172338,
+      "wall_s": 0.268820452
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 4.45006,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 116.64324500000001,
+      "client_decode_us_per_op": 4.45006,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1751.619,
+        "mean_us": 1537.421475,
+        "ops": 200,
+        "p0_us": 1214.75,
+        "p25_us": 1478.55,
+        "p50_us": 1559.74,
+        "p95_us": 1690.007,
+        "p99_us": 1720.727
+      },
+      "name": "join-conn-2",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1600,
+      "server_cpu_us_per_op": 1234.395,
+      "terminals": 2,
+      "throughput_ops": 1269.075223805699,
+      "wall_s": 0.157595071
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 4.42119,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 115.616835,
+      "client_decode_us_per_op": 4.42119,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1971.546,
+        "mean_us": 1600.335605,
+        "ops": 200,
+        "p0_us": 1392.554,
+        "p25_us": 1530.061,
+        "p50_us": 1602.101,
+        "p95_us": 1788.637,
+        "p99_us": 1826.766
+      },
+      "name": "join-conn-4",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1600,
+      "server_cpu_us_per_op": 1272.015,
+      "terminals": 4,
+      "throughput_ops": 2441.3903952674523,
+      "wall_s": 0.081920532
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 3.7679300000000002,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 76.795925,
+      "client_decode_us_per_op": 3.7679300000000002,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 2045.974,
+        "mean_us": 1522.38004,
+        "ops": 200,
+        "p0_us": 1244.32,
+        "p25_us": 1330.864,
+        "p50_us": 1520.177,
+        "p95_us": 1830.63,
+        "p99_us": 1957.103
+      },
+      "name": "join-conn-8",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1600,
+      "server_cpu_us_per_op": 1286.545,
+      "terminals": 8,
+      "throughput_ops": 4831.834405690529,
+      "wall_s": 0.041392147
+    }
+  ],
+  "profile": true,
+  "scenario": "s1",
+  "seed": 1,
+  "started_unix": 1795858037
+}

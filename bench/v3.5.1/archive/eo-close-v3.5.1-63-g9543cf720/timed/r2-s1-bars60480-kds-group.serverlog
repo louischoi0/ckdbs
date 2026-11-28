@@ -1,0 +1,8 @@
+1795858061 WARN [query] "DROP TABLE s1_write_probe" -> ERR no relation named 's1_write_probe' (byte 11) in 79us
+1795858061 WARN [query] "DROP TABLE s1_model_results" -> ERR no relation named 's1_model_results' (byte 11) in 15us
+1795858061 WARN [query] "DROP TABLE s1_models" -> ERR no relation named 's1_models' (byte 11) in 9us
+1795858061 WARN [query] "DROP TABLE s1_daily_stats" -> ERR no relation named 's1_daily_stats' (byte 11) in 7us
+1795858061 WARN [query] "DROP TABLE s1_daily_bars" -> ERR no relation named 's1_daily_bars' (byte 11) in 7us
+1795858061 WARN [query] "DROP TABLE s1_sessions" -> ERR no relation named 's1_sessions' (byte 11) in 8us
+1795858061 WARN [query] "DROP TABLE s1_symbols" -> ERR no relation named 's1_symbols' (byte 11) in 8us
+1795858061 WARN [query] "DROP TABLE s1_exchanges" -> ERR no relation named 's1_exchanges' (byte 11) in 18us

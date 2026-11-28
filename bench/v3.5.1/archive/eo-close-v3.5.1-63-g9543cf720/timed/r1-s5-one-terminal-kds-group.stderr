@@ -1,0 +1,11 @@
+phase new-order: 300 ops, mean 1125.6 us, p50 1097.1 us, p99 2885.5 us, 888 ops/s, errors {}
+phase payment: 300 ops, mean 487.1 us, p50 463.8 us, p99 877.7 us, 2052 ops/s, errors {}
+phase order-status: 300 ops, mean 423.9 us, p50 413.4 us, p99 585.0 us, 2356 ops/s, errors {}
+phase delivery: 300 ops, mean 1437.3 us, p50 1397.9 us, p99 2209.8 us, 695 ops/s, errors {}
+phase stock-level: 300 ops, mean 479.1 us, p50 465.0 us, p99 851.4 us, 2083 ops/s, errors {}
+phase mix: 76231 ops, mean 787.0 us, p50 570.1 us, p99 2544.7 us, 1270 ops/s, errors {}
+check warehouse-ytd: ok 
+check district-next-order: ok 
+check order-line-count: ok 541800 lines, 541800 declared
+check stock-ytd: ok ytd 1880312 vs ordered 1880312; count 342172 vs lines 342172
+check customer-balance: ok 15252471040 vs 23512632848 - 8260161808

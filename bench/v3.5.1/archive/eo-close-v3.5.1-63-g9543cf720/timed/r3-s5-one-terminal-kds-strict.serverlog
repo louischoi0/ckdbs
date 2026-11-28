@@ -1,0 +1,9 @@
+1795859849 WARN [query] "DROP TABLE s5_history" -> ERR no relation named 's5_history' (byte 11) in 52us
+1795859849 WARN [query] "DROP TABLE s5_new_orders" -> ERR no relation named 's5_new_orders' (byte 11) in 30us
+1795859849 WARN [query] "DROP TABLE s5_order_lines" -> ERR no relation named 's5_order_lines' (byte 11) in 9us
+1795859849 WARN [query] "DROP TABLE s5_orders" -> ERR no relation named 's5_orders' (byte 11) in 5us
+1795859849 WARN [query] "DROP TABLE s5_stock" -> ERR no relation named 's5_stock' (byte 11) in 5us
+1795859849 WARN [query] "DROP TABLE s5_items" -> ERR no relation named 's5_items' (byte 11) in 4us
+1795859849 WARN [query] "DROP TABLE s5_customers" -> ERR no relation named 's5_customers' (byte 11) in 4us
+1795859849 WARN [query] "DROP TABLE s5_districts" -> ERR no relation named 's5_districts' (byte 11) in 4us
+1795859849 WARN [query] "DROP TABLE s5_warehouses" -> ERR no relation named 's5_warehouses' (byte 11) in 4us
