@@ -7758,14 +7758,15 @@ public:
     }
     ~SelectRun() {
         d_.select_scratch_pool_.push_back(std::move(scratch_));
-        // **Bounded**: the pool keeps a few small aggregators for the next
-        // folds and lets a large one go, so the memory a core keeps for
-        // folds is a few small ones' whatever the peak of folds parked at
-        // once and the largest one ever run (EH-Sy's review).
+        // **Bounded by count, not by size** (EH-Sy's review, EH's close):
+        // eight aggregators at most, whatever the peak of folds parked at
+        // once, so a core keeps at most eight folds' capacity where before
+        // EH it kept one's. **Not by size**: letting an aggregator of many
+        // groups go made the next such fold grow every buffer again - a
+        // group a row over 60,480 rows read 291 ns a row against 177 ns
+        // pooled at EH's close (`bench/v3.5.1/results-eh-close-...`).
         constexpr std::size_t kPooledAggregators = 8;
-        constexpr std::size_t kPooledGroupsAtMost = 4096;
-        if (aggregator_ != nullptr && d_.aggregator_pool_.size() < kPooledAggregators &&
-            aggregator_->group_count() <= kPooledGroupsAtMost) {
+        if (aggregator_ != nullptr && d_.aggregator_pool_.size() < kPooledAggregators) {
             d_.aggregator_pool_.push_back(std::move(aggregator_));
         }
     }
