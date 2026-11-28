@@ -280,6 +280,11 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
   aggregate change, they failed 3 and 6 times here against 5 and 8 there.
   The suite run before it was **voided**: CLA rebuilt the test binary while
   it ran.
+- **Measured** (`bench/v3.5.1/results-eh-s2-group-table-v3.5.1-46-g70e0cb368.md`,
+  interleaved against EH-S1's binary): a fold founding 7,560 groups is
+  63.3 ns of server CPU a row against 76.5 ns before and PostgreSQL's
+  59.0 ns; with a `SUM`, 74.7 ns against 88.1 ns and PostgreSQL's 76.5 ns,
+  inside the spread. A group a row: 173.7 ns against PostgreSQL's 193.0 ns.
 - Overhead not measured; measured at the milestone's close.
 
 ### EH-S1 (2026-11-28): a global fold from the row's bytes, on `eh-native-fold-per-row` from `1f7ef7c84`
