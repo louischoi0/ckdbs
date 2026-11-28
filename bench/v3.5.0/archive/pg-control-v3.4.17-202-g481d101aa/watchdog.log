@@ -1,0 +1,16 @@
+2026-11-28T00:18:31Z master=none alive=n status_age=0s status=
+2026-11-28T00:18:31Z ORPHAN: master gone, launching
+2026-11-28T00:19:31Z master=1648329 alive=y status_age=6s status=2026-11-28T00:19:25Z pg-s2-b1 waiting for a quiet host: busy=0% procs=3
+2026-11-28T00:20:31Z master=1648329 alive=y status_age=5s status=2026-11-28T00:20:26Z pg-s2-b1 waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:21:31Z master=1648329 alive=y status_age=5s status=2026-11-28T00:21:26Z pg-s2-b1 waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:22:31Z master=1648329 alive=y status_age=5s status=2026-11-28T00:22:26Z pg-s2-b1 waiting for a quiet host: busy=0% procs=3
+2026-11-28T00:23:31Z master=1648329 alive=y status_age=5s status=2026-11-28T00:23:26Z pg-s2-b1 waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:24:31Z master=1648329 alive=y status_age=4s status=2026-11-28T00:24:27Z pg-s2-b1 waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:25:31Z master=1648329 alive=y status_age=8s status=2026-11-28T00:25:23Z pg-s3-n200-none waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:26:31Z master=1648329 alive=y status_age=8s status=2026-11-28T00:26:23Z pg-s3-n200-none waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:27:31Z master=1648329 alive=y status_age=8s status=2026-11-28T00:27:23Z pg-s3-n200-none waiting for a quiet host: busy=1% procs=3
+2026-11-28T00:28:31Z master=1648329 alive=y status_age=0s status=2026-11-28T00:28:31Z pg-s3-n1000-all start
+2026-11-28T00:29:31Z master=1648329 alive=y status_age=2s status=2026-11-28T00:29:29Z r2-pg-s2-b1 start
+2026-11-28T00:30:31Z master=1648329 alive=y status_age=17s status=2026-11-28T00:30:14Z r2-pg-s1 running
+2026-11-28T00:31:31Z master=1648329 alive=y status_age=2s status=2026-11-28T00:31:29Z r3-pg-s1 running
+2026-11-28T00:32:31Z all.done seen, watchdog exits

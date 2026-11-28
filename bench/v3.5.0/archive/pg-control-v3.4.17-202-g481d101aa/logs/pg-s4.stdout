@@ -1,0 +1,28 @@
+/home/ukjin/bench-runs/pg-control-v3.4.17-202-g481d101aa/src/tools/pg_scenario4_cabinopt_days.py:215: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  "started_utc": datetime.datetime.utcfromtimestamp(t0)
+
+postgresql benchmark - id bigserial pk, symbol text, qty bigint, price bigint columns, boards 2x10000, tapes 200/1000/10000 rows resident, 1 connection
+server 127.0.0.1:15434  table board_*/tape_*_pg_s4
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+load[pg]                 31200    55,013      18.2     16.1     16.9     17.6     18.7     37.7     870.9     0
+d1-open[pg]                240     2,605     383.8    131.7    137.5    153.3    322.0  12986.6   13414.3     0
+d1-board[pg]              2400     4,020     248.7    222.9    239.8    244.7    269.8    426.1     925.1     0
+d1-tape200[pg]             396    30,709      32.6     29.8     31.2     31.7     36.9     40.3      84.9     0
+d1-tape1k[pg]              396    20,704      48.3     45.5     47.0     47.6     53.3     54.3      61.8     0
+d1-tape10k[pg]             396     4,314     231.8    217.8    222.6    224.3    279.4    376.0     534.3     0
+d1-pk[pg]                  240    42,507      23.5     18.8     20.1     20.4     25.0    157.8     206.0     0
+d1-close[pg]                12     2,124     470.9    164.6    169.7    215.6   1422.8   1422.8    1422.8     0
+
+  load[pg]: setup, txn batches of 500
+  d1-open[pg]: 240 inserts
+  d1-board[pg]: hot equality on board_a_pg_s4
+  d1-tape200[pg]: 200 rows
+  d1-tape1k[pg]: 1000 rows
+  d1-tape10k[pg]: 10000 rows
+  d1-pk[pg]: control
+  d1-close[pg]: COUNT/SUM/GROUP BY full scans
+
+  PostgreSQL at defaults: no structure is ever created for the hot predicate, so one day stands for every day.
+json -> /home/ukjin/bench-runs/pg-control-v3.4.17-202-g481d101aa/json/pg-s4.json

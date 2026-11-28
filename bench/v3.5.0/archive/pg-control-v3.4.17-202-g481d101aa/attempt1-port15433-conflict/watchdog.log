@@ -1,0 +1,4 @@
+2026-11-28T00:16:21Z master=none alive=n status_age=0s status=
+2026-11-28T00:16:21Z ORPHAN: master gone, launching
+2026-11-28T00:17:21Z master=1642238 alive=y status_age=60s status=2026-11-28T00:16:21Z pg up
+2026-11-28T00:18:21Z PG start failed; watchdog exits
