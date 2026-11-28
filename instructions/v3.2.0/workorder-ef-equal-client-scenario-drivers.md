@@ -1,6 +1,6 @@
 # Work order EF - the scenario drivers on an equal client, and a short read's fixed cost only if one is left behind it
 
-Status: **CLOSED 2026-11-28 at EF-S2, the engine stage (S3) not opened** (EF-Q1 (a) read on the matched run: no short read is behind PostgreSQL through equal clients; §7, "EF-S4"). Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree
+Status: **CLOSED 2026-11-28 at EF-S2, the engine stage (S3) not opened** (EF-Q1 (a) read on the matched run: neither `pk` nor the 200-row tape is behind PostgreSQL through the twins' client modes; §7, "EF-S4"). Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree
 `ef-equal-client-scenario-drivers` (branch
 `worktree-ef-equal-client-scenario-drivers`) from `72580aa04`
 (`v3.5.1-6-g72580aa04`), under the operator's standing go-ahead of
@@ -234,7 +234,7 @@ move.
 | EF-Q5 | S2's time | (a) the 20-minute stage budget lifted for S2 alone (estimate: 45 to 60 minutes, basis: the `v3.5.0` run's 44 minutes plus PostgreSQL's 14, confidence: medium); (b) cut to fit: one round a cell, scenario 4 and the size sweeps left out | (a) |
 | EF-Q6 | The compiled chain | (a) stays where CX-Q37 (a) and EA-Q3 (a) left it: S3 may measure its share again and may not build its reuse without the operator's word; (b) reopened inside S3 | (a) |
 | EF-Q7 | Scenario 1, whose twin already decodes as the KDS client does (§1.1) | (a) left on its equal-decode pair, named a `values` phase throughout, and S1 moves scenarios 2 to 4 only; (b) both of its sides moved to `count`, a second series break | (a) |
-| EF-Q8 | (written at EF-S2) Scenario 1's point reads are behind through its own pair - `read-bar-lookup` 0.62x to 0.72x in EF-S2's run a - because the KDS client builds four frames and decodes the row description on every statement, which the twin's `fetch` has no equivalent of; EF-Q7's "already equal" was wrong for a statement | (a) left and labelled; (b) scenario 1's KDS statements through `ServerConnection.rendered` - the reply string `send_command` returns, byte for byte, over the request and the cached description `fetch` uses - and its cells measured again; (c) `send_command` itself rebuilt that way, which moves every series under `bench/` at once | (b) |
+| EF-Q8 | (written at EF-S2) Scenario 1's point reads are behind through its own pair - `read-bar-lookup` 0.62x to 0.76x in EF-S2's run a - because the KDS client builds four frames and decodes the row description on every statement, which the twin's `fetch` has no equivalent of; EF-Q7's "already equal" was wrong for a statement | (a) left and labelled; (b) scenario 1's KDS statements through `ServerConnection.rendered` - the reply string `send_command` returns, byte for byte, over the request and the cached description `fetch` uses - and its cells measured again; (c) `send_command` itself rebuilt that way, which moves every series under `bench/` at once | (b) |
 
 ### Marks
 
@@ -296,7 +296,8 @@ rule and binds S3 only.
   build one binary. The suite was not executed for the same reason: no
   cell of it reads `tools/`.
 - **What EF hands on**: to EG, `result-insert` at 60,480 bars (0.81x at
-  `strict`, at parity at the three smaller sizes); to EH, the folds
+  `strict`, no claim at the three smaller sizes, a spread over 20 % on
+  one side of each); to EH, the folds
   (`agg-global` 0.71x on 1.40x the server CPU through counting clients,
   `agg-distinct` 0.73x to 0.83x, `close` 0.70x); to nobody, the per-row
   render of a typed value in the Python client.
@@ -308,14 +309,19 @@ rule and binds S3 only.
 rounds, KDS and PostgreSQL 18.7 interleaved, 151 cells, every return code
 0 and every verification passing:
 
-- **EF-Q1 read: S3 does not open.** Through its twin's client mode no
-  short read is behind PostgreSQL by more than the larger spread:
-  scenario 4's `pk` 20.5 µs against 21.2 µs, a booking's point reads
-  21.8 µs to 26.1 µs against 21.9 µs to 25.4 µs (`cargo-lookup` at
-  `strict` is 0.7 µs behind on a 2.0 % spread and inside it at `group`),
-  scenario 1's lookup 24.9 µs to 27.2 µs against 28.8 µs. **The 200-row
-  tape, which the gate names, carries no claim**: PostgreSQL's three
-  runs spread 49.4 %; KDS's side is 26.6 µs against a median of 38.7 µs.
+- **EF-Q1 read: S3 does not open.** Through its twin's client mode
+  neither read the gate names is behind PostgreSQL: scenario 4's `pk`
+  20.5 µs against 21.2 µs (inside the spread, KDS the faster in each
+  round), and **the 200-row tape carries no claim** - PostgreSQL's three
+  runs spread 49.4 % - with KDS the faster in every round (26.2 µs to
+  27.1 µs against 32.8 µs to 51.9 µs). Beside them, a booking's point
+  reads are 21.8 µs to 26.1 µs against 21.9 µs to 25.4 µs and scenario
+  1's lookup 24.9 µs to 27.2 µs against 28.8 µs; **two short reads are
+  behind by more than the larger spread, by under 1 µs**: `cargo-lookup`
+  at `strict` (0.7 µs on a 2.0 % spread, inside it at `group`) and
+  `books-by-genre` over 200 unindexed loans (0.8 µs on 3.2 %), each less
+  than the 2.9 µs of client CPU EF-R1 leaves unequal on a decoded read.
+  A gate read on every short read would have been met.
 - **One booker**: 2,077.5 bookings a second against 2,070.2; every
   write and the commit ahead (1.05x to 1.38x at `strict`).
 - **Scenario 3**: a geometric mean of 1.09x to 1.42x over its six cells.
@@ -323,7 +329,7 @@ rounds, KDS and PostgreSQL 18.7 interleaved, 151 cells, every return code
   `result-insert` at 60,480 bars, and a read returning thousands of rows
   through the rendering pair.
 - **EF-Q8 written and adopted (b)** in this stage: run a read scenario
-  1's lookup at 0.62x to 0.72x, which refuted EF-Q7's premise;
+  1's lookup at 0.62x to 0.76x, which refuted EF-Q7's premise;
   `ServerConnection.rendered` answers `send_command`'s string byte for
   byte (16 deterministic replies compared on a live server; an `ANALYZE`
   differs only in the timing text two `send_command` runs differ in),

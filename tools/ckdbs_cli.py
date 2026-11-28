@@ -244,7 +244,9 @@ class ServerConnection:
         if error is not None:
             return error.as_reply_line()
         shape = self._conn.last_shape
-        if shape is None:
+        if shape is None or not shape[0]:
+            # No description, or one with no fields: `send_command`'s
+            # `if not fields` answers the tag for both.
             return tag
         _renderers, header, diagnostic = shape
         if diagnostic:
