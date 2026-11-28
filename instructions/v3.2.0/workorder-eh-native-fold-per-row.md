@@ -295,6 +295,12 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
   alone at this tree), which folds nothing.
 - **`docs/spec/aggregate.md` §1** states the bytes path and what AG1 still
   promises (EH-Q3 (a)).
+- **Measured** (`bench/v3.5.1/results-eh-s1-in-place-v3.5.1-41-g6142f32f1.md`,
+  interleaved against the engine EH opened from): a global fold of four
+  aggregates is 29.1 ns of server CPU a row against 38.8 ns before and
+  PostgreSQL's 28.0 ns; `COUNT(*)` 11.4 ns against 19.2 ns and 12.1 ns.
+  **EH-Q1's bar is met within the spread** (1.04x on PostgreSQL's 5.1 %).
+  Every grouped shape is inside its spread of the old binary.
 - Overhead not measured; measured at the milestone's close.
 
 ### EH-S0 (2026-11-28): the premise and the ranking, on `eh-native-fold-per-row` from `01c6c741c`
