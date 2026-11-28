@@ -210,14 +210,19 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
   or optimize a feature's whole structure, by these weights. They are
   figures that give a tendency or a direction rather than something
   explicit; where possible an A/B test or a cost measurement may apply
-  the weights, but that is optional"). An optimization, and the structure
-  of a whole feature, is designed toward that mix: where a design trades
-  one axis's cost against another's, the heavier axis is favoured, and
-  the cost moved onto the lighter axis is stated. **The weights are a
-  direction, not a bar**: nothing passes or fails on a weighted figure,
-  and no invariant, spec rule or correctness check yields to one. An A/B
-  or cost measurement may apply the weights - a weighted figure beside
-  the per-axis numbers, never instead of them - and nothing requires it.
+  the weights, but that is optional"). **The weights are a direction, not
+  a bar**: an optimization and a feature's structure are designed toward
+  that mix, nothing passes or fails on a weighted figure, and a
+  measurement that applies the weights is optional.
+- **A feature is built and improved for the concept KDS is: a
+  high-performance OLTP engine that guarantees consistency, optimized for
+  modern software environments such as a microservice architecture**
+  (operator, 2026-11-28: "bear in mind that KDBS is, in concept, a
+  high-performance OLTP engine that guarantees consistency, optimized for
+  modern software environments such as a microservice architecture;
+  features must be implemented and improved with that in mind"). It is a
+  direction for design, as the weights are: "What This Project Is" still
+  bounds the scope, and this rule opens no feature by itself.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.**
