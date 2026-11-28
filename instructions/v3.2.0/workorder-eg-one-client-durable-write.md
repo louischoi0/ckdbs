@@ -82,15 +82,17 @@ runs
   Its rung differs from every row of the table above, and nothing else
   about it is read here.
 - **An older reading agrees with parity**: at `c390a624` one core at
-  `group` matched PostgreSQL, 4,977 against 4,902 statements a second
-  (`bench/v3.0.0/results-ba-s4-census-v2.7.0-725-gc390a624.md`, as the
-  research pass read it).
+  `group` matched PostgreSQL, 4,977 against 4,902 statements a second on
+  BA-S4's `trade` shape at 16 sessions, not one client
+  (`bench/v3.0.0/results-ba-s4-census-v2.7.0-725-gc390a624.md:152`,
+  `:175`, `:215`), on another host.
 
 ### 1.2 How a commit becomes durable at one core `[source-read]`
 
 - **`strict` syncs inline.** `WalManager::Commit` appends `TXN_COMMIT`
   and calls `Sync()` on the statement's own stack
-  (`src/wal/manager.cpp:176-262`): one `pwrite` of everything staged,
+  (`src/wal/manager.cpp:485-515`, the call at `:496`; `Sync()` at
+  `:176-262`): one `pwrite` of everything staged,
   then `fdatasync` of every live segment
   (`src/wal/file_log_device.cpp:581-632`). The deferred path
   (`CommitDeferred`) is taken only where `KicksDurableWaiters()` holds
@@ -100,10 +102,13 @@ runs
   (`include/kds/stats/wait_event.hpp:125`, spot-read) is opened on the
   park path (`src/server/command_dispatcher.cpp:1278`, spot-read), which
   `strict` at one core never takes. Its commit time is on-CPU time in
-  `sys.wait_stats`, `sys.session_waits` and `sys.ash`.
+  `sys.wait_stats` and `sys.session_waits`; `sys.ash` does not see it at
+  all, because its sampler runs between polls and never shows ON_CPU
+  (`docs/spec/wait-events.md:37`, `src/sched/scheduler.cpp:438-448`).
 - **`group` stages and parks.** The commit is counted into
-  `pending_group_commits_` (`src/wal/manager.cpp:503`, `:520`,
-  spot-read) and the statement parks under `commit.wal_flush`. The
+  `pending_group_commits_` (`src/wal/manager.cpp:503`, spot-read; `:520`
+  is `StageStrictCommit`, the deferred `strict` stage above one core) and
+  the statement parks under `commit.wal_flush`. The
   scheduler's post-task hook, phase 4.5
   (`src/sched/scheduler.cpp:453-467`, spot-read), runs `DrainOnce`, which
   with no registry calls the same inline `Sync()`
@@ -134,9 +139,10 @@ runs
   beyond the first by that entry. Its breadth is DY's (DY-Q2), not EG's.
 - **Not found**: bytes written per commit, images per commit, or the
   number of live segments during any cell above.
-- **Two documents disagree with the code**: `wal.md` §6's items marked
-  `[PROPOSED]` describe a flush future and a phase-5 drain through
-  `IoBackend`, where the code is synchronous syscalls in phase 4.5; and
+- **Two documents disagree with the code**: `wal.md` §6, whose heading is
+  marked `[PROPOSED]`, describes in its items 2 and 3 a flush future and a
+  phase-5 drain through `IoBackend`, where the code is synchronous
+  syscalls in phase 4.5; and
   `manual/server/server.md:163` calls the per-transaction durability
   class "not wired" where `protocol.md` §9 and the session say it is.
 

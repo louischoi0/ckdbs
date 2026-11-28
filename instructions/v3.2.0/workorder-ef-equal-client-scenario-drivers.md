@@ -60,11 +60,17 @@ server's per-statement work (S3, behind EF-Q1's gate).
   it calls `kwp.Connection.execute`, which builds a list per row and a
   bytes object per field, then renders every field to text and joins the
   rows into one string.
-- **Every PostgreSQL twin times `PgConnection.query`**
-  (`tools/pg_wire.py:224-262`): rows are counted and their column lengths
-  walked, and no value is decoded. Its `_skip_data_row` says of the KDS
-  side that `send_command` "is not one" - not its counterpart
-  (`tools/pg_wire.py:256-262`).
+- **The PostgreSQL twins of scenarios 2, 3 and 4 time
+  `PgConnection.query`** (`tools/pg_wire.py:224-262`; scenario 4's through
+  `PgConnection.send_command`, `tools/pg_wire.py:313-322`): rows are
+  counted and their column lengths walked, and no value is decoded. Its
+  `_skip_data_row` says of the KDS side that `send_command` "is not one" -
+  not its counterpart (`tools/pg_wire.py:256-262`). **Scenario 1's twin is
+  the exception**: its `PgClient` times `PgConnection.fetch` and decodes
+  and joins every field into the KDS client's reply shape, "the client
+  pays the same price on both sides" (`tools/pg_scenario1_backtest.py:78-83`,
+  `:266-292`), so scenario 1's cells are timed through near-equal clients
+  already.
 - **The counterpart exists and no scenario driver calls it**:
   `kwp.Connection.query` (`tools/kwp.py:654`) returns
   `(tag, rows, payload_bytes, error)` as `pg_wire`'s does, and its
@@ -95,8 +101,9 @@ server's per-statement work (S3, behind EF-Q1's gate).
 - **`9712f5f0`** (`bench/v3.4.12/results-cx-s6-compile-share-v3.4.12-112-g9712f5f0.md`,
   as the research pass read it): a point read's client p50 of 40.2 µs was
   about 33 µs of client and socket and 7.2 µs of server.
-- **This host, 2026-11-28** (the PostgreSQL control): `pk` 23.2 µs mean,
-  through the client that counts.
+- **This host, 2026-11-28** (the PostgreSQL control): `pk` 23.2 µs
+  (1,000,000 / its median of 43,103 qps, not a mean), through the client
+  that counts.
 - **Not measured anywhere**: the client difference on this host and this
   Python; a short read on `main` through equal clients; PostgreSQL's
   server CPU for a point statement on this host.
@@ -110,31 +117,45 @@ In order, with what each does per statement:
   (`src/wire/frame_codec.cpp:85-114`).
 - **PARSE and BIND**: the text is scanned for placeholders and lexed and
   hashed whole for its fingerprint, then scanned and copied again by the
-  substitution; a portal named `p%d` is inserted into a map
-  (`src/server/kwp_session.cpp:287-366`, `:429-433`). **The text is then
+  substitution; the portal is inserted into a map under the name the
+  client sent, `p%d` from `execute` (`tools/kwp.py:568`)
+  (`src/server/kwp_session.cpp:646-690`, `:692-740`, the insert at
+  `:735`). **The text is then
   lexed and parsed a second time** in the dispatcher
   (`docs/inflight/known-gaps.md:1733`).
-- **Dispatch**: a coroutine frame is a heap allocation, about six a
-  statement (`include/kds/sched/coro.hpp:26-30`); the statement epoch is
+- **Dispatch**: a coroutine frame is a heap allocation
+  (`include/kds/sched/coro.hpp:26-30`), about six a statement (the count is
+  the research pass's and unverified: the cited lines state the allocation,
+  not the count); the statement epoch is
   entered and published and the schema word read.
 - **The view and the lease**: `MintReadView` calls `SnapshotCeiling`
-  twice, each a loop over every core's slots, and the reader lease
-  publishes the core's bounds at take and at release
-  (`src/txn/manager.cpp:649-689`, `src/txn/instance_visibility.cpp:138-158`).
+  twice, each a loop over every core's slot
+  (`src/txn/manager.cpp:91-126`, `src/txn/instance_visibility.cpp:138-158`),
+  and the reader lease publishes the core's bounds at take and at release
+  (`src/txn/manager.cpp:649-689`).
 - **The borrow**: the relation `IS` through the lock table, taken and
   released (`include/kds/server/read_borrow.hpp:94-115`).
 - **Compile**: a one-relation block skips the plan lookup and the
-  join-order search; `InitTableAccess` is a hash lookup run three times
-  (`src/exec/step_compiler.cpp:3004-3089`). **No compiled chain is kept**
+  join-order search; `InitTableAccess` is a hash lookup, run at the
+  compile's bind (`src/exec/step_compiler.cpp:3051`) and again at the
+  executor's (`src/exec/step_vm.cpp:309`) - the research pass's "three
+  times" is unverified. **No compiled chain is kept**
   (CX-Q37 (a), EA-Q3 (a)): `exec::Compile` is 8.1 % to 8.2 % of a
-  prepared point `SELECT`'s server CPU.
+  prepared point `SELECT`'s server CPU with its parse removed, at
+  `481d101aa`
+  (`bench/v3.4.17/results-ea-s0-premise-v3.4.17-202-g481d101aa.md:10-11`).
 - **The descent**: `StillOwned` reads two pages, the anchor and the
   descriptor, on every statement before the lookup
   (`src/exec/step_vm.cpp:305-338`).
-- **The reply**: each frame is encoded into a vector, copied into the
-  session's frames and again into the outbox, and leaves in one `send`
-  (`src/server/tcp_server.cpp:740-815`). BN's close put the floor of a
-  `C_PING` at 12 µs of CPU with 64 % of it in the `send`.
+- **The reply**: each row is encoded into a vector and copied into a
+  string, then into the open batch and again at its seal
+  (`src/server/kwp_session.cpp:287-366`); each frame is encoded into a
+  vector and copied into the connection's frames (`:429-433`), copied
+  again into the outbox (`src/server/tcp_server.cpp:633-643`, `:1203-1215`),
+  and leaves in one `send` (`:884-905`). BN's close put the floor of a
+  `C_PING` at 12.2 µs of CPU with 64 % of it in the `send`, at `8679367e`
+  (`bench/v3.0.0/results-bn-close-v2.7.0-787-g8679367e.md:160`), an engine
+  and a host other than this order's.
 
 Against a client-observed 23 µs to 32 µs, the server's whole 6.4 µs is
 the smaller part; that is what the tree says about how much S3 could

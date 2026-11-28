@@ -96,7 +96,8 @@ built.
   key and a map node (`src/exec/aggregate.cpp:188-201`, spot-read;
   `:371-377`), with nothing reserved and `Reset` a `clear()`
   (`:52-64`). The closed plan's AP05 measured about 1 µs a group founded
-  and was not built.
+  in its own section and about 0.5 µs in the plan's last state table,
+  both pre-AP02 figures the plan itself calls stale, and was not built.
 - **`SUM` over `int64`** is one overflow-checked add
   (`src/exec/aggregate.cpp:281-310`); 128-bit arithmetic is
   `DECIMAL128`'s alone.
@@ -122,12 +123,18 @@ built.
   (`bench/v3.5.0/interim-scenarios-v3.4.17-166-g6c98f7c32.md:151-153`);
   no file says why the arms differ.
 - `9f8f8b354`, this host, the archived JSON as the research pass read
-  it: over nine `off` day-runs `close` has a p50 of 467 µs to 625 µs and
-  a mean of 774 µs to 1,211 µs, so its mean is carried by its largest
-  statement.
-- PostgreSQL 18.7, this host: `close` mean 474.3 µs, p50 206.6 µs.
+  it (`s4`, `r2-s4` and `cd2-s4`, recomputed by the review of
+  `a7dce4487`): over nine `off`
+  day-runs `close` has a p50 of 467 µs to 625 µs and a mean of 774 µs to
+  1,211 µs, with a maximum of 1,967 µs to 4,222 µs, so its mean is carried
+  by a few large operations - which statement they are is not recorded.
+- PostgreSQL 18.7, this host: `close` mean 474.3 µs, p50 206.6 µs (the
+  median run's percentile row; §0's 474.4 µs is 1,000,000 / its median
+  qps, the comparison file's form).
 - `9682b725` and `a40882af`: `close` at 0.57x, then 0.67x once the
-  client's decoder changed and nothing else did.
+  client's decoder changed and nothing else did
+  (`bench/v3.3.0/results-scenario4-cabinopt-days-v3.3.0-38-ga40882af.md:9`,
+  `:346`).
 - **Not measured anywhere**: a per-statement split of `close` on either
   engine; the fold's server CPU on `main`; the share of any item of
   §1.2.
