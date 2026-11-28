@@ -545,6 +545,12 @@ public:
                                   Oid default_namespace, std::uint32_t byte_offset = 0,
                                   const txn::ReadView* view = nullptr);
 
+    // `FindNamespaceOidByName` for a statement's qualifier, from the cache
+    // where that cannot change the answer (EM's C4; the rule is at the
+    // definition). Only `ResolveRelation` and `ResolveView` ask it (EM-Q9
+    // (b)); the DDL callers keep their scan.
+    StatusOr<Oid> ResolveNamespace(std::string_view name, const txn::ReadView* view);
+
     // The SQL spelling of a namespace oid for a message: `sys`, `public`, a
     // live namespace's name, or `oid N` for one no longer live.
     std::string NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view = nullptr);

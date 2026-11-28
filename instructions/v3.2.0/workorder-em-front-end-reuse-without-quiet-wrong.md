@@ -433,7 +433,9 @@ site in `src/` outside the parser:
   `shared_ptr<const SelectStmt>` binds C2 and C5, which G0 drops.
 - **Namespace DDL.** A namespace's oid is `GenerateUserOid`'s
   (`catalog.cpp:2469`), never issued again. `DropNamespace` bumps the
-  version (`:2547`). `CreateNamespace` does not, and needs no bump: it
+  version (`:2547`). `CreateNamespace` bumps it too, through
+  `InsertObjectRow`'s `sys.objects insert` (`:1299`; correction at S2a's
+  review, where this line read "does not"), and C4 needs no bump from it: it
   refuses a live name (`CheckNameFree`), so a name a positive entry holds
   is free only after a drop, which bumped. No rename exists.
 - **The route C4 sits on.** Every resolution goes through `ResolveNames`
@@ -561,13 +563,14 @@ copies of `b46ac5140`. The measurement is
 - **C3 passes G1**: −0.67 µs on the join under a two-variant plan
   (−5.7 %).
 - **C4 and C3 together** lean +0.04 µs (+0.6 %, +0.7 %) on the point
-  `SELECT`, text and prepared. That is outside the floor but inside A's
-  spread, and it is reported as a lean (EM-R7).
-- **C1 fails G1, and EM-R7 refuses it.** It adds +0.35 to +0.45 µs to every
-  text point statement and +0.41 µs to the query-layer `SELECT`, and saves
-  0.08 µs on the join. The parse moved to `C_PARSE` runs 0.10 to 0.14 µs
+  `SELECT`, text and prepared, and +0.03 µs (+0.4 %) on the query-layer
+  `SELECT`. Each is outside its floor but inside A's spread, and is
+  reported as a lean (EM-R7).
+- **C1 fails G1, and EM-R7 refuses it.** It adds +0.36 to +0.45 µs to each
+  of the four text point shapes and +0.41 µs to the query-layer `SELECT`, and saves
+  0.08 µs on the join. The parse moved to `C_PARSE` runs 0.12 to 0.14 µs
   dearer, and the kept parse's allocations and copies cost more than the
-  0.21 to 0.25 µs lex removed. **C1 is not implemented.** EM-Q3, EM-Q4,
+  0.19 to 0.24 µs lex removed. **C1 is not implemented.** EM-Q3, EM-Q4,
   EM-Q10 and EM-Q11 therefore govern nothing built. They stand as adopted
   for the record, and EA-R4 stays unamended. Its equality harness (green)
   and the spike are archived as figures, not code (EM-R8).
@@ -582,3 +585,44 @@ copies of `b46ac5140`. The measurement is
 
 **The stages.** S2a builds C4, the larger saving. S2b builds C3. There is no
 S2c.
+
+**EM-S1 review** (`critics-developer`, at `cb768add9`). It recomputed every
+cell of the results file's table from the raw runs and found them right,
+and the G1 verdicts with them. It corrected the prose: C1's own figure is
+ALL against C43 (+0.36 to +0.45 µs, +6.0 % to +6.9 % of A); the lex it
+removes is 0.19 to 0.24 µs; the three-arm run's floor was not within
+±0.4 %; and the leans of C4 with C3 include the query-layer `SELECT`
+(+0.03 µs, +0.4 %). Applied at `60ad34bfe`, with the driver's docstring
+and its rotation check. Not taken: none.
+
+### EM-S2a - C4, the namespace map (2026-11-28)
+
+On `em-front-end-reuse` from `60ad34bfe`: the S1 spike's C4, with EM-Q12
+(a)'s gate (`Catalog::ResolveNamespace`, `CatalogCache::FindNamespaceOid`,
+`PutNamespaceOid`, cleared by `Invalidate`). Its harness is kept as
+`CatalogNamespaceCacheTest`, five cells. The first is red against the
+gate's removal; the last asserts the namespace's own refusal. The
+pre-existing window is now in `known-gaps.md`, at its existing entry.
+Overhead not measured; measured at the milestone's close.
+
+**Review** (`critics-developer`, the stage's diff). No correctness bug:
+every path it traced answers what `FindNamespaceOidByName(name, view)`
+would at that moment. These include another core's namespace or relation
+DDL after a head, a fill racing a bump, an uncommitted create, a rolled-back
+drop, the graveyard, `Bootstrap`, `DropCache` and a catalog with no
+instance words. Its other findings:
+
+- **Corrected**: S0's "`CreateNamespace` does not bump". It does,
+  through `InsertObjectRow` (`catalog.cpp:1299`), which only strengthens
+  the proof.
+- **Applied**: two comments, the reasoning written once at
+  `ResolveNamespace`'s body, and the weak last cell, which now asserts the
+  message, so a map not cleared at the head turns it red.
+- **Not taken**: none.
+
+**Suite**: 5,442 of 5,443 at the stage's code before the review's
+comment and test edits. The one failure is
+`DropTableReclaimCrashTest.AReclaimCutAnywhereIsFinishedByTheNextMount` on
+the `/tmp` quota held by other sessions' files, and it passes when rerun.
+After the edits, `CatalogNamespaceCacheTest` passes. The full suite runs
+again at S2b over both stages.

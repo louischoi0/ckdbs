@@ -1219,6 +1219,15 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   binds through a stale memo to reach BF-R10's root check, so taking it
   needs that cell to reach the check another way. Owner:
   `docs/spec/ddl-transactional.md` §4.
+  **The same window holds an entry filled before the head** (EM-S1, on
+  `em-front-end-reuse` off `b46ac5140`, at catalog level). Core 1 caches
+  `t`, passes a statement head, and core 0 then drops `t` and creates `t`
+  again. Core 1's next resolution in that statement answers the dropped
+  relation's oid: 4000, where a scan answers 4003. Whether a server
+  statement then reads rows through that oid, or is refused as the
+  rolled-back form above is, is not verified. EM's namespace map (C4) is read
+  and filled only while `Catalog::MemoIsCurrent()` holds, so it adds no
+  qualified name to this window (`CatalogNamespaceCacheTest`, EM-Q12).
 
 - **A KWP load chunk refused by a relation `X` rolls back the whole
   load.** Accepted by the operator on 2026-10-21. A chunk runs

@@ -34,6 +34,20 @@ void CatalogCache::PutOidByName(Oid namespace_oid, std::string_view name, Oid oi
     if (inserted) ++stats_.fills;
 }
 
+const Oid* CatalogCache::FindNamespaceOid(std::string_view name) noexcept {
+    const auto it = namespace_oids_.find(name);
+    if (it == namespace_oids_.end()) {
+        ++stats_.misses;
+        return nullptr;
+    }
+    ++stats_.hits;
+    return &it->second;
+}
+
+void CatalogCache::PutNamespaceOid(std::string_view name, Oid oid) {
+    if (namespace_oids_.try_emplace(std::string(name), oid).second) ++stats_.fills;
+}
+
 const TableAccess* CatalogCache::FindTableAccess(Oid oid) noexcept {
     auto it = table_access_.find(oid);
     if (it == table_access_.end()) {
@@ -205,6 +219,7 @@ void CatalogCache::Invalidate() noexcept {
     ++generation_;
     table_access_.clear();
     name_to_oid_.clear();
+    namespace_oids_.clear();
     table_list_.reset();
     view_names_.reset();
     view_defs_.clear();

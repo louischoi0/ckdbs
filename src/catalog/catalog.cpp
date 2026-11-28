@@ -2332,10 +2332,29 @@ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
         // what frees the name, exactly as a dropped table's does.
         if (row.type_oid == kTypeNamespace && NameView(row.name) == name) return row.oid;
     }
-    // Not cached, for `FindTableOidByName`'s reason: a caller looking a
+    // An absence is not cached (`ResolveNamespace` keeps found names only),
+    // for `FindTableOidByName`'s reason: a caller looking a
     // name up *expecting* NotFound before creating it would be answered
     // from a remembered absence that its own create just falsified.
     return Status::NotFound("no namespace with this name");
+}
+
+StatusOr<Oid> Catalog::ResolveNamespace(std::string_view name, const txn::ReadView* view) {
+    // **The map answers only what the scan would** (EM's C4). Read and filled
+    // on the unfiltered route only, `FindTableOidByName`'s rule (DT3), and
+    // after the reserved spellings, as they always were. And only while the
+    // memo is the word's (EM-Q12 (a)): every namespace change - a drop, a
+    // create, a rollback of either - moves the word, so an entry served is no
+    // older than the scan it replaces. Once another core's catalog write
+    // moved it, the scan answers until this core's next head drops the map.
+    if (view != nullptr || name == kNamespaceSysName || name == kNamespacePublicName ||
+        !MemoIsCurrent()) {
+        return FindNamespaceOidByName(name, view);
+    }
+    if (const Oid* cached = cache_.FindNamespaceOid(name); cached != nullptr) return *cached;
+    auto found = FindNamespaceOidByName(name, nullptr);
+    if (found.ok()) cache_.PutNamespaceOid(name, found.value());
+    return found;
 }
 
 std::string Catalog::NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view) {
@@ -2362,7 +2381,7 @@ StatusOr<Oid> Catalog::ResolveRelation(std::string_view qualifier, std::string_v
     };
     Oid ns = default_namespace;
     if (!qualifier.empty()) {
-        auto named = FindNamespaceOidByName(qualifier, view);
+        auto named = ResolveNamespace(qualifier, view);
         if (!named.ok()) {
             if (named.status().code() != StatusCode::kNotFound) return named.status();
             return at(Status::NotFound("no namespace named '" + std::string(qualifier) + "'"));
@@ -4271,7 +4290,7 @@ StatusOr<std::optional<Oid>> Catalog::ResolveView(std::string_view qualifier,
     if (!AnyView()) return std::optional<Oid>();
     Oid ns = default_namespace;
     if (!qualifier.empty()) {
-        auto named = FindNamespaceOidByName(qualifier, view);
+        auto named = ResolveNamespace(qualifier, view);
         if (!named.ok()) {
             if (named.status().code() == StatusCode::kNotFound) return std::optional<Oid>();
             return named.status();
