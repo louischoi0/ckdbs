@@ -580,6 +580,24 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   Owner: `docs/spec/wal.md` §3,
   `wal/file_log_device.cpp`.
 
+
+- **On a one-core instance a `strict` commit syncs on its reactor, so
+  every other session waits out each commit's sync** (EG-S0, recorded on
+  `eg-one-client-durable-write` at `d50d304f8`, not built: EG-Q3 (a)).
+  Nothing defers the commit there - there is no wake registry below two
+  cores (`src/server/command_dispatcher.cpp`, `DefersCommit`) - and
+  `WalManager::Commit` calls `Sync()` on the statement's stack; `group`
+  parks its committers and the reactor's post-task hook covers one
+  iteration's commits with one sync. Eight bookers on one core, one run
+  each: 3,325.2 bookings a second at `strict` with a commit p99 of
+  2,114.5 µs, against 4,191.9 and 413.1 µs at `group`
+  (`bench/v3.5.1/results-eg-s0-premise-v3.5.1-26-gd50d304f8.md`). Since
+  EG-S1 the inline sync is at least visible: booked under
+  `commit.wal_flush` in `sys.wait_stats` and `sys.session_waits`
+  (`docs/spec/wait-events.md`), though never in `sys.ash`. To build:
+  the deferred path at one core, which needs a waker for a one-core
+  instance or a park the hook's drain resumes. Owner:
+  `docs/spec/wal.md` §6.
 - **A segment roll does I/O inside the instance's append latch, and at
   `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
   `WalStream::Append` rolls under the stream latch; `Roll` reaches
