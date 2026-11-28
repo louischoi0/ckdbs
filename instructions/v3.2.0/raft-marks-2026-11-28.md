@@ -145,3 +145,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version, for EF, EG or EH |
 | **Recorded at** | this file; `workorder-eh-native-fold-per-row.md` (header, §4 "Marks", §7); EH's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
+## 16. EF, EG and EH pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, at CLA's push gate for the three milestones |
+| **Mark** | **EF, EG and EH land on `main`** in one `--no-ff` merge of `worktree-eh-native-fold-per-row`, which carries EF's and EG's branches beneath EH's, pushed with `--no-verify` |
+| **Skipped, on the word** | the pre-push hook. The suite was last run at `8db2923d4`, the last commit with a build input: 5,437 of 5,438, the one failure the two-core insert rig the stage logs name; it was not a green run, and the push does not report it as one |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; the three orders' landed rows in `instructions/milestones.md` |
+
