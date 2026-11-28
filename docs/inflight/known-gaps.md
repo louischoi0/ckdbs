@@ -1853,6 +1853,12 @@ stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
   `FingerprintOf` for the informational `pattern_id`, then the statement's
   own parse - 0.23 µs on a point statement and 0.86 µs on a three-relation
   join, 3.4 - 8.1 % of its server CPU (EA-S0, same file). Left by EA-R4.
+  **EM's C1 found no cut that pays** (EM-S1, `em-front-end-reuse` at
+  `259a7fa3a`, `bench/v3.5.1/results-em-s1-poc-v3.5.1-70-g259a7fa3a.md`):
+  parsing an unnamed statement once at `C_PARSE` and keeping it made every
+  text point statement 0.36 to 0.45 µs dearer, and the query-layer `SELECT`
+  0.41 µs, because the kept parse's allocations and copies cost more than
+  the lex removed. C1 was not built.
 - **Waystone records a trail for a point `SELECT` by tuple key only if an
   operator opted the shape in.** Closed for every shape not opted by CF-S1b
   and CF-S1c (verified on `cf-waystone-premise` at `46c632aa`): a `SELECT`
@@ -3161,11 +3167,12 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
   plan's thresholds in a loop grows the var-heap through the run. Not
   measured. Owned by `exec/plan_catalog.hpp`.
 
-- **A multi-variant plan lexes the statement a second time at every
-  compile**, to read its arguments (`parser::ArgumentsOf`); a one-variant
-  plan does not, and neither does a statement run from a kept parse, whose
-  bound arguments the rule reads (EA-S2, verified on
-  `ea-prepared-statement-reuse`). And while any plan is enabled, every top-level join
+- **A multi-variant plan lexes a write's text a second time at every
+  compile**, to read its arguments (`parser::ArgumentsOf`, `FindWritePlan`).
+  A `SELECT` reads them off its own parse (EM's C3, verified on
+  `em-front-end-reuse` at `aa8eaebbc`), a statement from a kept parse reads
+  its bind's (EA-S2), and a one-variant plan reads none. The write's lex is
+  not measured. And while any plan is enabled, every top-level join
   block's compile on every core probes the administrator's table - one
   partition latch - a tuple key chain's included, which the captured table
   is never asked of (CX-R6 as amended in the stage log). Neither is

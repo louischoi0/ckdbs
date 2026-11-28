@@ -101,6 +101,20 @@ A task that reads the catalog without a boundary serves a memo as fresh
 as its last boundary. Stale, never wrong, by CT1's three facts.
 Where staleness has a cost the task asks: the Cabin optimizer's tick.
 
+**A statement's qualifier is answered from the memo only while the memo is
+the word's** (EM's C4, EM-Q12 (a); `Catalog::ResolveNamespace`). A
+qualified relation name (`ns.t`) reads its namespace's oid from the memo's
+namespace map rather than scanning `sys.objects`. It does so only on the
+unfiltered route (a lookup under a view neither reads nor fills it,
+`FindTableOidByName`'s rule), only after the reserved spellings, and only
+while `Catalog::MemoIsCurrent()` holds. Every namespace change moves the
+word, so an entry served is no older than the scan it replaces. Once
+another core's catalog write moved the word inside the statement, the scan
+answers until the next boundary drops the memo. Only `ResolveRelation` and
+`ResolveView` ask it; the DDL callers scan. The relation-name map has no
+such check, and the window that leaves is a known gap (`known-gaps.md`, "A
+DDL that opens and closes inside one statement...").
+
 ## CT4 — Why a drop of the memo is enough
 
 One frame table serves every core (AM-S2 step 3, `page.md` §6): the

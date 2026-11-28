@@ -223,3 +223,13 @@ landed (§16):
 | **CLA's, not the operator's** | G0's verdicts at EM-S0: C1, C3 and C4 admitted; C2 dropped (its re-parse is 0.02 % of a slice); C5 dropped (no shape class repeats its literals); C1 as first written found dearer than the text path it replaces, and admitted only with EM-Q11's zero-hole path and EM-Q10's kept failure |
 | **Does not settle** | a push, a merge to `main`, a tag or a version; which refusal byte a statement with leading whitespace should name (`docs/inflight/bugs/kept-parse-refusal-byte-counts-leading-whitespace.md`) |
 | **Recorded at** | this file; EM's order (header, §5's mark column, §8); EM's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 23. EM closed on the standing go-ahead, narrowed to C4 and C3
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §22; no further word |
+| **Mark** | **EM is closed on the work branch** with code at `aa8eaebbc` (`v3.5.1-74-gaa8eaebbc`): C4 (`Catalog::ResolveNamespace`, served only while `MemoIsCurrent()`, EM-Q12 (a)) and C3 (a `SELECT`'s plan arguments from its own parse) built; C1 failed G1 (every text point statement 0.36 to 0.45 µs dearer); C2 and C5 dropped at G0. The close (`bench/v3.5.1/results-em-close-v3.5.1-74-gaa8eaebbc.md`) measured C4 at −5.6 % and −10.0 %, C3 at −4 to −8 %, and a lean of +0.9 % to +1.5 % on four point cells that the A2 floor does not exclude, reported as a lean |
+| **CLA's, not the operator's** | the reading of that lean as code placement (a prepared point `SELECT`, which runs no EM code, leans as much), which no arm measured; EM-Q12, written at S1 and adopted; the pre-existing stale relation-name window recorded in `known-gaps.md`, not fixed; the refusal-byte divergence recorded in `docs/inflight/bugs/`, not fixed |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; which refusal byte a statement with leading whitespace should name |
+| **Recorded at** | this file; EM's order (header, §8); EM's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

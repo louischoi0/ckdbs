@@ -6,7 +6,7 @@ Status: **OPENED 2026-11-28 on the operator's standing go-ahead
 (`v3.5.1-69-gb46ac5140`).** EM-Q0..Q9 are adopted as CLA proposed, and so
 are EM-Q10 and EM-Q11, written at S0. Each is CLA's proposal, adopted under
 that word, and none is a per-item mark by the operator (§5's mark column).
-**S0 is landed**: G0 admits C1, C3 and C4 and drops C2 and C5 (§8).
+**CLOSED 2026-11-28 on the work branch**: C4 and C3 are built (EM-S2a, EM-S2b); C1 failed G1, and C2 and C5 were dropped at G0. The close measured EM-R7 as a lean of up to +1.5 % that the floor does not exclude (§8, EM-Sz). Not merged to `main`.
 Written on worktree `front-end-parse-reuse-order` from `72580aa04`
 (`v3.5.1-6-g72580aa04`) on the operator's word of 2026-11-28
 (`raft-marks-2026-11-28.md` §8). The `[source-read]` claims in §1 were
@@ -659,3 +659,59 @@ and `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the
 two-core flake memory records at about 1 in 5 at base (4 of 5 rerun).
 After the cuts, the parser, plan and kept-parse cells (195) pass. The
 whole suite runs again at the close.
+
+### EM-Sz - the close (2026-11-28)
+
+On `em-front-end-reuse`, the code at `aa8eaebbc` (`v3.5.1-74-gaa8eaebbc`)
+against `b46ac5140`, measured by `ck-tester`
+(`bench/v3.5.1/results-em-close-v3.5.1-74-gaa8eaebbc.md`; two runs of 9
+rounds, A2 a byte copy of A):
+
+- **C4 holds its saving**: −0.38 µs on `ns1.t2` (−5.6 %), −0.71 µs with a
+  view (−10.0 %), each more than nine times its cell's floor.
+- **C3 holds its**: −0.5 to −0.9 µs (4 to 8 %) on the join under a
+  two-variant plan. The direction holds in both runs, and the cell's floor
+  is wide (−1.5 %, −4.0 %).
+- **EM-R7 is not shown to hold to the floor.** The point `SELECT` leans
+  +1.0 % text and +1.3 % prepared, `DELETE` +0.9 %, and `t2` under `USE`
+  +1.5 %: +0.05 to +0.09 µs, each inside A's spread in one run or the
+  other, with the sign repeating across both runs and EM-S1's C43 arm.
+  The query-layer `SELECT`, `INSERT` and both joins are inside the floor.
+  **CLA's reading, not measured**: the prepared point `SELECT` runs none of
+  EM's code (no parse, no qualifier, no plan) and leans as much as the text
+  cells, which points to code placement in the binary rather than to EM's
+  work. No arm separates C3 from C4, so the lean is not attributed. It is
+  reported as a lean, not as a pass and not as a separated regression.
+
+**Documents.**
+
+- `catalog.md` CT3 states C4.
+- `parser-v2.md`'s plan paragraph states C3.
+- `known-gaps.md`: the second-lex entry records C1's measured failure, the
+  multi-variant entry narrows to writes, and the stale-memo entry records
+  the pre-head form.
+- `docs/inflight/bugs/kept-parse-refusal-byte-counts-leading-whitespace.md`
+  is new.
+- `CLAUDE.md`'s Namespaces and Query language rows.
+- The SQL surface is unchanged, so the manual is too.
+- `protocol.md` §5 is unchanged, since C1 was not built and EA-R4 stands.
+
+**The sync.** `git fetch origin` found `origin/main` still at `b46ac5140`,
+so there was nothing to merge.
+
+**Achieved, narrowed.** Two of the five candidates are built:
+
+| candidate | outcome |
+|---|---|
+| C2 | dropped at G0 |
+| C5 | dropped at G0 |
+| C1 | dropped at G1 |
+| C3 | built |
+| C4 | built |
+
+**Suite at the close** (`aa8eaebbc`'s code): 5,442 of 5,444. The two
+failures are `DropTableReclaimCrashTest`, on the `/tmp` quota held by other
+sessions' files (it passes rerun on disk), and
+`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+the two-core flake memory records (2 of 3 rerun). Neither is a green run
+of the whole suite, and this log does not report one.

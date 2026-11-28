@@ -1,0 +1,14 @@
+base/point/text {'A': 6.209, 'A2': 6.212, 'B': 6.278}
+base/point/prepared {'A': 5.343, 'A2': 5.356, 'B': 5.391}
+base/update/text {'A': 6.439, 'A2': 6.491, 'B': 6.492}
+base/update/prepared {'A': 5.743, 'A2': 5.748, 'B': 5.708}
+base/insert/text {'A': 5.886, 'A2': 5.906, 'B': 5.874}
+base/delete/text {'A': 6.006, 'A2': 6.038, 'B': 6.067}
+base/join3/text {'A': 10.121, 'A2': 10.089, 'B': 10.116}
+base/join3/prepared {'A': 7.488, 'A2': 7.482, 'B': 7.454}
+base/qlayer/text {'A': 9.146, 'A2': 9.143, 'B': 9.147}
+base/nsq/text {'A': 6.794, 'A2': 6.778, 'B': 6.411}
+base/nsu/text {'A': 6.239, 'A2': 6.262, 'B': 6.307}
+view/nsq/text {'A': 7.127, 'A2': 7.167, 'B': 6.402}
+plan/join3/text {'A': 11.784, 'A2': 11.317, 'B': 10.842}
+plan/join3/prepared {'A': 7.978, 'A2': 8.083, 'B': 8.121}
