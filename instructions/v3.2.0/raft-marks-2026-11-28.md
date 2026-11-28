@@ -155,3 +155,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; the three orders' landed rows in `instructions/milestones.md` |
 
+
+## 17. EN written: the two-core cells; and the scenario series recorded
+
+| | |
+|---|---|
+| **Word** | *"investigate the cause of the two-core flakes, write the milestone that resolves them, and push"*; and *"record this too: the final scenario 1 to 4 run (`6c98f7c32`, the unpinned series) is still left as an interim file. Now that EF has started a new driver series, scenario measurements from here on must be read on the drivers after EF-S1"* (given in Korean, rendered here) |
+| **Mark** | **EN is written, not opened** (`workorder-en-two-core-cells.md`), on `main` at `e571ae57`, documents only. CLA's source reading finds two causes behind the three cells: a cross-core kick lost to the destination's `sleeping` flag (`DurableKickRigTest`, `ContentionCountersTest`) and an unbounded first-updater-wins loss at `READ COMMITTED` (`SetExprTwoCoreRigTest`). EN-Q0..Q5 are written with CLA's proposals; **none is adopted**, and EN-Q2 revises a `txn.md` §5 sentence, so it waits for the operator's mark whatever the standing go-ahead says |
+| **The scenario record** | **`bench/v3.5.0/interim-scenarios-v3.4.17-166-g6c98f7c32.md` is still an interim file**: its pinned series is complete, and the unpinned series and PostgreSQL 17 it names as running were never committed; no final results file or summary replaced it, and it was not deleted as its header says it would be. **EF-S1 (`bench/v3.5.1/results-ef-s1-drivers-v3.5.1-6-g72580aa04.md`) begins a new driver series**: the scenario drivers now time what their PostgreSQL twins time. **Every scenario measurement from here on is read on the drivers after EF-S1, and no delta is taken across that break** - the interim file, the `v3.5.0` and `9f8f8b354` runs and the superseded comparison stand as what the old drivers read. A note to this effect heads the interim file |
+| **Does not settle** | opening EN, any EN-Q item, whether the interim file's unpinned series is recovered from the measuring host or abandoned, a tag or a version |
+| **Recorded at** | this file; `workorder-en-two-core-cells.md`; EN's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md`; the note at the head of the interim file |
