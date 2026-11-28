@@ -11055,19 +11055,6 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 
 }  // namespace
 
-// Executes `chain` with an `Aggregator` in place of the row formatter, and
-// emits the fold's output rows (docs/spec/aggregate.md AG1, workplan AG06).
-//
-// `header` is the column-heading line the caller already built from
-// `chain.column_names` - which for an aggregated chain labels the *fold's*
-// output (`b`, `count(*)`, `sum(distinct x)`), so the reply's shape is one
-// heading per emitted value exactly as it is for a projection.
-//
-// Note what this function does not touch. The trail collector and the
-// replay index are passed straight through to `Execute` and behave as they
-// would without a fold; nothing here consults them, and nothing here can
-// change what the chain read. That is AG1 - the fold consumes rows and has
-// no opinion about where they came from.
 Status CommandDispatcher::DescribeAggregate(ResultSink& sink, const exec::StepChain& chain,
                                             std::vector<std::uint32_t>& wire_types) {
     // A MIN/MAX or a group key over a relation's column 0 is a Keystone id,
@@ -11101,6 +11088,19 @@ Status CommandDispatcher::EmitAggregate(ResultSink& sink, exec::Aggregator& aggr
     });
 }
 
+// Executes `chain` with an `Aggregator` in place of the row formatter, and
+// emits the fold's output rows (docs/spec/aggregate.md AG1, workplan AG06).
+//
+// `header` is the column-heading line the caller already built from
+// `chain.column_names` - which for an aggregated chain labels the *fold's*
+// output (`b`, `count(*)`, `sum(distinct x)`), so the reply's shape is one
+// heading per emitted value exactly as it is for a projection.
+//
+// Note what this function does not touch. The trail collector and the
+// replay index are passed straight through to `Execute` and behave as they
+// would without a fold; nothing here consults them, and nothing here can
+// change what the chain read. That is AG1 - the fold consumes rows and has
+// no opinion about where they came from.
 DispatchOutcome CommandDispatcher::RunAggregated(
     ResultSink& sink, TextResultSink& text_sink, const exec::StepChain& chain,
     exec::TrailCollector* trail, const exec::TrailReplay* replay,

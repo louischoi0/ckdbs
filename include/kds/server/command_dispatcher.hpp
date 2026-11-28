@@ -2568,6 +2568,15 @@ public:
     }
 
 private:
+    // The fold's output description (wire types and fields), sent to the
+    // sink before the walk; and its rows, emitted from `aggregator` after it.
+    // Shared by the fold that runs in one turn and the one the sliced walk
+    // runs, so the two describe and emit alike.
+    Status DescribeAggregate(ResultSink& sink, const exec::StepChain& chain,
+                             std::vector<std::uint32_t>& wire_types);
+    Status EmitAggregate(ResultSink& sink, exec::Aggregator& aggregator,
+                         std::span<const std::uint32_t> wire_types, std::uint64_t& rows);
+
     // The aggregated SELECT path (docs/spec/aggregate.md AG1): the same
     // execution, with an `Aggregator` in the sink and the fold's output
     // emitted after it. `header` is the column-heading line the caller
@@ -2583,14 +2592,6 @@ private:
     // nothing else was installed, and is what the reply is taken from.
     // `borrow` as on `RunAnalyze` above (AT-R1). The sort and the counters
     // each takes are the statement's pooled scratch (`SelectScratch`).
-    // The fold's output description (wire types and fields), sent to the
-    // sink before the walk; and its rows, emitted from `aggregator` after it.
-    // Shared by the fold that runs in one turn and the one the sliced walk
-    // runs, so the two describe and emit alike.
-    Status DescribeAggregate(ResultSink& sink, const exec::StepChain& chain,
-                             std::vector<std::uint32_t>& wire_types);
-    Status EmitAggregate(ResultSink& sink, exec::Aggregator& aggregator,
-                         std::span<const std::uint32_t> wire_types, std::uint64_t& rows);
     DispatchOutcome RunAggregated(ResultSink& sink, TextResultSink& text_sink,
                                   const exec::StepChain& chain, exec::TrailCollector* trail,
                                   const exec::TrailReplay* replay,

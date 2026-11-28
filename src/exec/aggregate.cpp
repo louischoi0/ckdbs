@@ -56,7 +56,9 @@ Status Aggregator::Reset(const AggregateSpec& spec, std::span<const std::string>
     limits_ = limits;
 
     // `clear()` throughout, never a fresh container: every one of these
-    // keeps its capacity, which is the whole point of reusing the object.
+    // keeps its capacity, which is the whole point of reusing the object -
+    // all but `table_`, which `FileGroup` regrows from 64 slots by doubling
+    // into a fresh vector each statement.
     groups_.clear();
     table_.clear();
     key_spans_.clear();
@@ -469,8 +471,8 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
         if (Status s = EncodeValue(frame.Get(key), key_scratch_); !s.ok()) return s;
     }
 
-    // Heterogeneous, so the probe never materialises a string. This is the
-    // one lookup on the per-row path and it must stay allocation-free.
+    // Probed with the scratch key's bytes, so nothing is materialised. This
+    // is the one lookup on the per-row path and it must stay allocation-free.
     const std::uint64_t hash = HashKey(key_scratch_);
     if (const std::size_t at = FindGroup(key_scratch_, hash); at != groups_.size()) {
         return FoldInto(groups_[at], frame);
@@ -768,8 +770,8 @@ Status Aggregator::Merge(Aggregator&& other) {
     // **In `other`'s own group order**, which is what makes the merged
     // result's order defined: this side keeps its groups where they are and
     // the far side's newcomers arrive behind them, in the order that side
-    // founded them. Iterating the far side's *index* instead would append in
-    // hash order and make the output depend on a seed.
+    // founded them. Iterating the far side's *table* instead would append in
+    // slot order and make the output depend on the hash.
     for (Group& incoming : other.groups_) {
         std::size_t at = 0;
         if (!spec_->group_keys.empty()) {

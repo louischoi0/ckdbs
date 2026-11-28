@@ -152,11 +152,11 @@ public:
     std::size_t group_count() const noexcept { return groups_.size(); }
 
 private:
-    // Heterogeneous lookup, which is the whole reason the index is keyed by
+    // Heterogeneous lookup for the DISTINCT sets, which are keyed by
     // `std::string` and probed by `std::string_view`: without
     // `is_transparent` every probe would materialise a string, and the
     // per-row allocation this class exists to avoid would be back. The
-    // DISTINCT sets use it for the same reason.
+    // group table below has its own hash (`HashKey`).
     struct KeyHash {
         using is_transparent = void;
         std::size_t operator()(std::string_view v) const noexcept {
