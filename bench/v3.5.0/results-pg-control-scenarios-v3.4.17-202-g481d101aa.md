@@ -8,7 +8,7 @@ KDS run on this host is read against, and it replaces the v3.3.0 PostgreSQL numb
 host, another PostgreSQL minor version and a native install, and they differ from these by 1.2x to 9.7x depending on which wait a cell is
 made of (section 9: commit 9.7x, round trip 2.6x, per examined row 1.9x, per returned row 1.2x to 1.4x). No KDS cell ran in this window.
 
-The thesis, in the order the file shows it: (1) the cells are repeatable on this host, with a median spread of 2.9 % to 3.8 % per scenario and
+The thesis, in the order the file shows it: (1) the cells are repeatable on this host, with a median spread of 2.9 % to 3.9 % per scenario and
 a few small cells above 20 % that carry no claim (section 4); (2) a booking is 479 µs, of which the durable commit is 29 % and its floor
 (p0) is 125.4 µs (section 5); (3) an unindexed equality costs a fixed 22 to 27 µs round trip plus about 18 ns per row examined, and an index
 removes the per-row term only from 1,000 loans up, 1.3x to 1.7x there and 4.7x to 7.6x on the `loans` equalities at 10,000 (sections 6 and 8); (4) the shapes that return many rows are bounded by a per-returned-row
@@ -18,7 +18,7 @@ cost of 2.8 µs that moved least against v3.3.0, which is the cell family where 
 
 | Field | Value |
 |---|---|
-| Date and time executed | **2026-11-28 00:18:31 to 00:32:03 UTC** (attempt 2, the measurement; 36 cells, `timeline` in the archive). 812 s of wall clock, of which **580 s were quiet-gate holds** (390 s before `pg-s2-b1`, 190 s before `pg-s3-n200-none`) and 232 s ran the cells. Attempt 1 (00:16:21 to 00:17:23 UTC) ran 0 cells: section 3 |
+| Date and time executed | **2026-11-28 00:18:31 to 00:32:03 UTC** (attempt 2, the measurement; 36 cells, `timeline` in the archive). 812 s of wall clock: **691 s were the quiet gate** (the holds of 390 s before `pg-s2-b1` and 190 s before `pg-s3-n200-none` by the gate's own 10 s count, 395 s and 194 s by the `timeline` and `.precheck` stamps, and every other cell's 3 s busy sample), about **120 s ran the cells** (each cell's `.precheck` time to its `timeline` end, 1 s resolution) and 1 s started the server. Attempt 1 (00:16:21 to 00:17:23 UTC) ran 0 cells: section 3 |
 | Worktree / branch | `pg-control-scenarios` / `worktree-pg-control-scenarios`, at `origin/main` `0d6a8c526` (`v3.4.17-238-g0d6a8c526`), where this file was written. The measured commit is **`481d101aa`** (`v3.4.17-202-g481d101aa`, committed 2026-11-27 06:55:30 -0500), an ancestor of `0d6a8c526`; the measurement ran from the main checkout's session, not from this worktree |
 | Drivers | a `tools/` snapshot of `481d101aa` copied to the run directory (`src/tools`, not archived; `src/COMMIT` = `481d101aa69df4be7173fe609576a09378edda76`). **Verified at writing time identical to `git archive 481d101aa tools`** with `diff -r`, `__pycache__` ignored, so the tree measured was clean. The drivers are `tools/pg_scenario1_backtest.py`, `pg_scenario2_freight.py`, `pg_scenario3_library.py`, `pg_scenario4_cabinopt_days.py` over `pg_wire.py` and `bench_common.py`. **Between `481d101aa` and `0d6a8c526` seven files of `tools/` differ** (`cp_s0_fence.py`, `ea_close.py`, `ea_s0_premise.py`, `eb_close.py`, `eb_s0_premise.py`, `eb_s4_difftest.py`, `ee_s0_premise.py`); none is a scenario driver, `pg_wire.py` or `bench_common.py`. Between `9682b725` (v3.3.0's PostgreSQL cells) and `481d101aa`, `git diff --stat` over the four `pg_scenario*` drivers, `pg_wire.py`, `bench_common.py` and `pg_setup.sh` is empty |
 | Build type, KDS binary | not applicable: no KDS binary ran. The version of record at the measured commit is `v3.4.17`, `git describe --tags` = `v3.4.17-202-g481d101aa` |
@@ -28,12 +28,12 @@ cost of 2.8 µs that moved least against v3.3.0, which is the cell family where 
 | Host | Intel Core Ultra 7 270K Plus, 24 logical CPUs (8 P-cores = CPUs 0-7, 16 E-cores = CPUs 8-23), `powersave` governor, Linux 7.3.6-300.fc45 (`uname -r` at writing time). **Not the host of any earlier PostgreSQL number in `bench/`** |
 | Pinning | the postmaster and every process under it on **CPUs 0-7**: `podman --cpuset-cpus` is unavailable in rootless mode on this host, so `taskset -a -cp 0-7` was applied to the postmaster and its children after start, and new backends inherit it (`conf/pg-affinity.txt`: nine processes, all `0-7`). Every driver ran under **`taskset -c 8-23`** |
 | Quiet host | a gate before every cell waits for no `cc1plus`, `cmake --build`, `ctest` or `kds_tests` process and at most 8 % busy CPU over 3 s (`lib.sh`), **ignoring `kds_server` by name**: another project's `kds_server` (pid 1386) and containers (`sql-tuning-*`: postgres 17, mssql, two oracle and a `kds` image) run on this host throughout, so the gate sees their CPU only as the 8 % busy ceiling, not by process. `/proc/loadavg` and the foreign-process list are in every cell's `.precheck` (1-minute load 0.50 to 1.20 over the 36 cells). Section 4 states what the gate did and did not catch |
-| Time budget | within the 20-minute stage budget of `CLAUDE.md` once the gate holds are set aside: **580 s of quiet-gate hold, outside the budget**; 232 s of cells |
+| Time budget | within the 20-minute stage budget of `CLAUDE.md` once the gate holds are set aside: **691 s of quiet gate, outside the budget** (580 s of it the two holds by the gate's count); about 120 s of cells |
 | Suite | not executed; no code was changed |
 
 ## 2. Role, and the KDS cells each PostgreSQL cell is the floor for
 
-Every cell is the PostgreSQL cell of `bench/v3.3.0/archive/run-v3.3.0-33-g9682b725/run_all.sh` (lines 226 to 239), with the same arguments, three rounds (`""`, `r2-`, `r3-`)
+Every cell is the PostgreSQL cell of `bench/v3.3.0/archive/run-v3.3.0-33-g9682b725/run_all.sh` (lines 226 to 239), with the same arguments but scenario 3's `--user postgres` (v3.3.0: `--user cdkbs`, its native cluster's role), three rounds (`""`, `r2-`, `r3-`)
 in the same order. A later KDS run on this host that reads itself against PostgreSQL should pair its cells as follows and quote
 **these** numbers; the v3.3.0 PostgreSQL numbers stay what they were, a number from another host.
 
@@ -62,7 +62,7 @@ arguments (24,624 rows resident, 3,000 freights and 16,889 charges accumulate in
 | Verification | scenario 2: `verify (§4) 400 checks, 0 failure(s)` in **3 of 3** runs. Scenario 1: `verify: OK - all 8 models' P&L read back through the comparison join matches what was accumulated` in **12 of 12** runs (`verify_problems` empty in every JSON). Scenarios 3 and 4 have no `--verify` mode; their cells report `client_errors 0` / `err 0` in every phase |
 | Watchdog | a 60 s watchdog polled the run's `status` file (`watchdog.sh`, `watchdog.log`). It logged `ORPHAN: master gone, launching` at 00:18:31 UTC, which started attempt 2; it found no stall during attempt 2 and exited on `all.done` at 00:32:31 UTC |
 
-**Attempt 1 failed and ran no cell.** A user systemd timer set about 10 h out fired the master at 00:16:21 UTC instead of its scheduled 00:01:53 UTC; the cause of the delay is **unverified**. The postmaster then could not bind `127.0.0.1:15433`: the container `sql-tuning-kdbs` of another project had held that port since 2026-11-27 14:02 UTC. `pg_up` failed at 00:17:23 UTC (`PG FAILED TO START`)
+**Attempt 1 failed and ran no cell.** A user systemd timer started at 2026-11-27 14:01:53 UTC and set about 10 h out fired at 00:16:21 UTC instead of its scheduled 00:01:53 UTC (the user journal, not archived; attempt 1's `watchdog.log` shows the watchdog launching the master at 00:16:21); the cause of the delay is **unverified**. The postmaster then could not bind `127.0.0.1:15433`: the container `sql-tuning-kdbs` of another project had held that port since 2026-11-27 14:02 UTC. `pg_up` failed at 00:17:23 UTC (`PG FAILED TO START`)
 and nothing ran. Attempt 2 moved the run to **port 15434** (the port v3.3.0's PostgreSQL also used) and added a port-occupancy precheck to `pg_up`. Attempt 1's logs are in `attempt1-port15433-conflict/`
 of the archive. The 15433 of `tools/pg_setup.sh` is therefore not usable on this host while that container lives.
 
@@ -84,14 +84,14 @@ What explains the spreads that are large, as far as the run shows:
 * **The first read phase of a scenario-3 cell is slow to start.** `pk-user` runs first (200 operations, about 5 ms) and carries 5 of the 9 scenario-3 cells above 20 %: in `pg-s3-n10000-none` its three runs have means of 38.4 µs, 62.7 µs and 21.2 µs (p50 28.7, 56.5, 20.3 µs). The
   pattern (an early stretch of a short phase several times slower, then the steady state) is what a CPU that has not yet ramped up would show; the host's CPUs report `powersave`
   and about 51 % of maximum frequency at an idle sample. **The cause is unverified** (no frequency was sampled during a cell). Consequence: `pk-user` is not usable as the
-  control that cannot be affected, and a later KDS run's first phase will carry the same start-up term.
+  control that cannot be affected, and a later KDS run's first phase is exposed to the same start-up term if its cause is the host (unverified).
 * **A time-triggered checkpoint overlapped round 1.** The server log has `checkpoint starting: time` at 00:23:32 (before any cell) and again at **00:28:32**, completing at 00:29:26 (543 buffers written over 54.4 s, as the default spreading
-  gives). It overlapped the round-1 cells from `pg-s3-n1000-none` to `pg-s1s-n10080`; rounds 2 and 3 saw none. This is PostgreSQL's own default behaviour and was not controlled. `pg-s4` run 1's `d1-open` (240 autocommit inserts, mean 383.8 µs, p99 12,986.6 µs, max 13,414.3 µs against means of
-  about 150 µs in rounds 2 and 3) is the one cell in this run where the slowest operations are 100x the median; it coincides with that checkpoint, and **the attribution is unverified**.
+  gives). It overlapped the round-1 cells from `pg-s3-n1000-all` to `pg-s1s-n10080` (`pg-s3-n1000-none` ended at 00:28:31 by the `timeline`); rounds 2 and 3 saw none. This is PostgreSQL's own default behaviour and was not controlled. `pg-s4` run 1's `d1-open` (240 autocommit inserts, mean 383.8 µs, p99 12,986.6 µs, max 13,414.3 µs against means of
+  about 150 µs in rounds 2 and 3) has its p99 at 85x its p50; it coincides with that checkpoint, and **the attribution is unverified**: a larger stall came with no checkpoint in the log, in round 2's `r2-pg-s3-n10000-none` `load` (19,000 autocommit inserts at 00:29:52, mean 380.7 µs against 150.7 µs and 151.6 µs in rounds 1 and 3, p99 10,928.4 µs, max 21,926.2 µs; the median-of-three table in section 6 does not show it).
 * **One cell overlapped another session's test process.** The `.precheck` of **`pg-s2-b1` (round 1)** lists a foreign `build/tests/kds_tests` process
   (`ContentionCountersTest..., --gtest_repeat=5`, pid 1663701) that appeared between the gate's release (after 390 s) and the precheck's listing at 00:25:07, so it may have overlapped that cell, which
   ran for a few seconds. Round 1's 2,087.1 tps is the **median** of the three runs (2,128.7 and 2,047.5 tps beside it), so no effect is visible, and none can be excluded. The next cell's gate then held 190 s for the same process. Every other precheck lists no foreign process and a gate wait of 0 s.
-* **The `FATAL: role "root" does not exist` lines in `logs/pg.serverlog`** (one per cell) are the readiness probe `pg_isready` run through `podman exec` as root; they are not driver connections.
+* **The `FATAL: role "root" does not exist` lines in `logs/pg.serverlog`** (37: one per cell and one at start-up) are the readiness probe `pg_isready` run through `podman exec` as root; they are not driver connections.
 
 The shared-host caveat is the one the gate cannot remove: the other project's containers and `kds_server` ran throughout; the gate's 8 % busy ceiling bounds them in aggregate (the loads it sampled during waits were 0 to 1 %), and
 the drivers' and server's CPU sets are disjoint from each other but not from those processes.
@@ -125,7 +125,7 @@ the wait types that apply to a single connection are the commit, the statements 
 | write: organization update | `org-update` | 1 per committed booking | 20.9 µs | 4.5 % | 4.4 % to 4.5 % |
 | not in any statement phase (the candidates, not separated: `BEGIN`, the `ROLLBACK` of 340 rejected attempts, client work between statements, the manifest reporter's contention) | - | - | - | 7.1 % | 6.8 % to 7.1 % |
 
-The commit is the one durable wait: 138.2 µs mean, **p0 125.4 µs and p50 132.8 µs**, so 91 % of its mean is its floor, which is the cost of one WAL flush on this device. The 5.6 charge inserts per booking (19.6 µs each, 23.1 %)
+The commit is the one durable wait: 138.2 µs mean, **p0 125.4 µs and p50 132.8 µs**, so 91 % of its mean is its floor: one WAL flush (`wal_sync_method = fdatasync`) plus the `COMMIT` statement's own round trip on this device, not separated by the driver. The 5.6 charge inserts per booking (19.6 µs each, 23.1 %)
 are the largest single statement family, and every statement is a round trip with a mean of 19.6 to 38.8 µs (p0 of the reads: 17.9 to 33.6 µs).
 
 Latency distribution per phase (median over the three runs of each percentile; the operation count is one run's):
@@ -187,7 +187,7 @@ Median queries per second, three runs per cell, 200 operations per shape, one co
 At 10,000 loans the equalities on `loans` and `reservations` gain 4.7x to 7.6x (`loans-by-book` 7.28x, `exists-correlated` 7.60x, `count-by-user` 7.55x, `join-loan-user` 4.69x; `loans-by-user` 6.03x with a 20.7 % spread on the indexed side), `books-by-author` 2.28x,
 `overdue` 1.39x and `books-by-genre` 1.30x; `loans-by-daterange` and `join-no-literal` do not move (1.01x, 0.96x), and these two are this scenario's **controls that an index cannot affect**: `EXPLAIN` in the cells'
 JSON shows `join-no-literal` as the same Hash Join over a sequential scan of `loans` in both modes, and `loans-by-daterange` is a control by its ratio alone (its plan is not among the five archived `EXPLAIN`s). Their `all`/`none` ratios, 0.92x, 0.96x, 0.96x and 0.95x, 0.97x, 1.01x over the
-three sizes, are the floor of this table: **a ratio from 0.92x to 1.01x is inside the controls and is not an index effect**. At 200 loans there is no gain: every shape reads 0.86x to 0.95x or carries no claim, and the two controls read 0.92x and 0.95x, so 5 to 8 points of the offset are common to shapes the index cannot affect; the remainder, up to 14 % (`loans-by-user` 0.86x, spreads 3.5 % and 5.3 %), is a cost of the indexed cell that this run does not explain. Whether the common part is an ordering effect (the `all` cell always runs 3 to 4 s after the `none` cell) is unverified.
+three sizes, are the floor of this table: **a ratio from 0.92x to 1.01x is inside the controls and is not an index effect**. At 200 loans there is no gain: every shape reads 0.86x to 0.95x or carries no claim, and the two controls read 0.92x and 0.95x, so 5 to 8 points of the offset are common to shapes the index cannot affect (the 0.92x one carrying no claim, 26.9 % on its indexed side); the remainder, up to a further 6 to 9 points (`loans-by-user` 0.86x, 14 % in all, spreads 3.5 % and 5.3 %), is a cost of the indexed cell that this run does not explain. Whether the common part is an ordering effect (the `all` cell always runs 3 to 4 s after the `none` cell) is unverified.
 
 The access arms (`EXPLAIN`, `plans` in each cell's JSON) at 10,000 loans: unindexed, `loans-by-user`, `books-by-genre` and `overdue` are sequential scans and the two joins hash joins (`exists-correlated` a hash join over a `HashAggregate`); indexed, the equalities are Bitmap Heap Scans over the driver's covering indexes, `overdue` a Bitmap Heap Scan
 and `exists-correlated` a Nested Loop Semi Join over an index-only scan of the pk. At 200 loans the unindexed plans are sequential scans (`cost=0.00..4.50` for `loans-by-user`) and the joins hash joins.
@@ -404,7 +404,7 @@ Everything that returns or aggregates over whole relations scales with rows (`re
 where 27.1 µs is that run's `read-bar-lookup` mean, taken as the fixed term.
 Two independent shapes agree on about 2.8 µs per returned row.
 
-The full-size backtest join runs at 778 qps (`backtest-read`, 360 cross-sections, 11.6 % spread) and the replay at 771 qps (19.8 %, no claim); `compare-all` is one statement per run (105 qps, 14.9 %).
+The full-size backtest join runs at 778 qps (`backtest-read`, 360 cross-sections, 11.6 % spread) and the replay at 771 qps (19.8 %, just inside the 20 % bar); `compare-all` is one statement per run (105 qps, 14.9 %).
 
 Latency distributions, one table per size (median over three runs of each percentile):
 
@@ -519,9 +519,9 @@ Latency distributions, one table per size (median over three runs of each percen
 |---|---|---|---|---|---|---|---|
 | `bar-lookup` | 13,973 qps (7.5 %) | 32,466 qps (30.8 %) | - | - | - | 14,673 qps (1.7 %) | 2.21x † |
 | `bar-range` | 1,670 qps (4.4 %) | 1,709 qps (2.0 %) | - | - | - | 1,400 qps (6.0 %) | 1.22x |
-| `day-slice` | 807 qps (14.6 %) | 812 qps (10.4 %) | 6,588 qps (39.5 %) | 771 qps (21.8 %) | 8.12x | 414 qps (17.8 %) | 1.96x |
+| `day-slice` | 807 qps (14.6 %) | 812 qps (10.4 %) | 6,588 qps (39.5 %) | 771 qps (21.8 %) | 8.12x † | 414 qps (17.8 %) | 1.96x |
 | `symbol-history` | 46 qps (0.2 %) | 46 qps (0.2 %) | 48 qps (0.8 %) | 46 qps (0.4 %) | 1.05x | 32 qps (8.0 %) | 1.42x |
-| `cross-join` | 715 qps (18.8 %) | 716 qps (27.0 %) | 4,873 qps (18.9 %) | 726 qps (18.6 %) | 6.81x | 393 qps (19.5 %) | 1.82x † |
+| `cross-join` | 715 qps (18.8 %) | 716 qps (27.0 %) | 4,873 qps (18.9 %) | 726 qps (18.6 %) | 6.81x † | 393 qps (19.5 %) | 1.82x † |
 | `point-join` | 11,889 qps (45.8 %) | 15,772 qps (14.2 %) | - | - | - | 7,071 qps (2.4 %) | 2.23x |
 | `model-join` | 1,415 qps (15.4 %) | 1,446 qps (5.1 %) | 1,473 qps (8.4 %) | 1,451 qps (4.2 %) | 1.02x | 1,092 qps (0.6 %) | 1.32x |
 
@@ -552,14 +552,14 @@ Latency distributions, one table per size (median over three runs of each percen
 |---|---|---|---|---|---|---|---|
 | `bar-lookup` | 38,887 qps (7.7 %) | 37,806 qps (6.2 %) | - | - | - | 14,171 qps (30.9 %) | 2.67x † |
 | `bar-range` | 1,724 qps (2.2 %) | 1,681 qps (1.7 %) | - | - | - | 1,355 qps (6.9 %) | 1.24x |
-| `day-slice` | 3,809 qps (19.4 %) | 4,474 qps (11.8 %) | 15,211 qps (24.9 %) | 4,369 qps (20.5 %) | 3.40x | 2,058 qps (6.1 %) | 2.17x |
+| `day-slice` | 3,809 qps (19.4 %) | 4,474 qps (11.8 %) | 15,211 qps (24.9 %) | 4,369 qps (20.5 %) | 3.40x † | 2,058 qps (6.1 %) | 2.17x |
 | `symbol-history` | 277 qps (0.2 %) | 271 qps (1.5 %) | 273 qps (1.8 %) | 271 qps (1.6 %) | 1.01x | 195 qps (10.8 %) | 1.39x |
-| `cross-join` | 2,965 qps (8.1 %) | 3,656 qps (23.8 %) | 8,704 qps (9.6 %) | 3,572 qps (11.5 %) | 2.38x | 1,682 qps (11.7 %) | 2.17x † |
+| `cross-join` | 2,965 qps (8.1 %) | 3,656 qps (23.8 %) | 8,704 qps (9.6 %) | 3,572 qps (11.5 %) | 2.38x † | 1,682 qps (11.7 %) | 2.17x † |
 | `point-join` | 20,056 qps (1.7 %) | 20,266 qps (1.1 %) | - | - | - | 7,010 qps (2.6 %) | 2.89x |
 | `model-join` | 5,513 qps (41.7 %) | 7,702 qps (6.3 %) | 8,081 qps (2.5 %) | 7,491 qps (22.6 %) | 1.05x | 4,190 qps (2.6 %) | 1.84x |
 
-**An index on the filter column pays only where there are rows to skip**: at 60,480 bars `day-slice` gains 8.12x (a 39.5 % spread on the indexed side: no claim) and `cross-join` 6.81x (18.9 %), at 10,080 bars 3.40x (24.9 %, no claim) and 2.38x, at 1,008 bars 1.39x and 1.13x, at 252 bars 0.94x and 0.96x,
-the last two inside the noise. `symbol-history` and `model-join` do not gain (1.05x and 1.02x at full size); `symbol-history` returns 7,560 rows and its time is the per-returned-row cost (2.83 µs per row from this mean, 2.77 µs from `bar-range`, measured independently), so the filter is not where its time goes. The cold and warm cells of the scans are within their spreads at full size (`day-slice` 807 and 812 qps, `symbol-history` 46 and 46 qps, `cross-join` 715 and 716 qps); `bar-lookup` at full size is the one shape where a cold argument is slower (13,973 qps cold, 32,466 qps warm, 30.8 % spread on the warm side). Whether the data is resident in `shared_buffers` was not checked by a buffer-hit count, and the cause of the `bar-lookup` gap is not separated here.
+**An index on the filter column pays only where there are rows to skip**: at 60,480 bars `day-slice` gains 8.12x (a 39.5 % spread on the indexed side) and `cross-join` 6.81x (27.0 % on the warm side), at 10,080 bars 3.40x (24.9 % indexed) and 2.38x (23.8 % warm), at 1,008 bars 1.39x and 1.13x, at 252 bars 0.94x and 0.96x,
+the last two inside the noise. **The four gains at 60,480 and 10,080 bars carry no claim by the 20 % rule**: their medians differ by 2.4x to 8.1x, far outside every spread, but the rule is the file's and holds for them too. The one gain that is a finding is 1,008 bars' `day-slice` 1.39x; its `cross-join` 1.13x is inside the warm side's 16.4 % spread. `symbol-history` and `model-join` do not gain (1.05x and 1.02x at full size); `symbol-history` returns 7,560 rows and its time is the per-returned-row cost (2.83 µs per row from this mean, 2.77 µs from `bar-range`, measured independently), so the filter is not where its time goes. The cold and warm cells of the scans are within their spreads at full size (`day-slice` 807 and 812 qps, `symbol-history` 46 and 46 qps, `cross-join` 715 and 716 qps); `bar-lookup` at full size is the one shape where a cold argument is slower (13,973 qps cold, 32,466 qps warm, 30.8 % spread on the warm side). Whether the data is resident in `shared_buffers` was not checked by a buffer-hit count, and the cause of the `bar-lookup` gap is not separated here.
 
 **Write sweep (rule 3: the durability wait).** Rows per second inserting 2,000 rows, one round trip per row, by rows per transaction; the sweep is independent of the bars loaded, and its four columns are four more measurements of the same thing (the spread of the autocommit row across them, 5,915 to 6,039 rows/s, is the engine's noise floor):
 
@@ -571,7 +571,7 @@ the last two inside the noise. `symbol-history` and `model-join` do not gain (1.
 | 1000 | 49,428 rows/s (8.7 %) | 50,072 rows/s (2.4 %) | 48,963 rows/s (8.4 %) | 47,815 rows/s (5.3 %) |
 
 An autocommit insert costs 1,000,000 / 5,988 = 167.0 µs and a 1,000-row batch 20.2 µs per row, so one durable commit costs 146.8 µs; scenario 2's `commit` mean is 138.2 µs, p0 125.4 µs. The `load-*` autocommit phases of the matrix
-are the same floor (the `load-models` rows, 8 inserts: 142 to 152 µs p50).
+are the same floor (the `load-models` rows, 8 inserts: 141 to 151 µs p50).
 
 **Connection sweep.** The backtest's 3-relation join, 200 operations per connection count, PostgreSQL forking one backend per connection (the one place where PostgreSQL's aggregate rate is genuine parallel execution and not only round-trip overlap), the backends confined to CPUs 0-7:
 
@@ -582,16 +582,16 @@ are the same floor (the `load-models` rows, 8 inserts: 142 to 152 µs p50).
 | 4 | 2,453 qps (22.6 %) † | 20,234 qps (16.7 %) | 13,190 qps (75.1 %) † | 8,803 qps (9.7 %) |
 | 8 | 4,626 qps (11.4 %) | 18,849 qps (45.5 %) † | 14,612 qps (29.1 %) † | 11,836 qps (87.8 %) † |
 
-At 60,480 bars the curve climbs: 746, 1,375, 2,453, 4,626 qps for 1, 2, 4 and 8 connections (6.2x at eight, 11.4 % spread at 8), which is the shape's own scaling because every connection runs a 1.3 ms join. At 252, 1,008 and 10,080 bars a 200-operation point lasts 5 to 60 ms and the run's
+At 60,480 bars the curve climbs: 746, 1,375, 2,453, 4,626 qps for 1, 2, 4 and 8 connections (6.2x at eight, 11.4 % spread at 8), which is the shape's own scaling because every connection runs a 1.3 ms join. At 252, 1,008 and 10,080 bars a 200-operation point lasts 10 to 60 ms (200 operations over the medians) and the run's
 own length and client start-up dominate: 252 bars rises to 20,234 qps at 4 and then falls to 18,849 qps at 8 with a 45.5 % spread. **Nothing in this run found the bound on the connection sweep**: the server's CPU was not sampled, and the driver, one Python process per connection count on the E-cores, is a candidate
-the run cannot exclude. The 4- and 8-connection points of the smaller sizes carry no claim.
+the run cannot exclude. The 8-connection points of the smaller sizes, the 2- and 4-connection points at 1,008 bars, and the 1- and 4-connection points at 60,480 bars carry no claim (the `†` cells).
 
 ## 9. Against v3.3.0's PostgreSQL 18.6: what the host change moved
 
 This section is the only comparison in the file, and it is labelled for what it is: **the host (an 8-vCPU AMD EPYC 9V74 cloud VM on `/dev/root` ext4, unpinned, against this 24-CPU hybrid desktop on xfs/NVMe, pinned), the PostgreSQL minor version (18.6 against 18.7) and the install (native, `/home/cdkbs/pg-bench-ba`, against a container with `--network host`) changed together**, and no ratio below is attributable to any one of them.
 The v3.3.0 numbers are re-derived from that run's archived JSON (`bench/v3.3.0/archive/scenario{1,2,3,4}-v3.3.0-33-g9682b725/json/`, three runs per cell) by the same spread rule. Its tools differ from this run's by nothing in the PostgreSQL drivers (section 1).
 
-What the ratios show is that the move did not scale PostgreSQL uniformly: **it moved each kind of wait by a different factor**, in the order the wait is made of fewer CPU cycles.
+What the ratios show is that the move did not scale PostgreSQL uniformly: **it moved each kind of wait by a different factor**, most for the durable commit and least for the per-row costs.
 
 | wait | measure here | measure at v3.3.0 | ratio |
 |---|---|---|---|
@@ -602,18 +602,18 @@ What the ratios show is that the move did not scale PostgreSQL uniformly: **it m
 | per row examined | unindexed equality, 10,000 loans, 17.6 ns per row | 34.2 ns per row | 1.94x lower |
 | per row returned | `read-bar-range` 2.77 µs per row; `read-symbol-history` 2.83 µs per row | 3.26 and 4.04 µs per row | 1.18x and 1.43x lower |
 
-The commit moved by the device (an fsync on an NVMe volume against the cloud VM's disk), the round trip by the CPU and the loopback path, and the per-row costs the least. Practical consequence for a later KDS run: **a ratio of KDS to PostgreSQL computed against the v3.3.0 PostgreSQL numbers
-would have been misstated by 1.2x to 9.7x depending on the shape**, and the shapes bounded by durability are the ones where it would have been most misstated. The ratios of the matrices are above: scenario 2 at 4.98x; scenario 3 at 1.4x to 3.9x (geometric means 1.92x to 2.93x per cell); scenario 4's `board` 2.02x, `tape10k` 2.05x, `pk` 2.99x, `close` 1.78x and the load 3.15x;
+The commit moved most and the per-row costs least; the device (an fsync on an NVMe volume against the cloud VM's disk) for the commit and the CPU and loopback path for the round trip are the candidates, and this run does not separate them from the version and install changes. Practical consequence for a later KDS run: **a ratio of KDS to PostgreSQL computed against the v3.3.0 PostgreSQL numbers
+would have been misstated by 1.2x to 9.7x depending on the shape**, and the shapes bounded by durability are the ones where it would have been most misstated. The ratios of the matrices are above: scenario 2 at 4.98x; scenario 3 at 1.25x to 3.9x (geometric means 1.92x to 2.93x per cell); scenario 4's `board` 2.02x, `tape10k` 2.05x, `pk` 2.99x, `close` 1.78x and the load 3.15x;
 scenario 1's bulk loads (`load-sessions`, `load-bars`, `load-stats`) 2.5x to 3.5x, the autocommit-dominated `result-insert` 7.7x to 9.0x, and the reads and aggregates 1.2x to 4.0x, with one cell (`compare-all` at 60,480 bars, 0.88x) inside its spread.
 
 ## 10. What the run teaches
 
-1. **A durable booking on this host is 29 % commit and 64 % statements.** The commit floor (p0 125.4 µs) is what a durable single-connection KDS booker also pays on this device; whatever a later KDS run adds above that floor in the commit
-   is KDS's. The v3.3.0 summary read one durable KDS booker as equal to PostgreSQL because both wait on the same fsync, at a commit of 1,343 µs; here the commit is a tenth of that and the statements, 19.6 to 38.8 µs each, are 64 % of the booking, so
+1. **A durable booking on this host is 29 % commit and 64 % statements.** The commit floor (p0 125.4 µs, a WAL flush and a round trip) is PostgreSQL's on this device; what a durable single-connection KDS booker pays here is unmeasured,
+   and a later KDS run's commit is read against this floor. The v3.3.0 summary read one durable KDS booker as equal to PostgreSQL because both wait on the same fsync, at a commit of 1,343 µs; here the commit is a tenth of that and the statements, 19.6 to 38.8 µs each, are 64 % of the booking, so
    that reading does not carry over to this host's numbers. Whether it holds for KDS on this host is the later run's question, and this file does not predict it.
 2. **The per-row terms are linear and small**: about 18 to 20 ns per row examined, 2.8 µs per row returned and 22 to 27 µs fixed. They give a line for each of scenario 3's and scenario 4's unindexed cells, and a KDS cell that sits off the line says which term it differs in.
 3. **PostgreSQL's index-gain curve against rows is the control for any KDS index or Cabin gain curve**: nothing at 200 loans, 1.3x to 1.7x on the equalities at 1,000, and 4.7x to 7.6x on the `loans` equalities at 10,000.
-4. **The first phase of a short cell is not a measurement of the engine** (section 4, `pk-user`): on this host a 200-operation first phase has a 12 % to 120 % spread. A later KDS run that uses a pk lookup as its control in a first phase has the same problem.
+4. **The first phase of a short cell is not a measurement of the engine** (section 4, `pk-user`): on this host a 200-operation first phase has a 12 % to 120 % spread. A later KDS run that uses a pk lookup as its control in a first phase is exposed to the same problem if its cause is the host (unverified).
 5. No decision recorded in `CLAUDE.md` or a spec is contradicted or informed by this run: it measures PostgreSQL only. The run supports no insight about KDS's engine, and none is manufactured.
 
 ## 11. What is cut, absent or unverified
@@ -626,7 +626,7 @@ scenario 1's bulk loads (`load-sessions`, `load-bars`, `load-stats`) 2.5x to 3.5
 | Saturation (rule 4b) | not reached: the connection sweep's bound was not found (section 8) and `synchronous_commit = on` is the durability extreme, so `strict`'s counterpart is measured; no CPU sampler ran |
 | PostgreSQL 17 | not measured (another series' scope) |
 | Cause of attempt 1's delayed timer | unverified |
-| Cause of the slow first phase; of `pg-s4` run 1's 13 ms stall | unverified (a frequency trace and a `log_checkpoints` correlation would settle them) |
+| Cause of the slow first phase; of `pg-s4` run 1's 13 ms stall; of `r2-pg-s3-n10000-none`'s `load` stall | unverified (`log_checkpoints` is on and was correlated: one stall coincides with a checkpoint, the other does not; a frequency trace and per-operation timestamps would settle them) |
 | Whether `pg-s2-b1` run 1 was affected by the foreign `kds_tests` | not excludable (section 4); no effect visible |
 | Whether the E-core pinning of the drivers sets the 2.8 µs per returned row | unverified; a driver profile on P-cores would say |
 | Suite | not executed; no code changed |
