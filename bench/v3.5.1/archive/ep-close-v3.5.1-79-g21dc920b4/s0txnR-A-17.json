@@ -1,0 +1,402 @@
+{
+  "checks": [
+    {
+      "detail": "200 accounts read back, 0 mismatched",
+      "name": "balance-verify",
+      "ok": true
+    },
+    {
+      "detail": "count/sum(balance)/sum(qty)/sum(trades): stored [586, 58600000000, 0, 30290], client [586, 58600000000, 0, 30290], conserved [586, 58600000000, 0, 30290], torn 0",
+      "name": "balance-conserved",
+      "ok": true
+    },
+    {
+      "detail": "30290 rows, 30290 legs inserted",
+      "name": "trades-rows",
+      "ok": true
+    },
+    {
+      "detail": "46 rows, 46 inserted",
+      "name": "profit-rows",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795876559,
+  "engine": "kds",
+  "harness": "eqbench",
+  "meta": {
+    "accounts": 586,
+    "assets": 100,
+    "committed": 15145,
+    "conflict_retries": 0,
+    "days": 180,
+    "derived_phases": "trade-insert, account-update, profit-scan and profit-insert are every execution of that statement inside the txn phase: latency, errors and throughput over txn's wall clock only; CPU and breakdown are txn's",
+    "fk": true,
+    "limit": "seconds",
+    "per_trader_committed": [
+      5020,
+      5046,
+      5079
+    ],
+    "profit": true,
+    "profit_periods": 3,
+    "profit_rows": 46,
+    "relation_kinds": {
+      "s0_accounts": "BTREE",
+      "s0_assets": "HEAP",
+      "s0_trades": "HEAP",
+      "s0_user_periodic_profit": "HEAP",
+      "s0_users": "HEAP"
+    },
+    "rolled_back": 0,
+    "seconds": 7.734218101,
+    "seconds_budget": 6,
+    "torn": 0,
+    "tps": 1958.1811376694716,
+    "traders": 3,
+    "txn": true,
+    "txn_target": 0,
+    "underfunded": 613,
+    "users": 300
+  },
+  "options": {
+    "assets": "100",
+    "fk": "1",
+    "profit_users": "20",
+    "seconds": "6",
+    "traders": "3",
+    "txn": "1",
+    "users": "300"
+  },
+  "phases": [
+    {
+      "breakdown": {
+        "commit": 118.85333333333334,
+        "disk_read": 0.0,
+        "execution": 5.26,
+        "formatting_client": 0.0,
+        "lock": 0.0,
+        "network": 0.0,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 11.845953333333334,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [
+        {
+          "class": "Commit",
+          "count": 300.0,
+          "name": "commit.wal_flush",
+          "total_us": 35656.0
+        },
+        {
+          "class": "CPU",
+          "count": 0.0,
+          "name": "cpu.on_cpu",
+          "total_us": 1557.0
+        },
+        {
+          "class": "Scheduler",
+          "count": 300.0,
+          "name": "sched.run_queue",
+          "total_us": 21.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 456.933,
+        "mean_us": 150.34868666666668,
+        "ops": 300,
+        "p0_us": 134.759,
+        "p25_us": 139.317,
+        "p50_us": 141.123,
+        "p95_us": 174.06,
+        "p99_us": 296.253
+      },
+      "name": "load-users",
+      "raw": {
+        "page_reads": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 13.10639,
+      "terminals": 1,
+      "throughput_ops": 6603.272317629725,
+      "wall_s": 0.04543202
+    },
+    {
+      "breakdown": {
+        "commit": 124.43,
+        "disk_read": 0.0,
+        "execution": 4.29,
+        "formatting_client": 0.0,
+        "lock": 0.0,
+        "network": 0.0,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 20.2712,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [
+        {
+          "class": "Commit",
+          "count": 100.0,
+          "name": "commit.wal_flush",
+          "total_us": 12443.0
+        },
+        {
+          "class": "CPU",
+          "count": 0.0,
+          "name": "cpu.on_cpu",
+          "total_us": 421.0
+        },
+        {
+          "class": "Scheduler",
+          "count": 100.0,
+          "name": "sched.run_queue",
+          "total_us": 8.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 367.658,
+        "mean_us": 177.27401999999998,
+        "ops": 100,
+        "p0_us": 139.147,
+        "p25_us": 143.822,
+        "p50_us": 149.607,
+        "p95_us": 314.986,
+        "p99_us": 365.008
+      },
+      "name": "load-assets",
+      "raw": {
+        "page_reads": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 12.40537,
+      "terminals": 1,
+      "throughput_ops": 5530.487698314993,
+      "wall_s": 0.018081588
+    },
+    {
+      "breakdown": {
+        "commit": 117.8566552901024,
+        "disk_read": 0.0,
+        "execution": 2.861774744027304,
+        "formatting_client": 0.0,
+        "lock": 0.0,
+        "network": 0.0,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 11.913351535836178,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [
+        {
+          "class": "Commit",
+          "count": 586.0,
+          "name": "commit.wal_flush",
+          "total_us": 69064.0
+        },
+        {
+          "class": "CPU",
+          "count": 0.0,
+          "name": "cpu.on_cpu",
+          "total_us": 1642.0
+        },
+        {
+          "class": "Scheduler",
+          "count": 586.0,
+          "name": "sched.run_queue",
+          "total_us": 35.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 548.364,
+        "mean_us": 145.83082252559726,
+        "ops": 586,
+        "p0_us": 134.162,
+        "p25_us": 136.439,
+        "p50_us": 137.81,
+        "p95_us": 162.437,
+        "p99_us": 318.258
+      },
+      "name": "load-accounts",
+      "raw": {
+        "page_reads": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 10.277682593856655,
+      "terminals": 1,
+      "throughput_ops": 6829.096533486503,
+      "wall_s": 0.085809301
+    },
+    {
+      "breakdown": {
+        "commit": 575.312314295147,
+        "disk_read": 0.0,
+        "execution": 35.73218884120172,
+        "formatting_client": 0.0021944536150544734,
+        "lock": 0.0,
+        "network": 0.0,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": 1.8267414988445032
+      },
+      "client_cpu_us_per_op": 31.05878322878838,
+      "client_decode_us_per_op": 0.0021944536150544734,
+      "errors": {},
+      "events": [
+        {
+          "class": "Commit",
+          "count": 15191.0,
+          "name": "commit.wal_flush",
+          "total_us": 8713105.0
+        },
+        {
+          "class": "CPU",
+          "count": 0.0,
+          "name": "cpu.on_cpu",
+          "total_us": 262759.0
+        },
+        {
+          "class": "Scheduler",
+          "count": 90962.0,
+          "name": "sched.run_queue",
+          "total_us": 306071.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 2066133.146,
+        "mean_us": 1400.1721205678443,
+        "ops": 15145,
+        "p0_us": 209.094,
+        "p25_us": 447.815,
+        "p50_us": 467.454,
+        "p95_us": 598.151,
+        "p99_us": 792.405
+      },
+      "name": "txn",
+      "raw": {
+        "compile_us": 27666.0,
+        "page_reads": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 36.60067764938924,
+      "terminals": 4,
+      "throughput_ops": 1958.1811376694716,
+      "wall_s": 7.734218101
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 917650.594,
+        "mean_us": 170.07356064707824,
+        "ops": 30290,
+        "p0_us": 12.981,
+        "p25_us": 21.187,
+        "p50_us": 25.516,
+        "p95_us": 159.311,
+        "p99_us": 181.492
+      },
+      "name": "trade-insert",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 3,
+      "throughput_ops": 3916.362275338943,
+      "wall_s": 7.734218101
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 917644.427,
+        "mean_us": 150.83360214592275,
+        "ops": 30290,
+        "p0_us": 10.635,
+        "p25_us": 16.855,
+        "p50_us": 21.617,
+        "p95_us": 154.015,
+        "p99_us": 177.75
+      },
+      "name": "account-update",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 3,
+      "throughput_ops": 3916.362275338943,
+      "wall_s": 7.734218101
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 576611.321,
+        "mean_us": 16891.431913043478,
+        "ops": 46,
+        "p0_us": 29.439,
+        "p25_us": 35.827,
+        "p50_us": 157.87,
+        "p95_us": 4268.221,
+        "p99_us": 576611.321
+      },
+      "name": "profit-scan",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 1,
+      "throughput_ops": 5.94759539998651,
+      "wall_s": 7.734218101
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1344694.15,
+        "mean_us": 58246.82769565217,
+        "ops": 46,
+        "p0_us": 148.451,
+        "p25_us": 259.554,
+        "p50_us": 280.268,
+        "p95_us": 443346.479,
+        "p99_us": 1344694.15
+      },
+      "name": "profit-insert",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 1,
+      "throughput_ops": 5.94759539998651,
+      "wall_s": 7.734218101
+    }
+  ],
+  "profile": true,
+  "scenario": "s0",
+  "seed": 1,
+  "started_unix": 1795876551
+}

@@ -1,12 +1,15 @@
 # Work order EP - a read refused "undo chain revisits the record": whether an undo record is recycled while a reader can still reach it, decided before anything is fixed
 
-Status: **WRITTEN 2026-11-28, not opened** (`raft-marks-2026-11-28.md`
-§25), on the operator's word *"write the milestone that resolves the newly
-found bug, and push"*. Written by CLA in a claude.ai session in the main
-checkout on `main` at `c43dbf46` (`v3.4.17-332-gc43dbf46`), documents
-only, no worktree. **Every `[source-read]` claim with a `path:line` was
-read by CLA at `c43dbf46`**; nothing was built or run, and every number
-is quoted from the record it names.
+Status: **CLOSED 2026-11-28 on the work branch, every stage landed**
+(`raft-marks-2026-11-28.md` §26, §27), opened on the operator's standing
+go-ahead on worktree `ep-undo-chain-revisit` from `012820e3e`: S0, S1 and
+S2 at `21dc920b4`, S3 the close. **The refusal was a false refusal**: a
+stale link into a recycled undo page, never followed, was asked of the
+cycle guard before the walk's verdict on it, and no wrong version could
+come of it (§7). EP-Q0, Q1, Q3 (revised) and Q4 were adopted as CLA
+proposed on that go-ahead; EP-Q2 was not reached. Written 2026-11-28
+(§25) by CLA in the main checkout at `c43dbf46`, documents only; the
+`[source-read]` claims of §1 were read there.
 
 Tags: `[operator]`, `[source-read]`, `[measured]` (quoted), `[design]`,
 `[quiet-wrong]`, as in DT's order.
@@ -279,3 +282,34 @@ The last one failed alone on `/tmp` with "Disk quota exceeded" (other
 sessions' scratch held about 8 GB of the host's quota) and passed 3 of 3
 with `TMPDIR` on disk. Overhead not measured; measured at the milestone's
 close.
+
+### EP-S3: the close
+
+`[measured]` `bench/v3.5.1/results-ep-close-v3.5.1-79-g21dc920b4.md`
+(`ck-tester`): base `012820e3e` against close `21dc920b4`, interleaved,
+`cores = 1`, server on CPUs 0 to 7, data on disk, 180 runs, none
+invalidated.
+
+- **Refusals.** On EO's reproduction, the base refused in 16 of 70 runs
+  (18 refusals) and the close in **0 of 70**. Adding CLA's 60 runs of the
+  close's source (§7, S0), the close refused 0 of 130 runs, which bounds
+  the rate below 2.3 % at 95 %. Scenario 0 `txn=0` and scenario 5: 0 on
+  both arms in 10 runs each. **Scenario 5's one EO refusal was not
+  reproduced on the base**, so its cause stays unverified.
+- **Overhead: none resolvable.** On the fast runs of scenario 0, the rate
+  was +1.1 %, p50 -0.6 %, p99 -1.0 % and server CPU per transaction
+  -2.3 %, against a 20 % run-to-run spread. Scenario 0 `txn=0` (-4.6 %)
+  and scenario 5 (-4.0 %, Mann-Whitney p 0.45) are inside their spreads.
+  The host ran at two speeds in both arms. The order-reversed pairs showed
+  that the slow runs follow order, not binary.
+- **Undo growth (EP-R3, as a statement).** Two pages live through
+  scenario 0. Recycled pages per 1,000 operations were 32.8 on both arms in
+  scenario 0, and 329 against 333 in scenario 5. EO recorded neither
+  counter.
+- **Cut**: scenario 0 `txn=0` and scenario 5 were run shortened, in 10
+  pairs each, with no delta against EO's figures for those cells; no row
+  sweep; no PostgreSQL floor and no two-core cell.
+
+EP-Q3 is applied: a note heads `results-eo-close-v3.5.1-63-g9543cf720.md`.
+The bug file `docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`
+is deleted in the close commit; `git show 21dc920b4:<path>` retrieves it.

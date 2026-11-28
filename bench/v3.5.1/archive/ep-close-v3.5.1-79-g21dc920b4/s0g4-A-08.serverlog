@@ -1,0 +1,5 @@
+1795875095 WARN [query] "DROP TABLE s0_user_periodic_profit" -> ERR no relation named 's0_user_periodic_profit' (byte 11) in 42us
+1795875095 WARN [query] "DROP TABLE s0_trades" -> ERR no relation named 's0_trades' (byte 11) in 7us
+1795875095 WARN [query] "DROP TABLE s0_accounts" -> ERR no relation named 's0_accounts' (byte 11) in 4us
+1795875095 WARN [query] "DROP TABLE s0_assets" -> ERR no relation named 's0_assets' (byte 11) in 3us
+1795875095 WARN [query] "DROP TABLE s0_users" -> ERR no relation named 's0_users' (byte 11) in 5us

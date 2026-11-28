@@ -1,0 +1,12 @@
+phase load-users: 300 ops, mean 167.5 us, p50 144.4 us, p99 428.4 us, 5907 ops/s, errors {}
+phase load-assets: 100 ops, mean 178.2 us, p50 145.2 us, p99 549.8 us, 5494 ops/s, errors {}
+phase load-accounts: 586 ops, mean 149.1 us, p50 133.7 us, p99 382.8 us, 6681 ops/s, errors {}
+phase txn: 36606 ops, mean 491.4 us, p50 468.2 us, p99 924.9 us, 6100 ops/s, errors {}
+phase trade-insert (of txn): 73212 execs, mean 71.0 us, p50 25.5 us, p99 194.8 us, errors {}
+phase account-update (of txn): 73212 execs, mean 61.2 us, p50 21.5 us, p99 189.7 us, errors {}
+phase profit-scan (of txn): 100 execs, mean 99.8 us, p50 40.7 us, p99 313.7 us, errors {}
+phase profit-insert (of txn): 100 execs, mean 256.6 us, p50 265.7 us, p99 387.8 us, errors {}
+check balance-verify: ok 200 accounts read back, 0 mismatched
+check balance-conserved: ok count/sum(balance)/sum(qty)/sum(trades): stored [586, 58600000000, 0, 73212], client [586, 58600000000, 0, 73212], conserved [586, 58600000000, 0, 73212], torn 0
+check trades-rows: ok 73212 rows, 73212 legs inserted
+check profit-rows: ok 100 rows, 100 inserted

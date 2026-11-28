@@ -262,3 +262,23 @@ landed (§16):
 | **CLA's, not the operator's** | S0's verdict: the refusal was a false refusal. A stale link into a recycled undo page, never followed, was asked of the cycle guard before the walk's verdict on it (22 Release and 12 Debug dumps, every one a self-link whose prior writer the view sees; 0 refusals in 30 runs with the purge disarmed, against 13 in 30 armed). The revision of EP-Q3's premise; EP-Q1's Debug arm cut from 30 runs to 10 to fit the stage's budget |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; EP's order (§4's mark column, §7); EP's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 27. EP closed on the standing go-ahead: a false refusal, fixed
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §26; no further word |
+| **Mark** | **EP is closed on the work branch**, with code at `21dc920b4` (`v3.5.1-79-g21dc920b4`). `ResolveThroughUndo` asks the cycle guard only of a link it follows. The close (`bench/v3.5.1/results-ep-close-v3.5.1-79-g21dc920b4.md`): 0 of 70 runs refused against the base's 16 of 70, and no overhead resolvable above a 20 % run-to-run spread. The bug file is deleted |
+| **CLA's, not the operator's** | the reading that no wrong version could come of the defect (S0's proof, with the review's confirmation over every write path); scenario 5's one EO refusal attributed to this cause **unverified**, since it was not reproduced; the review's cross-core foreign key window (R1) recorded in `known-gaps.md` and not fixed |
+| **Does not settle** | a tag or a version; R1 |
+| **Recorded at** | this file; EP's order (header, §7); EP's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md`; `CLAUDE.md`'s Transactions & MVCC row; `txn.md` §3.7 |
+
+## 28. EP to be pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"and commit and push no verify after milestone closed"*, given while EP's close was being measured |
+| **Mark** | On EP's close: commit, one `--no-ff` merge of `worktree-ep-undo-chain-revisit` over `origin/main`, pushed with `--no-verify` |
+| **Skipped, on the word** | the pre-push hook. The suite was last run at `21dc920b4`, the last commit with a build input: 5,442 of 5,446, the four failures each passing 3 of 3 alone (one a `/tmp` quota error). It was not a green run, and this push does not report it as one |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; EP's landed column in `instructions/milestones.md` |
