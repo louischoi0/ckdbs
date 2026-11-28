@@ -581,6 +581,22 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   `wal/file_log_device.cpp`.
 
 
+- **Two inline syncs are still booked to no wait event** (found by the
+  review of EG's close at `01c6c741c`, read in code, not measured): a
+  DDL with no transaction of its own syncs on the statement's stack
+  through `AwaitDdlDurability` and `SyncAll`
+  (`src/server/command_dispatcher.cpp`), at `strict` and at `group`; and
+  a `group` commit on a dispatcher that cannot park drains and waits
+  inline rather than parking. EG-S1 booked the `strict` arm of
+  `WalManager::Commit` alone, so these two read as their statement's CPU
+  time. Also from that review: `docs/spec/wal.md` §2 and §16 still say
+  every WAL write goes through `IoBackend`, where the log's seam is
+  `LogDevice` (§6 was corrected), and §6's heading still reads
+  `[PROPOSED]` over text that describes the code as built; and
+  `bench/v3.5.1/results-eg-close-v3.5.1-33-g01bd189f4.md` carries bare
+  numbers under unit-bearing headings, against `bench/README.md`'s rule.
+  Owner: `docs/spec/wait-events.md`, `docs/spec/wal.md`.
+
 - **On a one-core instance a `strict` commit syncs on its reactor, so
   every other session waits out each commit's sync** (EG-S0, recorded on
   `eg-one-client-durable-write` at `d50d304f8`, not built: EG-Q3 (a)).
