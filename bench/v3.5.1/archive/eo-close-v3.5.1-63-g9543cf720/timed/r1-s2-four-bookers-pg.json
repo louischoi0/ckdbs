@@ -1,0 +1,368 @@
+{
+  "checks": [
+    {
+      "detail": "0 failed booking(s), first: None",
+      "name": "bookings-without-failure",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I1",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I2",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I3",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I4",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795856772,
+  "engine": "pg",
+  "harness": "eqbench",
+  "meta": {
+    "abandoned": 0,
+    "axes": {
+      "commit": 0,
+      "operations": 0,
+      "organizations": 0,
+      "read": 0
+    },
+    "booking_statements": {
+      "begin": {
+        "max_us": 328.484,
+        "mean_us": 12.234924611973392,
+        "ops": 3157,
+        "p0_us": 9.705,
+        "p25_us": 11.012,
+        "p50_us": 11.232,
+        "p95_us": 12.26,
+        "p99_us": 26.849
+      },
+      "capacity-read": {
+        "max_us": 321.837,
+        "mean_us": 23.876681026290782,
+        "ops": 3157,
+        "p0_us": 12.858,
+        "p25_us": 19.618,
+        "p50_us": 21.738,
+        "p95_us": 27.306,
+        "p99_us": 172.233
+      },
+      "cargo-lookup": {
+        "max_us": 284.802,
+        "mean_us": 16.387766233766232,
+        "ops": 3157,
+        "p0_us": 12.653,
+        "p25_us": 14.271,
+        "p50_us": 14.574,
+        "p95_us": 16.274,
+        "p99_us": 43.725
+      },
+      "charge-insert": {
+        "max_us": 342.912,
+        "mean_us": 14.155697424638024,
+        "ops": 16852,
+        "p0_us": 11.829,
+        "p25_us": 13.309,
+        "p50_us": 13.582,
+        "p95_us": 14.86,
+        "p99_us": 27.467
+      },
+      "commit": {
+        "max_us": 6416.528,
+        "mean_us": 172.463599,
+        "ops": 3000,
+        "p0_us": 120.826,
+        "p25_us": 133.883,
+        "p50_us": 147.898,
+        "p95_us": 240.803,
+        "p99_us": 313.719
+      },
+      "credit-lookup": {
+        "max_us": 522.755,
+        "mean_us": 19.124890085524232,
+        "ops": 3157,
+        "p0_us": 13.214,
+        "p25_us": 15.04,
+        "p50_us": 15.942,
+        "p95_us": 19.42,
+        "p99_us": 176.891
+      },
+      "freight-insert": {
+        "max_us": 268.175,
+        "mean_us": 17.403358666666666,
+        "ops": 3000,
+        "p0_us": 13.98,
+        "p25_us": 15.522,
+        "p50_us": 15.823,
+        "p95_us": 20.741,
+        "p99_us": 41.119
+      },
+      "operation-update": {
+        "max_us": 258.719,
+        "mean_us": 21.047687333333336,
+        "ops": 3000,
+        "p0_us": 13.479,
+        "p25_us": 19.667,
+        "p50_us": 21.258,
+        "p95_us": 25.439,
+        "p99_us": 30.864
+      },
+      "org-update": {
+        "max_us": 319.711,
+        "mean_us": 15.512311,
+        "ops": 3000,
+        "p0_us": 13.053,
+        "p25_us": 14.508,
+        "p50_us": 14.801,
+        "p95_us": 16.972,
+        "p99_us": 20.998
+      },
+      "recipe-read": {
+        "max_us": 322.917,
+        "mean_us": 20.797337345581248,
+        "ops": 3157,
+        "p0_us": 17.121,
+        "p25_us": 18.853,
+        "p50_us": 19.351,
+        "p95_us": 21.603,
+        "p99_us": 43.049
+      },
+      "rollback": {
+        "max_us": 222.538,
+        "mean_us": 15.292350318471337,
+        "ops": 157,
+        "p0_us": 11.64,
+        "p25_us": 12.966,
+        "p50_us": 13.456,
+        "p95_us": 15.249,
+        "p99_us": 30.12
+      }
+    },
+    "cargo_pool_exhausted": false,
+    "cargo_pool_left": 946,
+    "charges": 16852,
+    "failures": {},
+    "first_failure": null,
+    "freights": 3000,
+    "loaded": {
+      "cargos": 4000,
+      "fees": 12,
+      "operations": 300,
+      "organizations": 300,
+      "recipes": 93,
+      "ships": 30
+    },
+    "mode": {
+      "bookers": 4,
+      "bookings": 3000,
+      "capacity": "cached",
+      "capacity_headroom": 1.0,
+      "contend": true,
+      "credit_headroom": 1.0,
+      "hot_routes": 6,
+      "isolation": "each engine's default: READ COMMITTED on all three",
+      "lock": true,
+      "max_fees": 0,
+      "max_retries": 5,
+      "txn": true
+    },
+    "outcomes": {
+      "committed": 3000,
+      "conflicted": 0,
+      "failed": 0,
+      "rejected-capacity": 103,
+      "rejected-credit": 54
+    },
+    "per_booker": [
+      750,
+      750,
+      750,
+      750
+    ],
+    "relation_kinds": {
+      "s2_cargos": "Btree",
+      "s2_charges": "Heap",
+      "s2_fees": "Heap",
+      "s2_freights": "Heap",
+      "s2_operations": "Btree",
+      "s2_organizations": "Btree",
+      "s2_recipes": "Heap",
+      "s2_ships": "Heap"
+    },
+    "retries": 0,
+    "tps": 9603.256441211399,
+    "verify": {
+      "checks": 400,
+      "failures": 0,
+      "unanswered": 0
+    }
+  },
+  "options": {
+    "bookers": "4"
+  },
+  "phases": [
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.5594884383908775,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 68.70668482736775,
+      "client_decode_us_per_op": 0.5594884383908775,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 6606.667,
+        "mean_us": 384.9818647450111,
+        "ops": 3157,
+        "p0_us": 84.219,
+        "p25_us": 341.377,
+        "p50_us": 357.203,
+        "p95_us": 499.443,
+        "p99_us": 854.707
+      },
+      "name": "booking",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 103.93791574279379,
+      "terminals": 4,
+      "throughput_ops": 10105.826861634796,
+      "wall_s": 0.312394032
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.42989,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 7.94871,
+      "client_decode_us_per_op": 0.42989,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 82.582,
+        "mean_us": 22.85173,
+        "ops": 100,
+        "p0_us": 16.975,
+        "p25_us": 19.748,
+        "p50_us": 21.482,
+        "p95_us": 33.876,
+        "p99_us": 42.769
+      },
+      "name": "manifest-scan",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1042,
+      "server_cpu_us_per_op": 11.07,
+      "terminals": 1,
+      "throughput_ops": 42488.93375720294,
+      "wall_s": 0.002353554
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.04768,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 4.67391,
+      "client_decode_us_per_op": 0.04768,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 34.509,
+        "mean_us": 18.76246,
+        "ops": 100,
+        "p0_us": 17.086,
+        "p25_us": 18.058,
+        "p50_us": 18.57,
+        "p95_us": 19.88,
+        "p99_us": 21.24
+      },
+      "name": "voyage-rollup",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 100,
+      "server_cpu_us_per_op": 9.93,
+      "terminals": 1,
+      "throughput_ops": 52208.11616932345,
+      "wall_s": 0.001915411
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0453,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 5.1294,
+      "client_decode_us_per_op": 0.0453,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 158.869,
+        "mean_us": 145.69816,
+        "ops": 50,
+        "p0_us": 141.126,
+        "p25_us": 143.695,
+        "p50_us": 144.921,
+        "p95_us": 152.369,
+        "p99_us": 158.869
+      },
+      "name": "customer-statement",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 50,
+      "server_cpu_us_per_op": 136.36,
+      "terminals": 1,
+      "throughput_ops": 6834.368398427276,
+      "wall_s": 0.007315965
+    }
+  ],
+  "profile": true,
+  "scenario": "s2",
+  "seed": 1,
+  "started_unix": 1795856771
+}

@@ -1,0 +1,13 @@
+phase load-users: 10000 ops, mean 351.6 us, p50 167.8 us, p99 10851.0 us, 2843 ops/s, errors {}
+phase load-assets: 10000 ops, mean 270.6 us, p50 155.2 us, p99 2217.2 us, 3695 ops/s, errors {}
+phase load-accounts: 20041 ops, mean 590.3 us, p50 177.4 us, p99 13650.3 us, 1694 ops/s, errors {}
+phase txn: 70306 ops, mean 852.3 us, p50 641.4 us, p99 7780.0 us, 1172 ops/s, errors {"profit-scan:other": 1}
+phase trade-insert (of txn): 140612 execs, mean 218.3 us, p50 160.1 us, p99 909.3 us, errors {}
+phase account-update (of txn): 140612 execs, mean 207.4 us, p50 157.4 us, p99 683.3 us, errors {}
+phase profit-scan (of txn): 1000 execs, mean 670.2 us, p50 490.6 us, p99 4798.6 us, errors {"other": 1}
+phase profit-insert (of txn): 999 execs, mean 450.5 us, p50 214.6 us, p99 5630.8 us, errors {}
+s0: the reporter's first refusal: Other: KDS 5: undo chain revisits the record at 8851992; the links are cyclic
+check balance-verify: ok 200 accounts read back, 0 mismatched
+check balance-conserved: ok count/sum(balance)/sum(qty)/sum(trades): stored [20041, 2004100000000, 0, 140612], client [20041, 2004100000000, 0, 140612], conserved [20041, 2004100000000, 0, 140612], torn 0
+check trades-rows: ok 140612 rows, 140612 legs inserted
+check profit-rows: ok 999 rows, 999 inserted

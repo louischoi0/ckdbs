@@ -1,0 +1,5 @@
+1795858307 WARN [query] "DROP TABLE s4_declared_board_a" -> ERR no relation named 's4_declared_board_a' (byte 11) in 46us
+1795858307 WARN [query] "DROP TABLE s4_declared_board_b" -> ERR no relation named 's4_declared_board_b' (byte 11) in 9us
+1795858307 WARN [query] "DROP TABLE s4_declared_tape_200" -> ERR no relation named 's4_declared_tape_200' (byte 11) in 5us
+1795858307 WARN [query] "DROP TABLE s4_declared_tape_1k" -> ERR no relation named 's4_declared_tape_1k' (byte 11) in 5us
+1795858307 WARN [query] "DROP TABLE s4_declared_tape_10k" -> ERR no relation named 's4_declared_tape_10k' (byte 11) in 4us

@@ -200,6 +200,6 @@ landed (§16):
 | | |
 |---|---|
 | **Word** | the standing go-ahead of §19 |
-| **Mark** | **EO closes at S4**: six scenarios on KDS, PostgreSQL and Oracle Free through one Rust client, 188 runs, every check passing (`bench/v3.5.1/results-en-close-v3.5.1-63-g9543cf720.md`; Oracle's figures under `bench/private/`, uncommitted). EO-Q9 (scenario 4's kinds) adopted as CLA proposed. A defect found and recorded, not fixed (`docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`) |
+| **Mark** | **EO closes at S4**: six scenarios on KDS, PostgreSQL and Oracle Free through one Rust client, 188 runs, every check passing (`bench/v3.5.1/results-eo-close-v3.5.1-63-g9543cf720.md`; Oracle's figures under `bench/private/`, uncommitted). EO-Q9 (scenario 4's kinds) adopted as CLA proposed. A defect found and recorded, not fixed (`docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`) |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; EO's order; the index; `instructions/milestones.md` |

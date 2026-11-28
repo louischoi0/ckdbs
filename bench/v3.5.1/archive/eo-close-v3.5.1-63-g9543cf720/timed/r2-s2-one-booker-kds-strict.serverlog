@@ -1,0 +1,8 @@
+1795858151 WARN [query] "DROP TABLE s2_charges" -> ERR no relation named 's2_charges' (byte 11) in 25us
+1795858151 WARN [query] "DROP TABLE s2_freights" -> ERR no relation named 's2_freights' (byte 11) in 3us
+1795858151 WARN [query] "DROP TABLE s2_recipes" -> ERR no relation named 's2_recipes' (byte 11) in 1us
+1795858151 WARN [query] "DROP TABLE s2_fees" -> ERR no relation named 's2_fees' (byte 11) in 1us
+1795858151 WARN [query] "DROP TABLE s2_cargos" -> ERR no relation named 's2_cargos' (byte 11) in 1us
+1795858151 WARN [query] "DROP TABLE s2_operations" -> ERR no relation named 's2_operations' (byte 11) in 1us
+1795858151 WARN [query] "DROP TABLE s2_ships" -> ERR no relation named 's2_ships' (byte 11) in 1us
+1795858151 WARN [query] "DROP TABLE s2_organizations" -> ERR no relation named 's2_organizations' (byte 11) in 1us

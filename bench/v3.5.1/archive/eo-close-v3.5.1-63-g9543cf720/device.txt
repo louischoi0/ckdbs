@@ -1,0 +1,1 @@
+/dev/mapper/fedora-root xfs  485595652 103086444 382509208  22% /

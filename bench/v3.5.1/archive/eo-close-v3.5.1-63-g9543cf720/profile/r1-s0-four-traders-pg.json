@@ -1,0 +1,510 @@
+{
+  "checks": [
+    {
+      "detail": "200 accounts read back, 0 mismatched",
+      "name": "balance-verify",
+      "ok": true
+    },
+    {
+      "detail": "count/sum(balance)/sum(qty)/sum(trades): stored [20041, 2004100000000, 0, 456638], client [20041, 2004100000000, 0, 456638], conserved [20041, 2004100000000, 0, 456638], torn 0",
+      "name": "balance-conserved",
+      "ok": true
+    },
+    {
+      "detail": "456638 rows, 456638 legs inserted",
+      "name": "trades-rows",
+      "ok": true
+    },
+    {
+      "detail": "1000 rows, 1000 inserted",
+      "name": "profit-rows",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795860433,
+  "engine": "pg",
+  "harness": "eqbench",
+  "meta": {
+    "accounts": 20041,
+    "assets": 10000,
+    "committed": 228319,
+    "conflict_retries": 0,
+    "days": 180,
+    "derived_phases": "trade-insert, account-update, profit-scan and profit-insert are every execution of that statement inside the txn phase: latency, errors and throughput over txn's wall clock only; CPU and breakdown are txn's",
+    "fk": false,
+    "limit": "seconds",
+    "per_trader_committed": [
+      57035,
+      57123,
+      57066,
+      57095
+    ],
+    "profit": true,
+    "profit_periods": 20,
+    "profit_rows": 1000,
+    "relation_kinds": {
+      "s0_accounts": "BTREE",
+      "s0_assets": "HEAP",
+      "s0_trades": "HEAP",
+      "s0_user_periodic_profit": "HEAP",
+      "s0_users": "HEAP"
+    },
+    "rolled_back": 0,
+    "seconds": 60.004466583,
+    "seconds_budget": 60,
+    "torn": 0,
+    "tps": 3805.033408374395,
+    "traders": 4,
+    "txn": false,
+    "txn_target": 0,
+    "underfunded": 4359,
+    "users": 10000
+  },
+  "options": {
+    "traders": "4"
+  },
+  "phases": [
+    {
+      "breakdown": {
+        "commit": 256.7576,
+        "disk_read": 0.0007,
+        "execution": 2.9963,
+        "formatting_client": 0.0,
+        "lock": 0.0,
+        "network": 8.76,
+        "optimise": 0.002,
+        "parse": null,
+        "parse_optimise": 0.002
+      },
+      "client_cpu_us_per_op": 22.8541262,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [
+        {
+          "class": "CPU",
+          "count": 65.0,
+          "name": "CPU",
+          "total_us": 68212.0
+        },
+        {
+          "class": "Client",
+          "count": 82.0,
+          "name": "ClientRead",
+          "total_us": 87600.0
+        },
+        {
+          "class": "IO",
+          "count": 2426.0,
+          "name": "WalSync",
+          "total_us": 2563442.0
+        },
+        {
+          "class": "IO",
+          "count": 4.0,
+          "name": "WalWrite",
+          "total_us": 4134.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 20505.825,
+        "mean_us": 316.9355859,
+        "ops": 10000,
+        "p0_us": 123.049,
+        "p25_us": 155.353,
+        "p50_us": 167.613,
+        "p95_us": 404.749,
+        "p99_us": 3590.309
+      },
+      "name": "load-users",
+      "raw": {
+        "blk_read_us": 7.0,
+        "calls": 10000.0,
+        "exec_us": 29970.0,
+        "plan_us": 20.0,
+        "shared_blks_hit": 29779.0,
+        "shared_blks_read": 1.0,
+        "wait_samples": 2996.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 51.2848,
+      "terminals": 1,
+      "throughput_ops": 3153.8831863300966,
+      "wall_s": 3.170694477
+    },
+    {
+      "breakdown": {
+        "commit": 167.6615,
+        "disk_read": 0.0013,
+        "execution": 2.1,
+        "formatting_client": 0.0,
+        "lock": 0.0,
+        "network": 7.2872,
+        "optimise": 0.0029,
+        "parse": null,
+        "parse_optimise": 0.0029
+      },
+      "client_cpu_us_per_op": 17.7287365,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [
+        {
+          "class": "CPU",
+          "count": 58.0,
+          "name": "CPU",
+          "total_us": 61969.0
+        },
+        {
+          "class": "Client",
+          "count": 68.0,
+          "name": "ClientRead",
+          "total_us": 72872.0
+        },
+        {
+          "class": "IO",
+          "count": 19.0,
+          "name": "WalInitSync",
+          "total_us": 20122.0
+        },
+        {
+          "class": "IO",
+          "count": 2.0,
+          "name": "WalInitWrite",
+          "total_us": 2114.0
+        },
+        {
+          "class": "IO",
+          "count": 1567.0,
+          "name": "WalSync",
+          "total_us": 1649226.0
+        },
+        {
+          "class": "IO",
+          "count": 5.0,
+          "name": "WalWrite",
+          "total_us": 5153.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 23710.221,
+        "mean_us": 213.7628073,
+        "ops": 10000,
+        "p0_us": 126.585,
+        "p25_us": 144.83,
+        "p50_us": 149.438,
+        "p95_us": 425.456,
+        "p99_us": 2131.988
+      },
+      "name": "load-assets",
+      "raw": {
+        "blk_read_us": 13.0,
+        "calls": 10000.0,
+        "exec_us": 21013.0,
+        "plan_us": 29.0,
+        "shared_blks_hit": 29779.0,
+        "shared_blks_read": 1.0,
+        "wait_samples": 2025.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 34.8625,
+      "terminals": 1,
+      "throughput_ops": 4676.043421821513,
+      "wall_s": 2.138560124
+    },
+    {
+      "breakdown": {
+        "commit": 123.85923856095005,
+        "disk_read": 0.00044907938725612497,
+        "execution": 1.7939224589591338,
+        "formatting_client": 0.0,
+        "lock": 0.0,
+        "network": 7.984332119155731,
+        "optimise": 0.0018961129684147498,
+        "parse": null,
+        "parse_optimise": 0.0018961129684147498
+      },
+      "client_cpu_us_per_op": 13.987849658200687,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [
+        {
+          "class": "CPU",
+          "count": 96.0,
+          "name": "CPU",
+          "total_us": 101965.0
+        },
+        {
+          "class": "Client",
+          "count": 149.0,
+          "name": "ClientRead",
+          "total_us": 160014.0
+        },
+        {
+          "class": "IO",
+          "count": 2353.0,
+          "name": "WalSync",
+          "total_us": 2477929.0
+        },
+        {
+          "class": "IO",
+          "count": 4.0,
+          "name": "WalWrite",
+          "total_us": 4334.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 9711.276,
+        "mean_us": 166.07718541988922,
+        "ops": 20041,
+        "p0_us": 117.631,
+        "p25_us": 137.423,
+        "p50_us": 143.48,
+        "p95_us": 196.79,
+        "p99_us": 627.366
+      },
+      "name": "load-accounts",
+      "raw": {
+        "blk_read_us": 9.0,
+        "calls": 20041.0,
+        "exec_us": 35961.0,
+        "plan_us": 38.0,
+        "shared_blks_hit": 60157.0,
+        "shared_blks_read": 1.0,
+        "wait_samples": 3156.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 26.371887630357765,
+      "terminals": 1,
+      "throughput_ops": 6018.904436701894,
+      "wall_s": 3.329675726
+    },
+    {
+      "breakdown": {
+        "commit": 876.158142773926,
+        "disk_read": 0.0,
+        "execution": 17.351140290558387,
+        "formatting_client": 0.001228636250158769,
+        "lock": 0.032673583889207644,
+        "network": 41.251096054204865,
+        "optimise": 0.0021680193063214185,
+        "parse": null,
+        "parse_optimise": 0.0021680193063214185
+      },
+      "client_cpu_us_per_op": 60.52256685602162,
+      "client_decode_us_per_op": 0.001228636250158769,
+      "errors": {},
+      "events": [
+        {
+          "class": "CPU",
+          "count": 6438.0,
+          "name": "CPU",
+          "total_us": 6840057.0
+        },
+        {
+          "class": "Client",
+          "count": 8689.0,
+          "name": "ClientRead",
+          "total_us": 9416305.0
+        },
+        {
+          "class": "IO",
+          "count": 22.0,
+          "name": "DataFileExtend",
+          "total_us": 22210.0
+        },
+        {
+          "class": "LWLock",
+          "count": 5.0,
+          "name": "ProcArray",
+          "total_us": 5332.0
+        },
+        {
+          "class": "IPC",
+          "count": 2.0,
+          "name": "ProcarrayGroupUpdate",
+          "total_us": 2104.0
+        },
+        {
+          "class": "IO",
+          "count": 2.0,
+          "name": "SlruWrite",
+          "total_us": 2040.0
+        },
+        {
+          "class": "LWLock",
+          "count": 1.0,
+          "name": "WALInsert",
+          "total_us": 1037.0
+        },
+        {
+          "class": "LWLock",
+          "count": 134561.0,
+          "name": "WALWrite",
+          "total_us": 141604070.0
+        },
+        {
+          "class": "IO",
+          "count": 37.0,
+          "name": "WalInitSync",
+          "total_us": 38452.0
+        },
+        {
+          "class": "IO",
+          "count": 14.0,
+          "name": "WalInitWrite",
+          "total_us": 15128.0
+        },
+        {
+          "class": "IO",
+          "count": 54632.0,
+          "name": "WalSync",
+          "total_us": 57651656.0
+        },
+        {
+          "class": "IO",
+          "count": 695.0,
+          "name": "WalWrite",
+          "total_us": 734245.0
+        },
+        {
+          "class": "LWLock",
+          "count": 1.0,
+          "name": "XidGen",
+          "total_us": 1091.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 35984.448,
+        "mean_us": 1050.3760586547767,
+        "ops": 228319,
+        "p0_us": 730.79,
+        "p25_us": 935.3,
+        "p50_us": 965.746,
+        "p95_us": 1184.576,
+        "p99_us": 1781.674
+      },
+      "name": "txn",
+      "raw": {
+        "blk_read_us": 0.0,
+        "calls": 915276.0,
+        "exec_us": 3969055.0,
+        "plan_us": 495.0,
+        "shared_blks_hit": 4065736.0,
+        "shared_blks_read": 0.0,
+        "wait_samples": 56838.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 103.89421379736247,
+      "terminals": 5,
+      "throughput_ops": 3805.033408374395,
+      "wall_s": 60.004466583
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 20274.148,
+        "mean_us": 262.1480680736163,
+        "ops": 456638,
+        "p0_us": 129.561,
+        "p25_us": 226.14,
+        "p50_us": 238.774,
+        "p95_us": 306.539,
+        "p99_us": 458.934
+      },
+      "name": "trade-insert",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 4,
+      "throughput_ops": 7610.06681674879,
+      "wall_s": 60.004466583
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 20454.307,
+        "mean_us": 262.731960047127,
+        "ops": 456638,
+        "p0_us": 137.98,
+        "p25_us": 226.3,
+        "p50_us": 239.003,
+        "p95_us": 307.183,
+        "p99_us": 462.15
+      },
+      "name": "account-update",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 4,
+      "throughput_ops": 7610.06681674879,
+      "wall_s": 60.004466583
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1928.823,
+        "mean_us": 461.17298800000003,
+        "ops": 1000,
+        "p0_us": 377.248,
+        "p25_us": 404.036,
+        "p50_us": 415.006,
+        "p95_us": 714.921,
+        "p99_us": 1124.19
+      },
+      "name": "profit-scan",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 1,
+      "throughput_ops": 16.665426041522586,
+      "wall_s": 60.004466583
+    },
+    {
+      "breakdown": {},
+      "client_cpu_us_per_op": 0.0,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 5314.31,
+        "mean_us": 286.685144,
+        "ops": 1000,
+        "p0_us": 132.693,
+        "p25_us": 172.484,
+        "p50_us": 201.594,
+        "p95_us": 454.628,
+        "p99_us": 3037.987
+      },
+      "name": "profit-insert",
+      "raw": {},
+      "rows": 0,
+      "server_cpu_us_per_op": null,
+      "terminals": 1,
+      "throughput_ops": 16.665426041522586,
+      "wall_s": 60.004466583
+    }
+  ],
+  "profile": true,
+  "scenario": "s0",
+  "seed": 1,
+  "started_unix": 1795860364
+}

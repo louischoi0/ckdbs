@@ -25,7 +25,7 @@ to 4), so no wrong answer has been seen.
 **Verified at** `e571ae574` (`v3.5.1-57-ge571ae574`): a Release
 `kds_server` built from that engine source (sha256 prefix
 `e961b65c1852fe50`), `cores = 1`. Found by EO-S2's scenario 0 port and
-counted in EO's close measurement (`bench/v3.5.1/archive/en-close-v3.5.1-63-g9543cf720/timed/*.serverlog`):
+counted in EO's close measurement (`bench/v3.5.1/archive/eo-close-v3.5.1-63-g9543cf720/timed/*.serverlog`):
 
 | cell | refusals over 3 rounds |
 |---|---|

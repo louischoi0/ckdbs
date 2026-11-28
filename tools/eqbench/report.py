@@ -165,7 +165,7 @@ def render(run, engines):
         # breakdown
         lines.append("\nWhere the time went, µs an operation by each engine's own accounting "
                      "(`-`: not reported by the engine; PostgreSQL's from the profile pass):\n")
-        lines.append("| phase | arm | " + " | ".join(CATS) + " | top events (count, total) |")
+        lines.append("| phase | arm | " + " | ".join(CATS) + " | top events (an op: count, µs) |")
         lines.append("|---|---|" + "---|" * len(CATS) + "---|")
         for ph in phases:
             for arm in arms:
@@ -178,15 +178,21 @@ def render(run, engines):
                 row = []
                 for c in CATS:
                     row.append(f(med([p["breakdown"].get(c) for p in ps]), "µs", 2))
-                ev = defaultdict(lambda: [0.0, 0.0])
+                # Each round's totals over that round's own operations, then
+                # the median across rounds: rounds differ in their counts, so
+                # a mean of totals over a median count is no round's figure.
+                per_round = defaultdict(lambda: ([], []))
                 for p in ps:
+                    n = max(1, p["latency"]["ops"])
                     for e in p.get("events", []):
                         if e["class"] == "Idle":
                             continue
-                        ev[e["name"]][0] += e["count"] / len(ps)
-                        ev[e["name"]][1] += e["total_us"] / len(ps)
+                        per_round[e["name"]][0].append(e["count"] / n)
+                        per_round[e["name"]][1].append(e["total_us"] / n)
+                ev = {k: (statistics.median(c + [0.0] * (len(ps) - len(c))),
+                          statistics.median(t + [0.0] * (len(ps) - len(t)))) for k, (c, t) in per_round.items()}
                 top = sorted(ev.items(), key=lambda kv: -kv[1][1])[:4]
-                evs = "; ".join(f"{n} ({c:,.0f}, {t:,.0f} µs)" for n, (c, t) in top) or "none"
+                evs = "; ".join(f"{n} ({c:,.2f}, {t:,.1f} µs)" for n, (c, t) in top) or "none"
                 lines.append(f"| {ph} | {arm} | " + " | ".join(row) + f" | {evs} |")
     s4 = digests_line(timed, "s4")
     if s4:

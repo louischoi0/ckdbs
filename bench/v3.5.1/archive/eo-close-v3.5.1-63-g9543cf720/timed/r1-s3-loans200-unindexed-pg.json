@@ -1,0 +1,590 @@
+{
+  "checks": [
+    {
+      "detail": "",
+      "name": "row-counts",
+      "ok": true
+    },
+    {
+      "detail": "200 rows scanned, 200 loaded",
+      "name": "loans-scan-equals-load",
+      "ok": true
+    },
+    {
+      "detail": "25 users sampled; ",
+      "name": "loans-by-user-vs-scan",
+      "ok": true
+    },
+    {
+      "detail": "0 user_ids name no user: []",
+      "name": "loan-user-exists",
+      "ok": true
+    },
+    {
+      "detail": "87 rows, expectation 87",
+      "name": "join-no-literal",
+      "ok": true
+    },
+    {
+      "detail": "20 ids, expectation 20",
+      "name": "exists-correlated",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "no-refusals",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795856787,
+  "engine": "pg",
+  "harness": "eqbench",
+  "meta": {
+    "index_mode": "none",
+    "index_when": "after",
+    "kinds": {
+      "s3_books": "Heap",
+      "s3_loans": "Heap",
+      "s3_reservations": "Heap",
+      "s3_users": "Btree"
+    },
+    "ops_per_shape": 200,
+    "sizes": {
+      "authors": 10,
+      "books": 40,
+      "loans": 200,
+      "reservations": 100,
+      "users": 40
+    },
+    "verify_sample": 25,
+    "warmup_per_shape": 20
+  },
+  "options": {
+    "indexed": "0",
+    "loans": "200"
+  },
+  "phases": [
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 15.01275,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 1141.05,
+        "mean_us": 626.81925,
+        "ops": 4,
+        "p0_us": 442.265,
+        "p25_us": 457.062,
+        "p50_us": 466.9,
+        "p95_us": 1141.05,
+        "p99_us": 1141.05
+      },
+      "name": "ddl",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 457.25,
+      "terminals": 1,
+      "throughput_ops": 1518.5071859556308,
+      "wall_s": 0.002634166
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 20.427494736842107,
+      "client_decode_us_per_op": 0.0,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 11112.045,
+        "mean_us": 356.73873947368423,
+        "ops": 380,
+        "p0_us": 127.898,
+        "p25_us": 162.926,
+        "p50_us": 175.624,
+        "p95_us": 291.021,
+        "p99_us": 10864.449
+      },
+      "name": "load",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 380,
+      "server_cpu_us_per_op": 22.83421052631579,
+      "terminals": 1,
+      "throughput_ops": 2794.0036065145605,
+      "wall_s": 0.136005551
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.215455,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 18.520915,
+      "client_decode_us_per_op": 0.215455,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 104.049,
+        "mean_us": 31.412294999999997,
+        "ops": 200,
+        "p0_us": 21.097,
+        "p25_us": 21.504,
+        "p50_us": 22.063,
+        "p95_us": 43.552,
+        "p99_us": 52.355
+      },
+      "name": "pk-user",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 200,
+      "server_cpu_us_per_op": 6.545,
+      "terminals": 1,
+      "throughput_ops": 30938.64603512743,
+      "wall_s": 0.006464407
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.14888500000000002,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 8.515625,
+      "client_decode_us_per_op": 0.14888500000000002,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 456.574,
+        "mean_us": 30.207849999999997,
+        "ops": 200,
+        "p0_us": 16.246,
+        "p25_us": 18.666,
+        "p50_us": 19.147,
+        "p95_us": 55.376,
+        "p99_us": 237.708
+      },
+      "name": "loans-by-user",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 955,
+      "server_cpu_us_per_op": 11.905,
+      "terminals": 1,
+      "throughput_ops": 32016.187384341523,
+      "wall_s": 0.00624684
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.0959,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 5.687645,
+      "client_decode_us_per_op": 0.0959,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 29.635,
+        "mean_us": 18.70101,
+        "ops": 200,
+        "p0_us": 16.358,
+        "p25_us": 18.087,
+        "p50_us": 18.437,
+        "p95_us": 20.082,
+        "p99_us": 20.909
+      },
+      "name": "loans-by-book",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 960,
+      "server_cpu_us_per_op": 8.835,
+      "terminals": 1,
+      "throughput_ops": 52793.09804153444,
+      "wall_s": 0.003788374
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.059965000000000004,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 5.309539999999999,
+      "client_decode_us_per_op": 0.059965000000000004,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 171.582,
+        "mean_us": 18.394255,
+        "ops": 200,
+        "p0_us": 13.8,
+        "p25_us": 15.331,
+        "p50_us": 15.769,
+        "p95_us": 16.81,
+        "p99_us": 135.716
+      },
+      "name": "resv-by-user",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 485,
+      "server_cpu_us_per_op": 6.645,
+      "terminals": 1,
+      "throughput_ops": 52544.507167990305,
+      "wall_s": 0.003806297
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.16284500000000002,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 7.37509,
+      "client_decode_us_per_op": 0.16284500000000002,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 135.206,
+        "mean_us": 18.87648,
+        "ops": 200,
+        "p0_us": 13.177,
+        "p25_us": 15.047,
+        "p50_us": 16.036,
+        "p95_us": 44.463,
+        "p99_us": 51.915
+      },
+      "name": "books-by-author",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 759,
+      "server_cpu_us_per_op": 5.945,
+      "terminals": 1,
+      "throughput_ops": 50958.036566467876,
+      "wall_s": 0.003924798
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.10949500000000001,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 5.8599950000000005,
+      "client_decode_us_per_op": 0.10949500000000001,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 41.553,
+        "mean_us": 15.39241,
+        "ops": 200,
+        "p0_us": 13.731,
+        "p25_us": 14.484,
+        "p50_us": 15.274,
+        "p95_us": 17.059,
+        "p99_us": 17.379
+      },
+      "name": "books-by-genre",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 498,
+      "server_cpu_us_per_op": 5.84,
+      "terminals": 1,
+      "throughput_ops": 62534.413469412386,
+      "wall_s": 0.003198239
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.29939499999999997,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 10.373395,
+      "client_decode_us_per_op": 0.29939499999999997,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 222.325,
+        "mean_us": 25.941834999999998,
+        "ops": 200,
+        "p0_us": 17.914,
+        "p25_us": 22.026,
+        "p50_us": 23.307,
+        "p95_us": 37.524,
+        "p99_us": 39.677
+      },
+      "name": "loans-by-daterange",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1770,
+      "server_cpu_us_per_op": 10.315,
+      "terminals": 1,
+      "throughput_ops": 37661.55630732206,
+      "wall_s": 0.005310455
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.18268,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 8.28915,
+      "client_decode_us_per_op": 0.18268,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 53.315,
+        "mean_us": 23.33685,
+        "ops": 200,
+        "p0_us": 19.218,
+        "p25_us": 21.849,
+        "p50_us": 22.839,
+        "p95_us": 26.955,
+        "p99_us": 28.973
+      },
+      "name": "overdue",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1230,
+      "server_cpu_us_per_op": 10.58,
+      "terminals": 1,
+      "throughput_ops": 41741.880317263334,
+      "wall_s": 0.004791351
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.166315,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 5.910055,
+      "client_decode_us_per_op": 0.166315,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 251.877,
+        "mean_us": 23.00059,
+        "ops": 200,
+        "p0_us": 18.026,
+        "p25_us": 20.107,
+        "p50_us": 20.618,
+        "p95_us": 23.297,
+        "p99_us": 50.357
+      },
+      "name": "join-loan-user",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 1007,
+      "server_cpu_us_per_op": 11.53,
+      "terminals": 1,
+      "throughput_ops": 42889.26078643464,
+      "wall_s": 0.004663172
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 2.815755,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 31.573575,
+      "client_decode_us_per_op": 2.815755,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 245.154,
+        "mean_us": 57.264095000000005,
+        "ops": 200,
+        "p0_us": 52.159,
+        "p25_us": 53.053,
+        "p50_us": 53.347,
+        "p95_us": 56.1,
+        "p99_us": 174.605
+      },
+      "name": "join-no-literal",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 17400,
+      "server_cpu_us_per_op": 19.365,
+      "terminals": 1,
+      "throughput_ops": 17286.290882294015,
+      "wall_s": 0.011569862
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.38573500000000005,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 11.182929999999999,
+      "client_decode_us_per_op": 0.38573500000000005,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 299.457,
+        "mean_us": 42.870705,
+        "ops": 200,
+        "p0_us": 34.922,
+        "p25_us": 35.901,
+        "p50_us": 36.19,
+        "p95_us": 70.794,
+        "p99_us": 194.525
+      },
+      "name": "exists-correlated",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 4000,
+      "server_cpu_us_per_op": 22.975,
+      "terminals": 1,
+      "throughput_ops": 23006.284051457238,
+      "wall_s": 0.008693277
+    },
+    {
+      "breakdown": {
+        "commit": null,
+        "disk_read": null,
+        "execution": null,
+        "formatting_client": 0.03069,
+        "lock": null,
+        "network": null,
+        "optimise": null,
+        "parse": null,
+        "parse_optimise": null
+      },
+      "client_cpu_us_per_op": 5.867705,
+      "client_decode_us_per_op": 0.03069,
+      "errors": {},
+      "events": [],
+      "kinds": {},
+      "latency": {
+        "max_us": 34.959,
+        "mean_us": 19.390945,
+        "ops": 200,
+        "p0_us": 16.659,
+        "p25_us": 17.727,
+        "p50_us": 17.842,
+        "p95_us": 28.961,
+        "p99_us": 30.178
+      },
+      "name": "count-by-user",
+      "raw": {
+        "wait_samples": 0.0
+      },
+      "rows": 200,
+      "server_cpu_us_per_op": 9.145,
+      "terminals": 1,
+      "throughput_ops": 50871.220522671276,
+      "wall_s": 0.003931496
+    }
+  ],
+  "profile": true,
+  "scenario": "s3",
+  "seed": 1,
+  "started_unix": 1795856787
+}

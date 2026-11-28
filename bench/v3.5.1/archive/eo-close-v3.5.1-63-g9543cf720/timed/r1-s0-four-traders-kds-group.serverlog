@@ -1,0 +1,7 @@
+1795856415 WARN [query] "DROP TABLE s0_user_periodic_profit" -> ERR no relation named 's0_user_periodic_profit' (byte 11) in 41us
+1795856415 WARN [query] "DROP TABLE s0_trades" -> ERR no relation named 's0_trades' (byte 11) in 18us
+1795856415 WARN [query] "DROP TABLE s0_accounts" -> ERR no relation named 's0_accounts' (byte 11) in 9us
+1795856415 WARN [query] "DROP TABLE s0_assets" -> ERR no relation named 's0_assets' (byte 11) in 3us
+1795856415 WARN [query] "DROP TABLE s0_users" -> ERR no relation named 's0_users' (byte 11) in 2us
+1795856442 WARN [query] "SELECT id, user_id, balance, asset_qty, trade_count, opened_day FROM s0_accounts WHERE user_id = 6216" -> ERR undo chain revisits the record at 8848648; the links are cyclic in 265us
+1795856468 WARN [query] "SELECT id, user_id, balance, asset_qty, trade_count, opened_day FROM s0_accounts WHERE user_id = 5374" -> ERR undo chain revisits the record at 9833096; the links are cyclic in 588us
