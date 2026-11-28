@@ -29,7 +29,7 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 |---|---|
 | **Word** | *"PG and kdbs performance comparison"*; to CLA's question of how the KDS side was to be had - a fresh run past the 20-minute budget, a cut run inside it, or the existing pinned numbers at `6c98f7c32` - **the operator chose "compare at once with the existing numbers"**; then *"commit it as a comparison file and push with no-verify"* |
 | **Mark** | **The comparison is a file of no measurement of its own**, `bench/v3.5.0/comparison-pg-kds-scenarios-v3.4.17-166-g6c98f7c32.md`, landed at `cce938aad` |
-| **Corrected** | **Two of the three leads its first version gave PostgreSQL were CLA's readings and are not supported by the tree**: the KDS scenario drivers time a client that decodes and renders every field while the PostgreSQL twins of scenarios 2 to 4 do less - scenario 4's counts rows, scenario 2's and 3's decode their reads and their `RETURNING` inserts without rendering - and scenario 1's does the same as the KDS client (measured once, at `e81ac7cd`; **this row first said the twins of scenarios 2 to 4 count, which EF-S0 corrected** and measured on this host), and the commit's sync is at parity in the archived JSON (135.5 µs against 138.2 µs). The corrected file landed at `b95be2e86`. **The correction's push is CLA's reading of the same word** ("push the comparison file"), not a second word |
+| **Corrected** | **Two of the three leads its first version gave PostgreSQL were CLA's readings and are not supported by the tree**: the KDS scenario drivers time a client that decodes and renders every field while the PostgreSQL twins of scenarios 2 to 4 time one that counts rows (measured once, at `e81ac7cd`; scenario 1's twin decodes and joins every field), and the commit's sync is at parity in the archived JSON (135.5 µs against 138.2 µs). The corrected file landed at `b95be2e86`. **The correction's push is CLA's reading of the same word** ("push the comparison file"), not a second word |
 | **Skipped, on the word** | the pre-push hook, both times; no suite ran and no `critics-developer` review was run on the file; documents only |
 | **Does not settle** | whether the matched KDS cells are measured on `main` (EF-S2 proposes it) |
 
@@ -49,16 +49,44 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | whether any of the three is opened, or in what order; any `-Q` item, each of which stands as CLA's proposal; EF-Q5's lift of the stage budget; a push of the orders, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; each order's header; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
-## 6. EF, EG and EH pushed to `main` with the hook skipped
+## 6. The transaction surveyed under the operator's premise of a microservice environment
+
+| | |
+|---|---|
+| **Word** | *"kdbs is a DB optimized for modern software in a microservice environment. Considering these characteristics, summarize the constraints, the differences and the strengths of the transaction as currently implemented"* |
+| **Mark** | A survey, given in conversation in the main checkout on `main` at `72580aa04` (`v3.5.1-6-g72580aa04`) and written to no file: eight strengths, twelve constraints (C1 to C12), a table against PostgreSQL, four recommendations, read from `docs/spec/`, `docs/inflight/known-gaps.md` and the manual, no code read and nothing run. The hour of the word was not read from a clock; the session's clock read 2026-11-28 01:50 UTC when the orders of §7 were begun, and the word is recorded under that day. **CLA reported the premise as contradicting the tree before answering**: `CLAUDE.md` states the purpose as OLTP for financial systems (CF-Q6 (b)), and no file under `docs/`, `manual/` or `CLAUDE.md` carries the word "microservice" (`grep -rni`, 0 lines). The survey also found `docs/spec/client-manual.md:304-306` ("there is no lock to wait on") at odds with `docs/spec/txn.md` §5 ("Detection is followed by a wait, not a refusal"); not corrected |
+| **Does not settle** | whether the purpose statement gains the service environment (EI-Q5) - **the concept itself reached `CLAUDE.md` the same day by another session**, as a working rule on `origin/main` at `3aa8a141e` that leaves "What This Project Is" to bound the scope; this session's finding of 0 lines is true of `72580aa04` and not of that commit; the `client-manual.md` sentence, and a second one of that file found by §7's review (`:322-326`, a write "runs to completion whatever happens to the connection") |
+| **Recorded at** | this file; EI's §0 |
+
+## 7. EI, EJ, EK and EL written from the survey's C1, C2, C3 and C8; none opened
+
+| | |
+|---|---|
+| **Word** | *"write milestones for C1, C2, C3 and C8; depending on the case, write them as exploratory or proof-of-concept milestones"* |
+| **Mark** | **Four orders are written and none is opened**, on worktree `service-txn-orders` from `72580aa04` (`v3.5.1-6-g72580aa04`), documents only. **EI** (C1, no two-phase commit): exploratory - whether a transaction may stop in doubt and survive a restart, the null hypothesis that it may not. **EJ** (C2, no change feed and no replication): exploratory, two proofs of concept behind its census - a feed in commit order and a standby from the archive. **EK** (C3, no `SERIALIZABLE`): exploratory - the write skew that assertion groups, foreign-key shares, unique keys and `FOR UPDATE` leave open; it re-reads AR0 D1 and D8 (`raft-marks-2026-09-28.md` §4, §5) and assumes neither moved. **EL** (C8, a retry can run twice): a proof of concept taking up CN-5 at its opening - a token row in the work's transaction, then the engine's one true `UNKNOWN_OUTCOME`. The kind of each is CLA's choice under the operator's "depending on the case"; the letters are the first four free after EH. **The orders were reviewed the day they were written** (`critics-developer`, at `5d8dd1ddf`) and corrected: the first writing of three of them reasoned from a claim the specs contradict - EL's recipe can answer `COMMITTED` of a commit not yet durable, EK said `FOR UPDATE` claims no absent row and would have let a lower bound admit falsely, EI said a prepared transaction's rows stay claimed by their headers alone - and each order's stage log says what was found. **The survey's C8 was also wider than the tree**: a dropped connection does end a walked write at its pause (`protocol.md` §10), which `client-manual.md` does not say |
+| **Does not settle** | whether any of the four is opened, or in what order; any `-Q` item, each of which stands as CLA's proposal; AR0 D1 and D8, which stand as marked; CN-5's ten items; a push of the orders, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; each order's header; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 8. EM written: the statement front end's repeated work, cut only where no cut can change an answer; not opened
+
+| | |
+|---|---|
+| **Word** | After CLA's reading of which SQL layers are cached, whether globally unique table names would help, and whether parsing could stop repeating: *"write a milestone that explores only the improvements here with no quiet-wrong risk, proves the concept, and implements once the gates pass"* |
+| **Mark** | **EM is written and not opened** (written as EI; renamed EM at the sync with `origin/main` at `1983ae5a7`, where §7's EI to EL already stood), on worktree `front-end-parse-reuse-order` from `72580aa04` (`v3.5.1-6-g72580aa04`), documents only: five candidates (C1 one lex for the unnamed text statement, C2 a parked statement's parse kept, C3 a multi-variant plan's arguments from the parse, C4 a positive namespace name cache, C5 a whole-text parse cache explored only), an admission test under which a candidate's worst failure is a refusal, a slower plan or a debug abort, and gates G0 (admission), G1 (proof of concept), G2 (implementation) and G3 (close) |
+| **CLA's, not the operator's** | the candidates, the admission test (EM-Q2), the bar (EM-Q1), what §0.1 excludes (auto-prepare by shape, a compiled-chain cache, skipping the first compile, globally unique names) |
+| **Does not settle** | whether EM is opened; any EM-Q item, each of which stands as CLA's proposal; a merge to `main`, a push, a tag or a version |
+| **Recorded at** | this file; EM's header; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 9. EF, EG and EH pushed to `main` with the hook skipped
 
 | | |
 |---|---|
 | **Word** | *"push no verify"*, at CLA's push gate for the three orders |
 | **Mark** | **The orders landed on `main` at `72580aa04`** (`v3.5.1-6-g72580aa04`), merged `--no-ff` from `worktree-pg-kds-comparison-orders` and pushed with `--no-verify`: the three orders, their index and register rows, this file's §2 to §5 and the comparison file's corrected claim about scenario 1's twin |
 | **Skipped, on the word** | the pre-push hook; no suite ran on the tree; documents only, no build input |
-| **Does not settle** | whether any of the three is opened (§7 does) |
+| **Does not settle** | whether any of the three is opened (§10 does) |
 
-## 7. EF, EG and EH taken up in that order on the standing go-ahead; EF opened, EF-Q0..Q7 adopted
+## 10. EF, EG and EH taken up in that order on the standing go-ahead; EF opened, EF-Q0..Q7 adopted
 
 | | |
 |---|---|
@@ -68,13 +96,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version; any item of EG or EH before it is opened |
 | **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks"); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
-## 8. EF closed on the standing go-ahead; EF-Q8 written and adopted, S3 not opened
+## 11. EF closed on the standing go-ahead; EF-Q8 written and adopted, S3 not opened
 
 | | |
 |---|---|
-| **Word** | the standing go-ahead of §7; no further word |
+| **Word** | the standing go-ahead of §10; no further word |
 | **Mark** | **EF is closed on the work branch at EF-S2, with EF-S3 not opened**: EF-Q1 (a)'s condition - `pk` or the 200-row tape behind PostgreSQL by more than the larger spread, through equal clients on `main` - is not met on the matched run (`bench/v3.5.1/results-ef-s2-matched-v3.5.1-6-g72580aa04.md`). **EF-Q8 was written at EF-S2 and adopted (b) on the same go-ahead**: scenario 1's KDS statements go through `ServerConnection.rendered`, which revises EF-Q7 (a) for that side; CLA's proposal, not the operator's mark |
 | **CLA's, not the operator's** | the reading of the gate (the 200-row tape it names carries no claim, PostgreSQL's runs spreading 49.4 %, KDS the faster in every round; `pk` is inside the spread; a booking's point reads and scenario 1's lookup are read beside them, and two short reads outside the gate - `cargo-lookup` at `strict`, `books-by-genre` over 200 unindexed loans - are behind by under 1 µs, less than the client CPU EF-R1 leaves unequal); the three runs in place of one and the 36 minutes they took under EF-Q5 (a); timed writes moved to the counting client after the stage's review; the rule added to `bench/README.md` |
-| **Does not settle** | a push, a merge to `main`, a tag or a version; the opening of EG, which follows under §7's word |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the opening of EG, which follows under §10's word |
 | **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks", §7); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 

@@ -4,7 +4,7 @@ Status: **CLOSED 2026-11-28 at EF-S2, the engine stage (S3) not opened** (EF-Q1 
 `ef-equal-client-scenario-drivers` (branch
 `worktree-ef-equal-client-scenario-drivers`) from `72580aa04`
 (`v3.5.1-6-g72580aa04`), under the operator's standing go-ahead of
-2026-11-28 (`raft-marks-2026-11-28.md` §7): every EF-Q item is **adopted
+2026-11-28 (`raft-marks-2026-11-28.md` §10): every EF-Q item is **adopted
 on that go-ahead, never marked by the operator item by item** (§4,
 "Marks"). Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
@@ -242,7 +242,7 @@ move.
 of 2026-11-28 (go-ahead-achieving-milestone)** - *"go ahead until
 achieving milestone, I will follow CLA proposal if decision needed"*,
 given as "proceed with the milestones in order, as proposed"
-(`raft-marks-2026-11-28.md` §7) - and none is the operator's own mark on
+(`raft-marks-2026-11-28.md` §10) - and none is the operator's own mark on
 the item. No EF-Q item is tagged `[quiet-wrong]`; EF-R7, which is, is a
 rule and binds S3 only.
 
