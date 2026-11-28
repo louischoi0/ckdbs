@@ -1,10 +1,16 @@
 # Work order EF - the scenario drivers on an equal client, and a short read's fixed cost only if one is left behind it
 
-Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
+Status: **OPENED 2026-11-28** on worktree
+`ef-equal-client-scenario-drivers` (branch
+`worktree-ef-equal-client-scenario-drivers`) from `72580aa04`
+(`v3.5.1-6-g72580aa04`), under the operator's standing go-ahead of
+2026-11-28 (`raft-marks-2026-11-28.md` §7): every EF-Q item is **adopted
+on that go-ahead, never marked by the operator item by item** (§4,
+"Marks"). Written on worktree
 `pg-kds-comparison-orders` (branch `worktree-pg-kds-comparison-orders`)
 from `b95be2e86` (`v3.4.17-255-gb95be2e86`) on the operator's word of
 2026-11-28 (`raft-marks-2026-11-28.md` §4, §5). No stage is started; EF-S0
-waits for the operator's word and for the marks on §4's items. A
+waited for the operator's word and for the marks on §4's items. A
 `[source-read]` claim with a `path:line` was read at `b95be2e86`. **Two
 readers stand behind them, and the order says which**: the driver and
 client lines of §1.1 and the files under `bench/` were read by CLA; the
@@ -214,6 +220,27 @@ move.
 | EF-Q5 | S2's time | (a) the 20-minute stage budget lifted for S2 alone (estimate: 45 to 60 minutes, basis: the `v3.5.0` run's 44 minutes plus PostgreSQL's 14, confidence: medium); (b) cut to fit: one round a cell, scenario 4 and the size sweeps left out | (a) |
 | EF-Q6 | The compiled chain | (a) stays where CX-Q37 (a) and EA-Q3 (a) left it: S3 may measure its share again and may not build its reuse without the operator's word; (b) reopened inside S3 | (a) |
 | EF-Q7 | Scenario 1, whose twin already decodes as the KDS client does (§1.1) | (a) left on its equal-decode pair, named a `values` phase throughout, and S1 moves scenarios 2 to 4 only; (b) both of its sides moved to `count`, a second series break | (a) |
+
+### Marks
+
+**Every row is CLA's proposal adopted on the operator's standing go-ahead
+of 2026-11-28 (go-ahead-achieving-milestone)** - *"go ahead until
+achieving milestone, I will follow CLA proposal if decision needed"*,
+given as "proceed with the milestones in order, as proposed"
+(`raft-marks-2026-11-28.md` §7) - and none is the operator's own mark on
+the item. No EF-Q item is tagged `[quiet-wrong]`; EF-R7, which is, is a
+rule and binds S3 only.
+
+| | adopted | note |
+|---|---|---|
+| EF-Q0 | (a) | S0 to S2, S3 behind EF-Q1 |
+| EF-Q1 | (a) | the engine stage opens only on a short read behind PostgreSQL by more than the larger spread, on equal clients on `main` |
+| EF-Q2 | (a) | a phase whose values the driver needs decodes to one depth on both sides, no rendering |
+| EF-Q3 | (a) | the new client is the only timed path; one overlap cell states the break |
+| EF-Q4 | (a) | PostgreSQL run again in S2's window, interleaved by round |
+| EF-Q5 | (a) | **the 20-minute stage budget is lifted for S2 by this adoption, not by the operator's own word for that measurement**; S2 is still planned as short as its cells allow and its file states the time |
+| EF-Q6 | (a) | the compiled chain stays where CX-Q37 (a) and EA-Q3 (a) left it |
+| EF-Q7 | (a) | scenario 1 stays on its equal-decode pair; S1 moves scenarios 2 to 4 |
 
 ## 5. Stages
 

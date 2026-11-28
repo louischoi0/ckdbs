@@ -48,3 +48,22 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Mark** | **Three orders are written and none is opened**, on worktree `pg-kds-comparison-orders` from `b95be2e86` (`v3.4.17-255-gb95be2e86`), documents only: **EF** (the scenario drivers on an equal client, the matched cells measured again, a short read's server cost only behind a gate), **EG** (one client's durable write beyond its sync: `result-insert` attributed, the one-core inline sync booked, a cut only behind a gate) and **EH** (what the native fold pays for a row) |
 | **Does not settle** | whether any of the three is opened, or in what order; any `-Q` item, each of which stands as CLA's proposal; EF-Q5's lift of the stage budget; a push of the orders, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; each order's header; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 6. EF, EG and EH pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, at CLA's push gate for the three orders |
+| **Mark** | **The orders landed on `main` at `72580aa04`** (`v3.5.1-6-g72580aa04`), merged `--no-ff` from `worktree-pg-kds-comparison-orders` and pushed with `--no-verify`: the three orders, their index and register rows, this file's §2 to §5 and the comparison file's corrected claim about scenario 1's twin |
+| **Skipped, on the word** | the pre-push hook; no suite ran on the tree; documents only, no build input |
+| **Does not settle** | whether any of the three is opened (§7 does) |
+
+## 7. EF, EG and EH taken up in that order on the standing go-ahead; EF opened, EF-Q0..Q7 adopted
+
+| | |
+|---|---|
+| **Word** | *"Proceed with the milestones in order, as proposed, with /go-ahead-achieving-milestone"*. The skill it names carries the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* "The order proposed" is CLA's recommendation of the preceding report: EF first, then EG, then EH |
+| **Mark** | **EF is opened** on worktree `ef-equal-client-scenario-drivers` (branch `worktree-ef-equal-client-scenario-drivers`) from `72580aa04` (`v3.5.1-6-g72580aa04`). **EF-Q0..Q7 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator. **EF-Q5 (a) lifts the 20-minute stage budget for EF-S2 by that adoption**, which is not the operator's own word for that measurement; the order's "Marks" says so. EG and EH follow EF's close, each opened and recorded when it is reached |
+| **CLA's reading** | the skill's scope is one milestone; the operator's word names three in an order, and CLA reads it as the skill run once per milestone in that order, each stopping at its own push gate |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; any item of EG or EH before it is opened |
+| **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks"); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
