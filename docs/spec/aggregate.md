@@ -59,6 +59,39 @@ by set union, `AVG` as its `(sum, count)` pair with the divide deferred to
 appends the right's unseen groups in their own order, so first-seen
 determinism (AG6) survives a merge with a defined partition order.
 
+**A row may reach the fold as bytes** (EH, `exec/bytes_fold.hpp`). AG1 is
+the statement that the chain - its steps, kinds, residuals and class - is
+the one the unaggregated statement compiles to, and that the fold consumes
+the chain's row stream. It does not say the stream must pass through the
+frame. For one shape it does not: **a fold with no `GROUP BY` and no
+`DISTINCT`, over a chain of one step that keeps every visible row** - no
+conjunct of any kind, no sub-chain, no index order, no trail entry, no Cabin
+recording live - **whose every argument is a column of that relation other
+than a `varchar`**. For it the executor hands the fold the visible version's
+payload under the leaf's hold, and the fold decodes the cells its items read
+with the row decoder the frame's path uses and folds each value through the
+one body both paths share (`Aggregator::FoldValue`). What stays as it was:
+
+- **Visibility is decided per row, before a byte is read** (`txn::Classify`
+  at the statement's snapshot). A version only the undo log holds is
+  reconstructed and takes the frame's path; so does the step's first visible
+  row, which is the row its shape checks run on; so does a payload of a
+  length other than the layout's, whose decode refuses it.
+- **Nothing of the page is kept**: the values are decoded into the fold's own
+  slots inside the call, which is why a `varchar` argument - whose value may
+  be a spill behind a fetch - keeps the frame's path, as `DISTINCT` does (its
+  set grows by allocating).
+- **A row is examined, charged and matched as the row sink's rows are**, in
+  that order, so a budget's refusal falls on the same row and comes before the
+  fold's own, and `ANALYZE` reports the same counts.
+- **Rows of one statement may come by both paths**, into one state.
+
+Every other fold - grouped, distinct, behind any predicate, over a join -
+is fed through the row sink. The property stated above still holds for all
+of them, and for this one the equivalence is the contract
+`tests/bytes_fold_equivalence_test.cpp` pins: the fold from bytes and the
+same fold behind a conjunct that keeps every row answer byte for byte.
+
 What AG1 deliberately gives up: **pre-aggregation below a join is rejected.**
 That optimization needs an operator inside the chain, and buying it means
 teaching the step-kind trust table about a step that reads no relation.

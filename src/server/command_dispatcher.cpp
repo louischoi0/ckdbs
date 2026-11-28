@@ -11040,7 +11040,10 @@ DispatchOutcome CommandDispatcher::RunAggregated(
             if (Status s = aggregator_.Accumulate(frame); !s.ok()) return s;
             return storage::VisitControl::kContinue;
         },
-        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_);
+        &stats, budget_, trail, replay, cabins_, &snapshot, indexes_enabled_,
+        // The fold itself, for a statement whose rows it can take from their
+        // bytes (EH-S1); it answers per statement whether it is one.
+        &aggregator_);
     if (!ran.ok()) {
         // **No trail on the failure path**, exactly as the unaggregated
         // path has it: a statement that stopped part way through touched

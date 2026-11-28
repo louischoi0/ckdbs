@@ -109,7 +109,7 @@ protected:
     // Runs `chain`, collecting each row's column 0; `stop_after` rows, then
     // the sink stops the statement.
     Ran RunChain(const StepChain& chain, std::size_t stop_after = SIZE_MAX,
-                 const Budget& budget = Budget()) {
+                 const Budget& budget = Budget(), BytesFold* fold = nullptr) {
         Ran out;
         ExecStats stats;
         out.status = Execute(
@@ -119,7 +119,8 @@ protected:
                 return out.ids.size() >= stop_after ? storage::VisitControl::kStop
                                                     : storage::VisitControl::kContinue;
             },
-            &stats, budget);
+            &stats, budget, /*trail=*/nullptr, /*replay=*/nullptr, /*cabins=*/nullptr,
+            /*snapshot=*/nullptr, /*indexes=*/true, fold);
         out.total = stats.Total();
         return out;
     }
@@ -343,6 +344,123 @@ TEST_F(ScanRowWalkTest, TheKernelRejectsEveryRowItHoldsAfterTheFirst) {
     EXPECT_EQ(without.total.rows_kernel_rejected, 0u);
     EXPECT_EQ(with.total.rows_examined, 100u);
     EXPECT_EQ(with.total.rows_matched, without.total.rows_matched);
+}
+
+// ---- EH-S1: a fold handed the visible row's bytes (`bytes_fold.hpp`) -------
+//
+// The executor's half of the contract, with a consumer of the test's own:
+// which rows come to it under the leaf's hold, which stay on the row sink,
+// and that a row is counted and charged the same either way. The fold's own
+// half - that `Aggregator` answers the same from bytes as from the frame - is
+// `bytes_fold_equivalence_test.cpp`'s.
+struct SummingFold final : BytesFold {
+    bool admit = true;
+    std::uint64_t refuse_at = 0;  // the 1-based row to refuse; 0: none
+    std::uint64_t prepared = 0;
+    std::uint64_t rows = 0;
+    std::int64_t sum_v = 0;
+    const catalog::RowLayout* layout = nullptr;
+
+    bool PrepareBytesFold(const catalog::Schema& schema, const catalog::RowLayout& l,
+                          std::uint16_t rel_slot) override {
+        ++prepared;
+        EXPECT_EQ(schema.columns.size(), 3u);
+        EXPECT_EQ(rel_slot, 0u);
+        layout = &l;
+        return admit;
+    }
+    Status AccumulateBytes(std::span<const std::byte> payload) override {
+        EXPECT_EQ(payload.size(), layout->row_size);
+        ++rows;
+        if (rows == refuse_at) return Status::OutOfRange("the fold refused this row");
+        std::int64_t v = 0;  // column 1, an int64 cell, where the layout puts it
+        std::memcpy(&v, payload.data() + layout->offsets[1], sizeof v);
+        sum_v += v;
+        return Status::OK();
+    }
+};
+
+// Every visible row of a step that keeps every row goes to the fold but the
+// first, which takes the full path that checks the step (BM-R6) - and the
+// rows are examined and matched as the sink's rows are.
+TEST_F(ScanRowWalkTest, AStepThatKeepsEveryRowHandsItsFoldEveryRowButTheFirst) {
+    Load(kThreeLeaves);
+    SummingFold fold;
+    Ran ran = RunChain(CompileSql("SELECT t.id FROM t"), SIZE_MAX, Budget(), &fold);
+    ASSERT_TRUE(ran.status.ok()) << ran.status.message();
+    EXPECT_EQ(fold.prepared, 1u);
+    EXPECT_EQ(ran.ids, (std::vector<std::int64_t>{1})) << "the first row, through the sink";
+    EXPECT_EQ(fold.rows, kThreeLeaves - 1u);
+    EXPECT_EQ(fold.sum_v, std::int64_t{kThreeLeaves} * (kThreeLeaves + 1) / 2 - 1);
+    EXPECT_EQ(ran.total.rows_folded_in_place, kThreeLeaves - 1u);
+    EXPECT_EQ(ran.total.rows_examined, kThreeLeaves);
+    EXPECT_EQ(ran.total.rows_matched, kThreeLeaves);
+
+    // The same statement with no fold: the counters a statement reports do
+    // not say which path a row took.
+    Ran plain = RunChain(CompileSql("SELECT t.id FROM t"));
+    EXPECT_EQ(plain.total.rows_examined, ran.total.rows_examined);
+    EXPECT_EQ(plain.total.rows_matched, ran.total.rows_matched);
+    EXPECT_EQ(plain.total.rows_folded_in_place, 0u);
+}
+
+// A step that can drop a row keeps the full path for every row, and the
+// fold is not even asked: a conjunct, and a second step.
+TEST_F(ScanRowWalkTest, AStepWithAConjunctOrAnotherStepNeverHandsARowToTheFold) {
+    Load(100);
+    SummingFold filtered;
+    Ran ran = RunChain(CompileSql("SELECT t.id FROM t WHERE v >= 1"), SIZE_MAX, Budget(), &filtered);
+    ASSERT_TRUE(ran.status.ok()) << ran.status.message();
+    EXPECT_EQ(ran.ids.size(), 100u);
+    EXPECT_EQ(filtered.prepared, 0u);
+    EXPECT_EQ(filtered.rows, 0u);
+
+    SummingFold joined;
+    Ran join = RunChain(CompileSql("SELECT a.id FROM t AS a JOIN t AS b ON a.id = b.id"),
+                        SIZE_MAX, Budget(), &joined);
+    ASSERT_TRUE(join.status.ok()) << join.status.message();
+    EXPECT_EQ(join.ids.size(), 100u);
+    EXPECT_EQ(joined.prepared, 0u);
+    EXPECT_EQ(joined.rows, 0u);
+}
+
+// A fold that declines the relation leaves every row on the sink.
+TEST_F(ScanRowWalkTest, AFoldThatDeclinesLeavesEveryRowOnTheSink) {
+    Load(100);
+    SummingFold fold;
+    fold.admit = false;
+    Ran ran = RunChain(CompileSql("SELECT t.id FROM t"), SIZE_MAX, Budget(), &fold);
+    ASSERT_TRUE(ran.status.ok()) << ran.status.message();
+    EXPECT_EQ(fold.prepared, 1u);
+    EXPECT_EQ(fold.rows, 0u);
+    EXPECT_EQ(ran.ids.size(), 100u);
+    EXPECT_EQ(ran.total.rows_folded_in_place, 0u);
+}
+
+// EH-R4: the row-touch budget refuses on the same row with the fold and
+// without, with the same words, and before the fold sees that row.
+TEST_F(ScanRowWalkTest, TheBudgetRefusesOnTheSameRowWithTheFoldAndWithout) {
+    Load(100);
+    const StepChain chain = CompileSql("SELECT t.id FROM t");
+    SummingFold fold;
+    Ran with = RunChain(chain, SIZE_MAX, Budget(/*limit=*/40), &fold);
+    Ran without = RunChain(chain, SIZE_MAX, Budget(/*limit=*/40));
+    ASSERT_EQ(with.status.code(), StatusCode::kResourceExhausted) << with.status.message();
+    EXPECT_EQ(with.status.message(), without.status.message());
+    EXPECT_EQ(with.total.rows_examined, without.total.rows_examined);
+    EXPECT_EQ(with.total.rows_matched, without.total.rows_matched);
+    EXPECT_EQ(with.ids.size() + fold.rows, without.ids.size());
+}
+
+// The fold's own refusal ends the statement on its row, as a sink's does.
+TEST_F(ScanRowWalkTest, AFoldsRefusalEndsTheStatementOnItsRow) {
+    Load(100);
+    SummingFold fold;
+    fold.refuse_at = 10;
+    Ran ran = RunChain(CompileSql("SELECT t.id FROM t"), SIZE_MAX, Budget(), &fold);
+    EXPECT_EQ(ran.status.code(), StatusCode::kOutOfRange) << ran.status.message();
+    EXPECT_EQ(fold.rows, 10u);
+    EXPECT_EQ(ran.total.rows_examined, 11u) << "the first row and the ten the fold was handed";
 }
 
 }  // namespace

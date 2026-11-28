@@ -284,6 +284,10 @@ public:
     // nested runner: only the outermost walk yields.
     void SetSlice(const SlicePolicy* slice) noexcept { slice_ = slice; }
 
+    // The statement's fold, where it can take a row from its bytes
+    // (`bytes_fold.hpp`, EH-S1). Never set on a nested runner.
+    void SetBytesFold(BytesFold* fold) noexcept { fold_ = fold; }
+
     // The session's cancel, taken at the slice boundary (§10).
     Status TakeCancel() const { return slice_->TakeCancel(); }
 
@@ -2961,6 +2965,9 @@ private:
                    ScanKernelRejects(*kernel, access.layout, payload);
         };
         bool kernel_rejected = false;
+        // EH-S1: the row was handed to the statement's fold under the span.
+        bool folded = false;
+        Status fold_status;
         {
             PageSpanGuard span;
             // Read with no Status (BT-S2): a slot ReadTupleIn() would refuse -
@@ -2995,6 +3002,30 @@ private:
                             kernel_rejected = true;
                             break;
                         }
+                        // **Folded where it lies** (EH-S1, `bytes_fold.hpp`):
+                        // this step keeps every visible row and the
+                        // statement's fold reads its cells from the bytes,
+                        // so nothing is copied, decoded into the frame or
+                        // emitted. Under the span and the leaf's hold, as
+                        // the kernel reads (invariant 10); the length check
+                        // first (invariant 13), and a version the undo log
+                        // holds never comes this way. The row is examined,
+                        // charged and matched in the order the full path
+                        // keeps a row in, so a budget's refusal falls on the
+                        // same row and comes before the fold's own.
+                        if (fold_ready_ && !recording_here &&
+                            tuple.payload.size() == access.layout.row_size) {
+                            folded = true;
+                            StepStats& fold_stats = stats_.For(step.step_id);
+                            ++fold_stats.rows_examined;
+                            fold_status = budget_.ChargeRow();
+                            if (fold_status.ok()) {
+                                ++fold_stats.rows_matched;
+                                ++fold_stats.rows_folded_in_place;
+                                fold_status = fold_->AccumulateBytes(tuple.payload);
+                            }
+                            break;
+                        }
                         // **The row's bytes, copied; the row itself, not
                         // built yet.** The copy is fixed-size (invariant 13)
                         // and costs a memcpy; building the row costs an
@@ -3013,6 +3044,7 @@ private:
             // in scope but finished with. Everything below may fetch.
             span.Release();
         }
+        if (folded) return fold_status;
 
         // ---- MVCC, phase 2: the walk, with no span live -----------------
         if (needs_walk) {
@@ -3085,6 +3117,16 @@ private:
         // used to mask it (BM-Q7).
         if (!StepShapeChecked(step)) {
             if (Status s = CheckStepShapeOnce(step, index, access, slots); !s.ok()) return s;
+            // **The fold is armed here, once, with the kernel's own
+            // discipline** (EH-S1): only after this step's checks have run,
+            // so its first visible row always takes the full path and no
+            // cell offset is read before the layout was checked. A step
+            // that could drop, record, reorder or extend a row keeps the
+            // full path for every row; so does a chain of more than one
+            // step, whose fold may read another relation's columns.
+            fold_ready_ = fold_ != nullptr && steps.size() == 1 && KeepsEveryVisibleRow(step) &&
+                          fold_->PrepareBytesFold(access.schema, access.layout,
+                                                  static_cast<std::uint16_t>(index));
         }
 
         // Decoded and then, once nothing is live, resolved - one call,
@@ -3362,6 +3404,17 @@ private:
         return Status::OK();
     }
 
+    // Whether a visible row of `step` reaches the row sink with nothing
+    // else done to it: no conjunct of any kind to drop it, no sub-chain, no
+    // index order to check it against, and no trail entry to record. A
+    // Cabin recording and an inner build are tested per row where they are
+    // live (`recording_here`; a build needs a second step).
+    bool KeepsEveryVisibleRow(const Step& step) const {
+        return step.residual.empty() && step.fn_residual.empty() && step.bool_residual.empty() &&
+               step.sub_chains.empty() && !IsIndexOrder(step.emit_order) &&
+               !(trail_ != nullptr && IsTrailReplayable(step));
+    }
+
     // Whether BM-R6's check has run for `step` in this statement: asked
     // before the call, so a checked step's row builds no Status (AP02).
     bool StepShapeChecked(const Step& step) const {
@@ -3591,6 +3644,12 @@ private:
     bool stopped_ = false;
     bool indexes_ = true;
 
+    // The statement's fold and whether this statement's one step is armed
+    // for it (`SetBytesFold`, `AcceptTupleAt`). `fold_ready_` is set once,
+    // at the step's first visible row, and never by a nested runner.
+    BytesFold* fold_ = nullptr;
+    bool fold_ready_ = false;
+
     // Sub-chain mode (EvaluateSubChain sets it on the runner it builds):
     // every stop in a sub-chain is its own short-circuit - no quota exists
     // at subquery depth (V09) - so a stop decides the answer without
@@ -3639,6 +3698,7 @@ StepStats& StepStats::operator+=(const StepStats& other) noexcept {
     relation_opens += other.relation_opens;
     rows_examined += other.rows_examined;
     rows_kernel_rejected += other.rows_kernel_rejected;
+    rows_folded_in_place += other.rows_folded_in_place;
     rows_matched += other.rows_matched;
     sub_chain_runs += other.sub_chain_runs;
     probe_memo_hits += other.probe_memo_hits;
@@ -3776,7 +3836,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         const SlicePolicy* slice = nullptr) {
+                         const SlicePolicy* slice = nullptr, BytesFold* fold = nullptr) {
     if (chain.steps.empty()) {
         co_return Status::InvalidArgument("a step chain with no steps reads nothing");
     }
@@ -3803,6 +3863,7 @@ sched::Coro ExecuteChain(catalog::Catalog& catalog, storage::PageStore& store,
     ChainRunner runner(catalog, store, sink, /*depth=*/0, /*parent=*/nullptr, counters, spend,
                        trail, replay, cabins, snapshot, indexes);
     runner.SetSlice(slice);
+    runner.SetBytesFold(fold);
 
     // Hoisted sub-chains run **once**, before the outer chain opens. An
     // uncorrelated subquery's answer is the same for every outer row by
@@ -3837,11 +3898,12 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,
                const RowSink& sink, ExecStats* stats, const Budget& budget,
                TrailCollector* trail, const TrailReplay* replay, stats::CabinStore* cabins,
-               const txn::Snapshot* snapshot, bool indexes) {
+               const txn::Snapshot* snapshot, bool indexes, BytesFold* fold) {
     // No slice policy, so nothing beneath parks and the gated driver
     // completes the coroutine inline.
     return RunToCompletionAtWalkBoundary(ExecuteChain(catalog, store, chain, sink, stats, budget,
-                                                      trail, replay, cabins, snapshot, indexes));
+                                                      trail, replay, cabins, snapshot, indexes,
+                                                      /*slice=*/nullptr, fold));
 }
 
 }  // namespace kds::exec

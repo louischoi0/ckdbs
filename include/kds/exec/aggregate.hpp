@@ -13,6 +13,7 @@
 
 #include "kds/base/int128.hpp"
 #include "kds/base/status.hpp"
+#include "kds/exec/bytes_fold.hpp"
 #include "kds/exec/chain_frame.hpp"
 #include "kds/exec/step_chain.hpp"
 #include "kds/parser/ast.hpp"
@@ -72,7 +73,7 @@ struct AggregateLimits {
     std::size_t max_distinct = 1048576;
 };
 
-class Aggregator {
+class Aggregator final : public BytesFold {
 public:
     // `spec` and `labels` are **borrowed** and must outlive the aggregator.
     // Both live on the `StepChain` the statement is executing, which the
@@ -112,6 +113,21 @@ public:
     // Folds one row of the chain's output. Called from the statement's row
     // sink, once per row the chain emits.
     Status Accumulate(const ChainFrame& frame);
+
+    // **The same fold from a row's bytes** (`bytes_fold.hpp`, EH-S1), for the
+    // global form over one relation: no GROUP BY, no DISTINCT, and every
+    // argument a column of that relation whose value lies whole in the row -
+    // which is every type but `varchar`, whose value may be a spill and
+    // would need a fetch the leaf's hold forbids. `PrepareBytesFold` answers
+    // whether this statement is that; `AccumulateBytes` decodes the cells
+    // the items read with the row decoder the frame's path uses
+    // (`DecodeColumnsInto`) and folds each through `FoldValue`, the one body
+    // both paths share, so the two cannot answer differently. A row may come
+    // by either path within one statement: the first row, and any whose
+    // visible version is in the undo log, come through `Accumulate`.
+    bool PrepareBytesFold(const catalog::Schema& schema, const catalog::RowLayout& layout,
+                          std::uint16_t rel_slot) override;
+    Status AccumulateBytes(std::span<const std::byte> payload) override;
 
     // Emits the output rows in **first-seen order** - the order the chain's
     // deterministic row stream founded each group (AG6). Hash-iteration
@@ -230,6 +246,9 @@ private:
 
     // Folds one row into one group's item states.
     Status FoldInto(Group& group, const ChainFrame& frame);
+    // One non-`*` aggregate item's fold of one value: the NULL test, DISTINCT
+    // and the function's arm. The whole of what a value does to a group.
+    Status FoldValue(Group& group, std::size_t i, const parser::AstValue& value);
 
     // The label an error message names an item by.
     std::string LabelOf(std::size_t item_index) const;
@@ -255,6 +274,15 @@ private:
     // be one bug away; both are reused and neither allocates after the
     // first row.
     std::string value_scratch_;
+
+    // `PrepareBytesFold`'s answer for this statement: the relation, the
+    // columns the items read (a decode mask) and the slots they are decoded
+    // into, indexed by column position as the row decoder writes them. Null
+    // `bytes_schema_` means the statement folds through the frame alone.
+    const catalog::Schema* bytes_schema_ = nullptr;
+    const catalog::RowLayout* bytes_layout_ = nullptr;
+    std::uint64_t bytes_columns_ = 0;
+    std::vector<parser::AstValue> bytes_slots_;
 
     // Entries across every DISTINCT set in this statement, against
     // `AggregateLimits::max_distinct`. Summed rather than per set, because

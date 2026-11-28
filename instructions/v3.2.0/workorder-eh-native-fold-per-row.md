@@ -253,6 +253,50 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 
 ## 7. Stage log (CLA, appended as stages land)
 
+### EH-S1 (2026-11-28): a global fold from the row's bytes, on `eh-native-fold-per-row` from `1f7ef7c84`
+
+- **The change.** `exec/bytes_fold.hpp` is the seam: a consumer the
+  executor may hand a visible version's payload under the leaf's hold.
+  `ChainRunner::AcceptTupleAt` hands it, in the `kVisible` arm, when the
+  statement has a fold, the chain is one step that keeps every visible row
+  (`KeepsEveryVisibleRow`: no conjunct of any kind, no sub-chain, no index
+  order, no trail-replayable step; no Cabin recording live, tested per row),
+  the fold admitted the relation at the step's first visible row - after
+  BM-R6's checks, as the kernel is armed - and the payload is the layout's
+  length. The row is examined, charged and matched in the full path's
+  order. `Aggregator` is the consumer: `PrepareBytesFold` admits a global
+  fold with no `DISTINCT` whose arguments are columns of the step's
+  relation other than `varchar`, and `AccumulateBytes` decodes those cells
+  with `DecodeColumnsInto` into its own slots and folds each through
+  `FoldValue`, the per-value body `FoldInto` now calls too. The dispatcher
+  passes its aggregator to `exec::Execute`. §2's (a) and (b) together: no
+  copy, no frame decode, no `std::function` call, for that shape.
+- **The `[quiet-wrong]` rules, read against the code as built**:
+  EH-R2 - the arm is inside `txn::Classify`'s `kVisible` case; a
+  `kNeedsUndoWalk` version takes the copied path and the sink. EH-R3 -
+  `AccumulateBytes` decodes into the aggregator's own slots inside the call
+  and keeps no span; no `varchar` is admitted, so no spill is pending and no
+  fetch happens under the hold. EH-R7 does not arise: nothing yields.
+- **Cells.** In `scan_row_walk_test.cpp`, the executor's contract with a
+  consumer of the test's own: every row but the first is handed over and
+  counted as the sink's would be; a conjunct, a second step or a declining
+  fold hands nothing; the row-touch budget refuses on the same row with the
+  same words; a fold's refusal ends the statement on its row. In the new
+  `bytes_fold_equivalence_test.cpp`, the fold's contract (EH-R1, EH-R4):
+  42 select lists over ten column types - every fixed-width type, `char`,
+  `varchar` and `uint64` among them - answer byte for byte the same bare and
+  behind a conjunct that keeps every row, empty, at one row, over 700 rows
+  with every third row NULL, after deletes and updates, over a column of
+  NULLs, beside an undecided writer's update and delete and after its
+  commit, and with an overflowing `SUM` refused in the same words.
+- **The suite**: 5,431 of 5,432 (`ctest -LE bs-nightly -j4`); the failure
+  is `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`,
+  the two-core rig `known-gaps.md` names as intermittent here (3 of 20
+  alone at this tree), which folds nothing.
+- **`docs/spec/aggregate.md` §1** states the bytes path and what AG1 still
+  promises (EH-Q3 (a)).
+- Overhead not measured; measured at the milestone's close.
+
 ### EH-S0 (2026-11-28): the premise and the ranking, on `eh-native-fold-per-row` from `01c6c741c`
 
 `[measured]` on `main`'s engine (EG's closing binary; no engine source
