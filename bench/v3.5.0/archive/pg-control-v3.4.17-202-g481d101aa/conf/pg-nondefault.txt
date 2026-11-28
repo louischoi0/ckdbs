@@ -1,0 +1,24 @@
+DateStyle|ISO, MDY|configuration file
+TimeZone|Etc/UTC|configuration file
+application_name|psql|client
+autovacuum_worker_slots|16|configuration file
+config_file|/var/lib/postgresql/18/docker/postgresql.conf|override
+data_directory|/var/lib/postgresql/18/docker|override
+default_text_search_config|pg_catalog.english|configuration file
+dynamic_shared_memory_type|posix|configuration file
+hba_file|/var/lib/postgresql/18/docker/pg_hba.conf|override
+ident_file|/var/lib/postgresql/18/docker/pg_ident.conf|override
+lc_messages|C|configuration file
+lc_monetary|C|configuration file
+lc_numeric|C|configuration file
+lc_time|C|configuration file
+listen_addresses|127.0.0.1|command line
+log_timezone|Etc/UTC|configuration file
+max_connections|100|configuration file
+max_wal_size|1024|configuration file
+min_wal_size|80|configuration file
+port|15434|command line
+shared_buffers|16384|configuration file
+transaction_deferrable|off|override
+transaction_isolation|read committed|override
+transaction_read_only|off|override

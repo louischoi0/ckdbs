@@ -1,0 +1,52 @@
+created 8 relations with suffix _r2_pg_s2_b1
+
+postgresql benchmark - 68 columns, 24624 rows resident, 1 connection
+server 127.0.0.1:15434  table scenario2_r2_pg_s2_b1
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+ddl                         10         0     621.1    247.2    463.9    486.7   1682.2   1682.2    1682.2     0
+load-organizations         300         0     153.5    137.5    140.6    143.0    179.9    297.3     553.2     0
+load-ships                  30         0     159.9    145.0    147.8    149.2    174.8    259.0     259.0     0
+load-operations            300         0     154.0    139.5    143.7    147.3    177.1    192.5     228.0     0
+load-fees                   12         0     149.4    139.6    140.2    140.9    225.1    225.1     225.1     0
+load-recipes                93         0     146.7    139.2    140.8    141.9    165.4    222.2     222.2     0
+load-cargos               4000         0     153.1    128.5    141.6    143.4    173.8    221.5    4497.1     0
+booking                   3340         0     419.9    127.4    425.2    446.3    484.4    564.3    3118.3     0
+cargo-lookup              3340         0      24.4     20.2     23.6     24.0     25.8     31.5     215.8     0
+credit-lookup             3340         0      22.4     18.3     21.4     22.2     23.6     27.3     308.1     0
+capacity-read             3340         0      21.7     17.9     20.9     21.3     22.6     25.4     343.0     0
+recipe-read               3340         0      38.4     33.7     36.9     38.0     40.3     46.3     312.8     0
+freight-insert            3000         0      28.7     25.2     27.2     27.6     31.1     47.3     252.6     0
+charge-insert            16889         0      19.2     16.8     18.4     18.6     20.3     28.4     247.9     0
+operation-update          3000         0      22.7     20.6     22.0     22.3     24.3     28.5     166.3     0
+org-update                3000         0      20.9     19.0     20.3     20.5     21.8     24.4     261.5     0
+commit                    3000         0     136.1    122.1    131.7    132.8    156.5    162.0     461.3     0
+manifest-scan               20        14      40.2     24.6     36.7     39.0     54.3     61.1      61.1     0
+voyage-rollup               20        14      38.3     28.4     29.3     29.9     43.0    177.2     177.2     0
+customer-statement          10         7     234.6    158.8    169.1    251.3    340.2    340.2     340.2     0
+
+  ddl: 8 relations + 2 indexes
+  booking: BEGIN/COMMIT, capacity=cached
+
+  PostgreSQL twin of tools/scenario2_freight.py: same booking, same
+  work target, same seed. freights and charges carry a pk index they
+  do not want and the two non-pk reads carry one they do.
+bookings
+  committed                 3000      2128.7 TPS
+  rejected-capacity          289        8.7% of attempts
+  rejected-credit             51        1.5% of attempts
+  conflicted                   0          0 retries
+
+  mode                 BEGIN/COMMIT, capacity=cached, max_fees=uncapped
+  bookers              1, partitioned (disjoint slices, no conflict possible)
+  cargo pool left      949
+
+  manifest reporter    1 passes, 50 reads, 154 freight rows scanned
+                       latency is in the table above, beside the bookings it contended with
+
+verify (§4)          400 checks, 0 failure(s)
+  I1 booked_cbm == SUM(freights.cbm), I2 within ship capacity,
+  I3 outstanding == recomputed charges, I4 charge rows == rules
+
+  wrote /home/ukjin/bench-runs/pg-control-v3.4.17-202-g481d101aa/json/r2-pg-s2-b1.json
