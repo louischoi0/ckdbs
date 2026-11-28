@@ -116,3 +116,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version; DY-Q2, which EG-S0 gives a new price and does not decide |
 | **Recorded at** | this file; `workorder-eg-one-client-durable-write.md` (header, §4 "Marks", §7); EG's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
+## 13. EG closed on the standing go-ahead after EG-S1; EG-Q6 written and adopted, no cut opened
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10; no further word |
+| **Mark** | **EG is closed on the work branch**: EG-S0 attributed scenario 1's `result-insert` to the breadth of a sync while a bulk load's segment stays live (traced: two `fdatasync` calls a commit, about 60 µs on the untouched segment); EG-S1 booked the one-core `strict` commit's inline sync under `commit.wal_flush`; the close's A/B found no cost it can tell from noise. **EG-Q6 was written at EG-S1's review and adopted (a)**: EG-R3 bounds the commit path, not its statistics |
+| **CLA's, not the operator's** | **the reading of EG-Q1**: its condition is met taken alone (the insert is behind and the cause is in the engine), and CLA let EG-R2 bound it, so no cut was built and the narrowed sync stays DY-Q2's with a new price beside it; the reading of EG-R3 (EG-Q6); the close with two A/B cells carrying no claim, one of them the eight-core cell EG-R3 asks for |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; DY-Q2; the opening of EH, which follows under §10's word |
+| **Recorded at** | this file; `workorder-eg-one-client-durable-write.md` (header, §4 "Marks", §7); EG's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+

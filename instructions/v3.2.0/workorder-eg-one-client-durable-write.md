@@ -1,6 +1,6 @@
 # Work order EG - one client's durable write beyond its sync: an insert left unattributed, and a one-core commit the wait statistics do not see
 
-Status: **OPENED 2026-11-28** on worktree `eg-one-client-durable-write`
+Status: **CLOSED 2026-11-28 after EG-S1, the cut (S2) not opened** (§7, "EG-S3"; `raft-marks-2026-11-28.md` §13): the insert's gap is the breadth of a sync, which is DY's; the one-core `strict` commit's inline sync is booked under `commit.wal_flush`. Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree `eg-one-client-durable-write`
 (branch `worktree-eg-one-client-durable-write`) from `d50d304f8`
 (`v3.5.1-26-gd50d304f8`), the close of EF's work branch, which is not
 landed; under the operator's standing go-ahead of 2026-11-28
@@ -237,6 +237,42 @@ read against it before it is built.
 - Nothing of a read's cost (EF) or a fold's (EH).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EG-S3 (2026-11-28): the close
+
+- **Built**: one engine change (`WalManager::Commit`'s `strict` arm
+  books its sync), three cells, `tools/eg_s0_premise.py`, and the
+  documents EG-Q4 names. **Not built**: a cut of the insert's cost
+  (EG-Q1; the cause is DY's), the deferred path at one core (EG-Q3 (a)).
+- **The close's measurement** (`ck-tester`, interleaved A/B, Release,
+  the engine EG opened from against `9830e6bb0`, whose `src/` is
+  `01bd189f4`'s; `bench/v3.5.1/results-eg-close-v3.5.1-33-g01bd189f4.md`,
+  03:23:46 to 03:29:18 UTC, 40 cells, five rounds a binary): **no cost
+  that can be told from the run's noise on any cell.** One booker at one
+  core, `strict`: 2,098 against 2,108 bookings a second and a `commit`
+  of 134.6 µs against 134.8 µs, inside spreads of 1.6 % and 2.4 % - the
+  tightest cell, which bounds the scope's cost to about 2 % of a commit.
+  The control the change cannot reach is inside its spread. **Two cells
+  carry no claim**: the one-client insert (156.5 µs against 146.1 µs
+  idle; one round ran slow in both arms, spreads over 20 %) and eight
+  bookers on eight cores (9,507 against 9,636; two of the old binary's
+  rounds ran at half speed). So **EG-R3's "a cell at eight cores shows
+  it did not move" is not shown by the rule**; the full-speed rounds of
+  the two arms overlap, and the read of the code is that a deferred
+  `strict` commit does not pass through the changed arm.
+- **The intended effect, measured**: 0 waits booked by the old binary
+  and 500 by the new over 500 commits, 121 µs a wait.
+- **The suite at the closing code** (`9830e6bb0`): 5,420 of 5,420.
+- **The durable content**: `docs/spec/wal.md` §6 (the write path as
+  built), `docs/spec/wait-events.md` (`commit.wal_flush`'s second
+  site), `manual/server/server.md` (the durability rungs),
+  `docs/inflight/known-gaps.md` ("WAL": the second price of the sync's
+  breadth; a one-core `strict` commit on its reactor), `CLAUDE.md`'s
+  Observability row.
+- **What EG hands on**: to DY-Q2's reader, the narrowed sync's price
+  against a commit (about 60 µs a commit for each further live segment,
+  traced); to the operator, the reading of EG-Q1 against EG-R2 and of
+  EG-R3 (EG-Q6).
 
 ### EG-S1 (2026-11-28): the inline sync booked, on `eg-one-client-durable-write` from `8f0058f4a`
 
