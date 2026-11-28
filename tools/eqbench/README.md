@@ -1,6 +1,6 @@
 # eqbench - one client for three engines
 
-EN's harness (`instructions/v3.2.0/workorder-en-three-engine-equal-client.md`,
+EO's harness (`instructions/v3.2.0/workorder-eo-three-engine-equal-client.md`,
 `bench/README.md` "Three engines on one client"): one Rust binary drives KDS
 (KWP/1), PostgreSQL and Oracle Database Free through the same scenario code,
 the same seeded parameter sequence and the same statements, and writes one
@@ -35,7 +35,7 @@ The decode is timed apart from the round trip on every engine
 operation (`client_cpu_us_per_op`), so the residue of the three clients'
 difference is in every cell.
 
-## The breakdown (EN-Q8)
+## The breakdown (EO-Q8)
 
 `src/profile.rs`'s table maps each engine's own accounting to `parse`,
 `optimise`, `parse_optimise`, `execution`, `disk_read`, `commit`, `lock`,

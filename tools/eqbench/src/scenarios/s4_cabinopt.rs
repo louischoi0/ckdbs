@@ -38,7 +38,7 @@
 //! Relation kinds on KDS (`bench/README.md`, "What a relation is stored as"),
 //! the same in both arms:
 //!
-//! **Kinds, EN-Q9 (a)** (adopted on the operator's standing go-ahead of
+//! **Kinds, EO-Q9 (a)** (adopted on the operator's standing go-ahead of
 //! 2026-11-28): the tapes and `board_b` are only walked on `off`, which the
 //! rule would make HEAP, but this scenario's subject is the declared Cabin,
 //! whose authority is the tuple key and which resolves through the

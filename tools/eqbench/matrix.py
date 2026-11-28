@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EN-S4's measurement: every scenario cell on KDS, PostgreSQL and Oracle,
+"""EO-S4's measurement: every scenario cell on KDS, PostgreSQL and Oracle,
 rounds interleaved, one JSON per cell and round under --out.
 
 Not timed itself: it starts servers, gates on a quiet host, runs
@@ -13,7 +13,7 @@ measurement is watched every minute").
               [--only s1,s5] [--engines kds,pg,oracle] [--pass timed|profile]
 
 The `profile` pass runs PostgreSQL alone with pg_stat_statements,
-track_io_timing and the wait sampler (EN-Q8): KDS's and Oracle's
+track_io_timing and the wait sampler (EO-Q8): KDS's and Oracle's
 accounting is always on, so their breakdown comes from the timed pass.
 """
 

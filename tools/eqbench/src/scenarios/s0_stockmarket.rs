@@ -23,7 +23,7 @@
 //! | `s0_assets` | HEAP | loaded and never read by a statement: append only |
 //!
 //! The Python declares every relation BTREE (AS-Q6's BTREE-only mark,
-//! replaced by EN's rule), so no delta crosses from a Python run to this one.
+//! replaced by EO's rule), so no delta crosses from a Python run to this one.
 //!
 //! **Phases**, the Python's names:
 //!

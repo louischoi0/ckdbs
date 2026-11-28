@@ -4,7 +4,7 @@
 # control"), host networking so no port forwarder sits in their path.
 #
 #   servers.sh pg-up      <port> [profile]   PostgreSQL 18; `profile` adds the
-#                                            instruments EN-Q8's breakdown reads
+#                                            instruments EO-Q8's breakdown reads
 #   servers.sh ora-up     <secret-file>      Oracle Database Free on 1521
 #   servers.sh pg-down | ora-down
 #   servers.sh pin        <name> <cpus>      every process of a container on <cpus>

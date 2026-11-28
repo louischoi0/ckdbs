@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-//! eqbench - one client for three engines (EN, `tools/eqbench/README.md`).
+//! eqbench - one client for three engines (EO, `tools/eqbench/README.md`).
 //!
 //!     eqbench --engine kds --kds 127.0.0.1:15791 [--kds-durability group|strict]
 //!     eqbench --engine pg  --pg "host=127.0.0.1 port=15434 user=postgres dbname=bench"

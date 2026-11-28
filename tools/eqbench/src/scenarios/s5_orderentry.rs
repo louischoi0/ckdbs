@@ -1,4 +1,4 @@
-//! Scenario 5: commercial OLTP, an order-entry workload (EN §4).
+//! Scenario 5: commercial OLTP, an order-entry workload (EO §4).
 //!
 //! After the shape of TPC-C's five transactions - **not TPC-C**: not
 //! audited, not the specification's full rules (no keying or think time,

@@ -7,7 +7,7 @@
 //! within the execute's own round trip; `begin` turns it off with no round
 //! trip, since an Oracle transaction opens at its first statement.
 //!
-//! **Fetch sizing** (EN-Q4): the fetch array and the prefetch are both
+//! **Fetch sizing** (EO-Q4): the fetch array and the prefetch are both
 //! `FETCH_ROWS`, so a result up to that many rows comes back in the
 //! execute's round trip, as KWP's 64 KiB batch and PostgreSQL's stream do.
 //!

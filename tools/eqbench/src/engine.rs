@@ -1,5 +1,5 @@
 //! The one interface every scenario drives, and the three things it is
-//! implemented over (EN-Q4, `instructions/v3.2.0/workorder-en-three-engine-equal-client.md`).
+//! implemented over (EO-Q4, `instructions/v3.2.0/workorder-eo-three-engine-equal-client.md`).
 //!
 //! **What "equal client" means here.** A scenario prepares each statement
 //! once per connection and executes it with bound values; every returned

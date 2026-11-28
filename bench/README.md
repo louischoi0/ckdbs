@@ -77,7 +77,7 @@ meets an older table reads its heading, as that table's own commit intended.
 
 ## A ratio against another engine names both clients - since 2026-11-28 (EF)
 
-**Since EN this section governs the Python drivers' files, the
+**Since EO this section governs the Python drivers' files, the
 verification paths and an A/B between two KDS binaries**; a number set
 beside another engine's comes from the harness (the next section), whose
 README names each engine's client difference.
@@ -111,10 +111,10 @@ of added client work on one side and 0.8 µs on the other).
   (`tools/parity_bench.py`): where a claim is about the engine, it is
   quoted beside the wall clock.
 
-## What a relation is stored as — the kind its access asks for, since 2026-11-28 (EN)
+## What a relation is stored as — the kind its access asks for, since 2026-11-28 (EO)
 
 The operator's words of 2026-11-28 (`instructions/v3.2.0/raft-marks-2026-11-28.md`
-§17): *"in benchmarking lift the heap suspension, give every scenario the
+§18): *"in benchmarking lift the heap suspension, give every scenario the
 btree or heap tree type that suits it (no benchmark of KDS's internal
 difference by table type)"*. This replaces AS-Q6's BTREE-only rule of
 2026-09-08 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`).
@@ -122,7 +122,7 @@ difference by table type)"*. This replaces AS-Q6's BTREE-only rule of
 - **Every relation a scenario creates is the kind its statements ask for**,
   and the scenario's driver states each relation's kind and the reason in
   one table (`tools/eqbench/README.md`, "Relation kinds"). The rule CLA
-  applies (EN-Q3, `[design]`): `BTREE` where the statements reach rows by
+  applies (EO-Q3, `[design]`): `BTREE` where the statements reach rows by
   the tuple key - a point, a range, an order by it - since a btree answers
   a point in one descent of its own tree, where a heap descends its
   Keystone index and then fetches the rowid's page, and a heap's walk is
@@ -137,9 +137,9 @@ difference by table type)"*. This replaces AS-Q6's BTREE-only rule of
   kinds.** A scenario file measured before its kinds were assigned is
   another workload, and no delta crosses that change.
 
-## Three engines on one client — since 2026-11-28 (EN)
+## Three engines on one client — since 2026-11-28 (EO)
 
-The operator's words of 2026-11-28 (§17): *"measure with a version that
+The operator's words of 2026-11-28 (§18): *"measure with a version that
 removes the cost of the kdbs measurement driver - the three, pg, oracle and
 kdbs, under client conditions as equal as possible; consider Rust too"*.
 
@@ -159,11 +159,11 @@ kdbs, under client conditions as equal as possible; consider Rust too"*.
   the three clients are and what each whole server spent.
 - The Python scenario drivers stay for verification and for an A/B between
   two KDS binaries; **a number set beside another engine's is the
-  harness's** from EN on.
+  harness's** from EO on.
 
 ## The Oracle control — internal analysis only, never marketing
 
-The operator's words of 2026-11-28 (§17): *"add Oracle with the basic
+The operator's words of 2026-11-28 (§18): *"add Oracle with the basic
 licence as a benchmark control too, and state that the comparison produces
 results only for internal analysis and will not be used for marketing
 later"*; and, asked where its results live, *"commit the drivers only"*.
@@ -203,7 +203,7 @@ is the one to read them at:
 | 2026-09-02, ahead of the big-bang change; reopened 2026-09-03 by AL-R8 (`instructions/v3.0.0/workorder-al-m0-single-wal.md`) | everything: the five C++ microbenchmarks, the probe drivers, `bench/docs/`, the three scenario documents, every v2.x results file | `1769487` |
 | 2026-09-30, the scenario rebaseline | every results file and archive under `bench/v3.0.0/` from AL-S8 (`f6ed10c`) through AY-S11's overhead run (`0552d55`), the `f6ed10c` HEAP files and their 2026-09-08 `-btree-` re-measurement among them; each scenario driver was re-run at `9a0525d` | `9a0525d`; AY-S11's overhead file, corrected on `main` afterwards, at `a59da9c` |
 | 2026-10-12 | the rebaseline's own results: every `results-scenario*` file and `archive/scenario*` directory under `bench/v3.0.0/` (KDS at `9a0525d`, PostgreSQL 18 at `f2f1ee7`), `results-rebaseline-summary-v2.7.0-531-g9a0525d.md` and `results-kds-vs-pg18-summary-v2.7.0-545-gf2f1ee7.md` | `36449d28` |
-| 2026-11-28, the operator's *"delete every benchmark result before version 3.4.9"*, 3.4.9 included on the operator's answer (`raft-marks-2026-11-28.md` §17) | every directory `bench/v3.0.0/` through `bench/v3.4.9/` (`v3.0.0`, `v3.1.0`, `v3.2.0`, `v3.3.0`, `v3.4.0`, `v3.4.3`, `v3.4.6`, `v3.4.7`, `v3.4.8`, `v3.4.9`): 19,581 files, results and archives | `e571ae574` |
+| 2026-11-28, the operator's *"delete every benchmark result before version 3.4.9"*, 3.4.9 included on the operator's answer (`raft-marks-2026-11-28.md` §18) | every directory `bench/v3.0.0/` through `bench/v3.4.9/` (`v3.0.0`, `v3.1.0`, `v3.2.0`, `v3.3.0`, `v3.4.0`, `v3.4.3`, `v3.4.6`, `v3.4.7`, `v3.4.8`, `v3.4.9`): 19,581 files, results and archives | `e571ae574` |
 
 **A citation to a `bench/` path that is not in the working tree** resolves
 by this table:

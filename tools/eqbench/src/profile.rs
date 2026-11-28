@@ -1,4 +1,4 @@
-//! Where a phase's time went, by each engine's own accounting (EN-Q8).
+//! Where a phase's time went, by each engine's own accounting (EO-Q8).
 //!
 //! A profiler holds a connection of its own, outside the timed loop, and
 //! takes a snapshot of the engine's views at a phase's head and end; the

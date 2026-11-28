@@ -24,8 +24,8 @@ to 4), so no wrong answer has been seen.
 
 **Verified at** `e571ae574` (`v3.5.1-57-ge571ae574`): a Release
 `kds_server` built from that engine source (sha256 prefix
-`e961b65c1852fe50`), `cores = 1`. Found by EN-S2's scenario 0 port and
-counted in EN's close measurement (`bench/v3.5.1/archive/en-close-v3.5.1-63-g9543cf720/timed/*.serverlog`):
+`e961b65c1852fe50`), `cores = 1`. Found by EO-S2's scenario 0 port and
+counted in EO's close measurement (`bench/v3.5.1/archive/en-close-v3.5.1-63-g9543cf720/timed/*.serverlog`):
 
 | cell | refusals over 3 rounds |
 |---|---|
@@ -49,6 +49,6 @@ return a wrong version), or whether the cycle guard misreads a legal chain
 that concurrent updates of one row build. A debug build with the chain
 dumped at the guard would tell the two apart.
 
-**Fix**: unknown, and no work order carries it. EN's results count these
+**Fix**: unknown, and no work order carries it. EO's results count these
 refusals in each cell's errors and take no figure from a refused
 operation.

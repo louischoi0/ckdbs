@@ -42,14 +42,14 @@ def load(run, pass_, engines):
 
 def good(d):
     """A round that ran and passed every check: the only kind a figure comes
-    from (EN §3, "a scenario whose checks fail on an engine reports no
+    from (EO §3, "a scenario whose checks fail on an engine reports no
     number for it")."""
     return not d.get("failed") and all(c["ok"] for c in d.get("checks", []))
 
 
 def digests_line(timed, sc):
     """Scenario 4's answers compared across every run read - each arm, each
-    engine, each round (EN §3): the cells run one arm a server, so no run
+    engine, each round (EO §3): the cells run one arm a server, so no run
     compares them itself."""
     seen = {}
     for (s, cell, arm), ds in timed.items():
