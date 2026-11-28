@@ -48,3 +48,21 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Mark** | **Three orders are written and none is opened**, on worktree `pg-kds-comparison-orders` from `b95be2e86` (`v3.4.17-255-gb95be2e86`), documents only: **EF** (the scenario drivers on an equal client, the matched cells measured again, a short read's server cost only behind a gate), **EG** (one client's durable write beyond its sync: `result-insert` attributed, the one-core inline sync booked, a cut only behind a gate) and **EH** (what the native fold pays for a row) |
 | **Does not settle** | whether any of the three is opened, or in what order; any `-Q` item, each of which stands as CLA's proposal; EF-Q5's lift of the stage budget; a push of the orders, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; each order's header; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 6. The transaction surveyed under the operator's premise of a microservice environment
+
+| | |
+|---|---|
+| **Word** | *"kdbs is a DB optimized for modern software in a microservice environment. Considering these characteristics, summarize the constraints, the differences and the strengths of the transaction as currently implemented"* |
+| **Mark** | A survey, given in conversation in the main checkout on `main` at `72580aa04` (`v3.5.1-6-g72580aa04`) and written to no file: eight strengths, twelve constraints (C1 to C12), a table against PostgreSQL, four recommendations, read from `docs/spec/`, `docs/inflight/known-gaps.md` and the manual, no code read and nothing run. The hour of the word was not read from a clock; the session's clock read 2026-11-28 01:50 UTC when the orders of §7 were begun, and the word is recorded under that day. **CLA reported the premise as contradicting the tree before answering**: `CLAUDE.md` states the purpose as OLTP for financial systems (CF-Q6 (b)), and no file under `docs/`, `manual/` or `CLAUDE.md` carries the word "microservice" (`grep -rni`, 0 lines). The survey also found `docs/spec/client-manual.md:303-305` ("there is no lock to wait on") at odds with `docs/spec/txn.md` §5 ("Detection is followed by a wait, not a refusal"); not corrected |
+| **Does not settle** | whether the purpose statement gains the service environment (EI-Q5); the `client-manual.md` sentence |
+| **Recorded at** | this file; EI's §0 |
+
+## 7. EI, EJ, EK and EL written from the survey's C1, C2, C3 and C8; none opened
+
+| | |
+|---|---|
+| **Word** | *"write milestones for C1, C2, C3 and C8; depending on the case, write them as exploratory or proof-of-concept milestones"* |
+| **Mark** | **Four orders are written and none is opened**, on worktree `service-txn-orders` from `72580aa04` (`v3.5.1-6-g72580aa04`), documents only. **EI** (C1, no two-phase commit): exploratory - whether a transaction may stop in doubt and survive a restart, the null hypothesis that it may not. **EJ** (C2, no change feed and no replication): exploratory, two proofs of concept behind its census - a feed in commit order and a standby from the archive. **EK** (C3, no `SERIALIZABLE`): exploratory - the write skew that assertion groups, foreign-key shares, unique keys and `FOR UPDATE` leave open; it re-reads AR0 D1 and D8 (`raft-marks-2026-09-28.md` §4, §5) and assumes neither moved. **EL** (C8, a retry can run twice): a proof of concept taking up CN-5 at its opening - a token row in the work's transaction, then the engine's one true `UNKNOWN_OUTCOME`. The kind of each is CLA's choice under the operator's "depending on the case"; the letters are the first four free after EH |
+| **Does not settle** | whether any of the four is opened, or in what order; any `-Q` item, each of which stands as CLA's proposal; AR0 D1 and D8, which stand as marked; CN-5's ten items; a push of the orders, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; each order's header; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
