@@ -1,0 +1,43 @@
+# Applies (or reverts) DX-S0's census probe: stderr lines, no behaviour change.
+#   python3 -I probe.py <worktree> apply|revert
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+TAG = "// DX-S0-PROBE"
+edits = [
+    ("src/txn/manager.cpp",
+     "    if (!txn.active_) return Status::OK();  // aborting twice is not an error\n",
+     "    std::fprintf(stderr, \"DX-S0-PROBE site=TxnAbort pins=%zu trail=%zu\\n\", "
+     "storage::PinsHeldOnThisThread(), txn.trail_.size());  " + TAG + "\n"),
+    ("src/exec/assertion_check.cpp",
+     "    const storage::DrainOnPressure drain(store);\n    std::vector<Reservation> reservations;\n",
+     "    std::fprintf(stderr, \"DX-S0-PROBE site=AssertAbortTxn pins=%zu\\n\", "
+     "storage::PinsHeldOnThisThread());  " + TAG + "\n"),
+    ("src/txn/recovery_undo.cpp",
+     "    std::uint64_t ptr = head;\n    CycleGuard<std::uint64_t> guard(head);\n",
+     "    std::fprintf(stderr, \"DX-S0-PROBE site=RecoveryRollBackOne pins=%zu\\n\", "
+     "storage::PinsHeldOnThisThread());  " + TAG + "\n"),
+    ("src/storage/device_page_store.cpp",
+     "        if (t_fill.drain_store == this && t_fill.drain_depth > 0 && t_pins_here == 0) {\n",
+     "        if (t_fill.drain_store == this && t_fill.drain_depth > 0 && t_pins_here != 0) "
+     "std::fprintf(stderr, \"DX-S0-PROBE site=ReserveInDrainHoldingPins pins=%zu\\n\", "
+     "t_pins_here);  " + TAG + "\n"),
+]
+for rel, anchor, line in edits:
+    p = root / rel
+    s = p.read_text()
+    if mode == "apply":
+        assert s.count(anchor) == 1, (rel, s.count(anchor))
+        # The probe line goes after the first line of the anchor for the abort
+        # (so a repeat abort is not counted), before it for the others.
+        if rel == "src/txn/manager.cpp":
+            s = s.replace(anchor, anchor + line)
+        else:
+            s = s.replace(anchor, line + anchor)
+        s = s.replace("#include", "#include <cstdio>  " + TAG + "\n#include", 1)
+    else:
+        s = "\n".join(l for l in s.split("\n") if TAG not in l)
+    p.write_text(s)
+print(mode, "ok")

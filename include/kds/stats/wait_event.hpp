@@ -147,7 +147,7 @@ inline constexpr std::array<WaitEventDef, kWaitEventCount> kWaitEvents = {{
     {WaitEvent::kSchedRunQueue, "sched.run_queue", WaitClass::kScheduler, WaitKind::kTimed,
      "scheduling_group", "queue_length", "", true},
     {WaitEvent::kResEvictionRetry, "res.eviction_retry", WaitClass::kResource, WaitKind::kTimed,
-     "retry_count", "pool_use", "", true},
+     "retry_count", "", "", true},
     {WaitEvent::kResTxnSlot, "res.txn_slot", WaitClass::kResource, WaitKind::kTimed, "core", "",
      "", true},
     {WaitEvent::kNetSendBackpressure, "net.send_backpressure", WaitClass::kNetwork,

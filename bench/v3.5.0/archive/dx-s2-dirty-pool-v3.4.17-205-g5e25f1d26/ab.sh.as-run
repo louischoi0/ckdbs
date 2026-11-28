@@ -1,0 +1,16 @@
+#!/bin/bash
+# DX-S2's dirty-pool A/B: base (481d101aa) and DX-S2 (5e25f1d26), alternating.
+cd /home/ukjin/workspaces/ckdbs/.claude/worktrees/dx-pool-under-pressure
+R=build-dx-s2/run/ab
+P=$R/progress.txt
+: > $P
+i=0
+for arm in base s2 base s2; do
+  i=$((i+1))
+  if [ $arm = base ]; then bin=build-dx-base/run/bin/kds_server; else bin=build-dx-s2/run/bin/kds_server; fi
+  echo "$(date -u +%H:%M:%S) start $i $arm load=$(cut -d' ' -f1 /proc/loadavg)" >> $P
+  python3 -I tools/dm_s1_check.py --bin $bin --base build-dx-base/run/cold_base --workdir $R/w$i \
+    --out $R/$i-$arm.json --arms 0,0 > $R/$i-$arm.log 2>&1
+  echo "$(date -u +%H:%M:%S) end $i $arm rc=$?" >> $P
+done
+echo "$(date -u +%H:%M:%S) done" >> $P

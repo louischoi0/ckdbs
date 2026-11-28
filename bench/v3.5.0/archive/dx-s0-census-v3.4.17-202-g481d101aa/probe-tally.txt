@@ -1,0 +1,11 @@
+DX-S0's probe tally over the whole suite (ctest -j4, every label, bs-nightly included),
+counted from build/Testing/Temporary/LastTest.log right after the run at 481d101aa
+plus probe.py.as-run, 2026-11-27 ~12:09 UTC, with
+  grep -o 'DX-S0-PROBE site=[A-Za-z]* pins=[0-9]*' LastTest.log | sort | uniq -c
+The log itself was overwritten by the three serial reruns that followed and is not kept.
+
+  20711 DX-S0-PROBE site=AssertAbortTxn pins=0
+    143 DX-S0-PROBE site=RecoveryRollBackOne pins=0
+  20522 DX-S0-PROBE site=TxnAbort pins=0
+
+No line with pins != 0 at any site; no site=ReserveInDrainHoldingPins line at all.

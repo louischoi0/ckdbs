@@ -36,56 +36,28 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   stands as measured. Owned by
   `docs/spec/eviction.md` (EV6, §3.1).
 
-- **A pool whose resident set is mostly dirty refuses point updates, and
-  fewer clean reads make it refuse more.** Measured on the engine at
-  `bf5fce58`, through DM's census spike (`c003e7fe`, `v3.5.0-89-gc003e7fe`,
-  whose memo-off arm is `bf5fce58` plus counters):
-  `bench/v3.5.0/results-dm-s1-ceiling-v3.5.0-89-gc003e7fe.md` §3. The cell
-  is a random-key `UPDATE ... WHERE id = k` on 1,000,000 rows (a 101 MB
-  file) on 2,048 frames, four sessions at `cores = 1`, with the file in the
-  OS page cache.
-  - On the base engine, the pool refuses `ResourceExhausted` ("buffer pool
-    full") 143-220 times in 6 s, against about 40,000 updates.
-  - With 78 % of the right sibling's reads removed (DM's U1 memo at 16,384
-    entries), it refuses 557-596 times (the pool's `pool_refused`; the
-    client counted 536-578). The pool's misses fall 35 %, and an inline
-    reclaim batch frees 1.35-1.45 frames where it freed 5.4-7.8.
-  - **The likely cause is how dirty frames get written back.** A dirty
-    frame is queued for writeback by a reclaim walk that passes over it,
-    and the checkpoint writes the rest. A read-heavy fault stream keeps
-    clean frames resident for the walk to take. An update stream that
-    faults less leaves the walk mostly dirty frames. These frames can be
-    flushed, but the built retry re-walks without yielding, and so it
-    refuses.
-  - The refusal is EV8 as built (`eviction.md` §3.3), and no answer moves:
-    every update that did not fail affected its one row.
-  - Any change that removes reads from a write path meets this cell; DM's
-    U1 and U2 are two.
+- **A full pool still refuses what DX-S2's re-run does not reach.**
+  Verified at DX-S2 (`dx-pool-under-pressure`). A write refused before it
+  wrote a row drains the dirty queue and runs again (`eviction.md` §3.3);
+  these are still refused `ResourceExhausted`:
+  - a statement that wrote a row before its refusal (DX-R1), and a refused
+    read;
+  - any refused statement of an explicit transaction that holds an
+    assertion reservation (`eviction.md` §3.3), its earlier statements'
+    included;
+  - every statement on a synchronous dispatcher (the newline debug port's
+    `Dispatch`, the simulator, the fixtures);
+  - a statement whose drain writes nothing - a pool whose unpinned frames
+    are clean but not reclaimable, or whose dirty queue another core
+    drained first - and one still refused at its deadline.
+  - The re-run's drain runs on the statement's reactor, and its writeback
+    waits there on the log for what it writes, as the tick's drain does.
+  - DM-S1's cell (`bench/v3.5.0/results-dm-s1-ceiling-v3.5.0-89-gc003e7fe.md`
+    §3) refused 143-220 point updates in 6 s on the base engine and
+    1,683-5,515 at DX-S0. DX-S2's measurement of it is in the work order's
+    stage log.
 
   Owned by `docs/spec/eviction.md` (§3.3, EV8).
-
-- **Writeback writes a page's checksum into the live frame under a shared
-  page latch.** Read at `6ddcae43` by CW-S0's census
-  (`bench/v3.5.0/archive/cw-s0-v3.5.0-91-g6ddcae43/census.md`, Part B, B1):
-  - `WriteBack` stamps the CRC into `*page.frame->bytes`
-    (`device_page_store.cpp:2228`), not into its scratch copy, holding the
-    structure latch and the page latch shared;
-  - every other byte write to a resident frame holds the page latch
-    exclusive, but for two `page_lsn` stamps made after release under the
-    structure latch alone (census B2b, B2c), which the copy also holds;
-  - a whole-page copy under a shared hold can therefore read a torn
-    checksum field (`LogBtreeSplit`'s copy of a page the split created,
-    `log_page_image.hpp:93-96`), and so can every `ReadPageHeader` of a
-    resident frame (`page_header.cpp:46` loads the field).
-
-  It is value-benign: no reader interprets the field of a resident frame
-  (nothing outside `page_header.cpp` reads `PageHeaderFields::checksum`, and
-  `VerifyPageChecksum` runs on device bytes only - a fault-in, a device
-  probe, a map page, a restore), and writeback stamps again before every
-  write. It is a data race by the
-  language's rule, which a `tsan` cell would report if it reached the
-  overlap. Stamping the scratch copy after the `memcpy` would remove it, and
-  that is not built. Owned by `docs/spec/page.md` (§6, §8, §10).
 
 - **The executor does not scan through EV6's ring, by decision.** Re-read
   at `0205444b`: `OpenScanRing`'s only caller is `cabin_optimizer_exec.cpp`
@@ -96,27 +68,35 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   scan's residency bounded to its slots rather than to the pool - is not
   measured. Owned by `docs/spec/eviction.md` (EV6, §5, §7).
 
-- **Three of BE's rules are argued, not tested.** Verified at `2f08b71c`:
+- **Two of BE's rules are argued, not tested.** Verified at `2f08b71c`:
   - **The reclaim walk's total bound** of `kClockUsageCap + 1` laps, which
     ends a reservation that other cores' hits keep warm. A two-core cell
     could not form the spin, and forcing it needs a seam between batches.
   - **`FailStop`**: a window that outgrows its share in a full pool.
-  - **Drain mode under recovery and `Abort` at the cap.** It is reached
-    only through `BoundedPoolTest.AnInsertRefusedForAFullPoolLeavesNoRowBehind`'s
-    rollback and reboot, which may not fill the pool while they run.
 
-  The `UPDATE` and carved-fill windows also have no cell of their own. Owned
-  by `docs/spec/eviction.md` (§3.2, §3.3).
+  The third, drain mode under recovery and `Abort` at the cap, has had its
+  cells since DX-S1 (`PoolOfDirtyFramesTest`). The `UPDATE` and carved-fill
+  windows also have no cell of their own. Owned by `docs/spec/eviction.md`
+  (§3.2, §3.3).
 
-- **A rollback compensation that meets a full pool while its thread holds
-  a pin is refused, and that leaves the write un-undone.** Verified at
-  `2f08b71c`: drain mode writes back only when the thread holds no pin
-  (`DevicePageStore::ReserveFrame`), because a writeback's shared try
-  re-enters the thread's own exclusive hold. No path into
-  `TransactionManager::Abort` holding a pin was found, and nothing
-  enforces that either. The damage is Census B's #11
-  (`bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`,
-  closed unreproduced at `d83bd502`).
+- **A rollback compensation is refused a frame where drain mode cleans
+  nothing, and that leaves the write un-undone.** Verified at DX-S1
+  (`dx-pool-under-pressure`).
+  - A thread holding a pin now drains too (`HeldFrames::kSkipPinned`).
+    The rollback locator's write descent is such a thread: it holds the
+    leaf while it fetches the right sibling.
+  - What stays: a drain that writes nothing falls through to the retries
+    and the refusal. Examples are a pool whose unreclaimable frames are
+    all pinned or of a resident class, and a queue whose every frame is
+    claimed elsewhere for all 8 retries.
+  - `TransactionManager::Abort` then keeps unwinding and logs
+    `TXN_ABORT`, so that one write stays un-undone. The damage is Census
+    B's #11 (`bugs/a-fetch-refused-after-a-page-write-leaves-the-mutation-half-done.md`,
+    closed unreproduced at `d83bd502`).
+  - No cell drives a rollback into a pool that drain mode cannot clean,
+    and none drives the locator's pinned fetch (a rollback of a row a leaf
+    division moved, at a full pool, with the right sibling not resident).
+
   Owned by `docs/spec/eviction.md` (§3.3) and `docs/spec/txn.md`.
 
 - **Writers outside a statement meet the ordinary refusal.** Verified at
@@ -1410,7 +1390,10 @@ Verified at `0064d8bd` (BA-S15). Owned by `docs/spec/sched.md` §3 and
   between its reservation and its undo record** (read at `60dc593af`,
   `DeleteInner`'s `mark`; DT-S0's review). Read: a refusal at the undo
   append fails the statement and the transaction's abort gives the
-  reservation back, so nothing is left half done. **Unverified**: no cell
+  reservation back, so nothing is left half done. That abort is why DX-S2's
+  re-run is withheld from an explicit transaction holding a reservation
+  (`eviction.md` §3.3): re-run unpoisoned, the `DELETE` would reserve the
+  departure a second time and its `COMMIT` keep both. **Unverified**: no cell
   refuses that append; a pool at its floor under a `DELETE` on an asserted
   relation, with the append's fetch failed, would check it.
 - **A page read still stops its core for every reader but two** (DE,

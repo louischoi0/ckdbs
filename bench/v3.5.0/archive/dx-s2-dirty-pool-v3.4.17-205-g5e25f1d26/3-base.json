@@ -1,0 +1,76 @@
+{
+ "bin": "build-dx-base/run/bin/kds_server",
+ "sha256": "17cda4082ac1714e5ba146bf72b212f50593de24aead4a4a87b61fb736cce0c7",
+ "started": "2026-11-27 14:34:00 UTC",
+ "args": {
+  "bin": "build-dx-base/run/bin/kds_server",
+  "base": "build-dx-base/run/cold_base",
+  "workdir": "build-dx-s2/run/ab/w3",
+  "out": "build-dx-s2/run/ab/3-base.json",
+  "port": 15781,
+  "arms": "0,0",
+  "rows": 1000000,
+  "frames": 2048,
+  "sessions": 4,
+  "seconds": 6.0
+ },
+ "arms": [
+  {
+   "arm": 0,
+   "ok": 35773,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 559,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 187
+   },
+   "pool": {
+    "pool_misses": 59281.0,
+    "pool_hits": 158586.0,
+    "pool_reclaimed_inline": 51082.0,
+    "pool_reclaimed_background": 5858.0,
+    "pool_batches_inline": 40195.0,
+    "pool_batches_background": 122.0,
+    "pool_dirty_queued": 32034.0,
+    "pool_dirty_drained": 32034.0,
+    "pool_refused": 1120.0,
+    "pool_resident": 1780.0,
+    "contention_checkpoint_pages_written": 65.0,
+    "contention_checkpoint_runs": 0.0,
+    "pool_resident_end": 1801.0
+   },
+   "host_before": {
+    "loadavg": "2.43 2.83 3.02 1/1601 174009",
+    "builds": []
+   }
+  },
+  {
+   "arm": 0,
+   "ok": 50209,
+   "not_one": 0,
+   "errors": {
+    "851968:buffer pool full: buffer_pool_frames 2048 cannot": 873,
+    "851968:buffer pool full: buffer_pool_frames 2048, 2048": 150
+   },
+   "pool": {
+    "pool_misses": 83273.0,
+    "pool_hits": 222524.0,
+    "pool_reclaimed_inline": 73193.0,
+    "pool_reclaimed_background": 7854.0,
+    "pool_batches_inline": 49175.0,
+    "pool_batches_background": 168.0,
+    "pool_dirty_queued": 45043.0,
+    "pool_dirty_drained": 45043.0,
+    "pool_refused": 1323.0,
+    "pool_resident": 1776.0,
+    "contention_checkpoint_pages_written": 77.0,
+    "contention_checkpoint_runs": 1.0,
+    "pool_resident_end": 1797.0
+   },
+   "host_before": {
+    "loadavg": "2.99 2.93 3.05 3/1591 174384",
+    "builds": []
+   }
+  }
+ ],
+ "ended": "2026-11-27 14:34:13 UTC"
+}

@@ -48,7 +48,7 @@ that follows directly from standing engine contracts:
 | EV5 | Eviction trigger: **low-watermark background sweep with an on-demand fallback**. The background task keeps the free-frame reserve above a configured low watermark; foreground allocation takes frames from the free list in O(1). If allocation finds the free list empty, it runs the sweep inline (on-demand fallback). **Built at BE-S3**: the reserve is the instance's one pool, kept between capacity / 16 and capacity / 8 on core 0's writeback tick, and the inline fallback runs in bounded batches (§3.2, §4). |
 | EV6 | Scan resistance: background bulk scans (the Cabin optimizer's build walk, §5) run through a **small dedicated ring buffer** of frames, cycling within it and **not bumping usage counters**, so foreground OLTP working sets are never displaced by a scan. |
 | EV7 | No page-kind priorities in v1: **uniform CLOCK** across all evictable classes. B+tree inner nodes are protected naturally by their access frequency. No artificial weighting (e.g., elevated initial usage counts for index pages) without a measurement that justifies it. |
-| EV8 | Pool exhaustion (every frame pinned or un-flushable): **bounded cooperative retry, then a truthful statement error.** The allocating step yields to the event loop up to a configured retry budget, giving writeback a chance to produce clean frames; on budget exhaustion the statement fails with `ResourceExhausted`. No waiting, ever. Occurrences are counted in production stats; the operational meaning is documented as "pool undersized for the workload." **Built at BE-S4, with three differences from this row** (§3.3): the retry re-walks without yielding, since a fault has no event loop to yield to; a refusal is admitted only before a mutation's first write (the no-refuse window, BE-Q11); and drain mode - recovery, rollback, the assertion loops - writes back on the fault path, waiting on the log's durability, rather than be refused. |
+| EV8 | Pool exhaustion (every frame pinned or un-flushable): **bounded cooperative retry, then a truthful statement error.** The allocating step yields to the event loop up to a configured retry budget, giving writeback a chance to produce clean frames; on budget exhaustion the statement fails with `ResourceExhausted`. No waiting, ever. Occurrences are counted in production stats; the operational meaning is documented as "pool undersized for the workload." **Built at BE-S4, with three differences from this row** (§3.3): the retry re-walks without yielding, since a fault has no event loop to yield to; a refusal is admitted only before a mutation's first write (the no-refuse window, BE-Q11); and drain mode - recovery, rollback, the assertion loops - writes back on the fault path, waiting on the log's durability, rather than be refused. **Since DX-S2 a write refused before it wrote a row drains the dirty queue holding nothing and runs again**, inside its deadline, on a dispatcher that can park (§3.3). |
 | EV9 | Observability: production counters for the pool (per store; `SHOW META`'s `pool_*`, BE-S3) — hits, misses, evictions, dirty writebacks, sweep rotations, ring-buffer scan frames served, `ResourceExhausted` occurrences. ANALYZE statements report page-cache hit/miss for their execution (per the standing ANALYZE goals). Sweep timing histograms are dev-mode only (dev/production profiling split). |
 | EV10 | Deterministic testing: a **tiny-pool test profile** (built as `KDS_TEST_FRAME_BUDGET`, which lowers every debug store's capacity to its value but never below the 256-frame working minimum, and the mount floor raises it to the floor, BE-R3; the simulation harness picks a cap per seed) makes every CI run exercise eviction, writeback, ring-buffer, and exhaustion paths. Crash matrix gains "immediately before / after dirty-evict writeback" points. The integrity sweep gains a flush-before-evict oracle. |
 
@@ -163,12 +163,59 @@ nothing that undoes it. So a mutation that writes and then fetches opens a
   committed change.
 
 **Drain mode** covers the passes that are not a row's mutation and hold no
-page latch between their steps: mount recovery, a rollback, and an
-assertion's commit and abort loops. At the limit, a fill on such a thread,
-holding no pin, writes the dirty queue back and walks again; a drain that
-cleaned something does not count as a retry. A drain that cleans nothing,
-or a thread holding a pin, falls through to step 1's retries and the
-refusal.
+page latch between their steps (within one, a rollback's row locator may,
+below): mount recovery, a rollback, and an assertion's commit and abort
+loops. At the limit, a fill on such a thread
+writes the dirty queue back and walks again. A drain that cleaned
+something does not count as a retry. A drain that cleans nothing falls
+through to step 1's retries and the refusal.
+- **The drain needs no page of the caller's** (DX-Q2 (a)). It claims only
+  frames nobody pins (`HeldFrames::kSkipPinned`), so it runs with pins held
+  and never copies a page its own thread is writing.
+- A rollback's row locator reaches it holding one pin: its write descent
+  keeps the leaf while it fetches the right sibling.
+- Such a drain then waits on the log with the caller's pin and latch held.
+  This is the one durability wait in the tree that holds a page latch. It
+  cannot deadlock, because the log's writer takes no page latch. It costs
+  a peer spinning on that leaf for one sync.
+- The drain's log gate leaves out the pinned frames it will not write, so
+  their own records never force that sync.
+- **Every abort, and every loser's undo at a mount, is entered holding no
+  pin, checked in every build** (`RequireNoPinsHeld`, DX-R2). One that
+  holds a pin stops the process.
+
+**A write refused before it wrote a row runs again** (DX-S2). The refusal
+is raised with the statement's leaf held, so nothing waits where it is
+raised. The statement ends first, and then `DispatchAsync` re-runs it, as
+it re-runs a stale descent (BA-S14):
+- The pool notes each of its two refusals on the thread: a reservation
+  refused, and a window's open refused. `EndWrite` turns the note into a
+  re-run due only on a dispatcher that can park, and only for a statement
+  whose trail did not grow.
+- Due, the statement's transaction is not poisoned. Its refusal is held
+  back as a structural refusal's is, and an autocommit scope is aborted
+  as one that waits.
+- `DispatchAsync` then drains the dirty queue the refused walk filled,
+  holding nothing, under `res.eviction_retry` (`wait-events.md`). On this
+  reactor, as the writeback tick's drain is, its writeback waits on the log
+  for what it writes.
+- The statement runs again only if the drain wrote something, and only
+  inside its one deadline, the lock family's fault net
+  (`lock_wait_fault_net_ms`, DX-Q3 (a)). The refusal that ends the
+  re-runs is the answer, and it poisons where it would have.
+- **No re-run after a written row** (DX-R1, `[quiet-wrong]`). A statement
+  that wrote a row before its refusal is answered with the refusal. A
+  re-run would write the row a second time inside an explicit
+  transaction.
+- **No re-run in an explicit transaction holding an assertion
+  reservation** (`[quiet-wrong]`). A `DELETE` reserves its row's departure
+  outside a window and before its trail entry, so a refusal at its undo
+  append leaves a reservation the trail does not show; re-run, the
+  departure would be reserved twice and the `COMMIT` keep both. An
+  autocommit scope's abort gives it back, so autocommit re-runs.
+- **No re-run on a synchronous dispatcher** (DX §2.3), which has nowhere to
+  wait. Nor once a row of a `SELECT` has left (CE-R4). A refused read is
+  not re-run.
 
 **The refusal's scope is `txn.md`'s** (BE-Q10, `txn.md` §6). A refused
 write in autocommit aborts its transaction. Inside `BEGIN` it puts the
@@ -176,8 +223,9 @@ session in `failed-txn` until its `ROLLBACK`. A refused read wrote nothing
 and fails only its statement.
 
 This bounds worst-case foreground latency and converts an undersized pool
-into a visible, countable, truthful signal (`pool_refused` in `SHOW META`)
-instead of a stall or an unbounded heap.
+into a visible, countable, truthful signal (`pool_refused` in `SHOW META`,
+which counts every refusal, a re-run one included) instead of a stall or
+an unbounded heap.
 
 ---
 

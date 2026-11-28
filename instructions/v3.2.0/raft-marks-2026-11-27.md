@@ -195,3 +195,30 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | **EB landed**: the work branch `worktree-eb-key-forms-in-the-executor` at `537921ae3` merged onto `origin/main` (`9e7597d5d`, unmoved since the branch was cut, so `git merge origin/main` brought nothing) `--no-ff` at `97ed790ee` and pushed, **the pre-push hook skipped**. The last full suite ran at `4ab5d55d5`, the closing code's build inputs: 5,404 of 5,405, the one failure `ContentionCountersTest`'s two-core insert, which failed 9 of 10 at the base under the same pinning; the commits after it carry `bench/`, `docs/`, `instructions/`, `tools/` and `CLAUDE.md`, no build input. The merge commit was made with `git commit-tree` from the work branch's tree, the session being held to its worktree; the main checkout's local `main` ref was not moved |
 | **Does not settle** | a tag or a version; the residual of EB-Q11 (a), which `known-gaps.md` carries |
 | **Recorded at** | this file; `workorder-eb-key-forms-in-the-executor.md` (header, §7 "Landed"); EB's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 22. DX opened on the standing go-ahead; DX-Q0..Q5 adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone DX`, given at about 12:05 UTC. The skill it names carries the operator's standing word: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session."* |
+| **Mark** | **DX is opened** on worktree `dx-pool-under-pressure` (branch `worktree-dx-pool-under-pressure`) from `481d101aa` (`v3.4.17-202-g481d101aa`). **DX-Q0..Q5 are adopted as CLA proposed, (a) in each, on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)** - CLA's proposals, not per-item marks by the operator: Q0 (a) §2's 1, 2 and 4; Q1 (a) S0 gates the wait, the abort's assertion built either way; Q2 (a) the assertion plus the drain that needs no page of the caller's; Q3 (a) the wait bounded by the statement's existing deadline; Q4 (a) the scan queue stays closed; Q5 (a) BE's three untested rules each get a cell in the stage that touches it. No item is `[quiet-wrong]`; DX-R1 is, and is a rule, not an item |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the scan queue (DX-Q4 (b) would reopen what the operator closed on 2026-11-23); any milestone but DX |
+| **Recorded at** | this file; `workorder-dx-pool-under-pressure.md` (header, §4 "Marks"); DX's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 23. DX's handoff taken up on "go ahead for BX from handoff", read as DX
+
+| | |
+|---|---|
+| **Word** | *"go ahead for BX from handoff"*, given at about 13:05 UTC to a new session |
+| **Mark** | **CLA's reading, not the operator's word**: BX is closed (`milestones.md`, landed `0479cb29`), and the only handoff in the tree was DX-S1's (`workorder-dx-pool-under-pressure.md` §7, on `dx-pool-under-pressure` at `8167fa139`), so the word was read as DX and the handoff taken up under §22's standing go-ahead. The reading was stated to the operator at the session's first reply |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file |
+
+## 24. DX-Q6 added and adopted on the same go-ahead; DX closed on the work branch
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §22 - no new word from the operator |
+| **Mark** | **DX-Q6 (a)** `[quiet-wrong]`, CLA's proposal written into the order's §4 at DX-S2's review and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: an explicit transaction holding a pending assertion reservation keeps a pool refusal rather than re-run it, because a `DELETE` reserves its departure before its trail entry. Its premise was re-read against the tree before adoption (`DeleteInner`: `ReserveDelete`, then `AppendUndo`, then `NoteDeleteMark`, outside any no-refuse window). **DX is closed on `worktree-dx-pool-under-pressure`**, on CLA's readings of DX-S2's bar (the dirty-pool cell refused 2 clients in 173,915) and of the close (DX-R5 holds to the harness's 1-2 % resolution), each the order's §7 states |
+| **Does not settle** | **the landing**: no merge to `main`, no push, no tag and no version - each waits for the operator's word |
+| **Recorded at** | this file; the order's header, §4 and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

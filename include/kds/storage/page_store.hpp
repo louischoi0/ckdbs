@@ -555,9 +555,9 @@ public:
     // **Drain mode** is for the passes that are not a row's mutation and
     // hold no page latch between their steps - recovery's redo and undo, a
     // rollback, an assertion's commit and abort loops. At the cap, a fill on
-    // such a thread holding no pin writes the dirty queue back and retries,
-    // which is sound there and nowhere else (`device_page_store.hpp`'s
-    // durability-wait bullet), instead of being refused.
+    // such a thread writes the dirty queue back and retries instead of being
+    // refused - pinned frames left alone, so with pins held too (DX-Q2 (a),
+    // `device_page_store.hpp`'s durability-wait bullet).
     //
     // A store with no pool does nothing for either.
     virtual Status BeginNoRefuseWindow(std::size_t frames) {
@@ -567,6 +567,12 @@ public:
     virtual void EndNoRefuseWindow() noexcept {}
     virtual void BeginDrainOnPressure() noexcept {}
     virtual void EndDrainOnPressure() noexcept {}
+
+    // **A drain between two runs of a refused statement** (DX-S2): writes
+    // back the dirty frames a refused reservation queued, from a caller
+    // holding no pin and no latch, so the statement can run again. Returns
+    // how many it wrote; a store with no pool writes none.
+    virtual StatusOr<std::size_t> DrainForPressure() { return std::size_t{0}; }
 
     // ---- The raw seam: protected since MG06 ----------------------------
     //
@@ -946,6 +952,22 @@ bool NoRefuseWindowOpenOnThisThread() noexcept;
 // one pool is never counted as this thread's. A store whose PinFrame is a
 // no-op counts nothing here either.
 std::size_t PinsHeldOnThisThread() noexcept;
+
+// **Stops the process if this thread holds a pin** (DX-S1, DX-R2), in
+// every build. Called at the entry of every abort and of every loser's undo
+// at a mount: those run between statements, and one entered holding a pin
+// is a caller mid-mutation, which no abort may unwind under. `site` names
+// the caller in the stop's line.
+void RequireNoPinsHeld(const char* site) noexcept;
+
+// **This thread's statement was refused a frame** (DX-S2): set at the
+// pool's two refusals (a reservation, a window's open), cleared by the
+// dispatcher before a statement runs and read by `EndWrite` after. A
+// reactor runs one statement at a time, so a thread-local is per statement,
+// as `storage::StructuralRefusalNoted` is.
+void NotePoolRefusal() noexcept;
+bool PoolRefusalNoted() noexcept;
+void ClearPoolRefusal() noexcept;
 
 // Drain mode for the life of the guard (`PageStore`'s note).
 class DrainOnPressure {

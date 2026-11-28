@@ -1,5 +1,9 @@
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -91,6 +95,118 @@ TEST(BoundedPoolTest, AWindowIsRefusedWhenThePoolCannotPromiseItsShare) {
     // And outside a window, a fill is refused the same way.
     EXPECT_EQ(store.value()->CreateNew().status().code(), StatusCode::kResourceExhausted);
     EXPECT_EQ(store.value()->frame_slots().slots, kCapacity);
+}
+
+TEST(BoundedPoolTest, ADrainHoldingPinsWritesBackTheQueueButNeverAPinnedFrame) {
+    // DX-Q2 (a): a reservation in drain mode drains with pins held, and
+    // needs no page of the caller's. A pool of dirty frames is queued for
+    // writeback by a refused fill; then this thread write-fetches two of
+    // the queued pages and changes them, as a rollback holding its leaf
+    // would, and a creation in drain mode is served from the frames the
+    // drain wrote clean - while the two held pages stay dirty and the device
+    // never sees their new bytes. The first held page is the drain's first
+    // claim, the second sits inside the run after it. Killed by:
+    //   - the drain's old `t_pins_here == 0` gate: the creation is refused;
+    //   - the drain in `kSkip`: with the latch unarmed the shared try
+    //     admits the held pages and writes them mid-change;
+    //   - the claim's pinned test: the first held page is written;
+    //   - the run's pinned test: the second is written inside a run.
+    const WithoutFrameBudgetOverride exact_capacity;
+    constexpr std::size_t kCapacity = 64;
+    auto device = MemoryPageDevice::Create(/*extent_pages=*/256, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = DevicePageStore::Open(*device.value(), FrameCapacity{kCapacity}, 16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+
+    std::vector<PageId> ids;
+    {
+        auto window = NoRefuseWindow::Open(*store.value(), kCapacity);
+        ASSERT_TRUE(window.ok()) << window.status().message();
+        for (std::size_t i = 0; i < kCapacity; ++i) {
+            auto made = store.value()->CreateNew();
+            ASSERT_TRUE(made.ok()) << "fill " << i << ": " << made.status().message();
+            FormatPage(made.value().second.bytes(), PageType::kHeap);
+            ids.push_back(made.value().first);
+        }
+    }
+    // Outside drain mode the pool refuses, as BE-R4 says - and its walk
+    // queues every dirty frame it passes.
+    EXPECT_EQ(store.value()->CreateNew().status().code(), StatusCode::kResourceExhausted);
+    ASSERT_GT(store.value()->pool_counters().dirty_queued, 0u);
+
+    constexpr std::size_t kOffset = 4000;  // in the body, past every header field
+    constexpr auto kMark = std::byte{0xAB};
+    const std::vector<PageId> mine = {ids[0], ids[5]};
+    std::vector<PageRef> held;
+    for (const PageId id : mine) {
+        auto ref = store.value()->Get(id);
+        ASSERT_TRUE(ref.ok()) << ref.status().message();
+        ref.value().bytes()[kOffset] = kMark;  // mid-change, as far as anyone can tell
+        held.push_back(std::move(ref.value()));
+    }
+    ASSERT_EQ(PinsHeldOnThisThread(), 2u);
+    const auto before = store.value()->pool_counters();
+    {
+        const DrainOnPressure drain(*store.value());
+        auto made = store.value()->CreateNew();
+        ASSERT_TRUE(made.ok()) << made.status().message();
+    }
+    const auto after = store.value()->pool_counters();
+    EXPECT_GT(after.dirty_drained, before.dirty_drained);
+    EXPECT_EQ(after.refused, before.refused);
+
+    const std::vector<PageId> dirty = store.value()->DirtyPageIds();
+    for (const PageId id : mine) {
+        SCOPED_TRACE("held page " + std::to_string(id));
+        EXPECT_NE(std::find(dirty.begin(), dirty.end(), id), dirty.end())
+            << "a held page was written clean";
+        std::array<std::byte, kPageSize> on_device{};
+        if (device.value()->ReadPage(id, on_device).ok()) {
+            EXPECT_NE(on_device[kOffset], kMark) << "the device holds a held page's change";
+        }
+    }
+    held.clear();
+    EXPECT_EQ(PinsHeldOnThisThread(), 0u);
+}
+
+TEST(BoundedPoolDeathTest, ARollbackEnteredHoldingAPinStopsTheInstance) {
+    // DX-S1: every abort's entry asks `RequireNoPinsHeld`, in every build -
+    // an abort entered mid-mutation would unwind under a page the caller is
+    // still writing. A `ROLLBACK` unwinds the assertion reservations before
+    // the trail (`RollbackLocal`), so one reached while this thread holds a
+    // pin stops the process at `AssertionEnforcer::AbortTxn`. Killed by
+    // dropping the call there (the next cell then names the one it reaches).
+    EXPECT_DEATH(
+        {
+            auto created = sim::SimInstance::Create(sim::SimInstance::Options{});
+            if (!created.ok()) std::abort();
+            sim::SimInstance& db = *created.value();
+            (void)db.Execute("CREATE TABLE t (id int64, v int64)");
+            (void)db.Execute("BEGIN");
+            (void)db.Execute("INSERT INTO t VALUES (1, 1)");
+            auto pinned = db.store().GetForRead(0);  // page 0, the superblock
+            if (!pinned.ok()) std::abort();
+            (void)db.Execute("ROLLBACK");
+        },
+        "AssertionEnforcer::AbortTxn entered holding 1 page pin");
+}
+
+TEST(BoundedPoolDeathTest, ATransactionAbortEnteredHoldingAPinStopsTheInstance) {
+    // The trail's own entry, reached without the enforcer in front of it (a
+    // deferred commit's failed sync, a DDL build's lock scope). Killed by
+    // dropping the call in `TransactionManager::Abort`.
+    EXPECT_DEATH(
+        {
+            auto created = sim::SimInstance::Create(sim::SimInstance::Options{});
+            if (!created.ok()) std::abort();
+            sim::SimInstance& db = *created.value();
+            auto begun = db.txn_manager().Begin(txn::IsolationLevel::kReadCommitted);
+            if (!begun.ok()) std::abort();
+            auto pinned = db.store().GetForRead(0);  // page 0, the superblock
+            if (!pinned.ok()) std::abort();
+            (void)db.txn_manager().Abort(*begun.value());
+        },
+        "TransactionManager::Abort entered holding 1 page pin");
 }
 
 // ---- BE-R5: the outermost read walk faults cold ---------------------------
@@ -284,6 +400,101 @@ TEST(BoundedPoolTest, ASelectLargerThanThePoolLeavesTheWorkingSetResident) {
     ok("SELECT * FROM hot");
     EXPECT_EQ(db.page_device().stats().reads, 0u)
         << "the scan displaced the working set";
+}
+
+// ---- DX-R2: an abort's compensation is never refused a frame -------------
+//
+// One transaction updates rows over more pages than the pool holds: the
+// first ones are written clean by a checkpoint mid-transaction and then
+// evicted by the next ones, until an update is refused with the pool full
+// of dirty frames. Undoing it then faults those first pages back in - into
+// that full, dirty pool - and only drain mode's writeback makes room.
+class PoolOfDirtyFramesTest : public ::testing::Test {
+protected:
+    static constexpr int kRows = 3000;  // about 1,000 leaves at three wide rows a leaf
+
+    void SetUp() override {
+        SimInstance::Options options;
+        options.buffer_pool_frames = 512;
+        auto created = SimInstance::Create(options);
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        db_ = std::move(created.value());
+        Ok("CREATE TABLE t (id int64, a char(2000), b char(2000))");
+        for (int i = 1; i <= kRows; ++i) {
+            Ok("INSERT INTO t VALUES (" + std::to_string(i) + ", 'x', 'y')");
+            if (i % 64 == 0) ASSERT_TRUE(db_->RunCheckpoint().ok());
+        }
+        ASSERT_TRUE(db_->RunCheckpoint().ok());
+        ASSERT_EQ(CountOld(), kRows);
+    }
+
+    // Opens the transaction and updates until the pool refuses.
+    void FillOneTransactionPastThePool() {
+        Ok("BEGIN");
+        // The first part, then a checkpoint: its pages are clean and evictable.
+        int id = 1;
+        for (; id <= 200; ++id) Ok("UPDATE t SET a = 'n' WHERE id = " + std::to_string(id));
+        ASSERT_TRUE(db_->RunCheckpoint().ok());
+        // The rest, until the pool is full of this transaction's dirty pages.
+        std::string refusal;
+        for (; id <= kRows && refusal.empty(); ++id) {
+            const std::string reply =
+                db_->Execute("UPDATE t SET a = 'n' WHERE id = " + std::to_string(id));
+            if (reply.rfind("ERR", 0) == 0) refusal = reply;
+        }
+        ASSERT_FALSE(refusal.empty()) << "the pool never filled with dirty frames";
+        EXPECT_NE(refusal.find("buffer pool full"), std::string::npos) << refusal;
+    }
+
+    void Ok(const std::string& sql) {
+        const std::string reply = db_->Execute(sql);
+        ASSERT_EQ(reply.rfind("ERR", 0), std::string::npos) << sql << " -> " << reply;
+    }
+
+    // Rows still carrying the value every update replaced.
+    int CountOld() {
+        const std::string reply = db_->Execute("SELECT COUNT(*) FROM t WHERE a = 'x'");
+        const auto newline = reply.find("\\n");
+        return newline == std::string::npos ? -1 : std::stoi(reply.substr(newline + 2));
+    }
+
+    const WithoutFrameBudgetOverride exact_capacity_;
+    std::unique_ptr<SimInstance> db_;
+};
+
+TEST_F(PoolOfDirtyFramesTest, ARollbackFaultingIntoItUndoesEveryRow) {
+    // The live rollback: every row reads as it was, live and after a
+    // reboot. Killed by dropping `Abort`'s drain mode: a compensation is
+    // refused and the rollback leaves a row updated.
+    ASSERT_NO_FATAL_FAILURE(FillOneTransactionPastThePool());
+    const auto before = db_->store().pool_counters();
+    Ok("ROLLBACK");
+    const auto after = db_->store().pool_counters();
+    EXPECT_EQ(after.refused, before.refused) << "a compensation was refused a frame";
+    EXPECT_GT(after.dirty_drained, before.dirty_drained)
+        << "the rollback met no full pool: the cell does not reach drain mode";
+    EXPECT_EQ(CountOld(), kRows) << "the rollback left a row updated";
+
+    db_->Crash();  // recovery decides what the rollback's records left
+    const Status rebooted = db_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_EQ(CountOld(), kRows) << "recovery found a row the rollback did not undo";
+}
+
+TEST_F(PoolOfDirtyFramesTest, AMountUndoingTheLoserInItUndoesEveryRow) {
+    // BE's untested rule, drain mode under recovery at the cap (DX-Q5 (a)):
+    // the same transaction left open by a power cut is the mount's loser,
+    // and its undo meets a pool the redo filled. Killed by dropping the
+    // mount's drain mode (`expeditor.cpp`'s `mount_drain`): the undo is
+    // refused and the mount fails.
+    ASSERT_NO_FATAL_FAILURE(FillOneTransactionPastThePool());
+    ASSERT_TRUE(db_->RunCheckpoint().ok());  // the loser's records durable, its pages on the device
+    db_->Crash();
+    const Status rebooted = db_->Reboot();
+    ASSERT_TRUE(rebooted.ok()) << rebooted.message();
+    EXPECT_GT(db_->store().pool_counters().dirty_drained, 0u)
+        << "the mount met no full pool: the cell does not reach drain mode";
+    EXPECT_EQ(CountOld(), kRows) << "the mount's undo left a row updated";
 }
 
 }  // namespace

@@ -8,6 +8,7 @@
 #include "kds/sched/wait_state.hpp"
 #include "kds/base/contention.hpp"
 #include "kds/base/current_core.hpp"
+#include "kds/base/fail_stop.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -120,6 +121,14 @@ bool WouldRehash(const Map& map) noexcept {
            static_cast<double>(map.bucket_count()) * static_cast<double>(map.max_load_factor());
 }
 #endif
+
+// **Not written under `kSkipPinned`** (DX-Q2 (a)): a frame pinned when the
+// writeback asks may be this thread's, mid-write. One test for the claim and
+// for the batch's log gate, so the gate leaves out exactly what no run
+// claims. Asked under the structure latch.
+bool LeftPinned(DevicePageStore::HeldFrames held, std::uint32_t pins) noexcept {
+    return held == DevicePageStore::HeldFrames::kSkipPinned && pins != 0;
+}
 
 }  // namespace
 
@@ -487,10 +496,10 @@ Status DevicePageStore::MarkHeaderlessBeforeInsert(PageId headerless_page) {
     // already and costs the one read.
     //
     // **And before the frame exists.** A writeback stamps a checksum into
-    // any frame it does not yet see as headerless - in place, at byte 4,
-    // which is child 1 - so a frame inserted ahead of the mark could be
-    // written out stamped while this read, write and sync run, and read
-    // back after a crash as a directory whose child 1 is a checksum.
+    // the copy of any frame it does not yet see as headerless - at byte 4,
+    // which is child 1 - so a frame inserted ahead of the mark could reach
+    // the device stamped while this read, write and sync run, and read back
+    // after a crash as a directory whose child 1 is a checksum.
     if (!DeviceHoldsNoPage(headerless_page, /*torn_is_none=*/false)) {
         const Page zeros{};
         if (Status s = device_.WritePage(headerless_page,
@@ -902,15 +911,30 @@ struct FillMode {
     int drain_depth = 0;
 };
 thread_local FillMode t_fill;
-// Pins this thread holds, across every store: drain mode writes back only
-// when it is zero (`ReserveFrame`), and the suspend audit trips when it is
-// not (`PinsHeldOnThisThread`). `CountPin` and `UncountPin` move it, and a
+// Pins this thread holds, across every store: the suspend audit trips when
+// it is not zero (`PinsHeldOnThisThread`), and so does an abort's entry
+// (`RequireNoPinsHeld`). `CountPin` and `UncountPin` move it, and a
 // pin is taken and dropped on the thread that holds the handle.
 thread_local std::size_t t_pins_here = 0;
+// This thread's statement was refused a frame (`NotePoolRefusal`).
+thread_local bool t_pool_refused = false;
 }  // namespace
+
+void NotePoolRefusal() noexcept { t_pool_refused = true; }
+bool PoolRefusalNoted() noexcept { return t_pool_refused; }
+void ClearPoolRefusal() noexcept { t_pool_refused = false; }
 
 bool NoRefuseWindowOpenOnThisThread() noexcept { return t_fill.window_depth > 0; }
 std::size_t PinsHeldOnThisThread() noexcept { return t_pins_here; }
+
+void RequireNoPinsHeld(const char* site) noexcept {
+    if (t_pins_here == 0) return;
+    // A fixed buffer, so the stop allocates nothing (`base::FailStop`).
+    char what[256];
+    std::snprintf(what, sizeof what, "%s entered holding %zu page pin(s) (DX-R2)", site,
+                  t_pins_here);
+    base::FailStop(what);
+}
 
 StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
     AssertOrderBeforeFrames("ReserveFrame");
@@ -947,13 +971,17 @@ StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
             if (batch.reclaimed != 0) continue;  // the limit test takes it
             if (walk.Done(batch, batch.progressed, SlotCountLocked())) break;
         }
-        // **Drain mode, holding no pin** (BE-Q11): the dirty queue the walk
-        // just filled is written back, and the next walk reclaims it. Sound
-        // because this thread holds no page latch, so the writeback's shared
-        // try cannot re-enter a hold of its own, and a durability wait holds
-        // nothing. A drain that cleaned something does not count as a retry.
-        if (t_fill.drain_store == this && t_fill.drain_depth > 0 && t_pins_here == 0) {
-            auto drained = DrainDirtyEvictionQueue();
+        // **Drain mode** (BE-Q11): the dirty queue the walk just filled is
+        // written back, and the next walk reclaims it. A drain that cleaned
+        // something does not count as a retry.
+        //
+        // **It needs no page of the caller's** (DX-Q2 (a), `HeldFrames`'s
+        // `kSkipPinned`), so it runs with pins held - as a rollback's row
+        // locator does, holding the leaf while it fetches the right sibling
+        // (DX-S0). It may then wait on the log holding them (the header's
+        // durability-wait bullet).
+        if (t_fill.drain_store == this && t_fill.drain_depth > 0) {
+            auto drained = DrainDirtyEvictionQueue(HeldFrames::kSkipPinned);
             if (drained.ok() && drained.value() > 0) continue;
         }
         // BE-R4: retry the walk - a drain on another core may have cleaned
@@ -961,6 +989,7 @@ StatusOr<std::uint32_t> DevicePageStore::ReserveFrame() {
         if (++attempt < kRefuseRetries) continue;
         if (in_window) FailStop();
         refused_.Add();
+        NotePoolRefusal();
         std::size_t pinned = 0;
         std::size_t dirty = 0;
         std::size_t resident = 0;
@@ -1062,6 +1091,7 @@ Status DevicePageStore::BeginNoRefuseWindow(std::size_t frames) {
         }
         if (++attempt < kRefuseRetries) continue;
         refused_.Add();
+        NotePoolRefusal();
         return Status::ResourceExhausted(
             "buffer pool full: buffer_pool_frames " + std::to_string(capacity_) +
             " cannot hold another mutation's " + std::to_string(frames) +
@@ -1959,7 +1989,8 @@ wal::WalDurability* DevicePageStore::GateForCaller() const noexcept {
     return wal_gate_;
 }
 
-wal::Lsn DevicePageStore::HighestDirtyPageLsn(std::span<const PageId> page_ids) {
+wal::Lsn DevicePageStore::HighestDirtyPageLsn(std::span<const PageId> page_ids,
+                                               HeldFrames held) {
     // **The scan under the hold, the wait outside it** (AM-S2 step 3f):
     // `EnsureDurable` may wait on an `fdatasync`, and no latch is held
     // across a durability wait (`device_page_store.hpp`'s acquisition-order
@@ -1974,6 +2005,7 @@ wal::Lsn DevicePageStore::HighestDirtyPageLsn(std::span<const PageId> page_ids) 
     for (const PageId page_id : page_ids) {
         auto it = frames_.find(page_id);
         if (it == frames_.end() || !it->second.dirty) continue;
+        if (LeftPinned(held, it->second.pins)) continue;  // not written: owes no sync
         // Skipped as `StampIfHeadered` skips it: a headerless page has no
         // page_lsn field, so the bytes there are entry data and would gate
         // on a meaningless watermark that `EnsureDurable` can only refuse.
@@ -1989,9 +2021,9 @@ wal::Lsn DevicePageStore::HighestDirtyPageLsn(std::span<const PageId> page_ids) 
 }
 
 Status DevicePageStore::AwaitWalGate(std::span<const PageId> page_ids, wal::WalDurability* gate,
-                                     wal::Lsn* defer) {
+                                     wal::Lsn* defer, HeldFrames held) {
     if (gate == nullptr) return Status::OK();
-    const wal::Lsn highest = HighestDirtyPageLsn(page_ids);
+    const wal::Lsn highest = HighestDirtyPageLsn(page_ids, held);
     // Nothing logged in this batch, or the log already past it: no wait.
     // Asked here rather than left to `EnsureDurable`'s own no-op, so the
     // phase below counts only the waits a reactor really paid (BI-S3).
@@ -2074,7 +2106,7 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
     // call and every run's below ask the same manager.
     wal::WalDurability* const gate = GateForCaller();
     if (Status s = WriteBackRefusal(gate); !s.ok()) return s;
-    if (Status s = AwaitWalGate(ordered, gate, defer); !s.ok()) return s;
+    if (Status s = AwaitWalGate(ordered, gate, defer, held); !s.ok()) return s;
     if (defer != nullptr && *defer != wal::kNoLsn) return std::size_t{0};
 
     // **Three phases per run, and the device call is the one between the
@@ -2148,12 +2180,12 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
         {
             LatchGuard structure(structure_latch());
             auto it = frames_.find(ordered[i]);
-            if (it == frames_.end() || !it->second.dirty) {
-                ++i;  // evicted, or already written by someone else: not ours
+            if (it == frames_.end() || !it->second.dirty || LeftPinned(held, it->second.pins)) {
+                ++i;  // evicted, written by someone else, or pinned under kSkipPinned: not ours
                 continue;
             }
             if (it->second.writing) {
-                if (held == HeldFrames::kSkip) {
+                if (held != HeldFrames::kWait) {
                     ++i;  // its writer carries it, or leaves it dirty
                     continue;
                 }
@@ -2166,7 +2198,8 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 while (run < kWritebackRunPages && i + run < ordered.size() &&
                        ordered[i + run] == ordered[i] + run) {
                     auto next = frames_.find(ordered[i + run]);
-                    if (next == frames_.end() || !next->second.dirty || next->second.writing) {
+                    if (next == frames_.end() || !next->second.dirty || next->second.writing ||
+                        LeftPinned(held, next->second.pins)) {
                         break;
                     }
                     ++run;
@@ -2247,11 +2280,6 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // generation's case above - pays it too.
                 page.frame->owes_image = true;
 
-                // (2) checksum, the last thing that touches a page before it
-                // goes out (page.md section 8) - skipped for a headerless
-                // page, which has no field to put one in.
-                StampIfHeadered(page_id, std::span<std::byte, kPageSize>(*page.frame->bytes));
-
                 // **Copied under the hold, always, and that is what makes the
                 // gate below mean anything** (AM-S3): a stamper on another
                 // core can raise a page's `page_lsn` after the batch gate, so
@@ -2260,6 +2288,14 @@ StatusOr<std::size_t> DevicePageStore::WriteBack(std::span<const PageId> page_id
                 // (`EvictionWritebackTest.FlushBeforeEvictHoldsWithTwoCoresDirtyingOnePage`).
                 std::memcpy(scratch.data() + k * kPageSize, page.frame->bytes->data(), kPageSize);
             }
+            // (2) checksum, the last thing that touches a page before it goes
+            // out (page.md section 8) - **into the copy, never the frame**
+            // (DX-S2): the frame is held shared, so a stamp there raced every
+            // other share's read of the field. Skipped for a headerless page,
+            // which has no field to put one in.
+            StampIfHeadered(page_id,
+                            std::span<std::byte, kPageSize>(scratch.data() + k * kPageSize,
+                                                            kPageSize));
             UnpinFrame(page_id);  // the share and the pin, one page at a time
             if (after_writeback_copy_for_test_) after_writeback_copy_for_test_(page_id);
 
@@ -2496,11 +2532,19 @@ StatusOr<std::size_t> DevicePageStore::FinishStaged(StagedWrite& staged) {
     return staged.cleaned_pages_;
 }
 
+StatusOr<std::size_t> DevicePageStore::DrainForPressure() {
+    // Between two runs of a refused statement, so this thread holds no pin
+    // and no latch - checked in every build - and `kSkip` is the tick's own
+    // drain (DX-S2).
+    RequireNoPinsHeld("DevicePageStore::DrainForPressure");  // DX-R3, as DX-R2
+    return DrainDirtyEvictionQueue(HeldFrames::kSkip);
+}
 
-StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue() {
+StatusOr<std::size_t> DevicePageStore::DrainDirtyEvictionQueue(HeldFrames held) {
+    assert(held != HeldFrames::kWait && "a drain owes no barrier and never waits");
     const std::vector<PageId> queued = TakeDirtyEvictionQueue();
     if (queued.empty()) return std::size_t{0};
-    auto written = WriteBack(queued, HeldFrames::kSkip);
+    auto written = WriteBack(queued, held);
     if (written.ok()) dirty_drained_.Add(written.value());
     if (written.ok() && written.value() > 0 && log_ != nullptr &&
         log_->enabled(LogLevel::kDebug)) {
@@ -3407,8 +3451,8 @@ void DevicePageStore::UnpinUnlatchedFrame(PageId page_id) noexcept {
 void DevicePageStore::UncountPin(Frame& frame) noexcept {
     if (frame.pins != 0) {
         --frame.pins;
-        // A pin uncounted on a thread that never counted it would let drain
-        // mode write back under a held page - the shape it must not run in.
+        // A pin uncounted on a thread that never counted it would let the
+        // suspend audit and `RequireNoPinsHeld` pass a thread that holds one.
         assert(t_pins_here != 0 && "a pin released on a thread that did not take it");
         if (t_pins_here != 0) --t_pins_here;
         if (live_pins_ != 0) --live_pins_;

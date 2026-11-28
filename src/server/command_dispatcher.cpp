@@ -1175,7 +1175,18 @@ sched::Coro CommandDispatcher::DispatchAsync(std::string_view line, Session* ses
     // never does). A statement that wrote rows first keeps today's refusal
     // (`txn.md` §9: no statement-level rollback) - `EndWrite` clears the
     // note for it. No B-link move-right (BA-Q10).
-    while (StructuralRerunDue(*out, session, statement_deadline_ns)) {
+    //
+    // **A statement refused a buffer-pool frame runs again the same way**
+    // (DX-S2), after a drain of the pool's dirty queue taken here, holding
+    // nothing (`PoolRerunDue`): its refusal was raised with its leaf held,
+    // so the wait cannot be taken there. Re-run only if the drain wrote
+    // something; a statement that wrote a row first keeps the refusal
+    // (DX-R1), and so does a synchronous dispatcher (DX §2.3).
+    for (std::uint64_t pool_reruns = 0;;) {
+        if (!StructuralRerunDue(*out, session, statement_deadline_ns) &&
+            !PoolRerunDue(*out, session, statement_deadline_ns, ++pool_reruns)) {
+            break;
+        }
         co_await sched::Yield{};
         {
             const MayParkScope parking(*this, /*allowed=*/true, statement);
@@ -1298,18 +1309,47 @@ bool CommandDispatcher::StructuralRerunDue(const DispatchOutcome& out, Session* 
         txn_ == nullptr || clock_ == nullptr) {
         return false;
     }
+    if (!RerunAdmitted(session, deadline_ns)) return false;
+    Contention::Add(Tally::kStructuralReruns);
+    return true;
+}
+
+bool CommandDispatcher::PoolRerunDue(const DispatchOutcome& out, Session* session,
+                                     sched::MonoTimeNs& deadline_ns, std::uint64_t attempt) {
+    // The code as well as the note, as the structural re-run asks: a refusal
+    // a caller recovered from leaves the note set, and the statement may then
+    // fail for another reason, which a drain does nothing for.
+    if (!out.pool_wait || out.status.code() != StatusCode::kResourceExhausted ||
+        clock_ == nullptr) {
+        return false;
+    }
+    if (!RerunAdmitted(session, deadline_ns)) return false;
+    // **Holding nothing**: the statement has ended, its leaf and window let
+    // go, so the drain needs no page of anyone's. On this reactor, as the
+    // tick's drain is; the wait it takes on the log is the one a park would.
+    StatusOr<std::size_t> drained = std::size_t{0};
+    {
+        sched::WaitScope wait(stats::WaitEvent::kResEvictionRetry, attempt);
+        drained = page_store_.DrainForPressure();
+    }
+    // Nothing changed, or the drain itself ran the statement out of time.
+    return drained.ok() && drained.value() > 0 && NowNs() < deadline_ns;
+}
+
+bool CommandDispatcher::RerunAdmitted(Session* session, sched::MonoTimeNs& deadline_ns) {
     // **Not once a row has left** (CE-R4, `[quiet-wrong]`): a client that
     // read the first attempt's rows would read the re-run's too. The
-    // refusal is answered, `retryable`, as it was before BA-S14.
+    // refusal is answered, as it was before BA-S14.
     ResultSink* const sink = (session != nullptr ? *session : autocommit_session_).result_sink();
     if (sink != nullptr && sink->Streamed()) return false;
     if (deadline_ns == 0) deadline_ns = NowNs() + lock_wait_fault_net_ns_;
     if (NowNs() >= deadline_ns) return false;
-    Contention::Add(Tally::kStructuralReruns);
     // **The re-run starts with no rows** (CE-A1, `[quiet-wrong]`). A walk
     // refused after it emitted - a join whose inner probe met a stale
     // descent - left them in a sink that outlives the run (the KWP
-    // portal's), and the re-run would append its own after them.
+    // portal's), and the re-run would append its own after them. Rewound
+    // here even where the pool's re-run then declines: the refusal it
+    // answers makes any row before it no result.
     if (sink != nullptr) sink->Rewind();
     return true;
 }
@@ -1377,7 +1417,9 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     // BA-S14's two per-statement facts, cleared before the statement runs.
     structural_poison_withheld_ = false;
     slot_refused_ = false;
+    pool_refused_ = false;
     storage::ClearStructuralRefusal();
+    storage::ClearPoolRefusal();
     // **No statement starts armed** (DE, `storage/miss_refusal.hpp`). The
     // arm is set and dropped around one body (`SelectRun::Execute`), and no
     // path leaves it set today; one that did - a frame destroyed between the
@@ -1445,6 +1487,8 @@ DispatchOutcome CommandDispatcher::StageStatement(Session* session, Body&& body)
     // DJ-S3: a refusal for a slot is the statement's answer only once its
     // wait has run out; a statement that recovered from one is not parked.
     outcome.slot_wait = std::exchange(slot_refused_, false) && !outcome.status.ok();
+    // DX-S2, on the same terms: `EndWrite` decided the statement may run again.
+    outcome.pool_wait = std::exchange(pool_refused_, false) && !outcome.status.ok();
     outcome.fetch_id = std::exchange(statement_fetch_id_, 0);
     outcome.pattern_id = std::exchange(statement_pattern_id_, 0);
     outcome.binding = std::exchange(statement_binding_, {});
@@ -16508,6 +16552,21 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
                                   storage::StructuralRefusalNoted() &&
                                   scope.txn->trail().size() == statement_trail_mark_;
     if (!structural_rerun) storage::ClearStructuralRefusal();
+    // **A pool refusal before the statement wrote a row is re-run** (DX-S2),
+    // on the same test, by `DispatchAsync` only: a synchronous dispatcher
+    // has nowhere to wait and keeps the refusal (DX §2.3). A statement that
+    // wrote rows keeps it too (DX-R1). **So does an explicit transaction
+    // holding an assertion reservation** (`[quiet-wrong]`): a `DELETE`
+    // reserves its row's departure outside any no-refuse window and before
+    // its trail entry, so a refusal at its undo append - or at a second
+    // assertion's chain - leaves a reservation the trail does not show, and
+    // the re-run would reserve the departure again, kept by the `COMMIT`. An
+    // owned scope's abort unwinds it, so autocommit re-runs.
+    pool_refused_ = may_park_ && !result.ok() && storage::PoolRefusalNoted() &&
+                    scope.txn->trail().size() == statement_trail_mark_ &&
+                    (scope.owned || !enforcer_->HasPending(scope.txn->id()));
+    storage::ClearPoolRefusal();
+    const bool rerun_due = structural_rerun || pool_refused_;
 
     if (!scope.owned) {
         // Inside an explicit transaction. A failure does **not** unwind:
@@ -16526,7 +16585,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // the wait `DispatchAsync` is about to take into a forced ROLLBACK;
         // the refusal that ends the wait poisons like any other.
         if (!result.ok() && blocking_writer_ == 0 && !lock_wait_.has_value()) {
-            if (structural_rerun) {
+            if (rerun_due) {
                 structural_poison_withheld_ = true;
             } else {
                 session.Poison();
@@ -16542,7 +16601,7 @@ Status CommandDispatcher::EndWrite(Session& session, WriteScope& scope, const St
         // wait or a structural re-run still standing here is a statement
         // that wrote nothing and is about to wait or run again - the tests
         // above dropped each where it wrote a row.
-        const bool waits = blocking_writer_ != 0 || lock_wait_.has_value() || structural_rerun;
+        const bool waits = blocking_writer_ != 0 || lock_wait_.has_value() || rerun_due;
         return AbortOwnedScope(scope, /*reported=*/Status::OK(),
                                waits ? stats::TxnEnd::kWaitAbort : stats::TxnEnd::kAbort);
     }

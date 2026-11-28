@@ -149,7 +149,17 @@ namespace {
 // `sys.tables` rows join the stream, every later LSN moves, and every later
 // row on those two pages lands one slot later. No record kind changes its
 // framing.
-constexpr std::uint32_t kGoldenLogCrc = 0xbe16c8b1u;
+// **Re-pinned at DX-S2** (on `dx-pool-under-pressure`,
+// `instructions/v3.2.0/workorder-dx-pool-under-pressure.md` §2.4): a
+// writeback stamps the checksum into its copy, never the frame, so a page
+// image logged from a frame after a writeback carries the frame's checksum
+// field as its load or format left it, not the last write's CRC. Those four
+// bytes of each such image move, and a PACKED_PAGE_IMAGE packs them as it
+// packs any bytes, so its length - and every later LSN - may move with
+// them. No record kind or framing changes. Redo never verifies an image's
+// checksum, and an image reaches the device only through a writeback, which
+// stamps it.
+constexpr std::uint32_t kGoldenLogCrc = 0x47b4f573u;
 
 const char* const kScript[] = {
     "CREATE TABLE golden_heap (id int64, v int64, name varchar) HEAP",
