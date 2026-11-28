@@ -203,3 +203,13 @@ landed (§16):
 | **Mark** | **EO closes at S4**: six scenarios on KDS, PostgreSQL and Oracle Free through one Rust client, 188 runs, every check passing (`bench/v3.5.1/results-eo-close-v3.5.1-63-g9543cf720.md`; Oracle's figures under `bench/private/`, uncommitted). EO-Q9 (scenario 4's kinds) adopted as CLA proposed. A defect found and recorded, not fixed (`docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`) |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; EO's order; the index; `instructions/milestones.md` |
+
+## 21. EO pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, at CLA's push gate for EO |
+| **Mark** | **EO lands on `main`** in one `--no-ff` merge of `worktree-three-engine-equal-client-bench`, `e29110c1b`, pushed with `--no-verify` |
+| **Skipped, on the word** | the pre-push hook. No full suite was run on this tree: EO changed no build input (`git diff e571ae574..` over `src`, `include`, CMake, `tests` and `scripts` is empty), and the push does not report a suite as passed |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; EO's landed row in `instructions/milestones.md` |
