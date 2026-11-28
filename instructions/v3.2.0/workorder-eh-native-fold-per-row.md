@@ -253,7 +253,7 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 
 ## 7. Stage log (CLA, appended as stages land)
 
-### EH-S2 (2026-11-28): the group table, on `eh-native-fold-per-row` from `2c82dd1d0`
+### EH-S2 (2026-11-28): the group table, on `eh-native-fold-per-row` from `b36deb576`
 
 - **The change** (§2's (c), less the reserve): `Aggregator`'s
   `std::unordered_map<std::string, size_t>` is replaced by an
