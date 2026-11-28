@@ -249,11 +249,12 @@ read against it before it is built.
   `01bd189f4`'s; `bench/v3.5.1/results-eg-close-v3.5.1-33-g01bd189f4.md`,
   03:23:46 to 03:29:18 UTC, 40 cells, five rounds a binary): **no cost
   that can be told from the run's noise on any cell.** One booker at one
-  core, `strict`: 2,098 against 2,108 bookings a second and a `commit`
+  core, `strict`: 2,098 (old) against 2,108 (new) bookings a second and a `commit`
   of 134.6 µs against 134.8 µs, inside spreads of 1.6 % and 2.4 % - the
   tightest cell, which bounds the scope's cost to about 2 % of a commit.
-  The control the change cannot reach is inside its spread. **Two cells
-  carry no claim**: the one-client insert (156.5 µs against 146.1 µs
+  The control the change cannot reach is inside its spread on its two
+  longer reads, and its 27 µs `pk-user` carries no claim (spreads 20 %
+  to 39 %). **Two cells carry no claim**: the one-client insert (156.5 µs against 146.1 µs
   idle; one round ran slow in both arms, spreads over 20 %) and eight
   bookers on eight cores (9,507 against 9,636; two of the old binary's
   rounds ran at half speed). So **EG-R3's "a cell at eight cores shows
@@ -270,7 +271,7 @@ read against it before it is built.
   breadth; a one-core `strict` commit on its reactor), `CLAUDE.md`'s
   Observability row.
 - **What EG hands on**: to DY-Q2's reader, the narrowed sync's price
-  against a commit (about 60 µs a commit for each further live segment,
+  against a commit (about 60 µs a commit for a second live segment,
   traced); to the operator, the reading of EG-Q1 against EG-R2 and of
   EG-R3 (EG-Q6).
 

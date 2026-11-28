@@ -584,8 +584,11 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 - **On a one-core instance a `strict` commit syncs on its reactor, so
   every other session waits out each commit's sync** (EG-S0, recorded on
   `eg-one-client-durable-write` at `d50d304f8`, not built: EG-Q3 (a)).
-  Nothing defers the commit there - there is no wake registry below two
-  cores (`src/server/command_dispatcher.cpp`, `DefersCommit`) - and
+  Nothing defers the commit there - the instance's wake registry is built
+  above one core only, so at one core the WAL writer kicks no parked
+  committer (`src/server/expeditor.cpp`; the page reader's one-entry wake
+  table there is not given to it) and `DefersCommit`
+  (`src/server/command_dispatcher.cpp`) answers false - and
   `WalManager::Commit` calls `Sync()` on the statement's stack; `group`
   parks its committers and the reactor's post-task hook covers one
   iteration's commits with one sync. Eight bookers on one core, one run
@@ -595,8 +598,8 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   EG-S1 the inline sync is at least visible: booked under
   `commit.wal_flush` in `sys.wait_stats` and `sys.session_waits`
   (`docs/spec/wait-events.md`), though never in `sys.ash`. To build:
-  the deferred path at one core, which needs a waker for a one-core
-  instance or a park the hook's drain resumes. Owner:
+  the deferred path at one core, which needs the writer to kick a
+  one-core reactor or a park the hook's drain resumes. Owner:
   `docs/spec/wal.md` §6.
 - **A segment roll does I/O inside the instance's append latch, and at
   `relaxed` under a bulk writer its hold is hundreds of milliseconds.**
