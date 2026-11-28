@@ -73,11 +73,13 @@ meets an older table reads its heading, as that table's own commit intended.
 
 A latency timed in a Python client is the server's plus the client's, and
 the two engines' clients do different work: KWP's rows arrive typed and
-must be rendered by the client, PostgreSQL's arrive as text. Twice a
-scenario file put KDS behind PostgreSQL on a statement where the engine
-was ahead (`v3.2.0/results-pg-parity-v3.2.0-171-ge81ac7cd.md`,
+must be rendered by the client, PostgreSQL's arrive as text. Twice
+scenario files put KDS behind PostgreSQL on statements where the engine
+was ahead, and twice a measurement on equal clients showed it
+(`v3.2.0/results-pg-parity-v3.2.0-171-ge81ac7cd.md`: 29.0 µs against
+5.0 µs of client CPU a statement on its host;
 `v3.5.1/results-ef-s0-premise-v3.5.1-6-g72580aa04.md`: 16.6 µs a statement
-of client work on one side and 0.8 µs on the other).
+of added client work on one side and 0.8 µs on the other).
 
 - **A results file that sets KDS beside another engine says, per phase,
   what each side's client did**: counted rows (`kwp.Connection.query`,

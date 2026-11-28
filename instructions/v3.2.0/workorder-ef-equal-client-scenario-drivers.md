@@ -295,6 +295,16 @@ rule and binds S3 only.
   CMakeLists.txt scripts` is empty, so the opening and closing commits
   build one binary. The suite was not executed for the same reason: no
   cell of it reads `tools/`.
+- **`known-gaps.md`, "Testing"**: what is still unequal between the
+  clients and between the twins' workloads, and an indexed
+  `books-by-genre` slower than the unindexed one, which the stage's
+  review found and nothing attributes.
+- **The reviews' cuts not taken**: `send_command` rebuilt over `fetch`
+  (EF-Q8 (c): every series at once, the operator's to say); one `Client`
+  class shared by scenarios 2 and 3 (each driver keeps its own on
+  purpose, as scenario 1's says of itself); a helper for the
+  transaction-word check and a rename of `exec_` (three one-line copies
+  and a name, not worth a second pass over drivers just measured).
 - **What EF hands on**: to EG, `result-insert` at 60,480 bars (0.81x at
   `strict`, no claim at the three smaller sizes, a spread over 20 % on
   one side of each); to EH, the folds

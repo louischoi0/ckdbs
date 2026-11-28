@@ -113,6 +113,48 @@ A bug entry `d83bd502` closed unreproduced is cited here as
 
 ## Testing
 
+- **A scenario driver's latency is the engine's plus a Python client's,
+  and three parts of the client's are still not equal to the PostgreSQL
+  twin's** (EF, verified on `ef-equal-client-scenario-drivers` at
+  `ed8564eb4`; `bench/README.md`, "A ratio against another engine names
+  both clients").
+  - **A decoded read charges KDS about 2.9 µs more client CPU a
+    statement** (11.5 µs against 8.6 µs on a lookup,
+    `bench/v3.5.1/results-ef-s1-drivers-v3.5.1-6-g72580aa04.md`, pass
+    D2), not attributed. It is the size of the two short reads the
+    matched run reads behind PostgreSQL (`cargo-lookup` at `strict`,
+    0.97x; `books-by-genre` over 200 unindexed loans, 0.96x).
+  - **A returned row costs the KDS client a typed render** that
+    PostgreSQL's text rows do not ask of its client: 1.4 µs to 1.7 µs
+    against 0.7 µs to 0.8 µs a row of 8 columns. A read of thousands of
+    rows through a decoding or rendering pair reads behind for it
+    (`read-symbol-history` 0.88x) where two counting clients read the
+    shape 1.50x.
+  - **The twins are not the same workload in three places, by their own
+    design**: scenario 2's twin rejects fewer bookings from the same seed
+    (340 against 402 of 3,402), so its phases run fewer operations;
+    its `manifest-scan` reads an index where KDS walks; and scenario 4's
+    twin has no index on `symbol` and one unpaced day.
+  - `ServerConnection.send_command` still builds four frames and decodes
+    the row description on every statement (16.6 µs a statement on the
+    EF host). It is the path of verification and of every A/B between
+    two KDS binaries, where both arms pay it; rebuilding it over `fetch`
+    would move every series under `bench/` at once (EF-Q8 (c), not
+    taken).
+
+  Owner: `bench/README.md`, `tools/ckdbs_cli.py`.
+
+- **An indexed `books-by-genre` is slower than the unindexed one at
+  10,000 loans** (found by EF-S2's review at `6e356bdfa`, not
+  attributed): 164.6 µs indexed against 148.5 µs unindexed on KDS, and
+  0.88x of PostgreSQL's indexed rate, in
+  `bench/v3.5.1/results-ef-s2-matched-v3.5.1-6-g72580aa04.md`. The
+  shape returns about a sixteenth of `books`; whether the index should
+  have been declined for it is the access ladder's question. To check:
+  `ANALYZE` of the statement in both modes, and the planner's priced
+  arms. Owner: `docs/spec/index.md`, `docs/spec/plan-stats.md`.
+
+
 - **Two rig cells fail intermittently on a 24-CPU host, at `60dc593af` as
   at `6e43ec8c0`** (found during DT, 2026-11-26; neither is DT's).
   `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`
