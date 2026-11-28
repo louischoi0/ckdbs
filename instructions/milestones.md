@@ -68,6 +68,10 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| ES | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | four or more clients: the equal-client scenarios at cores = 8, and what serialises KDS when it has the cores | v3.2.0/workorder-es-many-clients-at-eight-cores.md |
+| ER | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | scenario 2's customer statement: a grouped join over a walked heap at six times PostgreSQL's server CPU | v3.2.0/workorder-er-grouped-join-over-a-walked-heap.md |
+| EQ | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | the commit of a transaction that wrote nothing: no record and no sync of its own, and a writing commit's flush attributed | v3.2.0/workorder-eq-commit-that-wrote-nothing.md |
+| EP | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | a read refused "undo chain revisits the record": whether an undo record is recycled while a reader can still reach it | v3.2.0/workorder-ep-undo-chain-revisit.md |
 | EO | closed | 2026-11-28 | 2026-11-28 | 2026-11-28 | 2026-11-28 | e29110c1 | - | three engines on one client: KDS, PostgreSQL and Oracle through one Rust harness, every scenario's relations their own kind, and a commercial OLTP scenario | v3.2.0/workorder-eo-three-engine-equal-client.md |
 | EN | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | the two-core cells: a kick that cannot be lost, and a row's loser that cannot lose forever | v3.2.0/workorder-en-two-core-cells.md |
 | EM | closed-narrow | 2026-11-28 | 2026-11-28 | 2026-11-28 | 2026-11-28 | a398b2f4 | - | the statement front end's repeated work, cut only where no cut can change an answer | v3.2.0/workorder-em-front-end-reuse-without-quiet-wrong.md |

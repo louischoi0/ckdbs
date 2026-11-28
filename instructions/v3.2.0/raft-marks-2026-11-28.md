@@ -243,3 +243,12 @@ landed (§16):
 | **Skipped, on the word** | the pre-push hook. The suite was last run at `aa8eaebbc`, the last commit with a build input: 5,442 of 5,444, the two failures a `/tmp` quota error and the `ContentionCountersTest` two-core flake, each passing on rerun. It was not a green run, and this push does not report it as one |
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; EM's landed column in `instructions/milestones.md` |
+
+## 25. EP, EQ, ER and ES written: the undo chain defect and EO's three causes behind PostgreSQL
+
+| | |
+|---|---|
+| **Word** | *"write work milestones for the three causes behind the current performance gap, and push"*; then, a minute later, *"write the milestone that resolves the newly found bug, and push"* (given in Korean, rendered here) |
+| **Mark** | Four orders written, none opened, on `main` at `c43dbf46`, documents only, in a claude.ai session: **EP** (`workorder-ep-undo-chain-revisit.md`) for `docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`; and for the three things EO's close reads KDS behind on (`bench/v3.5.1/results-eo-close-v3.5.1-63-g9543cf720.md`), **EQ** (a commit that wrote nothing), **ER** (scenario 2's customer statement) and **ES** (four or more clients, measured at `cores = 8`). CLA proposes EP first, since its cause may be `[quiet-wrong]`. Every EP-, EQ-, ER- and ES-Q item carries CLA's proposal and **none is adopted**; EP-Q2 and EQ-Q2 change what a purge may reclaim and what a `COMMIT` promises, and wait for the operator's mark whatever the standing go-ahead says |
+| **Does not settle** | opening any of the four, any Q item, a tag or a version |
+| **Recorded at** | this file; the four orders; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
