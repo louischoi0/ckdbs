@@ -7758,7 +7758,16 @@ public:
     }
     ~SelectRun() {
         d_.select_scratch_pool_.push_back(std::move(scratch_));
-        if (aggregator_ != nullptr) d_.aggregator_pool_.push_back(std::move(aggregator_));
+        // **Bounded**: the pool keeps a few small aggregators for the next
+        // folds and lets a large one go, so the memory a core keeps for
+        // folds is a few small ones' whatever the peak of folds parked at
+        // once and the largest one ever run (EH-Sy's review).
+        constexpr std::size_t kPooledAggregators = 8;
+        constexpr std::size_t kPooledGroupsAtMost = 4096;
+        if (aggregator_ != nullptr && d_.aggregator_pool_.size() < kPooledAggregators &&
+            aggregator_->group_count() <= kPooledGroupsAtMost) {
+            d_.aggregator_pool_.push_back(std::move(aggregator_));
+        }
     }
     SelectRun(const SelectRun&) = delete;
     SelectRun& operator=(const SelectRun&) = delete;

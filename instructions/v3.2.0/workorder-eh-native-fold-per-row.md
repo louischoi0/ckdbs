@@ -279,6 +279,20 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 - `docs/spec/sched.md` §3 and `docs/spec/aggregate.md` §7 say a fold
   yields and owns its aggregator.
 - **The suite**: 5,438 of 5,438 (`ctest -LE bs-nightly -j4`, 176.5 s).
+- **After the review** (`da1f786c3`, comments only; and this commit): no
+  defect. **Applied**: the pool is bounded - eight aggregators at most, and
+  one that ran more than 4,096 groups is let go rather than pooled - so a
+  core no longer keeps the capacity of its largest fold for every fold that
+  was ever parked at once. **Not applied**: `table_`'s reallocation per
+  grouped statement (reusing it needs a fill at `Reset`, a measured trade
+  not taken); retiring `RunAggregated` for `RunInline` over a pooled
+  aggregator, and folding `FinishAggregate` into `Finish` (about 75 lines
+  between them, against a coroutine frame on every point aggregate that
+  EH-R5's pair would have to price first, and a DE miss-refusal change of
+  behaviour); a test seam for two keys of one hash.
+  **The suite at this tree**: 5,437 of 5,438; the failure is
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the two-core
+  rig named above, which failed 6 of 20 on EG's build in this window.
 - Overhead not measured; measured at the milestone's close.
 
 ### EH-S2 (2026-11-28): the group table, on `eh-native-fold-per-row` from `b36deb576`
