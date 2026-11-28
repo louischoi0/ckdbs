@@ -156,6 +156,83 @@ TEST_F(BytesFoldEquivalenceTest, AnUndecidedWritersRowsAreFoldedAsTheReaderSeesT
     ExpectBothPathsAgree("after its commit");
 }
 
+// The types `f` does not carry: `int8`, `bool`, the wide decimal (its int128
+// arm in `FoldValue`) and a `uint64` above INT64_MAX, which MIN and MAX
+// compare through the digit text the decoder must set on the bytes path too.
+TEST_F(BytesFoldEquivalenceTest, TheRemainingTypesAnswerTheSame) {
+    Must("CREATE TABLE x (id int64, k int16, t int8 NULL, o bool NULL, w decimal(30,4) NULL, "
+         "u uint64 NULL)");
+    const char* const u_values[] = {"5", "18446744073709551615", "9223372036854775808",
+                                    "9223372036854775807", "12"};
+    for (int i = 1; i <= 400; ++i) {
+        if (i % 4 == 0) {
+            Must("INSERT INTO x VALUES (" + std::to_string(i) + ", 1, NULL, NULL, NULL, NULL)");
+            continue;
+        }
+        Must("INSERT INTO x VALUES (" + std::to_string(i) + ", 1, " +
+             std::to_string(i % 200 - 100) +
+             ", " + (i % 2 ? "1" : "0") + ", " + (i % 3 ? "-" : "") +
+             "12345678901234567890." + std::to_string(1000 + i % 9000) + ", " + u_values[i % 5] +
+             ")");
+    }
+    const std::vector<std::string> lists = {
+        "COUNT(t)", "SUM(t)", "MIN(t)", "MAX(t)", "AVG(t)", "COUNT(o)", "MIN(o)", "MAX(o)",
+        "COUNT(w)", "SUM(w)", "MIN(w)", "MAX(w)", "AVG(w)", "COUNT(u)", "MIN(u)", "MAX(u)",
+        "COUNT(*), SUM(w), MIN(u), MAX(u), MAX(t)",
+    };
+    for (const std::string& list : lists) {
+        const std::string bare = db_->Execute("SELECT " + list + " FROM x");
+        const std::string kept = db_->Execute("SELECT " + list + " FROM x" + kKeepsEveryRow);
+        EXPECT_EQ(bare, kept) << "SELECT " << list << " FROM x";
+    }
+    EXPECT_EQ(db_->Execute("SELECT MIN(u), MAX(u) FROM x"),
+              "min(u),max(u)\\n5,18446744073709551615");
+}
+
+// EH-R2 from the writer's side: inside its own transaction a reader sees its
+// uncommitted writes, and a repeatable-read `READ ONLY` transaction sees its
+// one view's rows across the writer's commit, by both paths.
+TEST_F(BytesFoldEquivalenceTest, ATransactionsOwnWritesAndAReadOnlyViewAnswerTheSame) {
+    Load(150);
+    const auto both = [&](server::Session& s, const std::string& list) {
+        const std::string bare =
+            db_->dispatcher().Dispatch("SELECT " + list + " FROM f", &s).response;
+        const std::string kept =
+            db_->dispatcher().Dispatch("SELECT " + list + " FROM f" + kKeepsEveryRow, &s).response;
+        EXPECT_FALSE(IsErr(bare)) << bare;
+        EXPECT_EQ(bare, kept) << "SELECT " << list << " FROM f";
+        return bare;
+    };
+    const std::string list = "COUNT(*), SUM(a), MIN(a), MAX(b), COUNT(d)";
+
+    server::Session reader;
+    ASSERT_FALSE(IsErr(db_->dispatcher()
+                           .Dispatch("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ", &reader)
+                           .response));
+    const std::string viewed = both(reader, list);
+
+    server::Session writer;
+    ASSERT_FALSE(IsErr(db_->dispatcher().Dispatch("BEGIN", &writer).response));
+    const std::string before = both(writer, list);
+    EXPECT_EQ(before, viewed);
+    ASSERT_FALSE(IsErr(
+        db_->dispatcher().Dispatch("UPDATE f SET a = 900000000000 WHERE id = 7", &writer).response));
+    ASSERT_FALSE(IsErr(db_->dispatcher().Dispatch("DELETE FROM f WHERE id = 8", &writer).response));
+    ASSERT_FALSE(IsErr(db_->dispatcher()
+                           .Dispatch("INSERT INTO f VALUES (1000, 1, 1, 1, 1.25, NULL, NULL, NULL, "
+                                     "NULL, NULL)",
+                                     &writer)
+                           .response));
+    const std::string own = both(writer, list);
+    EXPECT_NE(own, before);
+    ASSERT_FALSE(IsErr(db_->dispatcher().Dispatch("COMMIT", &writer).response));
+
+    // The read-only view still answers from its snapshot, by both paths.
+    EXPECT_EQ(both(reader, list), viewed);
+    ASSERT_FALSE(IsErr(db_->dispatcher().Dispatch("COMMIT", &reader).response));
+    EXPECT_EQ(db_->Execute("SELECT " + list + " FROM f"), own);
+}
+
 // EH-R4: an overflow is refused on the same row with the same words.
 TEST_F(BytesFoldEquivalenceTest, AnOverflowIsRefusedTheSame) {
     Must("INSERT INTO f VALUES (1, 1, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL)");

@@ -3408,10 +3408,16 @@ private:
     // else done to it: no conjunct of any kind to drop it, no sub-chain, no
     // index order to check it against, and no trail entry to record. A
     // Cabin recording and an inner build are tested per row where they are
-    // live (`recording_here`; a build needs a second step).
+    // live (`recording_here`; a build needs a second step). And a step that
+    // decodes a column mask: a `kAllColumns` step - a sub-chain anywhere in
+    // the chain, or a relation wider than 64 columns - decodes every cell on
+    // the full path, resolving each spill and refusing a corrupt `varchar`
+    // cell the statement never reads, where a fold reads only its own cells
+    // (EH-R4: the refusal stays on the row that carries it).
     bool KeepsEveryVisibleRow(const Step& step) const {
         return step.residual.empty() && step.fn_residual.empty() && step.bool_residual.empty() &&
                step.sub_chains.empty() && !IsIndexOrder(step.emit_order) &&
+               step.read_columns != Step::kAllColumns &&
                !(trail_ != nullptr && IsTrailReplayable(step));
     }
 

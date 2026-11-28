@@ -424,6 +424,24 @@ TEST_F(ScanRowWalkTest, AStepWithAConjunctOrAnotherStepNeverHandsARowToTheFold) 
     EXPECT_EQ(joined.rows, 0u);
 }
 
+// A hoisted sub-chain leaves the step with no conjunct but makes it decode
+// every column (`read_columns` is `kAllColumns`): the full path then reads,
+// and may refuse, cells the fold would never read, so the fold is not asked
+// (EH-R4).
+TEST_F(ScanRowWalkTest, AStepThatDecodesEveryColumnNeverHandsARowToTheFold) {
+    Load(100);
+    const StepChain chain = CompileSql("SELECT t.id FROM t WHERE EXISTS (SELECT u.id FROM t AS u)");
+    ASSERT_FALSE(chain.hoisted.empty());
+    ASSERT_TRUE(chain.steps[0].residual.empty());
+    ASSERT_EQ(chain.steps[0].read_columns, Step::kAllColumns);
+    SummingFold fold;
+    Ran ran = RunChain(chain, SIZE_MAX, Budget(), &fold);
+    ASSERT_TRUE(ran.status.ok()) << ran.status.message();
+    EXPECT_EQ(ran.ids.size(), 100u);
+    EXPECT_EQ(fold.prepared, 0u);
+    EXPECT_EQ(fold.rows, 0u);
+}
+
 // A fold that declines the relation leaves every row on the sink.
 TEST_F(ScanRowWalkTest, AFoldThatDeclinesLeavesEveryRowOnTheSink) {
     Load(100);
