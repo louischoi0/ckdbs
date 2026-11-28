@@ -1,0 +1,10 @@
+phase booking: 3116 ops, mean 401.8 us, p50 357.5 us, p99 712.1 us, 2488 ops/s, errors {}
+bookings: committed 3000, rejected-capacity 69, rejected-credit 47, conflicted 0 (0 retries, 0 abandoned), failed 0, axes {"commit": 0, "operations": 0, "organizations": 0, "read": 0}
+check bookings-without-failure: ok 0 failed booking(s), first: None
+phase manifest-scan: 100 ops, mean 30.8 us, p50 21.9 us, p99 297.1 us, 30178 ops/s, errors {}
+phase voyage-rollup: 100 ops, mean 22.2 us, p50 20.3 us, p99 23.4 us, 42136 ops/s, errors {}
+phase customer-statement: 50 ops, mean 875.9 us, p50 849.9 us, p99 1127.7 us, 1131 ops/s, errors {}
+check I1: ok 100 checks, 0 failure(s), 0 unanswered
+check I2: ok 100 checks, 0 failure(s), 0 unanswered
+check I3: ok 100 checks, 0 failure(s), 0 unanswered
+check I4: ok 100 checks, 0 failure(s), 0 unanswered

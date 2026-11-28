@@ -1,0 +1,331 @@
+## s0 four-traders
+  load-users: kds-group 152.0us(6%); oracle 279.3us(14%); pg 149.6us(1%) | kds-group/pg 0.98x, kds-group/ora 1.84x
+  load-assets: kds-group 157.4us(393%); oracle 326.4us(40%); pg 158.9us(14%) | kds-group/pg 1.01x, kds-group/ora 2.07x
+  load-accounts: kds-group 153.0us(1%); oracle 280.6us(8%); pg 155.5us(0%) | kds-group/pg 1.02x, kds-group/ora 1.83x
+  txn: kds-group 1690.6us(13%); oracle 1837.5us(13%); pg 1167.0us(14%) | kds-group/pg 0.69x, kds-group/ora 1.09x
+  trade-insert: kds-group 420.4us(13%); oracle 459.6us(11%); pg 288.3us(13%) | kds-group/pg 0.69x, kds-group/ora 1.09x
+  account-update: kds-group 424.4us(13%); oracle 458.6us(16%); pg 294.8us(14%) | kds-group/pg 0.69x, kds-group/ora 1.08x
+  profit-scan: kds-group 1326.2us(107%); oracle 381.3us(28%); pg 507.8us(13%) | kds-group/pg 0.38x, kds-group/ora 0.29x
+  profit-insert: kds-group 545.6us(65%); oracle 2988.3us(177%); pg 833.8us(174%) | kds-group/pg 1.53x, kds-group/ora 5.48x
+## s0 one-trader
+  load-users: kds-group 351.6us(57%); kds-strict 394.8us(62%); oracle 559.8us(47%); pg 361.4us(58%) | kds-group/pg 1.03x, kds-group/ora 1.59x, kds-strict/pg 0.92x, kds-strict/ora 1.42x
+  load-assets: kds-group 270.6us(76%); kds-strict 368.3us(45%); oracle 494.2us(44%); pg 227.5us(104%) | kds-group/pg 0.84x, kds-group/ora 1.83x, kds-strict/pg 0.62x, kds-strict/ora 1.34x
+  load-accounts: kds-group 590.3us(74%); kds-strict 204.9us(31%); oracle 350.8us(13%); pg 175.6us(321%) | kds-group/pg 0.30x, kds-group/ora 0.59x, kds-strict/pg 0.86x, kds-strict/ora 1.71x
+  txn: kds-group 852.3us(43%); kds-strict 699.8us(4%); oracle 1163.7us(75%); pg 643.0us(94%) | kds-group/pg 0.75x, kds-group/ora 1.37x, kds-strict/pg 0.92x, kds-strict/ora 1.66x
+  trade-insert: kds-group 218.3us(44%); kds-strict 176.0us(4%); oracle 294.2us(80%); pg 158.8us(99%) | kds-group/pg 0.73x, kds-group/ora 1.35x, kds-strict/pg 0.90x, kds-strict/ora 1.67x
+  account-update: kds-group 207.4us(42%); kds-strict 173.6us(3%); oracle 287.2us(71%); pg 162.4us(90%) | kds-group/pg 0.78x, kds-group/ora 1.38x, kds-strict/pg 0.94x, kds-strict/ora 1.65x
+  profit-scan: kds-group 670.2us(125%); kds-strict 580.9us(54%); oracle 280.2us(29%); pg 456.9us(38%) | kds-group/pg 0.68x, kds-group/ora 0.42x, kds-strict/pg 0.79x, kds-strict/ora 0.48x
+  profit-insert: kds-group 450.5us(72%); kds-strict 336.6us(102%); oracle 489.3us(547%); pg 273.3us(466%) | kds-group/pg 0.61x, kds-group/ora 1.09x, kds-strict/pg 0.81x, kds-strict/ora 1.45x
+## s1 bars1008
+  load-exchanges: kds-group 255.6us(54%); oracle 1225.5us(24%); pg 183.4us(42%) | kds-group/pg 0.72x, kds-group/ora 4.79x
+  load-symbols: kds-group 316.5us(50%); oracle 548.5us(46%); pg 144.7us(48%) | kds-group/pg 0.46x, kds-group/ora 1.73x
+  load-sessions: kds-group 21.4us(36%); oracle 33.2us(62%); pg 14.6us(17%) | kds-group/pg 0.68x, kds-group/ora 1.55x
+  load-bars: kds-group 15.9us(1%); oracle 20.9us(14%); pg 14.5us(6%) | kds-group/pg 0.91x, kds-group/ora 1.31x
+  load-stats: kds-group 16.4us(8%); oracle 17.8us(65%); pg 14.4us(3%) | kds-group/pg 0.88x, kds-group/ora 1.09x
+  load-models: kds-group 146.8us(45%); oracle 339.1us(20%); pg 149.2us(21%) | kds-group/pg 1.02x, kds-group/ora 2.31x
+  backtest-read: kds-group 102.8us(87%); oracle 162.0us(52%); pg 61.3us(102%) | kds-group/pg 0.60x, kds-group/ora 1.58x
+  result-insert: kds-group 142.1us(2%); oracle 314.2us(34%); pg 145.6us(6%) | kds-group/pg 1.02x, kds-group/ora 2.21x
+  backtest-replay: kds-group 150.2us(72%); oracle 172.7us(46%); pg 89.4us(51%) | kds-group/pg 0.60x, kds-group/ora 1.15x
+  compare-all: kds-group 204.9us(91%); oracle 711.6us(36%); pg 100.8us(27%) | kds-group/pg 0.49x, kds-group/ora 3.47x
+  compare-one: kds-group 47.4us(76%); oracle 43.3us(105%); pg 29.0us(24%) | kds-group/pg 0.61x, kds-group/ora 0.91x
+  read-bar-lookup: kds-group 16.0us(37%); oracle 21.2us(27%); pg 19.7us(48%) | kds-group/pg 1.23x, kds-group/ora 1.33x
+  read-bar-range: kds-group 75.8us(10%); oracle 145.5us(15%); pg 112.9us(9%) | kds-group/pg 1.49x, kds-group/ora 1.92x
+  read-symbol-history: kds-group 148.4us(48%); oracle 426.6us(12%); pg 134.2us(58%) | kds-group/pg 0.90x, kds-group/ora 2.88x
+  read-day-slice: kds-group 29.0us(15%); oracle 31.4us(30%); pg 37.0us(7%) | kds-group/pg 1.28x, kds-group/ora 1.08x
+  read-join-point: kds-group 15.6us(45%); oracle 20.4us(47%); pg 21.4us(39%) | kds-group/pg 1.37x, kds-group/ora 1.31x
+  read-join-exists: kds-group 101.5us(73%); oracle 95.2us(168%); pg 74.2us(51%) | kds-group/pg 0.73x, kds-group/ora 0.94x
+  agg-global: kds-group 47.6us(191%); oracle 115.9us(99%); pg 48.6us(211%) | kds-group/pg 1.02x, kds-group/ora 2.44x
+  agg-by-symbol: kds-group 78.2us(103%); oracle 136.2us(104%); pg 121.7us(94%) | kds-group/pg 1.56x, kds-group/ora 1.74x
+  agg-by-session: kds-group 125.6us(35%); oracle 264.7us(21%); pg 346.4us(63%) | kds-group/pg 2.76x, kds-group/ora 2.11x
+  agg-day-slice: kds-group 27.6us(11%); oracle 30.1us(4%); pg 44.7us(19%) | kds-group/pg 1.62x, kds-group/ora 1.09x
+  agg-distinct: kds-group 64.2us(98%); oracle 92.6us(88%); pg 51.4us(4%) | kds-group/pg 0.80x, kds-group/ora 1.44x
+  qps-bar-lookup-cold: kds-group 16.6us(17%); oracle 20.7us(31%); pg 18.0us(48%) | kds-group/pg 1.08x, kds-group/ora 1.25x
+  qps-bar-lookup-warm: kds-group 16.0us(9%); oracle 28.9us(66%); pg 20.5us(20%) | kds-group/pg 1.29x, kds-group/ora 1.81x
+  qps-bar-range-cold: kds-group 92.2us(15%); oracle 159.2us(13%); pg 126.8us(12%) | kds-group/pg 1.38x, kds-group/ora 1.73x
+  qps-bar-range-warm: kds-group 78.6us(3%); oracle 159.0us(8%); pg 101.3us(30%) | kds-group/pg 1.29x, kds-group/ora 2.02x
+  qps-day-slice-cold: kds-group 27.2us(31%); oracle 36.8us(35%); pg 38.0us(8%) | kds-group/pg 1.40x, kds-group/ora 1.35x
+  qps-day-slice-warm: kds-group 27.1us(30%); oracle 31.7us(16%); pg 38.6us(18%) | kds-group/pg 1.42x, kds-group/ora 1.17x
+  qps-symbol-history-cold: kds-group 144.5us(57%); oracle 509.5us(30%); pg 197.9us(63%) | kds-group/pg 1.37x, kds-group/ora 3.53x
+  qps-symbol-history-warm: kds-group 117.4us(11%); oracle 358.4us(6%); pg 133.0us(5%) | kds-group/pg 1.13x, kds-group/ora 3.05x
+  qps-cross-join-cold: kds-group 42.0us(23%); oracle 42.9us(26%); pg 63.5us(24%) | kds-group/pg 1.51x, kds-group/ora 1.02x
+  qps-cross-join-warm: kds-group 40.2us(4%); oracle 46.0us(55%); pg 67.5us(12%) | kds-group/pg 1.68x, kds-group/ora 1.14x
+  qps-point-join-cold: kds-group 18.8us(51%); oracle 17.9us(7%); pg 33.8us(58%) | kds-group/pg 1.80x, kds-group/ora 0.95x
+  qps-point-join-warm: kds-group 14.9us(8%); oracle 18.4us(5%); pg 17.6us(33%) | kds-group/pg 1.19x, kds-group/ora 1.23x
+  qps-model-join-cold: kds-group 26.4us(593%); oracle 198.0us(85%); pg 23.8us(17%) | kds-group/pg 0.90x, kds-group/ora 7.51x
+  qps-model-join-warm: kds-group 21.9us(10%); oracle 47.5us(31%); pg 21.7us(49%) | kds-group/pg 0.99x, kds-group/ora 2.16x
+  write-batch-1: kds-group 152.0us(7%); oracle 284.4us(25%); pg 149.2us(2%) | kds-group/pg 0.98x, kds-group/ora 1.87x
+  write-batch-10: kds-group 30.7us(9%); oracle 34.1us(30%); pg 28.9us(4%) | kds-group/pg 0.94x, kds-group/ora 1.11x
+  write-batch-100: kds-group 16.5us(1%); oracle 19.0us(7%); pg 14.8us(7%) | kds-group/pg 0.90x, kds-group/ora 1.16x
+  write-batch-1000: kds-group 15.5us(6%); oracle 16.6us(7%); pg 13.8us(2%) | kds-group/pg 0.89x, kds-group/ora 1.08x
+  join-conn-1: kds-group 45.8us(10%); oracle 42.2us(5%); pg 71.4us(17%) | kds-group/pg 1.56x, kds-group/ora 0.92x
+  join-conn-2: kds-group 65.7us(9%); oracle 67.5us(81%); pg 80.9us(25%) | kds-group/pg 1.23x, kds-group/ora 1.03x
+  join-conn-4: kds-group 111.5us(5%); oracle 72.3us(21%); pg 151.6us(54%) | kds-group/pg 1.36x, kds-group/ora 0.65x
+  join-conn-8: kds-group 218.4us(11%); oracle 139.4us(15%); pg 131.9us(90%) | kds-group/pg 0.60x, kds-group/ora 0.64x
+## s1 bars10080
+  load-exchanges: kds-group 254.2us(18%); oracle 999.6us(10%); pg 180.8us(12%) | kds-group/pg 0.71x, kds-group/ora 3.93x
+  load-symbols: kds-group 226.7us(638%); oracle 477.7us(300%); pg 158.6us(44%) | kds-group/pg 0.70x, kds-group/ora 2.11x
+  load-sessions: kds-group 16.0us(14%); oracle 20.7us(11%); pg 13.7us(8%) | kds-group/pg 0.86x, kds-group/ora 1.29x
+  load-bars: kds-group 13.2us(0%); oracle 28.9us(42%); pg 14.4us(3%) | kds-group/pg 1.10x, kds-group/ora 2.20x
+  load-stats: kds-group 15.8us(4%); oracle 18.0us(42%); pg 14.8us(2%) | kds-group/pg 0.93x, kds-group/ora 1.14x
+  load-models: kds-group 206.0us(713%); oracle 395.9us(38%); pg 219.9us(33%) | kds-group/pg 1.07x, kds-group/ora 1.92x
+  backtest-read: kds-group 161.6us(15%); oracle 147.6us(12%); pg 248.7us(18%) | kds-group/pg 1.54x, kds-group/ora 0.91x
+  result-insert: kds-group 157.8us(117%); oracle 250.1us(117%); pg 155.0us(1%) | kds-group/pg 0.98x, kds-group/ora 1.59x
+  backtest-replay: kds-group 154.1us(30%); oracle 191.4us(40%); pg 341.1us(21%) | kds-group/pg 2.21x, kds-group/ora 1.24x
+  compare-all: kds-group 566.7us(10%); oracle 667.9us(2%); pg 490.1us(35%) | kds-group/pg 0.86x, kds-group/ora 1.18x
+  compare-one: kds-group 68.6us(41%); oracle 112.3us(23%); pg 76.2us(145%) | kds-group/pg 1.11x, kds-group/ora 1.64x
+  read-bar-lookup: kds-group 20.1us(18%); oracle 18.9us(35%); pg 18.2us(39%) | kds-group/pg 0.91x, kds-group/ora 0.94x
+  read-bar-range: kds-group 74.7us(6%); oracle 196.9us(9%); pg 117.3us(16%) | kds-group/pg 1.57x, kds-group/ora 2.64x
+  read-symbol-history: kds-group 598.5us(15%); oracle 1501.8us(8%); pg 754.4us(12%) | kds-group/pg 1.26x, kds-group/ora 2.51x
+  read-day-slice: kds-group 126.4us(6%); oracle 99.2us(2%); pg 227.2us(6%) | kds-group/pg 1.80x, kds-group/ora 0.78x
+  read-join-point: kds-group 23.0us(7%); oracle 18.9us(64%); pg 31.1us(14%) | kds-group/pg 1.35x, kds-group/ora 0.82x
+  read-join-exists: kds-group 406.5us(22%); oracle 183.2us(112%); pg 848.4us(23%) | kds-group/pg 2.09x, kds-group/ora 0.45x
+  agg-global: kds-group 373.3us(39%); oracle 326.8us(20%); pg 585.4us(34%) | kds-group/pg 1.57x, kds-group/ora 0.88x
+  agg-by-symbol: kds-group 722.1us(20%); oracle 398.7us(37%); pg 886.6us(23%) | kds-group/pg 1.23x, kds-group/ora 0.55x
+  agg-by-session: kds-group 966.2us(16%); oracle 925.9us(5%); pg 1326.3us(3%) | kds-group/pg 1.37x, kds-group/ora 0.96x
+  agg-day-slice: kds-group 131.0us(18%); oracle 100.0us(8%); pg 224.3us(2%) | kds-group/pg 1.71x, kds-group/ora 0.76x
+  agg-distinct: kds-group 629.4us(8%); oracle 396.4us(38%); pg 651.4us(13%) | kds-group/pg 1.03x, kds-group/ora 0.63x
+  qps-bar-lookup-cold: kds-group 32.5us(10%); oracle 29.9us(24%); pg 58.7us(41%) | kds-group/pg 1.80x, kds-group/ora 0.92x
+  qps-bar-lookup-warm: kds-group 22.9us(21%); oracle 29.6us(10%); pg 24.5us(98%) | kds-group/pg 1.07x, kds-group/ora 1.29x
+  qps-bar-range-cold: kds-group 119.2us(40%); oracle 203.0us(14%); pg 125.5us(30%) | kds-group/pg 1.05x, kds-group/ora 1.70x
+  qps-bar-range-warm: kds-group 70.5us(23%); oracle 203.9us(25%); pg 106.5us(20%) | kds-group/pg 1.51x, kds-group/ora 2.89x
+  qps-day-slice-cold: kds-group 123.2us(7%); oracle 103.7us(23%); pg 213.2us(6%) | kds-group/pg 1.73x, kds-group/ora 0.84x
+  qps-day-slice-warm: kds-group 140.9us(5%); oracle 94.2us(13%); pg 246.4us(20%) | kds-group/pg 1.75x, kds-group/ora 0.67x
+  qps-symbol-history-cold: kds-group 616.7us(16%); oracle 1538.1us(8%); pg 806.8us(10%) | kds-group/pg 1.31x, kds-group/ora 2.49x
+  qps-symbol-history-warm: kds-group 502.0us(5%); oracle 1469.8us(5%); pg 698.7us(15%) | kds-group/pg 1.39x, kds-group/ora 2.93x
+  qps-cross-join-cold: kds-group 148.7us(1%); oracle 136.3us(22%); pg 242.2us(7%) | kds-group/pg 1.63x, kds-group/ora 0.92x
+  qps-cross-join-warm: kds-group 157.4us(7%); oracle 156.1us(36%); pg 256.3us(39%) | kds-group/pg 1.63x, kds-group/ora 0.99x
+  qps-point-join-cold: kds-group 27.6us(2%); oracle 31.2us(21%); pg 35.2us(78%) | kds-group/pg 1.28x, kds-group/ora 1.13x
+  qps-point-join-warm: kds-group 28.9us(19%); oracle 25.4us(33%); pg 28.8us(52%) | kds-group/pg 1.00x, kds-group/ora 0.88x
+  qps-model-join-cold: kds-group 151.2us(11%); oracle 318.5us(56%); pg 99.3us(24%) | kds-group/pg 0.66x, kds-group/ora 2.11x
+  qps-model-join-warm: kds-group 65.3us(6%); oracle 78.2us(38%); pg 65.6us(82%) | kds-group/pg 1.00x, kds-group/ora 1.20x
+  write-batch-1: kds-group 148.7us(141%); oracle 284.9us(134%); pg 150.2us(2%) | kds-group/pg 1.01x, kds-group/ora 1.92x
+  write-batch-10: kds-group 31.4us(64%); oracle 35.7us(76%); pg 29.0us(7%) | kds-group/pg 0.93x, kds-group/ora 1.14x
+  write-batch-100: kds-group 16.6us(35%); oracle 19.5us(39%); pg 15.0us(3%) | kds-group/pg 0.90x, kds-group/ora 1.17x
+  write-batch-1000: kds-group 15.3us(7%); oracle 16.8us(5%); pg 14.3us(7%) | kds-group/pg 0.93x, kds-group/ora 1.10x
+  join-conn-1: kds-group 141.3us(5%); oracle 116.2us(10%); pg 233.4us(5%) | kds-group/pg 1.65x, kds-group/ora 0.82x
+  join-conn-2: kds-group 269.8us(8%); oracle 174.6us(26%); pg 295.6us(7%) | kds-group/pg 1.10x, kds-group/ora 0.65x
+  join-conn-4: kds-group 507.4us(1%); oracle 191.9us(27%); pg 366.6us(24%) | kds-group/pg 0.72x, kds-group/ora 0.38x
+  join-conn-8: kds-group 1013.4us(3%); oracle 286.9us(14%); pg 474.9us(8%) | kds-group/pg 0.47x, kds-group/ora 0.28x
+## s1 bars252
+  load-exchanges: kds-group 357.8us(41%); oracle 1528.6us(11%); pg 194.5us(45%) | kds-group/pg 0.54x, kds-group/ora 4.27x
+  load-symbols: kds-group 255.5us(48%); oracle 974.9us(38%); pg 171.8us(58%) | kds-group/pg 0.67x, kds-group/ora 3.82x
+  load-sessions: kds-group 21.7us(49%); oracle 27.6us(42%); pg 13.4us(14%) | kds-group/pg 0.62x, kds-group/ora 1.27x
+  load-bars: kds-group 18.7us(13%); oracle 23.5us(56%); pg 17.6us(20%) | kds-group/pg 0.94x, kds-group/ora 1.26x
+  load-stats: kds-group 18.1us(17%); oracle 24.0us(38%); pg 18.0us(25%) | kds-group/pg 0.99x, kds-group/ora 1.33x
+  load-models: kds-group 132.2us(2%); oracle 447.5us(22%); pg 145.7us(11%) | kds-group/pg 1.10x, kds-group/ora 3.38x
+  backtest-read: kds-group 33.9us(206%); oracle 76.0us(22%); pg 31.1us(9%) | kds-group/pg 0.92x, kds-group/ora 2.24x
+  result-insert: kds-group 145.4us(7%); oracle 228.0us(87%); pg 138.5us(3%) | kds-group/pg 0.95x, kds-group/ora 1.57x
+  backtest-replay: kds-group 122.6us(48%); oracle 157.3us(12%); pg 39.8us(38%) | kds-group/pg 0.32x, kds-group/ora 1.28x
+  compare-all: kds-group 278.0us(30%); oracle 443.5us(43%); pg 281.2us(69%) | kds-group/pg 1.01x, kds-group/ora 1.60x
+  compare-one: kds-group 30.4us(47%); oracle 45.4us(88%); pg 39.0us(58%) | kds-group/pg 1.28x, kds-group/ora 1.49x
+  read-bar-lookup: kds-group 22.3us(33%); oracle 19.8us(55%); pg 29.5us(44%) | kds-group/pg 1.33x, kds-group/ora 0.89x
+  read-bar-range: kds-group 66.7us(20%); oracle 168.7us(7%); pg 103.8us(17%) | kds-group/pg 1.56x, kds-group/ora 2.53x
+  read-symbol-history: kds-group 174.0us(9%); oracle 373.7us(1%); pg 218.7us(49%) | kds-group/pg 1.26x, kds-group/ora 2.15x
+  read-day-slice: kds-group 19.5us(22%); oracle 22.3us(9%); pg 20.9us(14%) | kds-group/pg 1.07x, kds-group/ora 1.14x
+  read-join-point: kds-group 16.8us(33%); oracle 21.1us(8%); pg 27.7us(26%) | kds-group/pg 1.65x, kds-group/ora 1.26x
+  read-join-exists: kds-group 39.4us(97%); oracle 44.6us(11%); pg 15.9us(4%) | kds-group/pg 0.40x, kds-group/ora 1.13x
+  agg-global: kds-group 22.4us(166%); oracle 54.6us(191%); pg 25.6us(620%) | kds-group/pg 1.14x, kds-group/ora 2.43x
+  agg-by-symbol: kds-group 57.2us(206%); oracle 43.3us(205%); pg 98.9us(134%) | kds-group/pg 1.73x, kds-group/ora 0.76x
+  agg-by-session: kds-group 84.4us(47%); oracle 203.9us(6%); pg 239.8us(16%) | kds-group/pg 2.84x, kds-group/ora 2.42x
+  agg-day-slice: kds-group 18.5us(8%); oracle 25.6us(20%); pg 21.1us(35%) | kds-group/pg 1.14x, kds-group/ora 1.38x
+  agg-distinct: kds-group 46.4us(172%); oracle 64.1us(307%); pg 33.0us(406%) | kds-group/pg 0.71x, kds-group/ora 1.38x
+  qps-bar-lookup-cold: kds-group 16.9us(6%); oracle 23.2us(28%); pg 18.6us(20%) | kds-group/pg 1.10x, kds-group/ora 1.37x
+  qps-bar-lookup-warm: kds-group 14.8us(12%); oracle 21.1us(27%); pg 20.4us(14%) | kds-group/pg 1.38x, kds-group/ora 1.43x
+  qps-bar-range-cold: kds-group 86.7us(29%); oracle 170.4us(35%); pg 120.2us(56%) | kds-group/pg 1.39x, kds-group/ora 1.96x
+  qps-bar-range-warm: kds-group 79.3us(14%); oracle 192.7us(20%); pg 104.6us(10%) | kds-group/pg 1.32x, kds-group/ora 2.43x
+  qps-day-slice-cold: kds-group 19.6us(27%); oracle 25.2us(29%); pg 19.2us(32%) | kds-group/pg 0.98x, kds-group/ora 1.28x
+  qps-day-slice-warm: kds-group 22.2us(35%); oracle 20.3us(17%); pg 19.0us(36%) | kds-group/pg 0.86x, kds-group/ora 0.92x
+  qps-symbol-history-cold:  | 
+  qps-symbol-history-warm: kds-group 108.8us(14%); oracle 330.3us(9%); pg 143.2us(22%) | kds-group/pg 1.32x, kds-group/ora 3.04x
+  qps-cross-join-cold: kds-group 32.9us(14%); oracle 31.8us(38%); pg 28.0us(10%) | kds-group/pg 0.85x, kds-group/ora 0.97x
+  qps-cross-join-warm: kds-group 33.9us(27%); oracle 27.6us(29%); pg 28.8us(18%) | kds-group/pg 0.85x, kds-group/ora 0.81x
+  qps-point-join-cold: kds-group 16.6us(8%); oracle 18.7us(11%); pg 26.7us(29%) | kds-group/pg 1.61x, kds-group/ora 1.12x
+  qps-point-join-warm: kds-group 16.4us(8%); oracle 29.2us(60%); pg 29.9us(57%) | kds-group/pg 1.82x, kds-group/ora 1.78x
+  qps-model-join-cold: kds-group 124.5us(80%); oracle 157.9us(139%); pg 28.9us(139%) | kds-group/pg 0.23x, kds-group/ora 1.27x
+  qps-model-join-warm: kds-group 25.2us(51%); oracle 44.9us(100%); pg 24.2us(61%) | kds-group/pg 0.96x, kds-group/ora 1.78x
+  write-batch-1: kds-group 148.9us(3%); oracle 315.6us(13%); pg 154.3us(10%) | kds-group/pg 1.04x, kds-group/ora 2.12x
+  write-batch-10: kds-group 30.8us(3%); oracle 34.8us(190%); pg 31.2us(4%) | kds-group/pg 1.01x, kds-group/ora 1.13x
+  write-batch-100: kds-group 16.7us(2%); oracle 18.5us(22%); pg 15.4us(7%) | kds-group/pg 0.92x, kds-group/ora 1.11x
+  write-batch-1000: kds-group 15.0us(3%); oracle 17.3us(7%); pg 13.8us(7%) | kds-group/pg 0.91x, kds-group/ora 1.15x
+  join-conn-1: kds-group 32.7us(20%); oracle 27.4us(11%); pg 32.6us(32%) | kds-group/pg 1.00x, kds-group/ora 0.84x
+  join-conn-2: kds-group 51.5us(14%); oracle 45.2us(59%); pg 35.7us(25%) | kds-group/pg 0.69x, kds-group/ora 0.88x
+  join-conn-4: kds-group 74.2us(3%); oracle 57.9us(11%); pg 51.2us(27%) | kds-group/pg 0.69x, kds-group/ora 0.78x
+  join-conn-8: kds-group 150.8us(3%); oracle 98.8us(20%); pg 155.9us(39%) | kds-group/pg 1.03x, kds-group/ora 0.66x
+## s1 bars60480
+  load-exchanges: kds-group 247.5us(17%); kds-strict 238.9us(55%); oracle 838.5us(54%); pg 188.0us(34%) | kds-group/pg 0.76x, kds-group/ora 3.39x, kds-strict/pg 0.79x, kds-strict/ora 3.51x
+  load-symbols: kds-group 231.7us(52%); kds-strict 220.3us(51%); oracle 490.7us(63%); pg 158.1us(33%) | kds-group/pg 0.68x, kds-group/ora 2.12x, kds-strict/pg 0.72x, kds-strict/ora 2.23x
+  load-sessions: kds-group 15.2us(7%); kds-strict 14.8us(2%); oracle 16.6us(18%); pg 13.5us(1%) | kds-group/pg 0.89x, kds-group/ora 1.09x, kds-strict/pg 0.91x, kds-strict/ora 1.12x
+  load-bars: kds-group 12.8us(4%); kds-strict 13.1us(1%); oracle 22.8us(22%); pg 14.2us(3%) | kds-group/pg 1.10x, kds-group/ora 1.78x, kds-strict/pg 1.08x, kds-strict/ora 1.74x
+  load-stats: kds-group 15.2us(2%); kds-strict 15.6us(2%); oracle 23.4us(15%); pg 14.2us(1%) | kds-group/pg 0.93x, kds-group/ora 1.54x, kds-strict/pg 0.91x, kds-strict/ora 1.50x
+  load-models: kds-group 297.2us(14%); kds-strict 219.0us(34%); oracle 412.4us(42%); pg 170.4us(50%) | kds-group/pg 0.57x, kds-group/ora 1.39x, kds-strict/pg 0.78x, kds-strict/ora 1.88x
+  backtest-read: kds-group 699.2us(3%); kds-strict 699.4us(2%); oracle 527.8us(1%); pg 1275.7us(24%) | kds-group/pg 1.82x, kds-group/ora 0.75x, kds-strict/pg 1.82x, kds-strict/ora 0.75x
+  result-insert: kds-group 223.0us(3%); kds-strict 219.3us(3%); oracle 277.8us(14%); pg 149.2us(144%) | kds-group/pg 0.67x, kds-group/ora 1.25x, kds-strict/pg 0.68x, kds-strict/ora 1.27x
+  backtest-replay: kds-group 685.5us(3%); kds-strict 703.0us(2%); oracle 520.2us(4%); pg 1269.3us(2%) | kds-group/pg 1.85x, kds-group/ora 0.76x, kds-strict/pg 1.81x, kds-strict/ora 0.74x
+  compare-all: kds-group 1288.0us(5%); kds-strict 1469.6us(14%); oracle 2140.8us(6%); pg 1475.3us(8%) | kds-group/pg 1.15x, kds-group/ora 1.66x, kds-strict/pg 1.00x, kds-strict/ora 1.46x
+  compare-one: kds-group 150.2us(48%); kds-strict 151.0us(29%); oracle 321.5us(27%); pg 181.7us(45%) | kds-group/pg 1.21x, kds-group/ora 2.14x, kds-strict/pg 1.20x, kds-strict/ora 2.13x
+  read-bar-lookup: kds-group 13.0us(15%); kds-strict 15.1us(30%); oracle 21.7us(56%); pg 16.4us(31%) | kds-group/pg 1.26x, kds-group/ora 1.67x, kds-strict/pg 1.08x, kds-strict/ora 1.44x
+  read-bar-range: kds-group 77.0us(7%); kds-strict 71.9us(8%); oracle 228.0us(12%); pg 113.8us(35%) | kds-group/pg 1.48x, kds-group/ora 2.96x, kds-strict/pg 1.58x, kds-strict/ora 3.17x
+  read-symbol-history: kds-group 2534.2us(2%); kds-strict 2560.2us(4%); oracle 8588.4us(4%); pg 4096.1us(0%) | kds-group/pg 1.62x, kds-group/ora 3.39x, kds-strict/pg 1.60x, kds-strict/ora 3.35x
+  read-day-slice: kds-group 666.6us(2%); kds-strict 692.5us(5%); oracle 450.1us(7%); pg 1332.0us(16%) | kds-group/pg 2.00x, kds-group/ora 0.68x, kds-strict/pg 1.92x, kds-strict/ora 0.65x
+  read-join-point: kds-group 34.3us(3%); kds-strict 33.4us(4%); oracle 31.5us(123%); pg 60.9us(31%) | kds-group/pg 1.78x, kds-group/ora 0.92x, kds-strict/pg 1.82x, kds-strict/ora 0.94x
+  read-join-exists: kds-group 2175.1us(10%); kds-strict 2081.5us(15%); oracle 687.8us(18%); pg 4306.9us(2%) | kds-group/pg 1.98x, kds-group/ora 0.32x, kds-strict/pg 2.07x, kds-strict/ora 0.33x
+  agg-global: kds-group 1969.5us(12%); kds-strict 1982.0us(1%); oracle 1483.8us(13%); pg 2256.4us(11%) | kds-group/pg 1.15x, kds-group/ora 0.75x, kds-strict/pg 1.14x, kds-strict/ora 0.75x
+  agg-by-symbol: kds-group 3700.8us(7%); kds-strict 3764.7us(2%); oracle 1909.7us(7%); pg 3523.7us(8%) | kds-group/pg 0.95x, kds-group/ora 0.52x, kds-strict/pg 0.94x, kds-strict/ora 0.51x
+  agg-by-session: kds-group 5715.8us(8%); kds-strict 5622.0us(3%); oracle 4117.4us(4%); pg 6558.5us(1%) | kds-group/pg 1.15x, kds-group/ora 0.72x, kds-strict/pg 1.17x, kds-strict/ora 0.73x
+  agg-day-slice: kds-group 681.3us(5%); kds-strict 681.9us(4%); oracle 486.5us(1%); pg 1421.3us(6%) | kds-group/pg 2.09x, kds-group/ora 0.71x, kds-strict/pg 2.08x, kds-strict/ora 0.71x
+  agg-distinct: kds-group 2970.5us(7%); kds-strict 2896.8us(10%); oracle 1209.9us(17%); pg 2038.0us(17%) | kds-group/pg 0.69x, kds-group/ora 0.41x, kds-strict/pg 0.70x, kds-strict/ora 0.42x
+  qps-bar-lookup-cold: kds-group 34.8us(6%); kds-strict 31.7us(42%); oracle 60.3us(100%); pg 38.9us(64%) | kds-group/pg 1.12x, kds-group/ora 1.73x, kds-strict/pg 1.22x, kds-strict/ora 1.90x
+  qps-bar-lookup-warm: kds-group 27.3us(28%); kds-strict 26.2us(44%); oracle 39.7us(52%); pg 27.7us(22%) | kds-group/pg 1.01x, kds-group/ora 1.45x, kds-strict/pg 1.06x, kds-strict/ora 1.51x
+  qps-bar-range-cold: kds-group 106.5us(34%); kds-strict 103.9us(11%); oracle 195.3us(22%); pg 122.7us(23%) | kds-group/pg 1.15x, kds-group/ora 1.83x, kds-strict/pg 1.18x, kds-strict/ora 1.88x
+  qps-bar-range-warm: kds-group 78.8us(20%); kds-strict 75.8us(54%); oracle 187.9us(15%); pg 101.9us(17%) | kds-group/pg 1.29x, kds-group/ora 2.38x, kds-strict/pg 1.34x, kds-strict/ora 2.48x
+  qps-day-slice-cold: kds-group 698.5us(3%); kds-strict 677.0us(3%); oracle 472.1us(1%); pg 1314.9us(15%) | kds-group/pg 1.88x, kds-group/ora 0.68x, kds-strict/pg 1.94x, kds-strict/ora 0.70x
+  qps-day-slice-warm: kds-group 725.3us(11%); kds-strict 683.7us(11%); oracle 527.8us(5%); pg 1474.9us(8%) | kds-group/pg 2.03x, kds-group/ora 0.73x, kds-strict/pg 2.16x, kds-strict/ora 0.77x
+  qps-symbol-history-cold: kds-group 2478.7us(4%); kds-strict 2512.0us(8%); oracle 8627.4us(4%); pg 3942.1us(5%) | kds-group/pg 1.59x, kds-group/ora 3.48x, kds-strict/pg 1.57x, kds-strict/ora 3.43x
+  qps-symbol-history-warm: kds-group 2572.5us(5%); kds-strict 2589.1us(3%); oracle 8210.0us(1%); pg 4002.6us(1%) | kds-group/pg 1.56x, kds-group/ora 3.19x, kds-strict/pg 1.55x, kds-strict/ora 3.17x
+  qps-cross-join-cold: kds-group 715.5us(4%); kds-strict 703.9us(8%); oracle 534.2us(17%); pg 1433.5us(9%) | kds-group/pg 2.00x, kds-group/ora 0.75x, kds-strict/pg 2.04x, kds-strict/ora 0.76x
+  qps-cross-join-warm: kds-group 693.1us(1%); kds-strict 725.7us(3%); oracle 601.1us(13%); pg 1288.5us(23%) | kds-group/pg 1.86x, kds-group/ora 0.87x, kds-strict/pg 1.78x, kds-strict/ora 0.83x
+  qps-point-join-cold: kds-group 34.3us(56%); kds-strict 35.3us(18%); oracle 146.1us(69%); pg 68.3us(69%) | kds-group/pg 2.00x, kds-group/ora 4.26x, kds-strict/pg 1.93x, kds-strict/ora 4.14x
+  qps-point-join-warm: kds-group 30.6us(18%); kds-strict 30.6us(32%); oracle 44.0us(65%); pg 44.0us(113%) | kds-group/pg 1.44x, kds-group/ora 1.44x, kds-strict/pg 1.44x, kds-strict/ora 1.44x
+  qps-model-join-cold: kds-group 218.1us(49%); kds-strict 335.7us(38%); oracle 418.9us(15%); pg 354.4us(20%) | kds-group/pg 1.63x, kds-group/ora 1.92x, kds-strict/pg 1.06x, kds-strict/ora 1.25x
+  qps-model-join-warm: kds-group 129.4us(8%); kds-strict 146.4us(6%); oracle 265.2us(5%); pg 185.9us(13%) | kds-group/pg 1.44x, kds-group/ora 2.05x, kds-strict/pg 1.27x, kds-strict/ora 1.81x
+  write-batch-1: kds-group 215.2us(1%); kds-strict 214.4us(3%); oracle 281.9us(44%); pg 150.3us(5%) | kds-group/pg 0.70x, kds-group/ora 1.31x, kds-strict/pg 0.70x, kds-strict/ora 1.31x
+  write-batch-10: kds-group 37.4us(3%); kds-strict 36.0us(7%); oracle 37.0us(7%); pg 29.2us(4%) | kds-group/pg 0.78x, kds-group/ora 0.99x, kds-strict/pg 0.81x, kds-strict/ora 1.03x
+  write-batch-100: kds-group 16.9us(6%); kds-strict 16.9us(5%); oracle 19.3us(4%); pg 14.9us(5%) | kds-group/pg 0.88x, kds-group/ora 1.14x, kds-strict/pg 0.88x, kds-strict/ora 1.14x
+  write-batch-1000: kds-group 14.9us(5%); kds-strict 15.1us(2%); oracle 18.4us(330%); pg 14.8us(13%) | kds-group/pg 0.99x, kds-group/ora 1.23x, kds-strict/pg 0.98x, kds-strict/ora 1.21x
+  join-conn-1: kds-group 699.0us(1%); kds-strict 697.2us(2%); oracle 527.7us(10%); pg 1342.1us(25%) | kds-group/pg 1.92x, kds-group/ora 0.76x, kds-strict/pg 1.92x, kds-strict/ora 0.76x
+  join-conn-2: kds-group 1312.8us(1%); kds-strict 1325.8us(0%); oracle 554.5us(6%); pg 1440.2us(14%) | kds-group/pg 1.10x, kds-group/ora 0.42x, kds-strict/pg 1.09x, kds-strict/ora 0.42x
+  join-conn-4: kds-group 2593.0us(1%); kds-strict 2626.7us(3%); oracle 638.0us(5%); pg 1470.2us(13%) | kds-group/pg 0.57x, kds-group/ora 0.25x, kds-strict/pg 0.56x, kds-strict/ora 0.24x
+  join-conn-8: kds-group 5234.9us(2%); kds-strict 5218.2us(3%); oracle 803.2us(4%); pg 1522.4us(11%) | kds-group/pg 0.29x, kds-group/ora 0.15x, kds-strict/pg 0.29x, kds-strict/ora 0.15x
+## s2 four-bookers
+  booking: kds-group 907.9us(3%); oracle 763.8us(5%); pg 390.1us(4%) | kds-group/pg 0.43x, kds-group/ora 0.84x
+  manifest-scan: kds-group 19.7us(112%); oracle 34.4us(77%); pg 21.9us(4%) | kds-group/pg 1.11x, kds-group/ora 1.75x
+  voyage-rollup: kds-group 25.0us(81%); oracle 31.5us(55%); pg 18.8us(3%) | kds-group/pg 0.75x, kds-group/ora 1.26x
+  customer-statement: kds-group 860.6us(2%); oracle 849.3us(2%); pg 147.5us(12%) | kds-group/pg 0.17x, kds-group/ora 0.99x
+## s2 one-booker
+  booking: kds-group 323.1us(3%); kds-strict 327.8us(5%); oracle 438.7us(9%); pg 337.7us(2%) | kds-group/pg 1.05x, kds-group/ora 1.36x, kds-strict/pg 1.03x, kds-strict/ora 1.34x
+  manifest-scan: kds-group 18.1us(34%); kds-strict 17.7us(35%); oracle 30.8us(26%); pg 22.5us(12%) | kds-group/pg 1.24x, kds-group/ora 1.70x, kds-strict/pg 1.27x, kds-strict/ora 1.74x
+  voyage-rollup: kds-group 23.7us(42%); kds-strict 16.0us(76%); oracle 22.2us(47%); pg 30.3us(51%) | kds-group/pg 1.28x, kds-group/ora 0.94x, kds-strict/pg 1.89x, kds-strict/ora 1.39x
+  customer-statement: kds-group 881.1us(1%); kds-strict 857.6us(3%); oracle 882.8us(22%); pg 147.5us(13%) | kds-group/pg 0.17x, kds-group/ora 1.00x, kds-strict/pg 0.17x, kds-strict/ora 1.03x
+## s3 loans1000-indexed
+  ddl: kds-group 404.5us(53%); oracle 3904.2us(11%); pg 674.1us(5%) | kds-group/pg 1.67x, kds-group/ora 9.65x
+  load: kds-group 150.1us(10%); oracle 286.1us(10%); pg 153.7us(141%) | kds-group/pg 1.02x, kds-group/ora 1.91x
+  create-index: kds-group 736.5us(11%); oracle 2280.1us(22%); pg 519.9us(64%) | kds-group/pg 0.71x, kds-group/ora 3.10x
+  pk-user: kds-group 30.1us(14%); oracle 27.8us(13%); pg 29.9us(48%) | kds-group/pg 0.99x, kds-group/ora 0.92x
+  loans-by-user: kds-group 21.0us(23%); oracle 26.7us(17%); pg 24.4us(40%) | kds-group/pg 1.16x, kds-group/ora 1.27x
+  loans-by-book: kds-group 20.6us(20%); oracle 28.6us(7%); pg 21.7us(25%) | kds-group/pg 1.05x, kds-group/ora 1.39x
+  resv-by-user: kds-group 19.8us(26%); oracle 19.7us(2%); pg 18.5us(29%) | kds-group/pg 0.94x, kds-group/ora 1.00x
+  books-by-author: kds-group 20.6us(12%); oracle 21.9us(21%); pg 22.7us(21%) | kds-group/pg 1.10x, kds-group/ora 1.06x
+  books-by-genre: kds-group 21.0us(21%); oracle 23.7us(31%); pg 24.1us(49%) | kds-group/pg 1.15x, kds-group/ora 1.13x
+  loans-by-daterange: kds-group 39.1us(7%); oracle 50.9us(28%); pg 52.4us(3%) | kds-group/pg 1.34x, kds-group/ora 1.30x
+  overdue: kds-group 26.3us(24%); oracle 43.6us(10%); pg 29.8us(34%) | kds-group/pg 1.13x, kds-group/ora 1.66x
+  join-loan-user: kds-group 26.6us(20%); oracle 19.9us(14%); pg 23.3us(11%) | kds-group/pg 0.88x, kds-group/ora 0.75x
+  join-no-literal: kds-group 50.0us(14%); oracle 70.5us(14%); pg 91.5us(22%) | kds-group/pg 1.83x, kds-group/ora 1.41x
+  exists-correlated: kds-group 45.4us(11%); oracle 25.3us(21%); pg 36.2us(0%) | kds-group/pg 0.80x, kds-group/ora 0.56x
+  count-by-user: kds-group 19.0us(4%); oracle 24.6us(38%); pg 16.8us(43%) | kds-group/pg 0.89x, kds-group/ora 1.30x
+## s3 loans1000-unindexed
+  ddl: kds-group 404.1us(25%); oracle 3897.7us(8%); pg 664.3us(5%) | kds-group/pg 1.64x, kds-group/ora 9.64x
+  load: kds-group 154.8us(0%); oracle 286.9us(7%); pg 147.0us(6%) | kds-group/pg 0.95x, kds-group/ora 1.85x
+  pk-user: kds-group 22.5us(38%); oracle 27.1us(31%); pg 27.7us(45%) | kds-group/pg 1.23x, kds-group/ora 1.20x
+  loans-by-user: kds-group 37.2us(28%); oracle 27.4us(11%); pg 37.3us(21%) | kds-group/pg 1.00x, kds-group/ora 0.74x
+  loans-by-book: kds-group 33.5us(19%); oracle 29.0us(20%); pg 34.2us(4%) | kds-group/pg 1.02x, kds-group/ora 0.87x
+  resv-by-user: kds-group 22.4us(14%); oracle 23.8us(25%); pg 23.4us(12%) | kds-group/pg 1.05x, kds-group/ora 1.06x
+  books-by-author: kds-group 21.8us(10%); oracle 22.8us(30%); pg 26.1us(31%) | kds-group/pg 1.20x, kds-group/ora 1.04x
+  books-by-genre: kds-group 22.9us(5%); oracle 26.5us(39%); pg 24.0us(25%) | kds-group/pg 1.05x, kds-group/ora 1.16x
+  loans-by-daterange: kds-group 38.2us(16%); oracle 50.5us(20%); pg 52.4us(8%) | kds-group/pg 1.37x, kds-group/ora 1.32x
+  overdue: kds-group 37.0us(10%); oracle 42.0us(18%); pg 56.3us(16%) | kds-group/pg 1.52x, kds-group/ora 1.14x
+  join-loan-user: kds-group 32.0us(27%); oracle 31.9us(59%); pg 39.5us(25%) | kds-group/pg 1.24x, kds-group/ora 1.00x
+  join-no-literal: kds-group 62.5us(8%); oracle 77.0us(4%); pg 87.2us(25%) | kds-group/pg 1.40x, kds-group/ora 1.23x
+  exists-correlated: kds-group 68.1us(13%); oracle 30.3us(15%); pg 94.4us(13%) | kds-group/pg 1.39x, kds-group/ora 0.45x
+  count-by-user: kds-group 30.3us(22%); oracle 24.7us(32%); pg 33.2us(15%) | kds-group/pg 1.10x, kds-group/ora 0.81x
+## s3 loans10000-indexed
+  ddl: kds-group 5409.8us(45%); oracle 3528.0us(8%); pg 650.3us(23%) | kds-group/pg 0.12x, kds-group/ora 0.65x
+  load: kds-group 357.7us(6%); oracle 299.2us(3%); pg 299.0us(75%) | kds-group/pg 0.84x, kds-group/ora 0.84x
+  create-index: kds-group 6015.3us(26%); oracle 3954.8us(30%); pg 1768.0us(105%) | kds-group/pg 0.29x, kds-group/ora 0.66x
+  pk-user: kds-group 31.1us(4%); oracle 29.4us(14%); pg 32.5us(21%) | kds-group/pg 1.04x, kds-group/ora 0.94x
+  loans-by-user: kds-group 20.7us(36%); oracle 27.7us(4%); pg 22.7us(44%) | kds-group/pg 1.10x, kds-group/ora 1.34x
+  loans-by-book: kds-group 18.9us(22%); oracle 20.9us(31%); pg 21.3us(43%) | kds-group/pg 1.13x, kds-group/ora 1.11x
+  resv-by-user: kds-group 18.0us(33%); oracle 24.5us(39%); pg 22.4us(45%) | kds-group/pg 1.24x, kds-group/ora 1.36x
+  books-by-author: kds-group 18.3us(23%); oracle 20.8us(13%); pg 21.5us(35%) | kds-group/pg 1.18x, kds-group/ora 1.14x
+  books-by-genre: kds-group 61.4us(35%); oracle 72.1us(2%); pg 77.9us(15%) | kds-group/pg 1.27x, kds-group/ora 1.18x
+  loans-by-daterange: kds-group 233.9us(10%); oracle 266.2us(8%); pg 353.1us(5%) | kds-group/pg 1.51x, kds-group/ora 1.14x
+  overdue: kds-group 106.0us(5%); oracle 283.1us(8%); pg 148.4us(6%) | kds-group/pg 1.40x, kds-group/ora 2.67x
+  join-loan-user: kds-group 22.3us(26%); oracle 22.8us(26%); pg 21.2us(43%) | kds-group/pg 0.95x, kds-group/ora 1.02x
+  join-no-literal: kds-group 47.1us(10%); oracle 74.5us(6%); pg 242.3us(9%) | kds-group/pg 5.14x, kds-group/ora 1.58x
+  exists-correlated: kds-group 42.6us(11%); oracle 27.7us(38%); pg 32.0us(30%) | kds-group/pg 0.75x, kds-group/ora 0.65x
+  count-by-user: kds-group 16.7us(33%); oracle 19.2us(5%); pg 19.0us(21%) | kds-group/pg 1.14x, kds-group/ora 1.15x
+## s3 loans10000-unindexed
+  ddl: kds-group 372.4us(48%); oracle 4212.2us(65%); pg 693.2us(34%) | kds-group/pg 1.86x, kds-group/ora 11.31x
+  load: kds-group 153.1us(5%); oracle 301.6us(41%); pg 176.9us(110%) | kds-group/pg 1.15x, kds-group/ora 1.97x
+  pk-user: kds-group 24.4us(43%); oracle 25.7us(42%); pg 34.4us(24%) | kds-group/pg 1.41x, kds-group/ora 1.05x
+  loans-by-user: kds-group 131.9us(2%); oracle 89.0us(39%); pg 215.1us(3%) | kds-group/pg 1.63x, kds-group/ora 0.67x
+  loans-by-book: kds-group 136.6us(8%); oracle 89.8us(17%); pg 232.8us(8%) | kds-group/pg 1.70x, kds-group/ora 0.66x
+  resv-by-user: kds-group 83.5us(19%); oracle 58.6us(33%); pg 131.8us(33%) | kds-group/pg 1.58x, kds-group/ora 0.70x
+  books-by-author: kds-group 47.5us(10%); oracle 53.8us(23%); pg 68.5us(32%) | kds-group/pg 1.44x, kds-group/ora 1.13x
+  books-by-genre: kds-group 73.3us(8%); oracle 84.3us(9%); pg 117.9us(19%) | kds-group/pg 1.61x, kds-group/ora 1.15x
+  loans-by-daterange: kds-group 224.4us(14%); oracle 265.8us(8%); pg 344.2us(5%) | kds-group/pg 1.53x, kds-group/ora 1.18x
+  overdue: kds-group 219.9us(14%); oracle 249.9us(9%); pg 323.1us(10%) | kds-group/pg 1.47x, kds-group/ora 1.14x
+  join-loan-user: kds-group 137.2us(7%); oracle 85.2us(15%); pg 216.9us(17%) | kds-group/pg 1.58x, kds-group/ora 0.62x
+  join-no-literal: kds-group 209.8us(8%); oracle 143.7us(8%); pg 272.7us(6%) | kds-group/pg 1.30x, kds-group/ora 0.69x
+  exists-correlated: kds-group 269.0us(4%); oracle 82.0us(5%); pg 652.2us(3%) | kds-group/pg 2.42x, kds-group/ora 0.30x
+  count-by-user: kds-group 146.2us(15%); oracle 112.7us(25%); pg 251.1us(8%) | kds-group/pg 1.72x, kds-group/ora 0.77x
+## s3 loans200-indexed
+  ddl: kds-group 361.1us(18%); oracle 3920.5us(5%); pg 665.3us(23%) | kds-group/pg 1.84x, kds-group/ora 10.86x
+  load: kds-group 153.6us(19%); oracle 336.8us(64%); pg 145.6us(143%) | kds-group/pg 0.95x, kds-group/ora 2.19x
+  create-index: kds-group 448.7us(13%); oracle 2185.4us(65%); pg 316.9us(131%) | kds-group/pg 0.71x, kds-group/ora 4.87x
+  pk-user: kds-group 24.8us(9%); oracle 30.8us(46%); pg 25.1us(59%) | kds-group/pg 1.01x, kds-group/ora 1.24x
+  loans-by-user: kds-group 22.3us(27%); oracle 20.4us(16%); pg 29.7us(62%) | kds-group/pg 1.33x, kds-group/ora 0.91x
+  loans-by-book: kds-group 18.5us(16%); oracle 24.5us(12%); pg 19.8us(21%) | kds-group/pg 1.07x, kds-group/ora 1.33x
+  resv-by-user: kds-group 18.1us(31%); oracle 22.7us(49%); pg 19.7us(77%) | kds-group/pg 1.09x, kds-group/ora 1.26x
+  books-by-author: kds-group 18.1us(1%); oracle 22.0us(12%); pg 16.5us(38%) | kds-group/pg 0.91x, kds-group/ora 1.21x
+  books-by-genre: kds-group 17.1us(19%); oracle 24.9us(32%); pg 15.9us(18%) | kds-group/pg 0.93x, kds-group/ora 1.45x
+  loans-by-daterange: kds-group 20.6us(34%); oracle 28.2us(48%); pg 25.2us(11%) | kds-group/pg 1.22x, kds-group/ora 1.37x
+  overdue: kds-group 20.9us(23%); oracle 28.6us(2%); pg 23.0us(39%) | kds-group/pg 1.10x, kds-group/ora 1.37x
+  join-loan-user: kds-group 22.4us(11%); oracle 22.7us(18%); pg 23.6us(55%) | kds-group/pg 1.05x, kds-group/ora 1.01x
+  join-no-literal: kds-group 53.3us(9%); oracle 78.0us(14%); pg 59.9us(4%) | kds-group/pg 1.12x, kds-group/ora 1.47x
+  exists-correlated: kds-group 37.7us(8%); oracle 23.2us(12%); pg 39.5us(18%) | kds-group/pg 1.05x, kds-group/ora 0.62x
+  count-by-user: kds-group 18.3us(23%); oracle 19.9us(15%); pg 21.1us(8%) | kds-group/pg 1.16x, kds-group/ora 1.09x
+## s3 loans200-unindexed
+  ddl: kds-group 507.5us(24%); oracle 4552.4us(5%); pg 657.6us(17%) | kds-group/pg 1.30x, kds-group/ora 8.97x
+  load: kds-group 153.6us(13%); oracle 291.8us(140%); pg 147.1us(146%) | kds-group/pg 0.96x, kds-group/ora 1.90x
+  pk-user: kds-group 22.1us(21%); oracle 23.8us(31%); pg 24.0us(32%) | kds-group/pg 1.09x, kds-group/ora 1.08x
+  loans-by-user: kds-group 22.9us(19%); oracle 27.1us(18%); pg 29.2us(18%) | kds-group/pg 1.27x, kds-group/ora 1.18x
+  loans-by-book: kds-group 23.0us(27%); oracle 25.3us(21%); pg 21.2us(27%) | kds-group/pg 0.92x, kds-group/ora 1.10x
+  resv-by-user: kds-group 17.4us(18%); oracle 23.9us(21%); pg 18.4us(11%) | kds-group/pg 1.06x, kds-group/ora 1.37x
+  books-by-author: kds-group 17.6us(40%); oracle 28.2us(25%); pg 18.9us(24%) | kds-group/pg 1.07x, kds-group/ora 1.60x
+  books-by-genre: kds-group 16.7us(14%); oracle 26.6us(29%); pg 16.4us(18%) | kds-group/pg 0.98x, kds-group/ora 1.59x
+  loans-by-daterange: kds-group 24.9us(31%); oracle 28.3us(11%); pg 25.9us(16%) | kds-group/pg 1.04x, kds-group/ora 1.14x
+  overdue: kds-group 21.4us(50%); oracle 42.3us(28%); pg 30.3us(33%) | kds-group/pg 1.41x, kds-group/ora 1.97x
+  join-loan-user: kds-group 22.9us(36%); oracle 23.2us(22%); pg 23.0us(26%) | kds-group/pg 1.00x, kds-group/ora 1.01x
+  join-no-literal: kds-group 58.7us(32%); oracle 81.3us(10%); pg 57.3us(18%) | kds-group/pg 0.98x, kds-group/ora 1.39x
+  exists-correlated: kds-group 33.2us(22%); oracle 28.4us(4%); pg 36.9us(18%) | kds-group/pg 1.11x, kds-group/ora 0.85x
+  count-by-user: kds-group 17.9us(24%); oracle 23.8us(5%); pg 19.4us(27%) | kds-group/pg 1.08x, kds-group/ora 1.32x
+## s4 day1
+  open: kds-group 142.0us(5%); oracle 313.9us(44%); pg 144.0us(2%) | kds-group/pg 1.01x, kds-group/ora 2.21x
+  board: kds-group 133.8us(2%); oracle 71.4us(2%); pg 250.6us(2%) | kds-group/pg 1.87x, kds-group/ora 0.53x
+  tape200: kds-group 21.9us(135%); oracle 25.7us(9%); pg 29.6us(10%) | kds-group/pg 1.35x, kds-group/ora 1.17x
+  tape1k: kds-group 27.1us(7%); oracle 26.0us(0%); pg 43.0us(17%) | kds-group/pg 1.59x, kds-group/ora 0.96x
+  tape10k: kds-group 132.1us(4%); oracle 66.4us(7%); pg 239.7us(4%) | kds-group/pg 1.81x, kds-group/ora 0.50x
+  pk: kds-group 20.2us(45%); oracle 17.0us(11%); pg 25.2us(78%) | kds-group/pg 1.25x, kds-group/ora 0.84x
+  close: kds-group 454.8us(12%); oracle 274.8us(18%); pg 541.2us(32%) | kds-group/pg 1.19x, kds-group/ora 0.60x
+## s4 day1-declared
+  open: kds-group 137.3us(5%) | 
+  board: kds-group 64.1us(4%) | 
+  tape200: kds-group 18.4us(16%) | 
+  tape1k: kds-group 20.2us(3%) | 
+  tape10k: kds-group 64.0us(1%) | 
+  pk: kds-group 14.9us(10%) | 
+  close: kds-group 430.9us(25%) | 
+## s5 four-terminals
+  new-order: kds-group 1131.2us(25%); kds-strict 1107.1us(16%); oracle 977.7us(5%); pg 834.6us(2%) | kds-group/pg 0.74x, kds-group/ora 0.86x, kds-strict/pg 0.75x, kds-strict/ora 0.88x
+  payment: kds-group 509.2us(5%); kds-strict 479.9us(17%); oracle 328.2us(50%); pg 246.5us(24%) | kds-group/pg 0.48x, kds-group/ora 0.64x, kds-strict/pg 0.51x, kds-strict/ora 0.68x
+  order-status: kds-group 461.1us(12%); kds-strict 424.7us(1%); oracle 70.0us(22%); pg 83.7us(11%) | kds-group/pg 0.18x, kds-group/ora 0.15x, kds-strict/pg 0.20x, kds-strict/ora 0.16x
+  delivery: kds-group 1518.1us(9%); kds-strict 1457.1us(2%); oracle 1907.8us(10%); pg 1566.8us(8%) | kds-group/pg 1.03x, kds-group/ora 1.26x, kds-strict/pg 1.08x, kds-strict/ora 1.31x
+  stock-level: kds-group 512.1us(20%); kds-strict 479.3us(3%); oracle 124.3us(4%); pg 191.4us(3%) | kds-group/pg 0.37x, kds-group/ora 0.24x, kds-strict/pg 0.40x, kds-strict/ora 0.26x
+  mix: kds-group 2404.4us(3%); kds-strict 2464.3us(5%); oracle 1369.8us(10%); pg 949.7us(18%) | kds-group/pg 0.39x, kds-group/ora 0.57x, kds-strict/pg 0.39x, kds-strict/ora 0.56x
+## s5 one-terminal
+  new-order: kds-group 1125.6us(28%); kds-strict 1110.2us(6%); oracle 1330.0us(31%); pg 856.1us(31%) | kds-group/pg 0.76x, kds-group/ora 1.18x, kds-strict/pg 0.77x, kds-strict/ora 1.20x
+  payment: kds-group 543.4us(72%); kds-strict 504.8us(12%); oracle 285.1us(108%); pg 274.1us(75%) | kds-group/pg 0.50x, kds-group/ora 0.52x, kds-strict/pg 0.54x, kds-strict/ora 0.56x
+  order-status: kds-group 433.4us(25%); kds-strict 442.6us(6%); oracle 73.8us(9%); pg 82.7us(7%) | kds-group/pg 0.19x, kds-group/ora 0.17x, kds-strict/pg 0.19x, kds-strict/ora 0.17x
+  delivery: kds-group 1440.9us(19%); kds-strict 1488.4us(2%); oracle 2295.0us(32%); pg 1636.3us(31%) | kds-group/pg 1.14x, kds-group/ora 1.59x, kds-strict/pg 1.10x, kds-strict/ora 1.54x
+  stock-level: kds-group 482.7us(58%); kds-strict 485.1us(10%); oracle 124.6us(5%); pg 187.8us(0%) | kds-group/pg 0.39x, kds-group/ora 0.26x, kds-strict/pg 0.39x, kds-strict/ora 0.26x
+  mix: kds-group 713.0us(13%); kds-strict 780.7us(19%); oracle 818.0us(3%); pg 601.0us(20%) | kds-group/pg 0.84x, kds-group/ora 1.15x, kds-strict/pg 0.77x, kds-strict/ora 1.05x

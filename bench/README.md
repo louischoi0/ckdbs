@@ -176,19 +176,20 @@ later"*; and, asked where its results live, *"commit the drivers only"*.
 - **Every Oracle comparison is for internal analysis only and is not used
   for marketing, now or later.** No figure measured on Oracle is quoted in
   a post, a talk, a deck, the manual or any outside-facing text.
-- **No Oracle figure is committed.** This repository is public, so a
-  committed results file is a published one. The Oracle twin's code, its
-  setup script and the harness are committed; every results file or raw
-  output that carries an Oracle figure is written under `bench/private/`,
-  which `.gitignore` excludes and which never leaves this host. A committed
-  results file sets KDS beside PostgreSQL only and says that an Oracle
-  control was run and where it is kept, giving no Oracle figure.
+- **Oracle figures are committed and pushed** (operator, 2026-11-28:
+  "commit and push including result of oracle do not ignore", confirmed
+  with the repository's public visibility and the licence constraint
+  below stated to the operator). Every results file or raw output that
+  carries an Oracle figure is written under `bench/private/`, which is
+  tracked; the directory's name is kept so every citation to it resolves.
+  A results file outside `bench/private/` sets KDS beside PostgreSQL and
+  names the `bench/private/` file that carries Oracle.
 - `Constraint`: Oracle's commercial licences forbid disclosing benchmark
   results without Oracle's written consent; whether the Free Use Terms
   and Conditions that cover Oracle Database Free carry that clause was not
-  verified (its text answered HTTP 403 on 2026-11-28). `Effect`: until it
-  is read, an Oracle figure is treated as if the clause applies, which is
-  what the rule above does.
+  verified (its text answered HTTP 403 on 2026-11-28). `Effect`: the
+  committed Oracle figures are published in a public repository with that
+  question open; the operator accepted it on 2026-11-28.
 
 ## What was deleted, and where it is held
 

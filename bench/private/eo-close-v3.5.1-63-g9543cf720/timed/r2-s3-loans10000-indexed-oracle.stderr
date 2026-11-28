@@ -1,0 +1,22 @@
+phase ddl: 4 ops, mean 3528.0 us, p50 3088.1 us, p99 5086.8 us, 266 ops/s, errors {}
+phase load: 19000 ops, mean 299.2 us, p50 208.4 us, p99 720.4 us, 3341 ops/s, errors {}
+phase create-index: 8 ops, mean 4952.3 us, p50 4749.6 us, p99 12550.8 us, 199 ops/s, errors {}
+phase pk-user: 200 ops, mean 28.6 us, p50 20.2 us, p99 231.9 us, 32815 ops/s, errors {}
+phase loans-by-user: 200 ops, mean 27.7 us, p50 19.2 us, p99 202.0 us, 34571 ops/s, errors {}
+phase loans-by-book: 200 ops, mean 26.9 us, p50 19.9 us, p99 235.5 us, 34902 ops/s, errors {}
+phase resv-by-user: 200 ops, mean 24.5 us, p50 17.1 us, p99 212.2 us, 38693 ops/s, errors {}
+phase books-by-author: 200 ops, mean 20.8 us, p50 17.4 us, p99 53.3 us, 45656 ops/s, errors {}
+phase books-by-genre: 200 ops, mean 71.1 us, p50 66.6 us, p99 219.7 us, 13896 ops/s, errors {}
+phase loans-by-daterange: 200 ops, mean 248.0 us, p50 249.3 us, p99 420.3 us, 4006 ops/s, errors {}
+phase overdue: 200 ops, mean 277.2 us, p50 264.2 us, p99 560.5 us, 3588 ops/s, errors {}
+phase join-loan-user: 200 ops, mean 22.2 us, p50 17.8 us, p99 157.2 us, 42283 ops/s, errors {}
+phase join-no-literal: 200 ops, mean 73.4 us, p50 72.0 us, p99 122.3 us, 13390 ops/s, errors {}
+phase exists-correlated: 200 ops, mean 25.1 us, p50 23.4 us, p99 37.4 us, 39226 ops/s, errors {}
+phase count-by-user: 200 ops, mean 18.5 us, p50 15.5 us, p99 44.8 us, 52704 ops/s, errors {}
+check row-counts: ok 
+check loans-scan-equals-load: ok 10000 rows scanned, 10000 loaded
+check loans-by-user-vs-scan: ok 25 users sampled; 
+check loan-user-exists: ok 0 user_ids name no user: []
+check join-no-literal: ok 82 rows, expectation 82
+check exists-correlated: ok 20 ids, expectation 20
+check no-refusals: ok 
