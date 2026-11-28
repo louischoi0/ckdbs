@@ -1,6 +1,6 @@
 # Work order EH - what the native fold pays for a row: an aggregate over a whole relation
 
-Status: **OPENED 2026-11-28** on worktree `eh-native-fold-per-row`
+Status: **CLOSED 2026-11-28 after EH-S1, EH-S2 and EH-Sy** (§7, "EH-Sz"; `raft-marks-2026-11-28.md` §15): a global fold from the row's bytes, the group table over one arena, and a fold that yields. Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree `eh-native-fold-per-row`
 (branch `worktree-eh-native-fold-per-row`) from `01c6c741c`
 (`v3.5.1-35-g01c6c741c`), the close of EG's work branch, which is not
 landed; under the operator's standing go-ahead of 2026-11-28
@@ -252,6 +252,38 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 - Nothing of a read's fixed cost (EF) or a commit's (EG).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EH-Sz (2026-11-28): the close
+
+- **EH-Q1's bar is met**: a global fold of four aggregates is 27.5 ns of
+  server CPU a row against 38.4 ns when EH opened and PostgreSQL 18.7's
+  28.0 ns, inside the spread; `COUNT(*)` 10.4 ns against 19.1 ns and
+  12.1 ns (`bench/v3.5.1/results-eh-close-v3.5.1-51-g5af42e1c0.md`, "After
+  this file").
+- **The close's measurement found a regression, and CLA's own**: the pool
+  size bound added at `5af42e1c0` on the Sy review's advice made a fold of
+  60,480 groups 1.6x dearer than at S2 (280.1 ns a row against 170.9 ns).
+  Localised in nine rounds against S2's binary and a variant without the
+  bound (177 ns), and removed at `8db2923d4`: the pool is bounded by count,
+  eight aggregators. Measured again from the opening binary to the closing
+  one, **no shape is dearer**; `group-60480` is 173.9 ns against 234.7 ns
+  and PostgreSQL's 192.0 ns.
+- **Scenario 4's `close`** (`ck-tester`'s cell 2, on `5af42e1c0`, whose
+  difference from the closing commit is the pool bound): 1.18x to 1.24x
+  faster on every arm, through the counting client both sides time.
+- **EH-R5**: a point read and a filtered walk are inside their spreads of
+  the opening binary (1.02x and 1.00x server CPU).
+- **The suite at the closing code** (`8db2923d4`): 5,437 of 5,438; the
+  failure is the two-core insert rig named under EH-S2 (3 of 10 alone).
+- **The durable content**: `docs/spec/aggregate.md` §1 (the bytes path,
+  what AG1 still promises, `ANALYZE` on the frame's path) and §7 (slices);
+  `docs/spec/sched.md` §3 (an aggregated walk yields, on an aggregator of
+  its own); `CLAUDE.md`'s Aggregation row; `known-gaps.md` (what is left).
+- **Built**: §2's (a), (b), (c) and (d). **Not built**: the group
+  table's reserve from the planner's prior; a fold behind a predicate, over
+  a `varchar`, `DISTINCT` or a join from bytes; the grouped probe through
+  bytes - the frame is still every grouped fold's path, 1.08x of
+  PostgreSQL's at 7,560 groups.
 
 ### EH-Sy (2026-11-28): the fold given slices, on `eh-native-fold-per-row` from `c3a4cff4c`
 

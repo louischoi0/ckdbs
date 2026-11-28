@@ -111,6 +111,23 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   unreferenced value the mount sweep collects, not a slot redo never built.
   Owned by `docs/spec/eviction.md` (§3.3).
 
+## The native fold (EH)
+
+- **A grouped fold still takes every row through the frame**: at 7,560
+  groups it is 64.4 ns of server CPU a row against PostgreSQL 18.7's
+  59.7 ns (1.08x), the key encoded from decoded values and probed
+  (`bench/v3.5.1/results-eh-close-v3.5.1-51-g5af42e1c0.md`, verified on
+  `eh-native-fold-per-row` at `8db2923d4`). A fold behind a predicate, over
+  a `varchar`, with `DISTINCT`, over a join or over a step that decodes
+  every column takes the frame too (`aggregate.md` §1), and `ANALYZE` of a
+  bytes-eligible fold runs the frame's path.
+- **The group table is reallocated every grouped statement** (`table_`
+  grows from empty after `Reset`); keeping it needs a fill at `Reset`, a
+  measured trade not taken.
+- **A core keeps up to eight pooled aggregators' capacity**, each the size
+  of the largest fold it ran; before EH it kept one. Owner:
+  `docs/spec/aggregate.md`.
+
 ## Testing
 
 - **A scenario driver's latency is the engine's plus a Python client's,

@@ -135,3 +135,13 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; `workorder-eh-native-fold-per-row.md` (header, §4 "Marks"); EH's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
 
+## 15. EH closed on the standing go-ahead after S1, S2 and Sy
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §10; no further word |
+| **Mark** | **EH is closed on the work branch** at `8db2923d4` (`v3.5.1-53-g8db2923d4`): a global fold takes its rows from the page's bytes (S1), the group table is one arena under an open-addressing table (S2), and an aggregated walk yields on an aggregator of its own (Sy). EH-Q1's bar is met within the spread |
+| **CLA's, not the operator's** | **a regression of CLA's own, found by the close and removed before it**: the pool size bound added at the Sy review's advice cost a 60,480-group fold 1.6x; the pool is now bounded by count alone, and the closing binary is measured again against the opening one with no shape dearer. The reviews' cuts not taken are recorded in the order |
+| **Does not settle** | a push, a merge to `main`, a tag or a version, for EF, EG or EH |
+| **Recorded at** | this file; `workorder-eh-native-fold-per-row.md` (header, §4 "Marks", §7); EH's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+

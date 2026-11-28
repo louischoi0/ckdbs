@@ -183,6 +183,37 @@ The S2 stage binary reproduces its own figure (170.9 ns against its file's 173.7
 - **`scan-reject` and `group-8`-class shapes** ran at one data set (60,480 rows). **Rule 9's three row counts (200, 1K, 10K) are not swept**: cells 1 and 4 measure one 60,480-row relation, and the per-row cost is a fit at that size only; scenario 4's tapes carry 200, 1,000 and 10,000 rows but the `close` phase is not split by them. This is a cut, not an exemption.
 - **The first six rounds ran while the host's 5-minute load was still 2.5 to 3.3**; the gate passed at 0 to 1 % busy and nothing competing was recorded, but a quieter host would be needed to narrow the 12 % to 17 % spreads of `group-7560`.
 
+## After this file: the regression found, removed and measured again
+
+Written by CLA after the measurement above, which `ck-tester` wrote.
+
+**The cause was the aggregator pool's size bound**, which EH-Sy's review had asked for and CLA added at `5af42e1c0`: an aggregator that had run more than 4,096 groups was let go instead of pooled, so every fold of that many groups grew every buffer again. Nine rounds, 2026-11-28 05:2x UTC, rotating the S2 binary, this file's NEW binary and a variant of it with the size bound removed (`bisect/nobound-variant.diff`), KDS only, server CPU a row:
+
+| shape | S2 binary | NEW (`5af42e1c0`) | NEW without the size bound |
+|---|---|---|---|
+| `agg-global` | 28.0 ns (5.0 %) | 27.9 ns (13.6 %) | 27.8 ns (6.0 %) |
+| `group-7560` | 64.5 ns (0.7 %) | 70.2 ns (12.2 %) | 64.9 ns (4.5 %) |
+| `group-7560-sum` | 76.2 ns (1.0 %) | 83.4 ns (15.1 %) | 75.5 ns (4.2 %) |
+| `group-60480` | 178.4 ns (4.4 %) | 291.2 ns (4.8 %) | 176.9 ns (4.8 %) |
+
+**The fix** (`8db2923d4`, `v3.5.1-53-g8db2923d4`): the pool is bounded by count alone, eight aggregators, so a core keeps at most eight folds' capacity where before EH it kept one's. **The eleven shapes again**, the binary EH opened from against a Release build of `8db2923d4`, interleaved as in cell 1, 2026-11-28 05:35:13 to 05:36:09 UTC, every gate passed at once, 1-minute load 2.05 to 3.56 (`finalab/`):
+
+| shape | OLD | closing (`8db2923d4`) | closing / OLD | read | PostgreSQL | closing / PostgreSQL | read |
+|---|---|---|---|---|---|---|---|
+| `scan-reject` | 11.2 ns (24.9 %) | 11.0 ns (11.6 %) | **0.98x** | no claim | 18.0 ns (4.0 %) | **0.61x** | KDS cheaper |
+| `count-star` | 19.1 ns (3.6 %) | 10.4 ns (3.6 %) | **0.54x** | cheaper | 12.1 ns (7.2 %) | **0.85x** | KDS cheaper |
+| `count-col` | 27.4 ns (3.1 %) | 17.8 ns (2.9 %) | **0.65x** | cheaper | 19.0 ns (3.0 %) | **0.94x** | KDS cheaper |
+| `sum` | 27.4 ns (3.0 %) | 18.0 ns (3.1 %) | **0.66x** | cheaper | 20.3 ns (4.1 %) | **0.89x** | KDS cheaper |
+| `min-max` | 31.9 ns (1.8 %) | 22.1 ns (3.1 %) | **0.69x** | cheaper | 22.2 ns (2.6 %) | **0.99x** | inside the spread |
+| `agg-global` | 38.4 ns (2.3 %) | 27.5 ns (2.4 %) | **0.72x** | cheaper | 28.0 ns (5.1 %) | **0.98x** | inside the spread |
+| `group-8` | 42.9 ns (3.3 %) | 42.3 ns (10.8 %) | **0.98x** | inside the spread | 38.9 ns (4.8 %) | **1.09x** | inside the spread |
+| `group-8-sum` | 49.5 ns (5.6 %) | 49.6 ns (5.3 %) | **1.00x** | inside the spread | 48.8 ns (3.9 %) | **1.02x** | inside the spread |
+| `group-7560` | 74.1 ns (6.7 %) | 64.4 ns (4.3 %) | **0.87x** | cheaper | 59.7 ns (3.6 %) | **1.08x** | KDS dearer |
+| `group-7560-sum` | 88.7 ns (10.9 %) | 76.0 ns (5.2 %) | **0.86x** | cheaper | 77.1 ns (3.5 %) | **0.99x** | inside the spread |
+| `group-60480` | 234.7 ns (4.2 %) | 173.9 ns (4.6 %) | **0.74x** | cheaper | 192.0 ns (7.4 %) | **0.91x** | KDS cheaper |
+
+**No shape is dearer than OLD**, and every global shape and `group-60480` are within or below PostgreSQL's; what is left behind it is the grouped probe at 7,560 groups without a `SUM` (1.08x); at 8 groups it is 1.09x, inside the spread.
+
 ## Archive
 
 `bench/v3.5.1/archive/eh-close-v3.5.1-51-g5af42e1c0/`: every cell's JSON and stdout, return codes, per-cell prechecks (load, gate wait), the server configurations, `run.sh`, `c4.sh`, the watchdog and its log, the timeline, the device, the PostgreSQL version and affinity and server log, `binary.sha256`, `source-binary-mtime.txt` and `tools.sha256`. No data file or WAL segment is archived.

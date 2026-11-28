@@ -1,0 +1,3 @@
+2026-11-28T05:23:55Z master=2450943 alive=y status_age=5s 2026-11-28T05:23:50Z pg up
+2026-11-28T05:24:55Z master=2450943 alive=y status_age=1s 2026-11-28T05:24:54Z idle burn
+2026-11-28T05:25:55Z end: /home/ukjin/bench-runs/eh-v3.5.1-35-g01c6c741c/bisect/done
