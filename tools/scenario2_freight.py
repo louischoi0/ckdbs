@@ -294,8 +294,8 @@ class Client:
         self.errors = 0
         self.first_error = None
 
-    def __call__(self, command):
-        reply = format_reply(self._conn.send_command(command))
+    def _note(self, command, reply):
+        """Echoes a reply and counts it if the server refused."""
         if ECHO:
             shown = (reply if len(reply) <= ECHO_REPLY_MAX
                      else reply[:ECHO_REPLY_MAX] + "...")
@@ -306,27 +306,35 @@ class Client:
                 self.first_error = f"{command}  ->  {reply}"
         return reply
 
+    def __call__(self, command):
+        """The rendered reply: what verification and every untimed caller
+        read."""
+        return self._note(command, format_reply(self._conn.send_command(command)))
+
+    def count(self, command):
+        """A timed write's or DDL's answer: its tag, or an `ERR` line, with no
+        row built - what the twin's `__call__` does through `query` (EF-S1).
+        The tag is the string `__call__` returns for the same statement, so
+        `inserted_id` reads it unchanged."""
+        return self._note(command, self._conn.count(command))
+
     def rows(self, command):
         """`(rows, reply)`: a read's rows with each value decoded to a string,
         or `(None, <ERR line>)`. What the twin's `rows` builds from `fetch`,
         and no rendering of the whole reply (EF-S1)."""
         rows, reply = self._conn.rows(command)
-        if ECHO:
-            print(f"[main] {command}  ->  {reply[:ECHO_REPLY_MAX]}",
-                  file=sys.stderr, flush=True)
-        if rows is None:
-            self.errors += 1
-            if self.first_error is None:
-                self.first_error = f"{command}  ->  {reply}"
+        self._note(command, reply)
         return rows, reply
 
     def close(self):
         self._conn.close()
 
 
-def send(exec_, phase, command):
+def send(client, phase, command):
+    """One timed statement that returns no rows the caller reads: a write,
+    DDL or `COMMIT`, through the client that builds none."""
     t0 = time.perf_counter()
-    reply = exec_(command)
+    reply = client.count(command)
     phase.record(time.perf_counter() - t0, reply)
     return reply
 
@@ -1767,7 +1775,7 @@ def main():
     meta = {
         # EF-S1: what the timed statements go through, so a results file can
         # say it. Reads decode each value to a string, as the twin's do.
-        "timed_client": {"reads": "rows", "writes": "send_command"},
+        "timed_client": {"reads": "rows", "writes": "count"},
         "engine": "ckdbs",
         "scenario": "freight",
         "columns": sum(len(SCHEMA[b][0].split(",")) for b in CREATE_ORDER),

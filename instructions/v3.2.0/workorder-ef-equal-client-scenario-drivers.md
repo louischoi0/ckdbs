@@ -327,6 +327,20 @@ rule and binds S3 only.
 - The suite was not executed: no build input changed (`tools/` only).
   Overhead not measured; nothing in the engine changed.
 
+- **After the review (`189c901fa`): timed writes moved to the counting
+  client.** The review showed EF-R1 unmet for writes: KDS timed them
+  through `send_command` and the twins through `query`, about 2 µs of
+  Python a statement by the review's mock (3.8 µs against 1.9 µs, no
+  server, off the bench host). `send` in scenarios 2 and 3 now calls
+  `Client.count`, which returns the tag `send_command` returns, so an
+  issued id is read as before; the outcomes of a 200-booking run are
+  unchanged. **Not measured in this stage**: EF-S2's scenario 2 and 3
+  cells are run on this form. What still differs: the twins' `RETURNING`
+  inserts decode one value where KDS reads its tag (against PostgreSQL,
+  under 1 µs a statement by EF-S0's `fetch` figure), and a `values`
+  phase's client CPU (11.5 µs against 8.6 µs on the lookup, not
+  attributed).
+
 ### EF-S0 (2026-11-28): the premise, on `ef-equal-client-scenario-drivers` from `72580aa04`
 
 `[measured]` at `v3.5.1-6-g72580aa04`, Release, both servers on CPUs 0 to

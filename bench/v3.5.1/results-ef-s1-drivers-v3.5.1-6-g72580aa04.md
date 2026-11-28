@@ -122,6 +122,10 @@ New driver: booking rate 1,978.6 a second (runs 1,981.0, 1,897.1, 1,978.6; sprea
 - **Three runs a cell.** A difference under about 3 % of a phase is not resolved.
 - **`load` and `pk-user`** (scenario 3's first phases) have spreads over 20 % in rounds 1 to 3 and carry no claim there.
 
+## After this run
+
+The review of this stage found the timed writes still on `send_command` where the twins count, and the drivers of scenarios 2 and 3 now time their writes and DDL through `ServerConnection.count` (the commit after `189c901fa`). **Nothing in this file measures that form**: every "new driver" write above went through `send_command`. EF-S2's cells run it.
+
 ## Archive
 
 `bench/v3.5.1/archive/ef-s1-v3.5.1-6-g72580aa04/`: `json/` (the two parity passes and the 24 overlap cells), `logs/` (each cell's stdout, return code, precheck and server configuration), `run.sh`, `run2.sh`, both watchdogs and their log, the timeline, the device, the binary's hash and the hashes of the driver copies that ran.

@@ -724,7 +724,7 @@ class Connection:
                     if len(self._renderers) >= 1024:
                         self._renderers.clear()
                     renderers = tuple(renderer_for(f) for f in self._row_desc(payload))
-                    self._renderers[bytes(payload)] = renderers
+                    self._renderers[payload] = renderers
             elif ftype == S_COMPLETE:
                 tag = _Reader(payload).text()
             elif ftype == S_ERROR:
