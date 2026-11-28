@@ -32,7 +32,7 @@ std::uint64_t BookedCommitFlushes() {
         .count.get();
 }
 
-TEST(StrictCommitWaitTest, AOneCoreStrictCommitBooksItsSyncUnderCommitWalFlush) {
+TEST(StrictCommitWaitTest, ASynchronousStrictCommitBooksItsSyncUnderCommitWalFlush) {
     auto created = sim::SimInstance::Create();
     ASSERT_TRUE(created.ok()) << created.status().message();
     sim::SimInstance& db = *created.value();

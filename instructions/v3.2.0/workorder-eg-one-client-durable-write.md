@@ -199,6 +199,7 @@ runs
 | EG-Q3 | The reactor in `fdatasync` at one core while other sessions wait | (a) outside EG: measured at eight bookers in S0 and recorded, no premise shows it costs a cell; (b) inside: the sync handed to the WAL writer at one core as above one | (a) |
 | EG-Q4 | The two documents of §1.3 | (a) corrected at EG's close whatever the gate; (b) left to their owners | (a) |
 | EG-Q5 | S0's PostgreSQL side | (a) run in S0's window; (b) the control run reused | (a) |
+| EG-Q6 | (written at EG-S1's review) EG-R3 says "one core only; the path above one core is not changed", and the booking is on every commit that syncs inline, which above one core is a `strict` DDL's, a synchronous dispatcher's and the own-transaction insert's | (a) EG-R3 bounds the commit path, not its statistics: the scope stays where the sync is, and those commits' sync time moves from CPU time to `commit.wal_flush` on any core count; (b) the scope gated on the core count, more code for a narrower truth | (a) |
 
 ### Marks
 
@@ -216,6 +217,7 @@ read against it before it is built.
 | EG-Q3 | (a) | measured at eight bookers in S0 and recorded; not built |
 | EG-Q4 | (a) | the two documents corrected at the close |
 | EG-Q5 | (a) | PostgreSQL run in S0's window |
+| EG-Q6 | (a) | written at EG-S1's review and adopted on the same go-ahead: no decision and no timing of a commit changes above one core, only where three kinds of commit book their sync |
 
 ## 5. Stages
 
@@ -289,6 +291,19 @@ read against it before it is built.
   on this host: alone it failed 3 of 12 here, its recorded rate, and the
   `strict` arm is not on its path.
 - Overhead not measured; measured at the milestone's close.
+- **After the review (`a44fd2adb`)**: a third cell,
+  `WalManagerTest.StrictCommitInsideAPolledTaskBooksToItsSession`, runs
+  the commit inside a polled task with a session - how a server's
+  statement reaches it - and pins the session's booking, the core's, and
+  that the scope closed; it is the first cell in which the nesting
+  assert is evaluated on this arm. The suite on that tree: **5,420 of
+  5,420** (`ctest -LE bs-nightly -j4`, 196.9 s). The code comment is cut to four
+  lines, the event's rung is spelled `kStrict`, and the simulator cell is
+  renamed for what it runs (a synchronous dispatcher). EG-Q6 records the
+  reading of EG-R3 the review asked for. **On a running Release server**
+  at `8b5b2587a`: 500 `strict` commits on one core book 500 waits and
+  122.9 µs an insert under `commit.wal_flush` in `sys.wait_stats`
+  (EG-S0 read 0), and `sys.session_waits` carries the session's row.
 
 ### EG-S0 (2026-11-28): the insert attributed, on `eg-one-client-durable-write` from `d50d304f8`
 

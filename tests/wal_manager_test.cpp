@@ -12,6 +12,7 @@
 
 #include "kds/base/current_core.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/coro.hpp"
 #include "kds/sched/wait_state.hpp"
 #include "kds/stats/wait_event.hpp"
 #include "kds/wal/memory_log_device.hpp"
@@ -137,6 +138,35 @@ TEST_F(WalManagerTest, StrictCommitBooksItsSyncAsCommitWalFlush) {
     device_->FailNextSync(Status::IoError("injected"));
     ASSERT_FALSE(wal->Commit(4, DurabilityClass::kStrict).ok());
     EXPECT_EQ(CommitWalFlushCount(), before + 2);
+}
+
+// The same commit from inside a polled task, which is how a server's
+// statement reaches it: the wait is booked to the task's session, the task is
+// running again once the commit has returned, and the scope did not meet
+// another one open (a `WaitScope` inside a `WaitScope` asserts, and only a
+// polled task evaluates that).
+TEST_F(WalManagerTest, StrictCommitInsideAPolledTaskBooksToItsSession) {
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    auto session = sched::MakeSessionWaitStats();
+    const std::size_t flush = static_cast<std::size_t>(stats::WaitEvent::kCommitWalFlush);
+    const std::uint64_t core_before = CommitWalFlushCount();
+
+    bool durable_at_return = false;
+    auto body = [&]() -> sched::Coro {
+        auto commit = wal->Commit(1, DurabilityClass::kStrict);
+        if (!commit.ok()) co_return commit.status();
+        durable_at_return = wal->IsDurable(commit.value());
+        co_return Status::OK();
+    };
+    sched::CoroTask task(sched::SchedulingGroup::kForeground, body());
+    task.wait_state_mut().session = session.get();
+    EXPECT_EQ(task.Poll(), sched::PollResult::kDone);
+
+    EXPECT_TRUE(durable_at_return);
+    EXPECT_EQ(session->events[flush].count.get(), 1u);
+    EXPECT_EQ(CommitWalFlushCount(), core_before + 1);
+    EXPECT_FALSE(task.wait_state().scoped) << "the scope closed with the sync";
 }
 
 TEST_F(WalManagerTest, StrictCommitReportsAFailedSyncAndStaysUndurable) {
