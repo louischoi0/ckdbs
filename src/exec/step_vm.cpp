@@ -3892,9 +3892,9 @@ sched::Coro ExecuteAsync(catalog::Catalog& catalog, storage::PageStore& store,
                          const StepChain& chain, const RowSink& sink, ExecStats* stats,
                          const Budget& budget, TrailCollector* trail, const TrailReplay* replay,
                          stats::CabinStore* cabins, const txn::Snapshot* snapshot, bool indexes,
-                         const SlicePolicy& slice) {
+                         const SlicePolicy& slice, BytesFold* fold) {
     return ExecuteChain(catalog, store, chain, sink, stats, budget, trail, replay, cabins, snapshot,
-                        indexes, &slice);
+                        indexes, &slice, fold);
 }
 
 Status Execute(catalog::Catalog& catalog, storage::PageStore& store, const StepChain& chain,

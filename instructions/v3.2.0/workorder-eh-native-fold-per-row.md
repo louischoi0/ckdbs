@@ -253,6 +253,34 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 
 ## 7. Stage log (CLA, appended as stages land)
 
+### EH-Sy (2026-11-28): the fold given slices, on `eh-native-fold-per-row` from `c3a4cff4c`
+
+- **The change.** `SelectBody` hands an aggregated statement to the sliced
+  driver where it may park and its first step is not a tuple key descent,
+  as it hands a plain walk; `SelectRun` takes an `Aggregator` of its own
+  from a dispatcher pool (`aggregator_pool_`), resets it, describes the
+  output to the sink, and its `Execute` folds through `ExecuteAsync` -
+  which now takes the `BytesFold` too - then emits after the walk.
+  `RunAggregated` keeps the one-turn folds on the dispatcher's
+  `aggregator_`, and the two share `DescribeAggregate` and `EmitAggregate`.
+  **EH-R7** (`[quiet-wrong]`), re-read before it was built: the premise -
+  one aggregator reused across statements, safe only while a fold never
+  gives its core back - holds at `c3a4cff4c`; the pooled aggregator is
+  the rule as written. Its cost - a fresh aggregator a statement, about
+  4 µs by AP03's comment - is paid once per pooled aggregator, not per
+  statement.
+- **Cells** (`walk_slice_rig_test.cpp`): a point read on the core of a
+  long fold is answered inside it; **two folds parked on one core at once -
+  a global one from bytes, a grouped one through the frame - each answer
+  as alone**, and with the three edits that share the dispatcher's
+  aggregator put back by hand the cell fails both answers (`x,2336,...`
+  where `1600,...` is right): it kills the mutant EH-R7 names; a cancel
+  ends a fold at its boundary and fails its transaction.
+- `docs/spec/sched.md` §3 and `docs/spec/aggregate.md` §7 say a fold
+  yields and owns its aggregator.
+- **The suite**: 5,438 of 5,438 (`ctest -LE bs-nightly -j4`, 176.5 s).
+- Overhead not measured; measured at the milestone's close.
+
 ### EH-S2 (2026-11-28): the group table, on `eh-native-fold-per-row` from `b36deb576`
 
 - **The change** (§2's (c), less the reserve): `Aggregator`'s

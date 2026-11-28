@@ -318,7 +318,13 @@ like `durability`.
   same chain.
 - **Cross-core**: nothing crosses. An aggregated statement runs, whole,
   on its session's core (`crosscore.md` CC1), so no core merges
-  another's. AG-M stays the contract - a merge of two partitions equals
+  another's.
+- **Slices** (EH): **a fold yields as a plain walk does** - every
+  `pages_per_slice` pages, where its statement may park and its first step
+  is not a tuple key descent (`sched.md` §3) - and owns its aggregator for
+  the walk, so two folds parked on one core never share one. A fold run
+  where nothing parks, and a fold over a descent, run in one turn on the
+  dispatcher's own. AG-M stays the contract - a merge of two partitions equals
   the one-pass fold - because it is what a partitioned aggregation would
   need.
 - **Transactions**: the fold reads through the statement's snapshot like

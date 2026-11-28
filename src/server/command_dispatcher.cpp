@@ -7756,7 +7756,10 @@ public:
             d_.select_scratch_pool_.pop_back();
         }
     }
-    ~SelectRun() { d_.select_scratch_pool_.push_back(std::move(scratch_)); }
+    ~SelectRun() {
+        d_.select_scratch_pool_.push_back(std::move(scratch_));
+        if (aggregator_ != nullptr) d_.aggregator_pool_.push_back(std::move(aggregator_));
+    }
     SelectRun(const SelectRun&) = delete;
     SelectRun& operator=(const SelectRun&) = delete;
 
@@ -7830,8 +7833,26 @@ public:
     bool top_level = false;
     bool arm_miss_refusal = false;
 
+    // **An aggregated walk handed to the slices** (EH-Sy): its own
+    // aggregator, taken from the dispatcher's pool and given back when the
+    // run ends (EH-R7: a fold that yields must not share the dispatcher's
+    // `aggregator_` with a fold another session starts on this core while it
+    // is parked), and the wire types its rows are emitted in.
+    exec::Aggregator& TakeAggregator() {
+        if (d_.aggregator_pool_.empty()) {
+            aggregator_ = std::make_unique<exec::Aggregator>();
+        } else {
+            aggregator_ = std::move(d_.aggregator_pool_.back());
+            d_.aggregator_pool_.pop_back();
+        }
+        return *aggregator_;
+    }
+    std::vector<std::uint32_t> aggregate_wire_types;
+
 private:
     DispatchOutcome Finish(const Status& ran);
+    DispatchOutcome FinishAggregate(const Status& ran);
+    std::unique_ptr<exec::Aggregator> aggregator_;
 
     CommandDispatcher& d_;
     // The statement's session, which outlives it: a connection is torn
@@ -7859,6 +7880,36 @@ void SetSelectRunStart(SelectRun& run, sched::MonoTimeNs started_ns) noexcept {
 
 sched::Coro SelectRun::Execute(DispatchOutcome* out) {
     CommandDispatcher::SelectScratch& scratch = *scratch_;
+    if (aggregator_ != nullptr) {
+        // **The fold, sliced** (EH-Sy): the walk yields every
+        // `pages_per_slice` pages as a plain `SELECT`'s does and is
+        // cancelled at a slice boundary the same way; its rows go to this
+        // run's own aggregator, from the frame or from their bytes, and the
+        // fold's output is emitted after the walk ends. Nothing streams
+        // while it walks, so the sink's resume hooks are not armed.
+        exec::Aggregator& fold = *aggregator_;
+        const exec::RowSink visit =
+            [&fold](const exec::ChainFrame& frame) -> StatusOr<storage::VisitControl> {
+            if (Status s = fold.Accumulate(frame); !s.ok()) return s;
+            return storage::VisitControl::kContinue;
+        };
+        scratch.stats.steps.clear();
+        const Status ran = co_await exec::ExecuteAsync(
+            d_.catalog_, d_.page_store_, *chain, visit, &scratch.stats, d_.budget_, trail, replay,
+            d_.cabins_, &snapshot->snap, d_.indexes_enabled_, slice_, &fold);
+        const std::uint64_t statement = out->statement;
+        const std::string_view plan_source = out->plan_source;
+        std::string plan_label = std::move(out->plan_label);
+        const std::optional<std::uint64_t> compile_ns = out->compile_ns;
+        const stats::StatementBinding binding = out->binding;
+        *out = FinishAggregate(ran);
+        out->statement = statement;
+        out->plan_source = plan_source;
+        out->plan_label = std::move(plan_label);
+        out->compile_ns = compile_ns;
+        out->binding = binding;
+        co_return Status::OK();
+    }
     // Encoding one row of the reply. Shared by the two paths below so the
     // sorted and unsorted replies are formatted by one routine - the bug
     // this shape avoids is a sorted statement rendering a DATE as an epoch
@@ -7950,6 +8001,24 @@ DispatchOutcome SelectRun::RunInline() {
             return Refused(parked);
         }
     }
+    return out;
+}
+
+DispatchOutcome SelectRun::FinishAggregate(const Status& ran) {
+    const CurrentCoreGuard as_this_core(d_.core_id_);
+    if (!ran.ok()) {
+        if (ran.code() == StatusCode::kCancelled) session_.Poison();
+        return Refused(ran);
+    }
+    std::uint64_t rows = 0;
+    if (Status emitted = d_.EmitAggregate(*sink, *aggregator_, aggregate_wire_types, rows);
+        !emitted.ok()) {
+        return Refused(emitted);
+    }
+    d_.RecordExecution(identity, trail, *chain, scratch_->stats);
+    DispatchOutcome out{text_sink.Take(), false};
+    out.rows_returned = rows;
+    out.examined = ExaminedBy(scratch_->stats);
     return out;
 }
 
@@ -10999,6 +11068,39 @@ void AppendEscaped(std::ostringstream& os, const std::string& text) {
 // would without a fold; nothing here consults them, and nothing here can
 // change what the chain read. That is AG1 - the fold consumes rows and has
 // no opinion about where they came from.
+Status CommandDispatcher::DescribeAggregate(ResultSink& sink, const exec::StepChain& chain,
+                                            std::vector<std::uint32_t>& wire_types) {
+    // A MIN/MAX or a group key over a relation's column 0 is a Keystone id,
+    // written as one whatever the column declares (`wire::WireValueType`).
+    // Widened for the wire only: `AggregateOutputType` stays the column's
+    // type, which `UPDATE ... SET` typing reads. Not through
+    // `DescribeFields`' projection, which would flag a `COUNT(*)` - whose
+    // ref is `{0, 0, 0}` too - as a Keystone; its int64 is unchanged here.
+    const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
+    wire_types.assign(out_types.size(), 0);
+    for (std::size_t i = 0; i < out_types.size(); ++i) {
+        wire_types[i] = wire::WireValueType(out_types[i], chain.aggregate->items[i].ref.col_pos);
+    }
+    std::vector<wire::FieldDescription> fields = DescribeFields(
+        chain.column_names, out_types, AggregateOutputTypeMods(*chain.aggregate));
+    for (std::size_t i = 0; i < fields.size() && i < wire_types.size(); ++i) {
+        fields[i].type_len = wire::WireTypeLen(wire_types[i]);
+    }
+    return sink.Describe(std::move(fields));
+}
+
+Status CommandDispatcher::EmitAggregate(ResultSink& sink, exec::Aggregator& aggregator,
+                                        std::span<const std::uint32_t> wire_types,
+                                        std::uint64_t& rows) {
+    std::string row_scratch;
+    return aggregator.Finish([&](std::span<const parser::AstValue> row) -> Status {
+        if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return s;
+        if (Status s = sink.Emit(row_scratch); !s.ok()) return s;
+        ++rows;
+        return Status::OK();
+    });
+}
+
 DispatchOutcome CommandDispatcher::RunAggregated(
     ResultSink& sink, TextResultSink& text_sink, const exec::StepChain& chain,
     exec::TrailCollector* trail, const exec::TrailReplay* replay,
@@ -11009,25 +11111,8 @@ DispatchOutcome CommandDispatcher::RunAggregated(
         return Refused(s);
     }
 
-    // A MIN/MAX or a group key over a relation's column 0 is a Keystone id,
-    // written as one whatever the column declares (`wire::WireValueType`).
-    // Widened for the wire only: `AggregateOutputType` stays the column's
-    // type, which `UPDATE ... SET` typing reads. Not through
-    // `DescribeFields`' projection, which would flag a `COUNT(*)` - whose
-    // ref is `{0, 0, 0}` too - as a Keystone; its int64 is unchanged here.
-    const std::vector<std::uint32_t> out_types = AggregateOutputTypes(*chain.aggregate);
-    std::vector<std::uint32_t> wire_types(out_types.size());
-    for (std::size_t i = 0; i < out_types.size(); ++i) {
-        wire_types[i] = wire::WireValueType(out_types[i], chain.aggregate->items[i].ref.col_pos);
-    }
-    std::vector<wire::FieldDescription> fields = DescribeFields(
-        chain.column_names, out_types, AggregateOutputTypeMods(*chain.aggregate));
-    for (std::size_t i = 0; i < fields.size() && i < wire_types.size(); ++i) {
-        fields[i].type_len = wire::WireTypeLen(wire_types[i]);
-    }
-    if (Status s = sink.Describe(std::move(fields)); !s.ok()) {
-        return Refused(s);
-    }
+    std::vector<std::uint32_t> wire_types;
+    if (Status s = DescribeAggregate(sink, chain, wire_types); !s.ok()) return Refused(s);
 
     // The fold's own failures - a SUM overflow, a cap - have to reach the
     // client, and a `RowSink` answers `StatusOr<VisitControl>`, so a
@@ -11054,16 +11139,8 @@ DispatchOutcome CommandDispatcher::RunAggregated(
 
     // Through the one sink every row path emits by: two formatters for a
     // folded row is how one of them comes to forget an item's `type_val`.
-    std::string row_scratch;
     std::uint64_t rows = 0;
-    Status emitted = aggregator_.Finish(
-        [&](std::span<const parser::AstValue> row) -> Status {
-            if (Status s = sink.EncodeValueRow(wire_types, row, row_scratch); !s.ok()) return s;
-            if (Status s = sink.Emit(row_scratch); !s.ok()) return s;
-            ++rows;
-            return Status::OK();
-        });
-    if (!emitted.ok()) {
+    if (Status emitted = EmitAggregate(sink, aggregator_, wire_types, rows); !emitted.ok()) {
         return Refused(emitted);
     }
 
@@ -11719,8 +11796,30 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // and access statistics hold unchanged" a structural fact rather than a
     // list of things that were remembered.
     if (compiled.aggregated()) {
-        return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity, snap,
-                             run->scratch().stats);
+        // **Handed to the slices where the statement may park** (EH-Sy), as
+        // a plain `SELECT`'s walk is below and for the same reason: a fold
+        // over a large relation would otherwise hold every other session on
+        // its core until it ends. A dispatcher that cannot park, and a fold
+        // over a tuple key descent - one leaf, no slice to fill - run here,
+        // on the dispatcher's own aggregator, in one turn.
+        const exec::AccessKind first = compiled.steps.front().kind;
+        if (!may_park_ || first == exec::AccessKind::kLookup ||
+            first == exec::AccessKind::kProbe) {
+            return RunAggregated(sink, text_sink, compiled, trail, replay_ptr, identity, snap,
+                                 run->scratch().stats);
+        }
+        exec::Aggregator& fold = run->TakeAggregator();
+        if (Status s = fold.Reset(*compiled.aggregate, compiled.column_names, aggregate_limits_);
+            !s.ok()) {
+            return Refused(s);
+        }
+        if (Status s = DescribeAggregate(sink, compiled, run->aggregate_wire_types); !s.ok()) {
+            return Refused(s);
+        }
+        run->HoldAcrossSuspension();
+        DispatchOutcome handed;
+        handed.select_run = run;
+        return handed;
     }
 
     // ---- V09: the emission quota wraps the sink, and nothing else moves --
