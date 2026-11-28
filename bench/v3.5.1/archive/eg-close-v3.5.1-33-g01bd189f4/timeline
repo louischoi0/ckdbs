@@ -1,0 +1,81 @@
+2026-11-28T03:23:49Z == c1-r1-old start
+2026-11-28T03:23:59Z == c1-r1-old end rc=0
+2026-11-28T03:24:02Z == c1-r1-new start
+2026-11-28T03:24:13Z == c1-r1-new end rc=0
+2026-11-28T03:24:16Z == c2-r1-old start
+2026-11-28T03:24:19Z == c2-r1-old end rc=0
+2026-11-28T03:24:22Z == c2-r1-new start
+2026-11-28T03:24:25Z == c2-r1-new end rc=0
+2026-11-28T03:24:28Z == c3-r1-old start
+2026-11-28T03:24:31Z == c3-r1-old end rc=0
+2026-11-28T03:24:35Z == c3-r1-new start
+2026-11-28T03:24:36Z == c3-r1-new end rc=0
+2026-11-28T03:24:39Z == c4-r1-old start
+2026-11-28T03:24:43Z == c4-r1-old end rc=0
+2026-11-28T03:24:46Z == c4-r1-new start
+2026-11-28T03:24:54Z == c4-r1-new end rc=0
+2026-11-28T03:24:57Z == c1-r2-new start
+2026-11-28T03:25:08Z == c1-r2-new end rc=0
+2026-11-28T03:25:11Z == c1-r2-old start
+2026-11-28T03:25:22Z == c1-r2-old end rc=0
+2026-11-28T03:25:25Z == c2-r2-new start
+2026-11-28T03:25:28Z == c2-r2-new end rc=0
+2026-11-28T03:25:31Z == c2-r2-old start
+2026-11-28T03:25:33Z == c2-r2-old end rc=0
+2026-11-28T03:25:36Z == c3-r2-new start
+2026-11-28T03:25:38Z == c3-r2-new end rc=0
+2026-11-28T03:25:41Z == c3-r2-old start
+2026-11-28T03:25:43Z == c3-r2-old end rc=0
+2026-11-28T03:25:46Z == c4-r2-new start
+2026-11-28T03:25:50Z == c4-r2-new end rc=0
+2026-11-28T03:25:53Z == c4-r2-old start
+2026-11-28T03:25:57Z == c4-r2-old end rc=0
+2026-11-28T03:26:00Z == c1-r3-old start
+2026-11-28T03:26:10Z == c1-r3-old end rc=0
+2026-11-28T03:26:13Z == c1-r3-new start
+2026-11-28T03:26:24Z == c1-r3-new end rc=0
+2026-11-28T03:26:27Z == c2-r3-old start
+2026-11-28T03:26:29Z == c2-r3-old end rc=0
+2026-11-28T03:26:33Z == c2-r3-new start
+2026-11-28T03:26:35Z == c2-r3-new end rc=0
+2026-11-28T03:26:38Z == c3-r3-old start
+2026-11-28T03:26:40Z == c3-r3-old end rc=0
+2026-11-28T03:26:43Z == c3-r3-new start
+2026-11-28T03:26:45Z == c3-r3-new end rc=0
+2026-11-28T03:26:48Z == c4-r3-old start
+2026-11-28T03:26:52Z == c4-r3-old end rc=0
+2026-11-28T03:26:55Z == c4-r3-new start
+2026-11-28T03:26:59Z == c4-r3-new end rc=0
+2026-11-28T03:27:02Z == c1-r4-new start
+2026-11-28T03:27:12Z == c1-r4-new end rc=0
+2026-11-28T03:27:15Z == c1-r4-old start
+2026-11-28T03:27:26Z == c1-r4-old end rc=0
+2026-11-28T03:27:29Z == c1-r5-old start
+2026-11-28T03:27:39Z == c1-r5-old end rc=0
+2026-11-28T03:27:42Z == c1-r5-new start
+2026-11-28T03:27:53Z == c1-r5-new end rc=0
+extension: rounds 4-5 of cells 2-4 added
+2026-11-28T03:28:08Z == c2-r4-new start
+2026-11-28T03:28:11Z == c2-r4-new end rc=0
+2026-11-28T03:28:14Z == c2-r4-old start
+2026-11-28T03:28:17Z == c2-r4-old end rc=0
+2026-11-28T03:28:20Z == c3-r4-new start
+2026-11-28T03:28:22Z == c3-r4-new end rc=0
+2026-11-28T03:28:25Z == c3-r4-old start
+2026-11-28T03:28:26Z == c3-r4-old end rc=0
+2026-11-28T03:28:30Z == c4-r4-new start
+2026-11-28T03:28:33Z == c4-r4-new end rc=0
+2026-11-28T03:28:36Z == c4-r4-old start
+2026-11-28T03:28:40Z == c4-r4-old end rc=0
+2026-11-28T03:28:43Z == c2-r5-old start
+2026-11-28T03:28:46Z == c2-r5-old end rc=0
+2026-11-28T03:28:49Z == c2-r5-new start
+2026-11-28T03:28:52Z == c2-r5-new end rc=0
+2026-11-28T03:28:55Z == c3-r5-old start
+2026-11-28T03:28:58Z == c3-r5-old end rc=0
+2026-11-28T03:29:01Z == c3-r5-new start
+2026-11-28T03:29:03Z == c3-r5-new end rc=0
+2026-11-28T03:29:06Z == c4-r5-old start
+2026-11-28T03:29:12Z == c4-r5-old end rc=0
+2026-11-28T03:29:15Z == c4-r5-new start
+2026-11-28T03:29:18Z == c4-r5-new end rc=0
