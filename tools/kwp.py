@@ -704,8 +704,9 @@ class Connection:
         a row description is decoded, and its renderers resolved, the first
         time its bytes are seen and looked up by those bytes after. A
         PostgreSQL client has no such step - its values arrive as text - so
-        paying it per statement charged KDS about 11 us of Python a
-        statement that says nothing about either server (EF-S1's pass D). A
+        paying it per statement charged KDS about 10 us of client CPU a
+        statement that says nothing about either server (EF-S1's passes D
+        and D2: 21.3 us against 11.5 us on a lookup). A
         refusal is returned, not raised, as `query` returns it.
         """
         self.sock.sendall(frame(C_PARSE, _Writer().s("").text(sql).take())

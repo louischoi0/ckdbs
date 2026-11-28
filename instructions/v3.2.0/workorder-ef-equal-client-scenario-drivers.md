@@ -293,22 +293,37 @@ rule and binds S3 only.
   23.4 µs, pass D): a KDS client must read the description to render
   typed values, a PostgreSQL client receives text and reads none, and in
   Python that step cost about 10 µs a statement. Cached, the lookup is
-  22.8 µs against 22.8 µs (pass D2).
+  22.8 µs against 22.8 µs (pass D2) **on the wall clock only**: the KDS
+  client spends 11.5 µs of CPU a statement against PostgreSQL's 8.6 µs
+  (spreads 4.3 % and 3.0 %), and its server 7.6 µs against 10.6 µs.
 - **The series break** (EF-Q3 (a), the overlap, three interleaved rounds
   on the final driver): a booking's four reads are 7.4 µs to 11.7 µs
-  cheaper each, its writes and commit inside their spreads, the booking
-  rate 1,978.6 against 1,829.8 a second; ten of scenario 3's twelve read
+  cheaper each, three of its writes and its commit inside their spreads
+  and `operation-update` and `org-update` 0.6 µs and 0.9 µs dearer through
+  write code the two drivers share (not attributed), the booking rate
+  1,978.6 against 1,829.8 a second; ten of scenario 3's twelve read
   shapes are 10 µs to 47 µs cheaper. The outcomes and `--verify` are
   identical through both drivers.
-- **What stays unequal is per row and is the wire's**: a typed value is
+- **What stays unequal**: per row, the wire's - a typed value is
   rendered by the KDS client, a text value is not by PostgreSQL's
   (`bar-range` 0.96x through the values pair, 1.74x through two counting
-  clients). EF-R1's "equal client work" is met for a statement and is
-  not for a row of a `values` phase; the results files say which mode
+  clients) - and per statement. **EF-R1's "equal client work" is not met**: a `values`
+  phase still costs the KDS client about 2.9 µs of CPU a statement more
+  than its twin's (not attributed) and more again per row, and the
+  writes are in another mode (next item); the results files say which mode
   each phase ran in, from the `timed_client` entry the drivers now write.
-- **Not moved**: writes keep `send_command` (no rows, and the overlap
-  shows them unmoved). **Not run**: an overlap for scenario 4, whose
-  change is the counting client EF-S0's pass A measured.
+- **Not moved, and not equal**: writes keep `send_command`, which reaches
+  `kwp.Connection.execute`, where the twins' writes go through
+  `pg_wire`'s `query` (counted) or, for `RETURNING`, `fetch` (one value
+  decoded). The overlap cannot show the difference, since both KDS
+  drivers time the same write code; it is not measured on this host
+  (a mock socket, no server, puts `send_command` of a write at 3.8 µs of
+  Python against `count`'s 1.9 µs). **Not run**: an overlap for scenario 4, whose
+  change is the counting client EF-S0's pass A measured, and **any
+  scenario 4 run at all on the new driver**, so its byte comparisons have
+  not yet passed through it (the stage's "every verification passing" is
+  met for scenarios 2 and 3 only). Run 1's new driver copy (`fetch`
+  before its cache) was not hashed.
 - The suite was not executed: no build input changed (`tools/` only).
   Overhead not measured; nothing in the engine changed.
 

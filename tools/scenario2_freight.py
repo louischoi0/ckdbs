@@ -797,7 +797,7 @@ def book_once(client, tables, state, args, phases, rng, day, axes):
     opened = False
     if args.txn:
         if client("BEGIN").startswith("ERR"):
-            state.give_back(cargo)
+            state.give_back(index)
             return FAILED
         opened = True
 
