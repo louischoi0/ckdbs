@@ -1,0 +1,581 @@
+{
+  "checks": [
+    {
+      "detail": "0 failed booking(s), first: None",
+      "name": "bookings-without-failure",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I1",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I2",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I3",
+      "ok": true
+    },
+    {
+      "detail": "100 checks, 0 failure(s), 0 unanswered",
+      "name": "I4",
+      "ok": true
+    }
+  ],
+  "ended_unix": 1795859530,
+  "engine": "oracle",
+  "harness": "eqbench",
+  "meta": {
+    "abandoned": 0,
+    "axes": {
+      "commit": 0,
+      "operations": 0,
+      "organizations": 0,
+      "read": 0
+    },
+    "booking_statements": {
+      "begin": {
+        "max_us": 1.505,
+        "mean_us": 0.035050064184852375,
+        "ops": 3116,
+        "p0_us": 0.022,
+        "p25_us": 0.03,
+        "p50_us": 0.03,
+        "p95_us": 0.041,
+        "p99_us": 0.177
+      },
+      "capacity-read": {
+        "max_us": 428.821,
+        "mean_us": 16.20161521181001,
+        "ops": 3116,
+        "p0_us": 13.599,
+        "p25_us": 15.067,
+        "p50_us": 15.279,
+        "p95_us": 16.514,
+        "p99_us": 35.656
+      },
+      "cargo-lookup": {
+        "max_us": 452.327,
+        "mean_us": 17.813449293966624,
+        "ops": 3116,
+        "p0_us": 14.27,
+        "p25_us": 16.288,
+        "p50_us": 16.589,
+        "p95_us": 18.319,
+        "p99_us": 49.678
+      },
+      "charge-insert": {
+        "max_us": 107276.002,
+        "mean_us": 23.108772891601966,
+        "ops": 16873,
+        "p0_us": 13.283,
+        "p25_us": 14.861,
+        "p50_us": 15.453,
+        "p95_us": 19.321,
+        "p99_us": 37.174
+      },
+      "commit": {
+        "max_us": 3184.314,
+        "mean_us": 158.92927466666666,
+        "ops": 3000,
+        "p0_us": 121.363,
+        "p25_us": 140.544,
+        "p50_us": 152.255,
+        "p95_us": 191.733,
+        "p99_us": 240.929
+      },
+      "credit-lookup": {
+        "max_us": 517.016,
+        "mean_us": 16.385536906290117,
+        "ops": 3116,
+        "p0_us": 13.682,
+        "p25_us": 15.1,
+        "p50_us": 15.318,
+        "p95_us": 16.515,
+        "p99_us": 39.586
+      },
+      "freight-insert": {
+        "max_us": 104271.395,
+        "mean_us": 57.424677,
+        "ops": 3000,
+        "p0_us": 17.395,
+        "p25_us": 19.291,
+        "p50_us": 19.994,
+        "p95_us": 25.934,
+        "p99_us": 83.788
+      },
+      "operation-update": {
+        "max_us": 555.944,
+        "mean_us": 17.14799066666667,
+        "ops": 3000,
+        "p0_us": 13.495,
+        "p25_us": 15.121,
+        "p50_us": 15.759,
+        "p95_us": 19.407,
+        "p99_us": 35.564
+      },
+      "org-update": {
+        "max_us": 606.694,
+        "mean_us": 15.818968333333334,
+        "ops": 3000,
+        "p0_us": 13.15,
+        "p25_us": 14.584,
+        "p50_us": 14.951,
+        "p95_us": 16.731,
+        "p99_us": 30.874
+      },
+      "recipe-read": {
+        "max_us": 542.548,
+        "mean_us": 21.287702824133504,
+        "ops": 3116,
+        "p0_us": 18.187,
+        "p25_us": 19.761,
+        "p50_us": 20.124,
+        "p95_us": 21.468,
+        "p99_us": 48.801
+      },
+      "rollback": {
+        "max_us": 62.044,
+        "mean_us": 13.069439655172413,
+        "ops": 116,
+        "p0_us": 11.009,
+        "p25_us": 12.287,
+        "p50_us": 12.461,
+        "p95_us": 13.709,
+        "p99_us": 19.03
+      }
+    },
+    "cargo_pool_exhausted": false,
+    "cargo_pool_left": 953,
+    "charges": 16873,
+    "failures": {},
+    "first_failure": null,
+    "freights": 3000,
+    "loaded": {
+      "cargos": 4000,
+      "fees": 12,
+      "operations": 300,
+      "organizations": 300,
+      "recipes": 93,
+      "ships": 30
+    },
+    "mode": {
+      "bookers": 1,
+      "bookings": 3000,
+      "capacity": "cached",
+      "capacity_headroom": 1.0,
+      "contend": true,
+      "credit_headroom": 1.0,
+      "hot_routes": 6,
+      "isolation": "each engine's default: READ COMMITTED on all three",
+      "lock": false,
+      "max_fees": 0,
+      "max_retries": 5,
+      "txn": true
+    },
+    "outcomes": {
+      "committed": 3000,
+      "conflicted": 0,
+      "failed": 0,
+      "rejected-capacity": 69,
+      "rejected-credit": 47
+    },
+    "per_booker": [
+      3000
+    ],
+    "relation_kinds": {
+      "s2_cargos": "Btree",
+      "s2_charges": "Heap",
+      "s2_fees": "Heap",
+      "s2_freights": "Heap",
+      "s2_operations": "Btree",
+      "s2_organizations": "Btree",
+      "s2_recipes": "Heap",
+      "s2_ships": "Heap"
+    },
+    "retries": 0,
+    "tps": 2193.8043100800146,
+    "verify": {
+      "checks": 400,
+      "failures": 0,
+      "unanswered": 0
+    }
+  },
+  "options": {},
+  "phases": [
+    {
+      "breakdown": {
+        "commit": 132.22528883183568,
+        "disk_read": 0.0,
+        "execution": 114.52792041078305,
+        "formatting_client": 6.218141206675225,
+        "lock": 0.0,
+        "network": 2.820282413350449,
+        "optimise": 0.0,
+        "parse": 0.0,
+        "parse_optimise": 0.0
+      },
+      "client_cpu_us_per_op": 72.03488703465982,
+      "client_decode_us_per_op": 6.218141206675225,
+      "errors": {},
+      "events": [
+        {
+          "class": "Idle",
+          "count": 41453.0,
+          "name": "SQL*Net message from client",
+          "total_us": 517992.0
+        },
+        {
+          "class": "Network",
+          "count": 41453.0,
+          "name": "SQL*Net message to client",
+          "total_us": 8788.0
+        },
+        {
+          "class": "Configuration",
+          "count": 2.0,
+          "name": "log file switch (checkpoint incomplete)",
+          "total_us": 109234.0
+        },
+        {
+          "class": "Configuration",
+          "count": 2.0,
+          "name": "log file switch completion",
+          "total_us": 101599.0
+        },
+        {
+          "class": "Commit",
+          "count": 3003.0,
+          "name": "log file sync",
+          "total_us": 412014.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 111812.358,
+        "mean_us": 438.6809107830552,
+        "ops": 3116,
+        "p0_us": 75.093,
+        "p25_us": 347.158,
+        "p50_us": 363.445,
+        "p95_us": 423.558,
+        "p99_us": 762.371
+      },
+      "name": "booking",
+      "raw": {
+        "st:execute count": 38344.0,
+        "st:parse count (hard)": 0.0,
+        "st:parse count (total)": 0.0,
+        "st:physical reads": 0.0,
+        "st:redo size": 15103864.0,
+        "st:session logical reads": 118326.0,
+        "st:user commits": 3000.0,
+        "tm:DB CPU": 342401.0,
+        "tm:DB time": 858286.0,
+        "tm:Java execution elapsed time": 0.0,
+        "tm:OLAP engine CPU time": 0.0,
+        "tm:OLAP engine elapsed time": 0.0,
+        "tm:PL/SQL compilation elapsed time": 0.0,
+        "tm:PL/SQL execution elapsed time": 0.0,
+        "tm:RMAN cpu time (backup/restore)": 0.0,
+        "tm:Tablespace encryption cpu time": 0.0,
+        "tm:Tablespace encryption elapsed time": 0.0,
+        "tm:background IM population cpu time": 0.0,
+        "tm:background IM population elapsed time": 0.0,
+        "tm:background IM prepopulation cpu time": 0.0,
+        "tm:background IM prepopulation elapsed time": 0.0,
+        "tm:background IM repopulation cpu time": 0.0,
+        "tm:background IM repopulation elapsed time": 0.0,
+        "tm:background IM trickle repopulation cpu time": 0.0,
+        "tm:background IM trickle repopulation elapsed time": 0.0,
+        "tm:background cpu time": 0.0,
+        "tm:background elapsed time": 0.0,
+        "tm:connection management call elapsed time": 0.0,
+        "tm:failed parse (out of shared memory) elapsed time": 0.0,
+        "tm:failed parse elapsed time": 0.0,
+        "tm:hard parse (bind mismatch) elapsed time": 0.0,
+        "tm:hard parse (sharing criteria) elapsed time": 0.0,
+        "tm:hard parse elapsed time": 0.0,
+        "tm:inbound PL/SQL rpc elapsed time": 0.0,
+        "tm:parse time elapsed": 0.0,
+        "tm:repeated bind elapsed time": 7.0,
+        "tm:sequence load elapsed time": 0.0,
+        "tm:sql execute elapsed time": 356869.0
+      },
+      "rows": 0,
+      "server_cpu_us_per_op": 130.75128369704748,
+      "terminals": 1,
+      "throughput_ops": 2278.6314100697755,
+      "wall_s": 1.367487513
+    },
+    {
+      "breakdown": {
+        "commit": 0.0,
+        "disk_read": 0.0,
+        "execution": 4.59,
+        "formatting_client": 4.62775,
+        "lock": 0.0,
+        "network": 0.2,
+        "optimise": 0.0,
+        "parse": 0.0,
+        "parse_optimise": 0.0
+      },
+      "client_cpu_us_per_op": 12.99293,
+      "client_decode_us_per_op": 4.62775,
+      "errors": {},
+      "events": [
+        {
+          "class": "Idle",
+          "count": 100.0,
+          "name": "SQL*Net message from client",
+          "total_us": 3264.0
+        },
+        {
+          "class": "Network",
+          "count": 100.0,
+          "name": "SQL*Net message to client",
+          "total_us": 20.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 290.604,
+        "mean_us": 25.43497,
+        "ops": 100,
+        "p0_us": 16.292,
+        "p25_us": 21.016,
+        "p50_us": 22.288,
+        "p95_us": 28.843,
+        "p99_us": 31.981
+      },
+      "name": "manifest-scan",
+      "raw": {
+        "st:execute count": 100.0,
+        "st:parse count (hard)": 0.0,
+        "st:parse count (total)": 0.0,
+        "st:physical reads": 0.0,
+        "st:redo size": 0.0,
+        "st:session logical reads": 932.0,
+        "st:user commits": 0.0,
+        "tm:DB CPU": 712.0,
+        "tm:DB time": 601.0,
+        "tm:Java execution elapsed time": 0.0,
+        "tm:OLAP engine CPU time": 0.0,
+        "tm:OLAP engine elapsed time": 0.0,
+        "tm:PL/SQL compilation elapsed time": 0.0,
+        "tm:PL/SQL execution elapsed time": 0.0,
+        "tm:RMAN cpu time (backup/restore)": 0.0,
+        "tm:Tablespace encryption cpu time": 0.0,
+        "tm:Tablespace encryption elapsed time": 0.0,
+        "tm:background IM population cpu time": 0.0,
+        "tm:background IM population elapsed time": 0.0,
+        "tm:background IM prepopulation cpu time": 0.0,
+        "tm:background IM prepopulation elapsed time": 0.0,
+        "tm:background IM repopulation cpu time": 0.0,
+        "tm:background IM repopulation elapsed time": 0.0,
+        "tm:background IM trickle repopulation cpu time": 0.0,
+        "tm:background IM trickle repopulation elapsed time": 0.0,
+        "tm:background cpu time": 0.0,
+        "tm:background elapsed time": 0.0,
+        "tm:connection management call elapsed time": 0.0,
+        "tm:failed parse (out of shared memory) elapsed time": 0.0,
+        "tm:failed parse elapsed time": 0.0,
+        "tm:hard parse (bind mismatch) elapsed time": 0.0,
+        "tm:hard parse (sharing criteria) elapsed time": 0.0,
+        "tm:hard parse elapsed time": 0.0,
+        "tm:inbound PL/SQL rpc elapsed time": 0.0,
+        "tm:parse time elapsed": 0.0,
+        "tm:repeated bind elapsed time": 0.0,
+        "tm:sequence load elapsed time": 0.0,
+        "tm:sql execute elapsed time": 459.0
+      },
+      "rows": 1007,
+      "server_cpu_us_per_op": 8.46,
+      "terminals": 1,
+      "throughput_ops": 37141.96998037418,
+      "wall_s": 0.002692372
+    },
+    {
+      "breakdown": {
+        "commit": 0.0,
+        "disk_read": 0.0,
+        "execution": 6.92,
+        "formatting_client": 0.8065000000000001,
+        "lock": 0.0,
+        "network": 0.18,
+        "optimise": 0.0,
+        "parse": 0.0,
+        "parse_optimise": 0.0
+      },
+      "client_cpu_us_per_op": 7.2844500000000005,
+      "client_decode_us_per_op": 0.8065000000000001,
+      "errors": {},
+      "events": [
+        {
+          "class": "Idle",
+          "count": 100.0,
+          "name": "SQL*Net message from client",
+          "total_us": 2317.0
+        },
+        {
+          "class": "Network",
+          "count": 100.0,
+          "name": "SQL*Net message to client",
+          "total_us": 18.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 215.948,
+        "mean_us": 21.94146,
+        "ops": 100,
+        "p0_us": 18.054,
+        "p25_us": 19.437,
+        "p50_us": 19.989,
+        "p95_us": 21.828,
+        "p99_us": 26.708
+      },
+      "name": "voyage-rollup",
+      "raw": {
+        "st:execute count": 100.0,
+        "st:parse count (hard)": 0.0,
+        "st:parse count (total)": 0.0,
+        "st:physical reads": 0.0,
+        "st:redo size": 0.0,
+        "st:session logical reads": 932.0,
+        "st:user commits": 0.0,
+        "tm:DB CPU": 1032.0,
+        "tm:DB time": 817.0,
+        "tm:Java execution elapsed time": 0.0,
+        "tm:OLAP engine CPU time": 0.0,
+        "tm:OLAP engine elapsed time": 0.0,
+        "tm:PL/SQL compilation elapsed time": 0.0,
+        "tm:PL/SQL execution elapsed time": 0.0,
+        "tm:RMAN cpu time (backup/restore)": 0.0,
+        "tm:Tablespace encryption cpu time": 0.0,
+        "tm:Tablespace encryption elapsed time": 0.0,
+        "tm:background IM population cpu time": 0.0,
+        "tm:background IM population elapsed time": 0.0,
+        "tm:background IM prepopulation cpu time": 0.0,
+        "tm:background IM prepopulation elapsed time": 0.0,
+        "tm:background IM repopulation cpu time": 0.0,
+        "tm:background IM repopulation elapsed time": 0.0,
+        "tm:background IM trickle repopulation cpu time": 0.0,
+        "tm:background IM trickle repopulation elapsed time": 0.0,
+        "tm:background cpu time": 0.0,
+        "tm:background elapsed time": 0.0,
+        "tm:connection management call elapsed time": 0.0,
+        "tm:failed parse (out of shared memory) elapsed time": 0.0,
+        "tm:failed parse elapsed time": 0.0,
+        "tm:hard parse (bind mismatch) elapsed time": 0.0,
+        "tm:hard parse (sharing criteria) elapsed time": 0.0,
+        "tm:hard parse elapsed time": 0.0,
+        "tm:inbound PL/SQL rpc elapsed time": 0.0,
+        "tm:parse time elapsed": 0.0,
+        "tm:repeated bind elapsed time": 0.0,
+        "tm:sequence load elapsed time": 0.0,
+        "tm:sql execute elapsed time": 692.0
+      },
+      "rows": 100,
+      "server_cpu_us_per_op": 10.67,
+      "terminals": 1,
+      "throughput_ops": 43590.78194452376,
+      "wall_s": 0.002294063
+    },
+    {
+      "breakdown": {
+        "commit": 0.0,
+        "disk_read": 0.0,
+        "execution": 828.66,
+        "formatting_client": 2.937,
+        "lock": 0.0,
+        "network": 0.66,
+        "optimise": 0.0,
+        "parse": 0.0,
+        "parse_optimise": 0.0
+      },
+      "client_cpu_us_per_op": 25.05672,
+      "client_decode_us_per_op": 2.937,
+      "errors": {},
+      "events": [
+        {
+          "class": "Idle",
+          "count": 50.0,
+          "name": "SQL*Net message from client",
+          "total_us": 4774.0
+        },
+        {
+          "class": "Network",
+          "count": 50.0,
+          "name": "SQL*Net message to client",
+          "total_us": 33.0
+        }
+      ],
+      "kinds": {},
+      "latency": {
+        "max_us": 1117.065,
+        "mean_us": 882.8462,
+        "ops": 50,
+        "p0_us": 826.202,
+        "p25_us": 845.885,
+        "p50_us": 859.194,
+        "p95_us": 1093.127,
+        "p99_us": 1117.065
+      },
+      "name": "customer-statement",
+      "raw": {
+        "st:execute count": 50.0,
+        "st:parse count (hard)": 0.0,
+        "st:parse count (total)": 0.0,
+        "st:physical reads": 0.0,
+        "st:redo size": 0.0,
+        "st:session logical reads": 301200.0,
+        "st:user commits": 0.0,
+        "tm:DB CPU": 41253.0,
+        "tm:DB time": 41572.0,
+        "tm:Java execution elapsed time": 0.0,
+        "tm:OLAP engine CPU time": 0.0,
+        "tm:OLAP engine elapsed time": 0.0,
+        "tm:PL/SQL compilation elapsed time": 0.0,
+        "tm:PL/SQL execution elapsed time": 0.0,
+        "tm:RMAN cpu time (backup/restore)": 0.0,
+        "tm:Tablespace encryption cpu time": 0.0,
+        "tm:Tablespace encryption elapsed time": 0.0,
+        "tm:background IM population cpu time": 0.0,
+        "tm:background IM population elapsed time": 0.0,
+        "tm:background IM prepopulation cpu time": 0.0,
+        "tm:background IM prepopulation elapsed time": 0.0,
+        "tm:background IM repopulation cpu time": 0.0,
+        "tm:background IM repopulation elapsed time": 0.0,
+        "tm:background IM trickle repopulation cpu time": 0.0,
+        "tm:background IM trickle repopulation elapsed time": 0.0,
+        "tm:background cpu time": 0.0,
+        "tm:background elapsed time": 0.0,
+        "tm:connection management call elapsed time": 0.0,
+        "tm:failed parse (out of shared memory) elapsed time": 0.0,
+        "tm:failed parse elapsed time": 0.0,
+        "tm:hard parse (bind mismatch) elapsed time": 0.0,
+        "tm:hard parse (sharing criteria) elapsed time": 0.0,
+        "tm:hard parse elapsed time": 0.0,
+        "tm:inbound PL/SQL rpc elapsed time": 0.0,
+        "tm:parse time elapsed": 0.0,
+        "tm:repeated bind elapsed time": 0.0,
+        "tm:sequence load elapsed time": 0.0,
+        "tm:sql execute elapsed time": 41433.0
+      },
+      "rows": 50,
+      "server_cpu_us_per_op": 842.14,
+      "terminals": 1,
+      "throughput_ops": 1121.950851731233,
+      "wall_s": 0.044565232
+    }
+  ],
+  "profile": true,
+  "scenario": "s2",
+  "seed": 1,
+  "started_unix": 1795859528
+}
