@@ -1,6 +1,6 @@
 # Work order EF - the scenario drivers on an equal client, and a short read's fixed cost only if one is left behind it
 
-Status: **OPENED 2026-11-28** on worktree
+Status: **CLOSED 2026-11-28 at EF-S2, the engine stage (S3) not opened** (EF-Q1 (a) read on the matched run: no short read is behind PostgreSQL through equal clients; §7, "EF-S4"). Not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree
 `ef-equal-client-scenario-drivers` (branch
 `worktree-ef-equal-client-scenario-drivers`) from `72580aa04`
 (`v3.5.1-6-g72580aa04`), under the operator's standing go-ahead of
@@ -234,6 +234,7 @@ move.
 | EF-Q5 | S2's time | (a) the 20-minute stage budget lifted for S2 alone (estimate: 45 to 60 minutes, basis: the `v3.5.0` run's 44 minutes plus PostgreSQL's 14, confidence: medium); (b) cut to fit: one round a cell, scenario 4 and the size sweeps left out | (a) |
 | EF-Q6 | The compiled chain | (a) stays where CX-Q37 (a) and EA-Q3 (a) left it: S3 may measure its share again and may not build its reuse without the operator's word; (b) reopened inside S3 | (a) |
 | EF-Q7 | Scenario 1, whose twin already decodes as the KDS client does (§1.1) | (a) left on its equal-decode pair, named a `values` phase throughout, and S1 moves scenarios 2 to 4 only; (b) both of its sides moved to `count`, a second series break | (a) |
+| EF-Q8 | (written at EF-S2) Scenario 1's point reads are behind through its own pair - `read-bar-lookup` 0.62x to 0.72x in EF-S2's run a - because the KDS client builds four frames and decodes the row description on every statement, which the twin's `fetch` has no equivalent of; EF-Q7's "already equal" was wrong for a statement | (a) left and labelled; (b) scenario 1's KDS statements through `ServerConnection.rendered` - the reply string `send_command` returns, byte for byte, over the request and the cached description `fetch` uses - and its cells measured again; (c) `send_command` itself rebuilt that way, which moves every series under `bench/` at once | (b) |
 
 ### Marks
 
@@ -255,6 +256,7 @@ rule and binds S3 only.
 | EF-Q5 | (a) | **the 20-minute stage budget is lifted for S2 by this adoption, not by the operator's own word for that measurement**; S2 is still planned as short as its cells allow and its file states the time |
 | EF-Q6 | (a) | the compiled chain stays where CX-Q37 (a) and EA-Q3 (a) left it |
 | EF-Q7 | (a) | scenario 1 stays on its equal-decode pair; S1 moves scenarios 2 to 4 |
+| EF-Q8 | (b) | written at EF-S2 and adopted on the same go-ahead; **it revises EF-Q7 (a) for scenario 1's KDS side**: the twin is untouched, the KDS reply string is unchanged, and the cells were measured again (run c) |
 
 ## 5. Stages
 
@@ -274,6 +276,64 @@ rule and binds S3 only.
 - Nothing of the commit (EG) or of the fold (EH).
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### EF-S4 (2026-11-28): the close
+
+- **EF closes at S2 with S3 not opened** (EF-Q1 (a)). Built: the
+  drivers of scenarios 1 to 4 on their twins' client modes
+  (`tools/kwp.py` `fetch`, `tools/ckdbs_cli.py` `rows`, `count`,
+  `rendered`), `tools/parity_bench.py`'s client choices and its host pid
+  for a containerised backend, and three results files
+  (`bench/v3.5.1/results-ef-s0-premise-...`, `-ef-s1-drivers-...`,
+  `-ef-s2-matched-...`). Not built: anything in the engine.
+- **The durable content**: `bench/README.md`, "A ratio against another
+  engine names both clients"; the comparison file carries its
+  supersession; §1.3 of this order stays as read, a list of what a
+  statement costs and not of a deficit.
+- **The milestone-close A/B was not taken, and there is nothing for it
+  to compare**: `git diff 72580aa04 HEAD -- src include tests
+  CMakeLists.txt scripts` is empty, so the opening and closing commits
+  build one binary. The suite was not executed for the same reason: no
+  cell of it reads `tools/`.
+- **What EF hands on**: to EG, `result-insert` at 60,480 bars (0.81x at
+  `strict`, at parity at the three smaller sizes); to EH, the folds
+  (`agg-global` 0.71x on 1.40x the server CPU through counting clients,
+  `agg-distinct` 0.73x to 0.83x, `close` 0.70x); to nobody, the per-row
+  render of a typed value in the Python client.
+
+### EF-S2 (2026-11-28): the matched run, on `ef-equal-client-scenario-drivers` from `3321c61fb`
+
+`[measured]` at engine `v3.5.1-6-g72580aa04`,
+`bench/v3.5.1/results-ef-s2-matched-v3.5.1-6-g72580aa04.md`, three
+rounds, KDS and PostgreSQL 18.7 interleaved, 151 cells, every return code
+0 and every verification passing:
+
+- **EF-Q1 read: S3 does not open.** Through its twin's client mode no
+  short read is behind PostgreSQL by more than the larger spread:
+  scenario 4's `pk` 20.5 µs against 21.2 µs, a booking's point reads
+  21.8 µs to 26.1 µs against 21.9 µs to 25.4 µs (`cargo-lookup` at
+  `strict` is 0.7 µs behind on a 2.0 % spread and inside it at `group`),
+  scenario 1's lookup 24.9 µs to 27.2 µs against 28.8 µs. **The 200-row
+  tape, which the gate names, carries no claim**: PostgreSQL's three
+  runs spread 49.4 %; KDS's side is 26.6 µs against a median of 38.7 µs.
+- **One booker**: 2,077.5 bookings a second against 2,070.2; every
+  write and the commit ahead (1.05x to 1.38x at `strict`).
+- **Scenario 3**: a geometric mean of 1.09x to 1.42x over its six cells.
+- **Behind PostgreSQL on these clients**: folds over a whole relation,
+  `result-insert` at 60,480 bars, and a read returning thousands of rows
+  through the rendering pair.
+- **EF-Q8 written and adopted (b)** in this stage: run a read scenario
+  1's lookup at 0.62x to 0.72x, which refuted EF-Q7's premise;
+  `ServerConnection.rendered` answers `send_command`'s string byte for
+  byte (16 deterministic replies compared on a live server; an `ANALYZE`
+  differs only in the timing text two `send_command` runs differ in),
+  and run c read the lookup at 0.99x to 1.19x.
+- **Three runs, not one**: run a (every cell, 23 minutes), run b
+  (scenarios 2 and 3 again after EF-S1's write change, and one scenario
+  4 cell CLA's own smoke test had run inside), run c (scenario 1 again
+  after EF-Q8). About 36 minutes, over the stage budget EF-Q5 (a) lifted
+  by adoption.
+- The suite was not executed: no build input changed (`tools/` only).
 
 ### EF-S1 (2026-11-28): the drivers, on `ef-equal-client-scenario-drivers` from `5df8ffe05`
 

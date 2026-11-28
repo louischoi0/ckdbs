@@ -397,7 +397,9 @@ class Client:
         self.first_error = None
 
     def __call__(self, command):
-        reply = format_reply(self._conn.send_command(command))
+        # `rendered` answers the string `send_command` answers, through the
+        # request the twin's `fetch` is the counterpart of (EF-Q8).
+        reply = format_reply(self._conn.rendered(command))
         if ECHO:
             shown = (reply if len(reply) <= ECHO_REPLY_MAX
                      else reply[:ECHO_REPLY_MAX] + "...")
@@ -1744,7 +1746,7 @@ def run_concurrency_sweep(host, port, timeout, suffix, session_count,
             for i in range(per_thread):
                 session_no = sessions[(index * per_thread + i) % len(sessions)]
                 reply = format_reply(
-                    conn.send_command(cross_section_sql(suffix, session_no)))
+                    conn.rendered(cross_section_sql(suffix, session_no)))
                 if reply.startswith("ERR"):
                     errors[index] += 1
 

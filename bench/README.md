@@ -69,6 +69,35 @@ was written on a day that already had a results file in it. Rewriting them would
 which is the one thing this directory's rules exist to prevent; a reader who
 meets an older table reads its heading, as that table's own commit intended.
 
+## A ratio against another engine names both clients - since 2026-11-28 (EF)
+
+A latency timed in a Python client is the server's plus the client's, and
+the two engines' clients do different work: KWP's rows arrive typed and
+must be rendered by the client, PostgreSQL's arrive as text. Twice a
+scenario file put KDS behind PostgreSQL on a statement where the engine
+was ahead (`v3.2.0/results-pg-parity-v3.2.0-171-ge81ac7cd.md`,
+`v3.5.1/results-ef-s0-premise-v3.5.1-6-g72580aa04.md`: 16.6 µs a statement
+of client work on one side and 0.8 µs on the other).
+
+- **A results file that sets KDS beside another engine says, per phase,
+  what each side's client did**: counted rows (`kwp.Connection.query`,
+  `ServerConnection.count`; `pg_wire`'s `query`), decoded values
+  (`kwp.Connection.fetch`, `ServerConnection.rows`; `pg_wire`'s `fetch`
+  and a decode) or rendered a reply (`ServerConnection.rendered`). The
+  scenario drivers of scenarios 2 to 4 write it into their JSON
+  (`meta.timed_client`).
+- **A KDS driver times the mode its twin times**, phase by phase, and a
+  driver that changes its timed path opens a new series: no delta is taken
+  across the change but on an overlap cell run through both.
+- **`ServerConnection.send_command` is not a timed path for a number set
+  beside another engine's.** It builds four frames and decodes the row
+  description on every statement; it stays the path of verification, of
+  the byte comparisons and of an A/B between two KDS binaries, where both
+  arms pay it alike.
+- **Server CPU is the figure no client choice touches**
+  (`tools/parity_bench.py`): where a claim is about the engine, it is
+  quoted beside the wall clock.
+
 ## What a v3 number is measured on — BTREE only, since 2026-09-08
 
 The operator's mark on AS-Q6 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`):

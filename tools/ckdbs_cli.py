@@ -227,6 +227,31 @@ class ServerConnection:
             for row in rows)
         return header + body
 
+    def rendered(self, line):
+        """`send_command`'s answer, byte for byte, built over `fetch`: the
+        request `query` sends and a row description decoded once per shape.
+
+        **The timed path of a driver whose twin decodes and renders**
+        (scenario 1; EF-Q8): the reply string is the one `send_command`
+        returns, and the client no longer builds four frames, a portal name
+        and a field list per statement, which the twin's `fetch` has no
+        equivalent of.
+        """
+        stripped = line.strip()
+        if stripped.upper().split(" ", 1)[0] in ("BEGIN", "COMMIT", "ROLLBACK", "ABORT"):
+            return self.send_command(stripped)
+        rows, tag, error = self._conn.fetch(stripped)
+        if error is not None:
+            return error.as_reply_line()
+        shape = self._conn.last_shape
+        if shape is None:
+            return tag
+        _renderers, header, diagnostic = shape
+        if diagnostic:
+            return "\\n".join("NULL" if row[0] is None else row[0] for row in rows)
+        return header + "".join(
+            "\\n" + ",".join(["NULL" if v is None else v for v in row]) for row in rows)
+
     def count(self, line):
         """Runs one statement and answers the flat line `pg_wire`'s
         `send_command` answers - `ROWS <n> <bytes>B`, the statement's tag, or

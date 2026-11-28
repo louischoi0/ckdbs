@@ -67,3 +67,14 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **CLA's reading** | the skill's scope is one milestone; the operator's word names three in an order, and CLA reads it as the skill run once per milestone in that order, each stopping at its own push gate |
 | **Does not settle** | a push, a merge to `main`, a tag or a version; any item of EG or EH before it is opened |
 | **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks"); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 8. EF closed on the standing go-ahead; EF-Q8 written and adopted, S3 not opened
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §7; no further word |
+| **Mark** | **EF is closed on the work branch at EF-S2, with EF-S3 not opened**: EF-Q1 (a)'s condition - a short read behind PostgreSQL by more than the larger spread, through equal clients on `main` - is not met on the matched run (`bench/v3.5.1/results-ef-s2-matched-v3.5.1-6-g72580aa04.md`). **EF-Q8 was written at EF-S2 and adopted (b) on the same go-ahead**: scenario 1's KDS statements go through `ServerConnection.rendered`, which revises EF-Q7 (a) for that side; CLA's proposal, not the operator's mark |
+| **CLA's, not the operator's** | the reading of the gate (the 200-row tape it names carries no claim, PostgreSQL's runs spreading 49.4 %; the gate is read on `pk`, on a booking's point reads and on scenario 1's lookup); the three runs in place of one and the 36 minutes they took under EF-Q5 (a); timed writes moved to the counting client after the stage's review; the rule added to `bench/README.md` |
+| **Does not settle** | a push, a merge to `main`, a tag or a version; the opening of EG, which follows under §7's word |
+| **Recorded at** | this file; `workorder-ef-equal-client-scenario-drivers.md` (header, §4 "Marks", §7); EF's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+

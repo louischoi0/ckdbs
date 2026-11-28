@@ -409,7 +409,10 @@ class Connection:
         self.capabilities = 0
         self.server_info = ""
         self._next_portal = 0
-        self._renderers = {}     # row description bytes -> its renderers (`fetch`)
+        # `fetch`: row description bytes -> (renderers, header line, whether it
+        # is one diagnostic-line column), and the last statement's entry or None.
+        self._renderers = {}
+        self.last_shape = None
         try:
             if tls is not None:
                 # Direct TLS: the first byte on the wire is the ClientHello
@@ -712,6 +715,7 @@ class Connection:
         self.sock.sendall(frame(C_PARSE, _Writer().s("").text(sql).take())
                           + _QUERY_TAIL)
         renderers, rows, tag, error = (), [], "", None
+        self.last_shape = None
         while True:
             ftype, _, payload = self._recv_frame()
             if ftype == S_ROW_BATCH:
@@ -719,12 +723,17 @@ class Connection:
                     rows.append([None if raw is None else render(raw)
                                  for render, raw in zip(renderers, raw_row)])
             elif ftype == S_ROW_DESC:
-                renderers = self._renderers.get(payload)
-                if renderers is None:
+                shape = self._renderers.get(payload)
+                if shape is None:
                     if len(self._renderers) >= 1024:
                         self._renderers.clear()
-                    renderers = tuple(renderer_for(f) for f in self._row_desc(payload))
-                    self._renderers[payload] = renderers
+                    fields = self._row_desc(payload)
+                    shape = (tuple(renderer_for(f) for f in fields),
+                             ",".join(f["name"] for f in fields),
+                             len(fields) == 1 and bool(fields[0]["flags"] & FIELD_DIAGNOSTIC_LINE))
+                    self._renderers[payload] = shape
+                renderers = shape[0]
+                self.last_shape = shape
             elif ftype == S_COMPLETE:
                 tag = _Reader(payload).text()
             elif ftype == S_ERROR:
