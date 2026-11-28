@@ -2,7 +2,8 @@
 
 Status: **CLOSED 2026-11-27** at `4ab5d55d5` (`v3.4.17-234-g4ab5d55d5`) on
 worktree `eb-key-forms-in-the-executor`, every stage landed on the work
-branch (§7). **OPENED 2026-11-27** on worktree `eb-key-forms-in-the-executor`
+branch (§7); **landed on `main` at `97ed790ee`**, pushed with the hook
+skipped on the operator's word. **OPENED 2026-11-27** on worktree `eb-key-forms-in-the-executor`
 (branch `worktree-eb-key-forms-in-the-executor`) from `9e7597d5d`
 (`v3.4.17-224-g9e7597d5d`), on the operator's standing go-ahead of
 2026-11-27 (go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §20).
@@ -482,6 +483,14 @@ and EB did not cause it. It is not reported as a pass.
 `ORDER BY` rows; `index.md` IX8, IX9, IX17; `heap-and-tuple.md` §3.1c;
 `parser-v2.md` I11, I20; `manual/sql/sql.md`; `known-gaps.md`, as each
 stage logged.
+
+### Landed 2026-11-27
+
+`97ed790ee` on `main`: the merge of `worktree-eb-key-forms-in-the-executor`
+at `537921ae3` onto `origin/main` at `9e7597d5d`, pushed with
+`--no-verify` on the operator's word - the hook skipped, the last full
+suite 5,404 of 5,405 at `4ab5d55d5` (EB-S6 above). No tag, no version
+(`raft-marks-2026-11-27.md` §21).
 
 ### Written 2026-11-26
 

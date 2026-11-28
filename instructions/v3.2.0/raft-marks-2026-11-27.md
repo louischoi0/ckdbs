@@ -186,3 +186,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Does not settle** | a tag, a tag's push or a version; any milestone but EB |
 | **At the close** | **EB closed at `4ab5d55d5`** (`v3.4.17-234-g4ab5d55d5`), EB-S0..S6 landed on the work branch: `1192c47ce` S0, `cf3f5bb87` S1, `78f98354b` S2, `88164d7fb` S3, `a610d007a` S4 (S5 empty), `f29dba427`, `3d7a8f6df`, `4ab5d55d5` the close's remedies. **One more item is CLA's, adopted on the same go-ahead**: **EB-Q11 (a)** - the point read's residual +0.3 % to +1.2 % of server CPU, after three remedies, is accepted and stated in `known-gaps.md`; (b) would have kept EB open. **The S0 reading of J3 was revised by its review** - from "under the bar, left" to "built with S2" - and S2 built it |
 | **Recorded at** | this file; `workorder-eb-key-forms-in-the-executor.md` (header, §4 "Marks", §7); EB's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 21. EB pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | §20's word: *"... and push no verify"* - the push asked for in advance, when EB closes, no tag and no version |
+| **Mark** | **EB landed**: the work branch `worktree-eb-key-forms-in-the-executor` at `537921ae3` merged onto `origin/main` (`9e7597d5d`, unmoved since the branch was cut, so `git merge origin/main` brought nothing) `--no-ff` at `97ed790ee` and pushed, **the pre-push hook skipped**. The last full suite ran at `4ab5d55d5`, the closing code's build inputs: 5,404 of 5,405, the one failure `ContentionCountersTest`'s two-core insert, which failed 9 of 10 at the base under the same pinning; the commits after it carry `bench/`, `docs/`, `instructions/`, `tools/` and `CLAUDE.md`, no build input. The merge commit was made with `git commit-tree` from the work branch's tree, the session being held to its worktree; the main checkout's local `main` ref was not moved |
+| **Does not settle** | a tag or a version; the residual of EB-Q11 (a), which `known-gaps.md` carries |
+| **Recorded at** | this file; `workorder-eb-key-forms-in-the-executor.md` (header, §7 "Landed"); EB's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
