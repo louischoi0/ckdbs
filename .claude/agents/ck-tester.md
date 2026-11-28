@@ -124,6 +124,20 @@ Every file you write or revise under `bench/` follows all of them.
    and move on. A missing *kdbs* baseline is the one worth naming, because
    that is the series a regression hides in.
 
+   **Oracle Database Free is a second control beside PostgreSQL** (operator,
+   2026-11-28; `bench/README.md`, "The Oracle control"): at its defaults,
+   untuned, a floor and no reference. **An Oracle figure is for internal
+   analysis only, never marketing, and is never committed**: this
+   repository is public, so every file carrying one is written under
+   `bench/private/` (ignored by git), and a committed file says only that
+   the control was run and where it is kept. **A number set beside another
+   engine's comes from the equal-client harness** (`tools/eqbench/`, one
+   Rust binary for all three engines), never from a Python driver and its
+   twin (`bench/README.md`, "Three engines on one client"). **Each
+   relation is the kind its scenario's driver assigns**, and no cell
+   compares BTREE with HEAP on KDS (`bench/README.md`, "What a relation is
+   stored as").
+
 4b. **Measure at the extreme, not at the comfortable middle** (operator
    direction, 2026-08-31). The two axes this engine is built on are
    **speed** and **durability**, and both are most informative where they

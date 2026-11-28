@@ -1,1 +1,0 @@
-other-CPU busy 10.9% > 10 %

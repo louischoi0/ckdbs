@@ -155,3 +155,23 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; the three orders' landed rows in `instructions/milestones.md` |
 
+
+## 17. Oracle as a second control, the relation kinds, one client for three engines, a commercial OLTP scenario, and the old results deleted
+
+The operator's words, in the order given, one session, after EF, EG and EH
+landed (§16):
+
+| | |
+|---|---|
+| **Word 1** | *"now add Oracle with the basic licence as a benchmark control too, and state that the comparison produces results only for internal analysis and will not be used for marketing later"* |
+| **Word 2** | *"and in benchmarking lift the heap suspension, give every scenario the btree or heap tree type that suits it (no benchmark of KDS's internal difference by table type), and if a cell is missing, run the benchmark and fill it"* |
+| **Word 3** | *"the scenario budget cap is discarded in this session"* |
+| **Word 4** | *"and measure with a version that removes the cost of the kdbs measurement driver - the three, pg, oracle and kdbs, under client conditions as equal as possible; consider Rust too"* |
+| **Word 5** | *"delete every benchmark result before version 3.4.9"* |
+| **Word 6** | *"and create one more scenario to measure commercial OLTP performance"* |
+| **Word 7** | *"and collect statistics for every case: the share of the delay between parse, optimise, execution, disk read and formatting, according to each database's architecture, and what lock events occurred"* |
+| **Asked by CLA, answered** | where Oracle's results live, since the repository is public (`gh repo view`: `PUBLIC`): **"commit the drivers only"**, CLA's proposal; the harness: **"a Rust single harness"**, CLA's proposal; whether 3.4.9 is inside Word 5: **"v3.4.9 included"** |
+| **Mark** | EN is written and opened (`workorder-en-three-engine-equal-client.md`). `bench/v3.0.0/` through `bench/v3.4.9/` are deleted, held at `e571ae574` (`bench/README.md`'s table). `bench/README.md` replaces AS-Q6's BTREE-only rule with the kind each scenario assigns, and gains the equal-client and Oracle rules; no Oracle figure is committed (`bench/private/`, ignored) |
+| **Word 3's reach** | this session only: the 20-minute stage and one-hour milestone budgets of `CLAUDE.md` do not bind EN's measurements in this session, and stand again for any other session |
+| **Does not settle** | a tag, a version or a push |
+| **Recorded at** | this file; EN's order; `bench/README.md`; `.claude/agents/ck-tester.md` |

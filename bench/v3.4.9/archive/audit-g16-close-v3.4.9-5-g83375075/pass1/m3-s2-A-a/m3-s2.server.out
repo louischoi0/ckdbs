@@ -1,4 +1,0 @@
-ckdbs on /home/louis/bench-runs/audit-g16-close/20261114T070437Z/m3-s2-A-a/s2/kds.db: 17 pages, superblock version 35
-logging to /home/louis/bench-runs/audit-g16-close/20261114T070437Z/m3-s2-A-a/s2/kdb.log at level INFO
-listening on 127.0.0.1:25731
-stopped; 2250 pages persisted

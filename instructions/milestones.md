@@ -68,6 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
+| EN | open | 2026-11-28 | 2026-11-28 | 2026-11-28 | - | - | - | three engines on one client: KDS, PostgreSQL and Oracle through one Rust harness, every scenario's relations their own kind, and a commercial OLTP scenario | v3.2.0/workorder-en-three-engine-equal-client.md |
 | EM | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | the statement front end's repeated work, cut only where no cut can change an answer | v3.2.0/workorder-em-front-end-reuse-without-quiet-wrong.md |
 | EL | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | a retry that cannot run twice: CN-5's token proved first as a row the client writes, and the truthful code where the engine does not know an outcome | v3.2.0/workorder-el-commit-outcome-and-at-most-once.md |
 | EK | written | 2026-11-28 | 2026-11-28 | - | - | n/a | - | the write skew that named units do not close: a declaration, a lock or a level | v3.2.0/workorder-ek-write-skew-outside-named-units.md |
