@@ -1,0 +1,17 @@
+[package]
+name = "eqbench"
+version = "0.1.0"
+edition = "2021"
+description = "One client for three engines: KDS (KWP/1), PostgreSQL and Oracle, one scenario code path (EN)"
+publish = false
+
+[dependencies]
+postgres = "0.19.14"
+oracle = "0.6.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+debug = 1
+codegen-units = 1
