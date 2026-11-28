@@ -675,6 +675,11 @@ public:
     // page's claim. Page 0 is unlogged, so its writeback waits on no log
     // record and on no other page.
     Status PersistTrxIdCeiling();
+    // The same in halves, for the early carve (DZ-S3): the encode and page
+    // 0's writeback here, the sync asked of the data-sync thread - its
+    // ticket, which the store's `data_sync()` answers.
+    StatusOr<std::uint64_t> StageTrxIdCeiling();
+    txn::StagedCeilingPersist StagedTrxIdCeiling();
 
     // Runs one checkpoint to completion: snapshot the dirty table, flush
     // it, log CHECKPOINT_END, publish the superblock anchor. This is what

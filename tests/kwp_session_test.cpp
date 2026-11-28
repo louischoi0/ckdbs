@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <regex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -742,20 +743,371 @@ TEST_F(KwpSessionTest, ANullParameterBindsAsNull) {
 }
 
 TEST_F(KwpSessionTest, ATextParameterCarryingAQuoteIsRefusedWithTheGrammarsReason) {
+    // The unnamed statement is the text path's (EA-R4): its value is
+    // substituted, and a quote has no spelling. A named one binds it (EA-S1,
+    // `AQuoteBindsThroughANamedStatementsKeptParse`).
     Handshake();
-    Feed(ClientFrameType::kParse, Parse("s", "SELECT id FROM t WHERE name = ?"));
+    Feed(ClientFrameType::kParse, Parse("", "SELECT id FROM t WHERE name = ?"));
     const std::string value = "O'Brien";
     wire::BoundParam p;
     p.type_oid = catalog::kTypeValVarchar;
     p.bytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(value.data()),
                                          value.size());
-    auto frames = Feed(ClientFrameType::kBind, Bind("p", "s", {p}));
+    auto frames = Feed(ClientFrameType::kBind, Bind("p", "", {p}));
     ASSERT_EQ(frames.size(), 1u);
     ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
     auto err = wire::DecodeError(frames[0].payload);
     ASSERT_TRUE(err.ok());
     EXPECT_NE(err.value().message.find("no escape for a quote"), std::string::npos)
         << "the refusal names the grammar's limit, which is whose it is";
+}
+
+// ---- EA-S1: a named statement's kept parse --------------------------------
+
+namespace ea {
+
+wire::BoundParam Fixed(std::uint32_t type, std::vector<std::byte>& store, std::uint64_t v,
+                       std::size_t width, std::uint32_t type_mod = 0) {
+    store.assign(width, std::byte{0});
+    for (std::size_t i = 0; i < width; ++i) {
+        store[i] = static_cast<std::byte>((v >> (8 * i)) & 0xFF);
+    }
+    wire::BoundParam p;
+    p.type_oid = type;
+    p.type_mod = type_mod;
+    p.bytes = std::span<const std::byte>(store);
+    return p;
+}
+
+wire::BoundParam Text(std::uint32_t type, const std::string& s) {
+    wire::BoundParam p;
+    p.type_oid = type;
+    p.bytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(s.data()), s.size());
+    return p;
+}
+
+// A frame list with each error reduced to its code: a refusal's byte is the
+// marker's on the kept path and the substituted literal's on the text path
+// (EA-R3), and nothing else may differ. A completion's tag is its text with
+// the relation's oid and page left out, so twin relations compare.
+std::string Answer(const std::vector<wire::DecodedFrame>& frames) {
+    std::string out;
+    for (const auto& f : frames) {
+        out += "[" + std::to_string(f.type) + ":";
+        if (f.type == static_cast<std::uint8_t>(ServerFrameType::kError)) {
+            auto err = wire::DecodeError(f.payload);
+            out += err.ok() ? std::to_string(err.value().code) : "?";
+        } else if (f.type == static_cast<std::uint8_t>(ServerFrameType::kComplete)) {
+            wire::PayloadReader r(f.payload);
+            auto tag = r.Text();
+            const std::string text = tag.has_value() && tag->has_value() ? **tag : "?";
+            out += std::regex_replace(text, std::regex("(oid|page)=[0-9]+"), "$1=#");
+        } else {
+            for (std::byte b : f.payload) out += std::to_string(std::to_integer<int>(b)) + ",";
+        }
+        out += "]";
+    }
+    return out;
+}
+
+}  // namespace ea
+
+TEST_F(KwpSessionTest, AQuoteBindsThroughANamedStatementsKeptParse) {
+    Handshake();
+    const std::string value = "O'Brien";
+    Feed(ClientFrameType::kParse, Parse("ins", "INSERT INTO t (id, v, name) VALUES (?, ?, ?)"));
+    std::vector<std::byte> id_bytes, v_bytes;
+    auto bound = Feed(ClientFrameType::kBind,
+                      Bind("p", "ins",
+                           {ea::Fixed(catalog::kTypeValInt64, id_bytes, 40, 8),
+                            ea::Fixed(catalog::kTypeValInt32, v_bytes, 7, 4),
+                            ea::Text(catalog::kTypeValVarchar, value)}));
+    ASSERT_EQ(bound.size(), 1u);
+    ASSERT_EQ(bound[0].type, static_cast<std::uint8_t>(ServerFrameType::kBindOk));
+    auto wrote = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_FALSE(wrote.empty());
+    ASSERT_NE(wrote[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+
+    Feed(ClientFrameType::kParse, Parse("sel", "SELECT id, v FROM t WHERE name = ?"));
+    Feed(ClientFrameType::kBind, Bind("q", "sel", {ea::Text(catalog::kTypeValVarchar, value)}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("q", 0));
+    ASSERT_EQ(frames.size(), 3u);
+    auto rows = wire::DecodeRowBatch(frames[1].payload, 2);
+    ASSERT_TRUE(rows.ok());
+    ASSERT_EQ(rows.value().size(), 1u) << "the row holding the quote, found by it";
+}
+
+TEST_F(KwpSessionTest, AQuoteBindsInAWriteThatAnswersWithReturning) {
+    // The write and its `RETURNING` both read the statement's parse - the
+    // walk's `UpdateInner` and `WithReturning` - and both take the kept one,
+    // so a value no literal can spell is written and answered.
+    Handshake();
+    const std::string value = "it's";
+    Feed(ClientFrameType::kParse,
+         Parse("u", "UPDATE t SET name = ? WHERE v = ? RETURNING v, name"));
+    std::vector<std::byte> v_bytes;
+    Feed(ClientFrameType::kBind, Bind("p", "u",
+                                      {ea::Text(catalog::kTypeValVarchar, value),
+                                       ea::Fixed(catalog::kTypeValInt32, v_bytes, 10, 4)}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_EQ(frames.size(), 3u) << ea::Answer(frames);
+    EXPECT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kRowDesc));
+    auto rows = wire::DecodeRowBatch(frames[1].payload, 2);
+    ASSERT_TRUE(rows.ok());
+    ASSERT_EQ(rows.value().size(), 1u);
+    EXPECT_EQ(Run("SELECT name FROM t WHERE v = 10"), "name\\nit's");
+}
+
+TEST_F(KwpSessionTest, EveryStorableTypeAndNullBindsAsItsTextBinds) {
+    // One relation of every storable type, written twice - once by a text
+    // statement with literals, once by a named statement's kept parse - and
+    // read back both ways: the rows and every frame agree (EA-R1).
+    Run("CREATE TABLE ty (id int64, a int16, b int32, c uint64, d bool, e date, f timestamp, "
+        "g decimal(10,2), h decimal(30,4), i varchar, j char(8), n int32 NULL)");
+    Handshake();
+    std::vector<std::byte> b_id, b_a, b_b, b_c, b_d, b_e, b_f, b_g, b_h_lo;
+    std::vector<std::byte> wide(16, std::byte{0});
+    // 123456789.0123 at scale 4: unscaled 1234567890123, low half first (§6).
+    const std::uint64_t unscaled = 1234567890123ULL;
+    for (int i = 0; i < 8; ++i) wide[i] = static_cast<std::byte>((unscaled >> (8 * i)) & 0xFF);
+    wire::BoundParam h;
+    h.type_oid = catalog::kTypeValDecimalWide;
+    h.type_mod = 4;
+    h.bytes = std::span<const std::byte>(wide);
+    wire::BoundParam null_n;
+    null_n.type_oid = catalog::kTypeValInt32;
+    const std::vector<wire::BoundParam> params = {
+        ea::Fixed(catalog::kTypeValInt64, b_id, 2, 8),
+        ea::Fixed(catalog::kTypeValInt16, b_a, static_cast<std::uint64_t>(-3), 2),
+        ea::Fixed(catalog::kTypeValInt32, b_b, 70000, 4),
+        ea::Fixed(catalog::kTypeValUint64, b_c, 18446744073709551615ULL, 8),
+        ea::Fixed(catalog::kTypeValBool, b_d, 1, 1),
+        ea::Fixed(catalog::kTypeValDate, b_e, 20480, 4),
+        ea::Fixed(catalog::kTypeValTimestamp, b_f, 1769472000123456ULL, 8),
+        ea::Fixed(catalog::kTypeValDecimal, b_g, static_cast<std::uint64_t>(-1250), 8, 2),
+        h,
+        ea::Text(catalog::kTypeValVarchar, "text"),
+        ea::Text(catalog::kTypeValChar, "chars"),
+    };
+    Run("INSERT INTO ty VALUES (1, -3, 70000, 18446744073709551615, 1, '2026-01-27', "
+        "'2026-01-27 00:00:00.123456', -12.50, 123456789.0123, 'text', 'chars', NULL)");
+
+    std::vector<wire::BoundParam> with_null = params;
+    with_null.push_back(null_n);
+    Feed(ClientFrameType::kParse,
+         Parse("ins", "INSERT INTO ty VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+    Feed(ClientFrameType::kBind, Bind("p", "ins", with_null));
+    auto wrote = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_FALSE(wrote.empty());
+    ASSERT_NE(wrote[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << ea::Answer(wrote);
+    const std::string rows = Run("SELECT a, b, c, d, e, f, g, h, i, j, n FROM ty");
+    const auto nl = rows.find("\\n");
+    ASSERT_NE(nl, std::string::npos);
+    const std::string body = rows.substr(nl + 2);
+    const auto split = body.find("\\n");
+    ASSERT_NE(split, std::string::npos) << rows;
+    EXPECT_EQ(body.substr(0, split), body.substr(split + 2)) << "both rows alike: " << rows;
+
+    // Each column found by its value, the text way and the kept way.
+    const char* columns[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
+    const char* literals[] = {"-3",           "70000",
+                              "18446744073709551615", "1",
+                              "'2026-01-27'", "'2026-01-27 00:00:00.123456'",
+                              "-12.50",       "123456789.0123",
+                              "'text'",       "'chars'"};
+    for (std::size_t k = 0; k < 10; ++k) {
+        const std::string text =
+            std::string("SELECT id FROM ty WHERE ") + columns[k] + " = " + literals[k];
+        Feed(ClientFrameType::kParse, Parse("", text));
+        Feed(ClientFrameType::kBind, Bind("t", ""));
+        const std::string want = ea::Answer(Feed(ClientFrameType::kExecute, Execute("t", 0)));
+        const std::string held = std::string("SELECT id FROM ty WHERE ") + columns[k] + " = ?";
+        Feed(ClientFrameType::kParse, Parse("k", held));
+        Feed(ClientFrameType::kBind, Bind("kp", "k", {params[k + 1]}));
+        const std::string got = ea::Answer(Feed(ClientFrameType::kExecute, Execute("kp", 0)));
+        EXPECT_EQ(got, want) << text;
+    }
+}
+
+TEST_F(KwpSessionTest, AKeptParseAnswersAsItsTextOverAShapeSet) {
+    // EA-R1 through the protocol: each statement run with its literals by the
+    // unnamed statement, then with `?` by a named one, on twin copies of one
+    // relation, so a write's effect is compared too.
+    Run("CREATE TABLE u (id int64, v int32, w varchar)");
+    Run("INSERT INTO u VALUES (1, 5, 'a'), (2, 6, 'b'), (3, 7, 'c')");
+    Run("CREATE TABLE u2 (id int64, v int32, w varchar)");
+    Run("INSERT INTO u2 VALUES (1, 5, 'a'), (2, 6, 'b'), (3, 7, 'c')");
+    Handshake();
+    struct Case {
+        const char* text;  // `%` stands for the relation
+        const char* held;
+        std::vector<std::int64_t> ints;
+    };
+    const std::vector<Case> cases = {
+        {"SELECT * FROM % WHERE id = 2", "SELECT * FROM % WHERE id = ?", {2}},
+        {"SELECT id FROM % WHERE v > 5 AND v < 7", "SELECT id FROM % WHERE v > ? AND v < ?",
+         {5, 7}},
+        {"SELECT id FROM % WHERE id IN (1, 3)", "SELECT id FROM % WHERE id IN (?, ?)", {1, 3}},
+        {"SELECT id FROM % WHERE v BETWEEN 5 AND 6", "SELECT id FROM % WHERE v BETWEEN ? AND ?",
+         {5, 6}},
+        {"SELECT COUNT(*) FROM % WHERE v >= 6", "SELECT COUNT(*) FROM % WHERE v >= ?", {6}},
+        {"SELECT * FROM % WHERE id = 99", "SELECT * FROM % WHERE id = ?", {99}},
+        {"UPDATE % SET v = v + 10 WHERE id = 1", "UPDATE % SET v = v + ? WHERE id = ?", {10, 1}},
+        {"UPDATE % SET v = 3 * (v - 2) WHERE id IN (2, 3)",
+         "UPDATE % SET v = ? * (v - ?) WHERE id IN (?, ?)",
+         {3, 2, 2, 3}},
+        {"DELETE FROM % WHERE id = 3 RETURNING v", "DELETE FROM % WHERE id = ? RETURNING v", {3}},
+        {"INSERT INTO % VALUES (4, 8, 'd')", "INSERT INTO % VALUES (?, ?, 'd')", {4, 8}},
+        {"INSERT INTO % VALUES (4, 9, 'e') ON CONFLICT (id) DO UPDATE SET v = 9",
+         "INSERT INTO % VALUES (?, ?, 'e') ON CONFLICT (id) DO UPDATE SET v = ?",
+         {4, 9, 9}},
+        {"SELECT * FROM % ORDER BY v DESC LIMIT 2", "SELECT * FROM % ORDER BY v DESC LIMIT 2",
+         {}},
+    };
+    auto subst = [](std::string s, const char* rel) {
+        const auto at = s.find('%');
+        return s.replace(at, 1, rel);
+    };
+    std::vector<std::vector<std::byte>> stores(8);
+    for (const Case& c : cases) {
+        Feed(ClientFrameType::kParse, Parse("", subst(c.text, "u")));
+        Feed(ClientFrameType::kBind, Bind("t", ""));
+        const std::string want = ea::Answer(Feed(ClientFrameType::kExecute, Execute("t", 0)));
+
+        std::vector<wire::BoundParam> params;
+        for (std::size_t i = 0; i < c.ints.size(); ++i) {
+            params.push_back(ea::Fixed(catalog::kTypeValInt64, stores[i],
+                                       static_cast<std::uint64_t>(c.ints[i]), 8));
+        }
+        // Each held form keeps a parse, so the kept path is what is compared.
+        EXPECT_TRUE(parser::KeptParse::Of(subst(c.held, "u2")).has_value()) << c.held;
+        Feed(ClientFrameType::kParse, Parse("k", subst(c.held, "u2")));
+        Feed(ClientFrameType::kBind, Bind("kp", "k", params));
+        const std::string got = ea::Answer(Feed(ClientFrameType::kExecute, Execute("kp", 0)));
+        EXPECT_EQ(got, want) << c.text;
+    }
+    EXPECT_EQ(Run("SELECT * FROM u2"), Run("SELECT * FROM u")) << "every write alike";
+}
+
+TEST_F(KwpSessionTest, AMultiVariantPlanChoosesByTheBoundValuesAsByTheText) {
+    // EA-S2: an administrator's plan's rule reads the statement's arguments.
+    // A kept parse hands it its bound values - the statement is not lexed for
+    // them - and the variant chosen is the one its text chooses.
+    Run("CREATE TABLE models (id int64, name int64) BTREE");
+    Run("CREATE TABLE results (id int64, model_id int64, pnl int64) BTREE");
+    for (int m = 1; m <= 4; ++m) Run("INSERT INTO models VALUES (" + std::to_string(m) + ", 0)");
+    for (int r = 1; r <= 16; ++r) {
+        Run("INSERT INTO results VALUES (" + std::to_string(r) + ", " +
+            std::to_string(1 + r % 4) + ", " + std::to_string(r) + ")");
+    }
+    const std::string head =
+        "SELECT results.pnl, models.name FROM results JOIN models ON results.model_id = "
+        "models.id WHERE results.pnl > ";
+    const std::string created =
+        Run("CREATE PLAN ea_plan FOR " + head +
+            "5 VARIANT low WHEN ARG(1) < 10 ORDER (models, results)"
+            " VARIANT high ELSE ORDER (results, models)");
+    ASSERT_EQ(created.rfind("ERR", 0), std::string::npos) << created;
+    Handshake();
+    auto variant_of = [&](std::int64_t pnl, bool kept) {
+        std::vector<std::byte> bytes;
+        if (kept) {
+            Feed(ClientFrameType::kParse, Parse("k", head + "?"));
+            Feed(ClientFrameType::kBind,
+                 Bind("kp", "k",
+                      {ea::Fixed(catalog::kTypeValInt64, bytes, static_cast<std::uint64_t>(pnl),
+                                 8)}));
+            Feed(ClientFrameType::kExecute, Execute("kp", 0));
+        } else {
+            Feed(ClientFrameType::kParse, Parse("", head + std::to_string(pnl)));
+            Feed(ClientFrameType::kBind, Bind("t", ""));
+            Feed(ClientFrameType::kExecute, Execute("t", 0));
+        }
+        // One row for the shape, both paths' (EA-R2), naming its last run's
+        // variant.
+        return Run("SELECT variant FROM sys.statement_stats WHERE plan_name = 'ea_plan'");
+    };
+    EXPECT_TRUE(parser::KeptParse::Of(head + "?").has_value());
+    for (const std::int64_t pnl : {3, 30, 7, 12}) {
+        const std::string text = variant_of(pnl, /*kept=*/false);
+        const std::string kept = variant_of(pnl, /*kept=*/true);
+        EXPECT_EQ(kept, text) << pnl;
+        EXPECT_NE(text.find(pnl < 10 ? "low" : "high"), std::string::npos) << text;
+    }
+
+    // A value the dispatched text cannot carry - its `?` stays - is read
+    // from the kept parse: lexed from the text it would be unbound, and the
+    // rule false.
+    Run("CREATE TABLE tags (id int64, tag varchar) BTREE");
+    Run("INSERT INTO tags VALUES (1, 'b')");
+    const std::string tagged =
+        "SELECT results.pnl, tags.tag FROM results JOIN tags ON results.model_id = tags.id "
+        "WHERE tags.tag = ";
+    const std::string made = Run("CREATE PLAN ea_tag FOR " + tagged +
+                                 "'a' VARIANT named WHEN ARG(1) != 'zz' ORDER (tags, results)"
+                                 " VARIANT other ELSE ORDER (results, tags)");
+    ASSERT_EQ(made.rfind("ERR", 0), std::string::npos) << made;
+    Feed(ClientFrameType::kParse, Parse("q", tagged + "?"));
+    Feed(ClientFrameType::kBind, Bind("qp", "q", {ea::Text(catalog::kTypeValVarchar, "it's")}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("qp", 0));
+    ASSERT_FALSE(frames.empty());
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << ea::Answer(frames);
+    EXPECT_NE(Run("SELECT variant FROM sys.statement_stats WHERE plan_name = 'ea_tag'")
+                  .find("named"),
+              std::string::npos);
+}
+
+TEST_F(KwpSessionTest, AKeyedWritesPlanChoosesByTheBoundValues) {
+    // EA-S2 on the write arm (`WritePlanFor`): a keyed UPDATE's plan rule
+    // reads the kept parse's arguments, a quote-bearing value among them,
+    // which the dispatched text leaves a `?`.
+    Run("CREATE TABLE w (id int64, tag varchar, v int64) BTREE");
+    Run("INSERT INTO w VALUES (1, 'a', 0), (2, 'b', 0)");
+    Run("CREATE INDEX w_tag ON w (tag)");
+    const std::string made = Run(
+        "CREATE PLAN ea_w FOR UPDATE w SET v = v + 1 WHERE tag = 'a' "
+        "VARIANT named WHEN ARG(2) != 'zz' ORDER (w) ACCESS w SCAN VARIANT other ELSE ORDER (w)");
+    ASSERT_EQ(made.rfind("ERR", 0), std::string::npos) << made;
+    Handshake();
+    Feed(ClientFrameType::kParse, Parse("u", "UPDATE w SET v = v + 1 WHERE tag = ?"));
+    Feed(ClientFrameType::kBind, Bind("up", "u", {ea::Text(catalog::kTypeValVarchar, "it's")}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("up", 0));
+    ASSERT_FALSE(frames.empty());
+    EXPECT_NE(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError))
+        << ea::Answer(frames);
+    EXPECT_NE(Run("SELECT variant FROM sys.statement_stats WHERE plan_name = 'ea_w'")
+                  .find("named"),
+              std::string::npos);
+}
+
+TEST_F(KwpSessionTest, AKeptParsesRefusalNamesTheMarkersByte) {
+    // EA-R3: the compile refuses a string against an integer column at the
+    // value's byte - on the kept path the `?` the client wrote.
+    Handshake();
+    const std::string held = "SELECT id FROM t WHERE id = ?";
+    Feed(ClientFrameType::kParse, Parse("k", held));
+    Feed(ClientFrameType::kBind, Bind("p", "k", {ea::Text(catalog::kTypeValVarchar, "zz")}));
+    auto frames = Feed(ClientFrameType::kExecute, Execute("p", 0));
+    ASSERT_FALSE(frames.empty());
+    ASSERT_EQ(frames[0].type, static_cast<std::uint8_t>(ServerFrameType::kError));
+    auto err = wire::DecodeError(frames[0].payload);
+    ASSERT_TRUE(err.ok());
+    EXPECT_NE(err.value().message.find("byte " + std::to_string(held.find('?'))),
+              std::string::npos)
+        << err.value().message;
+}
+
+TEST_F(KwpSessionTest, APreparedStatementKeepsItsTextsPatternIdAndStatementKey) {
+    // EA-R2: the `pattern_id` a PARSE answers, and the shape the statement is
+    // counted under, are the text's on both paths.
+    Handshake();
+    auto text = Feed(ClientFrameType::kParse, Parse("", "SELECT id FROM t WHERE id = 20"));
+    auto held = Feed(ClientFrameType::kParse, Parse("k", "SELECT id FROM t WHERE id = ?"));
+    ASSERT_EQ(text.size(), 1u);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(text[0].payload, held[0].payload) << "one pattern_id";
 }
 
 // BW-S6 (BW-Q12.11 of `instructions/v3.2.0/workorder-bw-instant-add-drop-column.md`):

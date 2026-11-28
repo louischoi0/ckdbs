@@ -1249,6 +1249,7 @@ StatusOr<std::unique_ptr<Expeditor>> Expeditor::Open(Config config,
     expeditor->trx_ids_.emplace(expeditor->database_->superblock,
                                 [self] { return self->PersistTrxIdCeiling(); });
     expeditor->trx_ids_->SetLatch(&expeditor->superblock_latch_);
+    expeditor->trx_ids_->SetStagedPersist(expeditor->StagedTrxIdCeiling());
     // Before the manager that publishes into it. **Unconditional**
     // (AM-S4(d)): a volume with more than one stream does not mount.
     // `visibility_` is therefore always engaged, and the
@@ -1576,6 +1577,21 @@ Status Expeditor::PersistSuperBlock() {
 Status Expeditor::PersistTrxIdCeiling() {
     if (Status s = EncodeSuperBlock(); !s.ok()) return s;
     return store_->PersistPage(kSuperBlockPageId);
+}
+
+StatusOr<std::uint64_t> Expeditor::StageTrxIdCeiling() {
+    if (Status s = EncodeSuperBlock(); !s.ok()) return s;
+    const PageId page[] = {kSuperBlockPageId};
+    // Page 0 is unlogged: its writeback waits on no log record. A claim on
+    // it - another writeback in flight - is waited out as `PersistPage`'s is.
+    if (auto wrote = store_->WriteBackPages(page, nullptr); !wrote.ok()) return wrote.status();
+    return store_->data_sync().Request();
+}
+
+txn::StagedCeilingPersist Expeditor::StagedTrxIdCeiling() {
+    return {[this] { return StageTrxIdCeiling(); },
+            [this](std::uint64_t t) { return store_->data_sync().Done(t); },
+            [this](std::uint64_t t) { return store_->data_sync().Result(t); }};
 }
 
 OptimizerSurface Expeditor::Optimizer() {
@@ -2165,7 +2181,8 @@ Status Expeditor::Start() {
             // sequence carves its window from the superblock core 0's does,
             // under the same latch, and persists through the same call.
             core_config.trx_id_ceiling = {&database_->superblock, &superblock_latch_,
-                                          [this] { return PersistTrxIdCeiling(); }};
+                                          [this] { return PersistTrxIdCeiling(); },
+                                          StagedTrxIdCeiling()};
 
             auto core = CoreRuntime::Open(core_config, *device_, clock_, &*logger_);
             if (!core.ok()) return core.status();

@@ -190,5 +190,35 @@ TEST_F(DirtyTableCrashTest, ACrashAfterTheRunsAnchorFindsTheWindowsWriteOnThePag
     EXPECT_NE(ValueOfRow7().find("7007"), std::string::npos) << ValueOfRow7();
 }
 
+// **DZ-R1's second half** (DZ-S0's re-read of §5a, DZ-Q7 (a)): a checkpoint
+// run's walk yields, so its own core's sessions run inside it. A transaction
+// begun there, which writes a page already walked and is still undecided at
+// `CHECKPOINT_BEGIN`, must be in that record's active table: the publish
+// writes its uncommitted change before the anchor lands, and only the
+// record's undo head lets a crash's recovery take it back. The seam stands
+// in for the yield on the one-core simulator. Shown to fail with the
+// transactions snapshotted before the walk, as `Start` took them before
+// DZ-S1: the row read 7007 after the crash (DZ-S1, the order's §7).
+TEST_F(DirtyTableCrashTest, ATransactionBegunInsideTheWalkIsListedAndTakenBackAfterACrash) {
+    db_->store().SetAfterDirtyTableChunkForTest([this](std::size_t chunk) {
+        if (chunk != 0 || updated_) return;
+        updated_ = true;
+        EXPECT_EQ(db_->Execute("BEGIN").rfind("BEGIN", 0), 0u);
+        const std::string reply = db_->Execute("UPDATE t SET v = 7007 WHERE id = 7");
+        EXPECT_EQ(reply.rfind("ERR", 0), std::string::npos) << reply;
+    });
+    // A live run's, whose begin record lists the transactions: the mount's
+    // `RunCheckpoint` lists none. Its publish writes the uncommitted row.
+    ASSERT_TRUE(db_->RunLiveCheckpoint().ok());
+    ASSERT_TRUE(updated_) << "the seam did not run: the walk was not in chunks";
+    db_->store().SetAfterDirtyTableChunkForTest(nullptr);
+    db_->Crash();
+    ASSERT_TRUE(db_->Reboot().ok());
+    const std::string row = ValueOfRow7();
+    EXPECT_EQ(row.find("7007"), std::string::npos)
+        << "an undecided transaction's change survived the crash: " << row;
+    EXPECT_NE(row.find('7'), std::string::npos) << row;
+}
+
 }  // namespace
 }  // namespace kds::storage

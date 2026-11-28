@@ -1030,8 +1030,16 @@ private:
     // `statement_deadline_ns` is in-out and zero means "not taken yet":
     // the fault net bounds the *statement*, so a second entry inherits the
     // first one's deadline instead of starting a fresh one.
-    // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5).
-    StatusOr<parser::Statement> ParseKeepingShape(std::string_view line);
+    // `parser::Parse`, setting `statement_fetch_id_` from the parse (BO-S5),
+    // or the session's kept parse where it was bound for `line` (`KeptFor`).
+    StatusOr<parser::Statement> ParseKeepingShape(std::string_view line, const Session* session);
+    // **The kept parse of the statement `line` is** (EA-S1,
+    // `parser/kept_parse.hpp`): the session's bound statement when `line` is
+    // the text it was bound for, else null - a statement not prepared, and
+    // every text a statement reads again that is not its whole own (a SET
+    // value's subquery, an `ANALYZE`'s stripped write), which parse as before.
+    static const parser::BoundStatement* KeptFor(const Session* session,
+                                                 std::string_view line) noexcept;
     // **A statement's head, for what its end subtracts** (DF-Q6 (a),
     // DF-Q12 (a)): the session's cost sample, and whether the statement runs
     // inside a task of its own session - the only case in which the
@@ -1898,10 +1906,25 @@ private:
     StatusOr<bool> TupleKeyPlaced(const catalog::TableAccess& ta, std::uint64_t id,
                                   std::uint32_t byte, WriteScope& scope);
 
-    // **What an `ON CONFLICT` reacts to** (CG-Q1 (b)): the unique index whose
-    // one column `(col)` names, or null for the tuple key.
+    // **What an `ON CONFLICT` reacts to** (CG-Q1 (b), EB-S4): the unique
+    // index whose key the written columns are whole, in any order, or null
+    // for the tuple key - which on an embedded relation is its primary key.
     StatusOr<const catalog::TableAccess::IndexRef*> ResolveConflictArbiter(
         const catalog::TableAccess& ta, const parser::InsertStmt& written);
+
+    // The tuple key a row of an `INSERT` names for the tuple key arbiter
+    // (EB-S4), and the byte its refusals point at: on an embedded relation
+    // the id its key encodes to, by the insert's own `EmbeddedRowId` and
+    // under its rule - a `keyidentity` the row wrote must be that id - else
+    // the `keyidentity` it wrote. Nothing where the row names none or names
+    // one the insert would refuse: the insert then issues one, or refuses the
+    // row by name, as it does with no `ON CONFLICT`.
+    struct ConflictKey {
+        std::uint64_t id = 0;
+        std::uint32_t byte = 0;
+    };
+    std::optional<ConflictKey> ConflictTupleKeyOf(const catalog::TableAccess& ta,
+                                                  const std::vector<parser::AstValue>& row);
 
     // **`ON CONFLICT DO UPDATE`, and `DO NOTHING` on a unique index** (CG):
     // each row's verdict - insert, update the holder, skip, or refuse - taken
@@ -2806,7 +2829,7 @@ private:
                        : nullptr;
         }
     };
-    WritePlan WritePlanFor(catalog::Oid oid, std::string_view statement);
+    WritePlan WritePlanFor(catalog::Oid oid, std::string_view statement, const Session* session);
     // What became of it, for `sys.statement_stats` and `ANALYZE`: served,
     // or declined for this statement (CX-R2), counted either way.
     void NoteWritePlan(const WritePlan& plan, bool declined);

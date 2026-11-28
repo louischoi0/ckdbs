@@ -73,7 +73,10 @@ struct CheckpointRunReport {
     bool completed = false;
     // One step's whole reactor hold, and one step's page writes summed - the
     // question BI-Q9 (ii) asks, which a per-occurrence max (one run write of
-    // up to 8 pages) cannot answer.
+    // up to 8 pages) cannot answer. **Since DZ-S2 a cadence run's writes are
+    // off its reactor**: `step_max_ns` is then the longest stage or finish of
+    // a step's or a publish batch's writes, and `step_page_write_max_ns` a
+    // synchronous run's only.
     std::uint64_t step_max_ns = 0;
     std::uint64_t step_page_write_max_ns = 0;
     std::array<std::uint64_t, kCheckpointPhaseCount> sum_ns{};
@@ -89,6 +92,10 @@ struct CheckpointRunReport {
     // other work meanwhile - on the log and on the data file's sync.
     std::uint64_t log_park_ns = 0;
     std::uint64_t data_park_ns = 0;
+    // DZ-S2: wall time parked while another thread wrote a batch, and the
+    // map halves' busy answers at the map write barrier (DZ-Q6 (a)).
+    std::uint64_t write_park_ns = 0;
+    std::uint64_t map_busy = 0;
     // CZ-S3 (`workorder-cz-checkpoint-roll-wait.md` §8.7): each of the task's
     // three waiting latch sites - its begin record, its end record and its
     // log park's flush (`CheckpointLatchSite`) - with the busy answers it

@@ -320,6 +320,25 @@ StatusOr<AstValue> Parser::ParseValue() {
             v.byte_offset = tok.byte_offset;
             return v;
         }
+        case TokenType::kParam:
+            if (admit_holes_) {
+                AstValue v;
+                v.type = ValueType::kParam;
+                v.byte_offset = tok.byte_offset;
+                v.int_val = holes_read_++;
+                v.str_val = "?";
+                return v;
+            }
+            // A `?` in text that reached the grammar unbound: C_BIND
+            // substitutes every value with a spelling, so this is a value
+            // that has none (a quote, `kept_parse.hpp`) in a form that reads
+            // the statement's text again, or a `?` in a text statement.
+            return Status::InvalidArgument(
+                "a '?' parameter reached the grammar unbound (byte " +
+                std::to_string(tok.byte_offset) +
+                "): a value is bound by C_BIND, and a text value holding a quote binds only "
+                "where the statement's kept parse answers it, never where its text is read "
+                "again (docs/inflight/known-gaps.md)");
         case TokenType::kNamedParam:
             // Accepted by **no** production (`CREATE PATTERN`, its one
             // user, was withdrawn 2026-08-31). The token stays reserved for
@@ -2713,20 +2732,26 @@ Status Parser::ParseInsertTail(InsertStmt& stmt) {
                                        At(lexer_.Peek().byte_offset));
     }
     lexer_.Next();
+    // A column list (EB-S4): the arbiter is the key those columns are whole,
+    // which the dispatcher resolves (`ResolveConflictArbiter`).
     if (lexer_.Peek().type == TokenType::kLParen) {
         lexer_.Next();
-        IndexColumnRef target;
-        target.byte_offset = lexer_.Peek().byte_offset;
-        auto name = ParseIdent();
-        if (!name.ok()) return name.status();
-        target.name = std::move(name.value());
+        while (true) {
+            IndexColumnRef target;
+            target.byte_offset = lexer_.Peek().byte_offset;
+            auto name = ParseIdent();
+            if (!name.ok()) return name.status();
+            target.name = std::move(name.value());
+            stmt.conflict_target.push_back(std::move(target));
+            if (lexer_.Peek().type != TokenType::kComma) break;
+            lexer_.Next();
+        }
         if (lexer_.Peek().type != TokenType::kRParen) {
-            return Status::NotImplemented("a conflict target of more than one column is not "
-                                          "supported" + At(lexer_.Peek().byte_offset) +
-                                          "; the tuple key is the one conflict there is");
+            return Status::InvalidArgument("expected ',' or ')' in the conflict target, got '" +
+                                           std::string(Describe(lexer_.Peek())) + "'" +
+                                           At(lexer_.Peek().byte_offset));
         }
         lexer_.Next();
-        stmt.conflict_target = std::move(target);
     }
     if (!IsWord(lexer_.Peek(), "DO")) {
         return Status::InvalidArgument("expected DO, got '" + std::string(Describe(lexer_.Peek())) +

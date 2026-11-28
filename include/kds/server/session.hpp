@@ -67,6 +67,10 @@
 // never touch each other's state - they interact only through the
 // manager's live set, which is what makes their read views differ.
 
+namespace kds::parser {
+struct BoundStatement;  // `parser/kept_parse.hpp`
+}  // namespace kds::parser
+
 namespace kds::server {
 
 // Where a write walk stopped, so the same walk can be resumed after a park
@@ -290,6 +294,19 @@ public:
     // connection cannot be clobbered by another connection.
     ResultSink* result_sink() const noexcept { return result_sink_; }
     void set_result_sink(ResultSink* sink) noexcept { result_sink_ = sink; }
+
+    // **The running statement's kept parse, bound** (EA-S1,
+    // `parser/kept_parse.hpp`): set by the KWP session for the portal it
+    // executes and cleared at the statement's end, null for every other
+    // statement. On the session for the sink's reason above. The dispatcher
+    // takes the AST from it, in place of a parse, only for the text it was
+    // bound for (`CommandDispatcher::KeptFor`).
+    const std::shared_ptr<const parser::BoundStatement>& bound_statement() const noexcept {
+        return bound_statement_;
+    }
+    void set_bound_statement(std::shared_ptr<const parser::BoundStatement> bound) noexcept {
+        bound_statement_ = std::move(bound);
+    }
 
     // **§10's cancel flag** (docs/spec/protocol.md, BA-S15). Set from any
     // core - a cancel connection's, through `CancelRegistry`, or this
@@ -553,6 +570,7 @@ private:
     txn::IsolationLevel default_isolation_ = txn::IsolationLevel::kReadCommitted;
     catalog::Oid default_namespace_ = catalog::kNamespacePublic;
     ResultSink* result_sink_ = nullptr;
+    std::shared_ptr<const parser::BoundStatement> bound_statement_;
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
     std::optional<wal::DurabilityClass> durability_;      // SET DURABILITY
     std::optional<wal::DurabilityClass> txn_durability_;  // BEGIN ... DURABILITY

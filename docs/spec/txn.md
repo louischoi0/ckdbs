@@ -716,10 +716,24 @@ the data file unconditionally (BA-S13; `CoreRuntime::Config::trx_id_ceiling`,
 handed by `Expeditor`; `Expeditor::PersistTrxIdCeiling`). The next block is
 carved ahead on the `system`-group tick once three-quarters of the window
 is issued (`TrxIdSequence::CarveAheadIfLow`), by a core that issued an id
-since the previous tick; a burn drops it. Core 0's tick runs at every core
-count, so at `cores = 1` the carve's stall moves from a `BEGIN` onto that
-tick; a peer's tick runs only while `wal_drain_interval_us` is above 0, and
-without it a peer carves on `BEGIN`'s path as before. `Carve()` reads
+since the previous tick; a burn drops it. **That early carve's sync is off
+its reactor since DZ-S3** (`txn::StagedCeilingPersist`,
+`Expeditor::StageTrxIdCeiling`): the tick raises the ceiling and writes page
+0, asks the data-sync thread for the sync and holds the block pending; a
+later tick that finds the sync done makes it the block ahead, so nothing
+issues from it before its ceiling is durable. A `BEGIN` that drains the
+window with the block pending persists it whole on its path, and a failed
+sync drops it, its ids burned. DZ-S3 measured a carve's whole persist at
+437-511 ms at `relaxed`, `cores = 1`, the reactor's longest hold outside a
+checkpoint run. **At that shape the split does not take the stall off the
+reactor**: the longest carve stayed 86-610 ms at DZ's close
+(`bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`), read there as
+the window's last quarter (1,024 ids) draining before the staged sync is
+done and the `BEGIN` that drains it persisting the block whole
+(`known-gaps.md`). Core 0's tick runs at every core count, so at
+`cores = 1` the early carve is that tick's; a peer's tick runs only while
+`wal_drain_interval_us` is above 0, and without it a peer carves on
+`BEGIN`'s path as before. `Carve()` reads
 the ceiling and raises it **in one step under the latch** - two cores
 carving at once get two disjoint blocks - and the raised ceiling is durable
 before the block is issued from, because a mount refuses a log naming an id

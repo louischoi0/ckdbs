@@ -1,0 +1,40 @@
+
+ckdbs benchmark - 2 columns, 4096 rows resident, BTREE-clustered, 8 connections
+server 127.0.0.1:15981  table cp_fence_973006_9175
+
+phase                      ops       qps   mean us       p0      p25      p50      p95      p99       max   err
+---------------------------------------------------------------------------------------------------------------
+update-fenced            96000    72,285     107.8     19.5     66.5     94.0    219.5    320.2    2069.3     0
+update-unfenced          96000    73,391     106.7     18.6     66.9     94.4    214.0    302.4    1732.1     0
+
+  update-fenced: fence `id > 4080` held by another session: every tuple ask walks 64 partitions
+  update-unfenced: no fence standing: the counter reads 0, no walk
+
+  protocol kwp: sessions spread by SO_REUSEPORT (expeditor.cpp:1718)
+  fence session core 4; writer cores ['3', '1', '0', '2', '7', '4', '0', '4'] (initial; an autocommit session may move between transactions, BL-S3)
+  latency is the client's wall clock around one send + one receive; sub-10us deltas are inside the harness floor
+arm                        ops   mean us      p50      p90      p99      p100  walks/stmt            p50 spread
+update-fenced            96000     107.8     94.0    181.7    320.2    2069.3  1.00..1.00      93.1..95.4      
+update-unfenced          96000     106.7     94.4    177.7    302.4    1732.1  0.00..0.00      94.1..94.9      
+
+  C3: fenced - unfenced = -0.4 us at p50, +1.1 us at the mean, per point UPDATE on an uncovered row (8 writers, kwp); block-to-block p50 spread within one arm up to 2.3 us
+  C3 (server CPU, pid 972725, every thread): fenced 13.96 us/stmt, unfenced 11.98 us/stmt, delta +1.98 us/stmt; block-to-block spread within one arm up to 5.00 us (CLK_TCK 100 Hz)
+  walks: 96000 fence walks over the run; fenced arm 1.000..1.000 per statement, unfenced arm 0.000..0.000
+  lock_partition latch waits over the run: 6073 waits, 2631 us
+
+  per block: block arm statements walks/stmt p50 p99 partition-waits fence_rows fence_held_s cpu_us/stmt
+      0 update-fenced      16000    1.000     93.1    291.8      437     16    0.219    11.25
+      0 update-unfenced    16000    0.000     94.3    291.1      192      -        -    12.50
+      1 update-unfenced    16000    0.000     94.1    300.2      316      -        -    11.25
+      1 update-fenced      16000    1.000     94.4    360.5      851     16    0.231    16.25
+      2 update-fenced      16000    1.000     93.9    314.8      654     16    0.222    13.12
+      2 update-unfenced    16000    0.000     94.9    311.8      361      -        -    13.12
+      3 update-unfenced    16000    0.000     94.5    306.8      286      -        -    11.88
+      3 update-fenced      16000    1.000     94.3    350.6      798     16    0.229    14.38
+      4 update-fenced      16000    1.000     93.4    299.2      652     16    0.219    14.38
+      4 update-unfenced    16000    0.000     94.3    308.3      365      -        -    11.25
+      5 update-unfenced    16000    0.000     94.4    293.8      308      -        -    11.88
+      5 update-fenced      16000    1.000     95.4    311.2      853     16    0.223    14.38
+
+  sys.lock_waits: 0 row(s) (recorded 0, overwritten 0, dropped 0)
+  wrote /home/ukjin/ee-s0-run/fence8/fence.json

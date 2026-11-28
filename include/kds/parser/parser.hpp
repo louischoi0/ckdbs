@@ -59,6 +59,14 @@ public:
     // other grammar's refusal (DC-R2): the dispatcher reads this.
     bool met_lock_clause() const noexcept { return met_lock_clause_; }
 
+    // **A `?` read as a typed hole** (EA-S1, `kept_parse.hpp`): asked before
+    // `Parse()`, every `?` a value production reads becomes a `kParam`
+    // value carrying the marker's byte and, in `int_val`, its 0-based
+    // ordinal among the holes read. Unasked, a `?` is refused where a value
+    // is read, as it always was. Only `KeepParse` asks.
+    void AdmitHoles() noexcept { admit_holes_ = true; }
+    std::uint32_t holes_read() const noexcept { return holes_read_; }
+
     // **The query grammar** (BU-S4, `workorder-bu-basic-query-surface.md`
     // BU-Q8, BU-Q9): one SELECT, or set operations over several, with value
     // expressions wherever a value stands, `DISTINCT`, every join kind,
@@ -363,6 +371,8 @@ private:
     std::uint32_t query_depth_ = 0;
     // Set once `ParseLockClause` consumes a `FOR` (`met_lock_clause()`).
     bool met_lock_clause_ = false;
+    bool admit_holes_ = false;
+    std::uint32_t holes_read_ = 0;
 };
 
 // Convenience free function: Parser(sql).Parse().

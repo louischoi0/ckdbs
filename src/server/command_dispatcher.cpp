@@ -76,6 +76,7 @@
 #include "kds/storage/log_page_image.hpp"
 #include "kds/storage/index/index_tree.hpp"
 #include "kds/parser/fingerprint.hpp"
+#include "kds/parser/kept_parse.hpp"
 #include "kds/parser/lexer.hpp"
 #include "kds/parser/parser.hpp"
 #include "kds/storage/heap/heap_page.hpp"
@@ -7800,6 +7801,8 @@ public:
     // The head's state, filled by `HandleSelect` in order.
     std::optional<txn::LeasedSnapshot> snapshot;
     std::optional<parser::Parser> parser;
+    // The statement's fingerprint: its parse's, or its kept parse's (EA-S1).
+    std::optional<parser::Fingerprint> fingerprint;
     std::optional<parser::Statement> statement;
     std::optional<ReadBorrow> borrow;
     // What this run's own compile bound (DI, `stats/statement_binding.hpp`):
@@ -8016,7 +8019,23 @@ sched::Coro CommandDispatcher::CompleteSelect(std::string_view line, DispatchOut
     co_return Status::OK();
 }
 
-StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_view line) {
+const parser::BoundStatement* CommandDispatcher::KeptFor(const Session* session,
+                                                         std::string_view line) noexcept {
+    if (session == nullptr) return nullptr;
+    const auto& bound = session->bound_statement();
+    if (bound == nullptr || Trim(line) != Trim(bound->text)) return nullptr;
+    return bound.get();
+}
+
+StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_view line,
+                                                                const Session* session) {
+    if (const parser::BoundStatement* kept = KeptFor(session, line); kept != nullptr) {
+        if (statement_fetch_id_ == 0) {
+            statement_fetch_id_ = kept->fingerprint.fetch_id;
+            statement_pattern_id_ = kept->fingerprint.pattern_id;
+        }
+        return kept->Materialize();
+    }
     // `parser::Parse`, keeping the fingerprint the lexer took on the way:
     // `sys.statement_stats`' key costs the statement no second lex (BO-S5).
     parser::Parser parser(line);
@@ -8033,7 +8052,7 @@ StatusOr<parser::Statement> CommandDispatcher::ParseKeepingShape(std::string_vie
 
 DispatchOutcome CommandDispatcher::InsertInner(std::string_view line, WriteScope& scope,
                                                const exec::StatementContext& context) {
-    auto parsed = ParseKeepingShape(line);
+    auto parsed = ParseKeepingShape(line, scope.session);
     if (!parsed.ok()) {
         return Refused(parsed.status());
     }
@@ -8374,11 +8393,12 @@ DispatchOutcome CommandDispatcher::InsertParsed(const parser::InsertStmt& writte
         kept.emplace(InsertShellOf(shaped));
         std::set<std::uint64_t> named;
         for (const std::vector<parser::AstValue>& r : shaped.rows) {
+            const auto key = ConflictTupleKeyOf(ta, r);
             const std::optional<std::uint64_t> id =
-                r.size() == ta.schema.columns.size() ? KeystoneIdOf(r.front()) : std::nullopt;
+                key.has_value() ? std::optional<std::uint64_t>(key->id) : std::nullopt;
             if (id.has_value()) {
                 if (named.count(*id) != 0) continue;
-                auto placed = TupleKeyPlaced(ta, *id, r.front().byte_offset, scope);
+                auto placed = TupleKeyPlaced(ta, *id, key->byte, scope);
                 if (!placed.ok()) {
                     return Refused(placed.status());
                 }
@@ -8561,18 +8581,12 @@ constexpr const catalog::TableAccess::IndexRef* kTupleKeyArbiter = nullptr;
 
 StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConflictArbiter(
     const catalog::TableAccess& ta, const parser::InsertStmt& written) {
-    // **An embedded primary key arbitrates nothing yet** (DR-S3e): its
-    // conflict is a tuple key's, found at the id the row's key encodes to,
-    // and neither arm here computes that id - the tuple key arm reads a key
-    // the row wrote, and the index arm has no index. Refused by name rather
-    // than answered with the duplicate the clause was written to avoid.
-    if (!ta.schema.embedded_key.empty()) {
-        return Status::NotImplemented(
-            "ON CONFLICT at byte " + std::to_string(written.conflict_byte_offset) +
-            " on a relation whose primary key is its Keystone id is not built");
-    }
-    if (!written.conflict_target.has_value()) {
-        if (written.on_conflict_do_update && ta.schema.hidden_keystone()) {
+    // **An embedded primary key is the tuple key** (EB-S4): its conflict is
+    // found at the id the row's key encodes to (`ConflictTupleKeyOf`), so no
+    // target, or a target of the key's columns, is the tuple key arm.
+    const bool embedded = !ta.schema.embedded_key.empty();
+    if (written.conflict_target.empty()) {
+        if (written.on_conflict_do_update && ta.schema.hidden_keystone() && !embedded) {
             return Status::NotImplemented(
                 "ON CONFLICT DO UPDATE at byte " + std::to_string(written.conflict_byte_offset) +
                 " names its arbiter here: the relation's tuple key is hidden (BZ-R4), so write "
@@ -8580,24 +8594,80 @@ StatusOr<const catalog::TableAccess::IndexRef*> CommandDispatcher::ResolveConfli
         }
         return kTupleKeyArbiter;
     }
-    const parser::IndexColumnRef& target = *written.conflict_target;
-    auto col = ta.schema.FindColumn(target.name, target.byte_offset);
-    if (!col.ok()) return col.status();
-    // `FindColumn` answers OK with no column for a name the relation does not
-    // have: no position to look an index up by, so the refusal below.
-    if (col.value() != nullptr) {
-        if (col.value() == &ta.schema.columns.front()) return kTupleKeyArbiter;
-        const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
-        for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
-            if (ix.unique && ix.nkeys == 1 && ix.key_cols[0] == at) return &ix;
+    // The written columns, by position; a name the relation does not have
+    // (`FindColumn` answers OK with no column) or one written twice is no key.
+    const std::uint32_t at_byte = written.conflict_target.front().byte_offset;
+    const auto names = [&] {
+        std::string out;
+        for (const parser::IndexColumnRef& target : written.conflict_target) {
+            out += (out.empty() ? "" : ", ") + target.name;
         }
+        return out;
+    };
+    const auto refuse = [&] {
+        return Status::NotImplemented(
+            "ON CONFLICT (" + names() + ") at byte " + std::to_string(at_byte) +
+            (ta.schema.hidden_keystone()
+                 ? ": the arbiter is the columns of a unique index" +
+                       std::string(embedded ? " or of the primary key" : "") +
+                       ", and this relation's tuple key is hidden (BZ-R4)"
+                 : ": the arbiter is the tuple key or the columns of a unique index"));
+    };
+    std::vector<std::uint16_t> cols;
+    for (const parser::IndexColumnRef& target : written.conflict_target) {
+        auto col = ta.schema.FindColumn(target.name, target.byte_offset);
+        if (!col.ok()) return col.status();
+        if (col.value() == nullptr) return refuse();
+        const auto at = static_cast<std::uint16_t>(col.value() - ta.schema.columns.data());
+        if (std::ranges::find(cols, at) != cols.end()) {
+            return Status::InvalidArgument("ON CONFLICT names column '" + target.name +
+                                           "' twice (byte " + std::to_string(target.byte_offset) +
+                                           ")");
+        }
+        cols.push_back(at);
     }
-    return Status::NotImplemented(
-        "ON CONFLICT (" + target.name + ") at byte " + std::to_string(target.byte_offset) +
-        (ta.schema.hidden_keystone()
-             ? ": the arbiter is the one column of a unique index, and this relation's tuple "
-               "key is hidden (BZ-R4)"
-             : ": the arbiter is the tuple key or the one column of a unique index"));
+    const auto same_set = [&](const auto& key) {
+        return key.size() == cols.size() &&
+               std::is_permutation(cols.begin(), cols.end(), key.begin());
+    };
+    if (cols.size() == 1 && cols.front() == 0) {
+        // **A hidden Keystone is named by no conflict target on a heap**
+        // (`heap-and-tuple.md` §3.1b, BZ-R4; EB-Q4 (a)).
+        if (ta.heap() && ta.schema.hidden_keystone()) {
+            return Status::NotImplemented(
+                "ON CONFLICT (" + names() + ") at byte " + std::to_string(at_byte) +
+                " names a heap's hidden Keystone, which no conflict target names (BZ-R4); the "
+                "arbiter is the columns of a unique index");
+        }
+        return kTupleKeyArbiter;
+    }
+    if (embedded && same_set(ta.schema.embedded_key)) return kTupleKeyArbiter;
+    for (const catalog::TableAccess::IndexRef& ix : ta.indexes) {
+        if (ix.unique && !ix.building && same_set(ix.keys())) return &ix;
+    }
+    return refuse();
+}
+
+std::optional<CommandDispatcher::ConflictKey> CommandDispatcher::ConflictTupleKeyOf(
+    const catalog::TableAccess& ta, const std::vector<parser::AstValue>& row) {
+    // A full-width row names its tuple key, as `InsertOneRow` reads it.
+    const bool named = row.size() == ta.schema.columns.size();
+    std::optional<std::uint64_t> written;
+    if (named) {
+        written = KeystoneIdOf(row.front());
+        if (!written.has_value()) return std::nullopt;  // the insert's refusal
+    }
+    if (ta.schema.embedded_key.empty()) {
+        if (!written.has_value()) return std::nullopt;
+        return ConflictKey{*written, row.front().byte_offset};
+    }
+    const std::vector<parser::AstValue> body = InsertBodyOf(ta, row);
+    if (body.empty()) return std::nullopt;
+    ConflictKey key{written.value_or(0), named ? row.front().byte_offset : 0};
+    // A key that does not encode, a NULL in it, or a `keyidentity` that is
+    // not the key's id names no id: the insert refuses the row by name.
+    if (!EmbeddedRowId(ta.oid, ta, body, named, key.id, key.byte).ok()) return std::nullopt;
+    return key;
 }
 
 namespace {
@@ -8707,10 +8777,10 @@ DispatchOutcome CommandDispatcher::InsertOnConflict(catalog::Oid oid,
         p.body = InsertBodyOf(ta, r);
         bool repeated = false;
         if (arbiter == nullptr) {
-            if (r.size() == ta.schema.columns.size()) {
-                p.key = KeystoneIdOf(r.front());
-                p.byte = r.front().byte_offset;
-                repeated = p.key.has_value() && !keys_seen.insert(*p.key).second;
+            if (const auto key = ConflictTupleKeyOf(ta, r); key.has_value()) {
+                p.key = key->id;
+                p.byte = key->byte;
+                repeated = !keys_seen.insert(key->id).second;
             }
         } else {
             // A key that does not encode is the insert arm's refusal.
@@ -11185,11 +11255,19 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // fingerprint can be taken **from the parse itself** (parser.hpp): a
     // second lex was ~13% of a point join's latency
     // (bench/results-waystone-v2.md, at 1769487).
-    parser::Parser& parser = run->parser.emplace(line);
-    auto parsed = parser.Parse();
+    //
+    // **A kept parse stands in for the parse** (EA-S1) where the session's
+    // statement was bound for this text: its AST, holes filled, and the
+    // substituted text's fingerprint.
+    const parser::BoundStatement* kept = KeptFor(&session, line);
+    StatusOr<parser::Statement> parsed =
+        kept != nullptr ? StatusOr<parser::Statement>(kept->Materialize())
+                        : run->parser.emplace(line).Parse();
+    run->fingerprint = kept != nullptr ? std::optional<parser::Fingerprint>(kept->fingerprint)
+                                       : run->parser->fingerprint();
     // `sys.statement_stats` (BO-S5): the first parse of the statement keys
     // it - an UPDATE's SET subquery runs here after the UPDATE's own parse.
-    if (const auto fingerprint = parser.fingerprint();
+    if (const auto& fingerprint = run->fingerprint;
         fingerprint.has_value() && statement_fetch_id_ == 0) {
         statement_fetch_id_ = fingerprint->fetch_id;
         statement_pattern_id_ = fingerprint->pattern_id;
@@ -11200,7 +11278,7 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
         // everything before the clause was native, and the query grammar
         // refuses every clause it meets, so its refusal - of a form the
         // query layer answers - would be false of this statement.
-        if (!analyze && !parser.met_lock_clause()) {
+        if (!analyze && !run->parser->met_lock_clause()) {
             if (auto layered = TryQueryLayer(line, session, snap, context); layered.has_value()) {
                 return std::move(*layered);
             }
@@ -11433,11 +11511,12 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         plan.admin = admin_plans_;
         plan.search = join_order != exec::JoinOrder::kWritten;
         plan.statement = line;
+        // A kept parse's arguments, its holes' values in place (EA-S2).
+        const parser::BoundStatement* kept = KeptFor(&session, line);
+        plan.arguments = kept != nullptr ? &kept->arguments : nullptr;
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
-        if (const auto fingerprint =
-                run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
-            fingerprint.has_value()) {
+        if (const auto& fingerprint = run->fingerprint; fingerprint.has_value()) {
             plan.fetch_id = fingerprint->fetch_id;
             plan.arg_hash = fingerprint->arg_hash;
             plan.literals_known = fingerprint->param_count == 0;
@@ -11500,7 +11579,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // Where the join order came from, for `sys.statement_stats` (CX-R11) -
     // of the statement's own SELECT, not of a subquery an UPDATE's SET runs
     // through here, which `fetch_id` is guarded against the same way.
-    const auto own = run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
+    const auto& own = run->fingerprint;
     const bool statements_own = own.has_value() && own->fetch_id == statement_fetch_id_;
     if (statements_own) NoteStatementCompiled();
     if (!statements_own) {
@@ -11521,7 +11600,7 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
     // (lexer.hpp), so identifying the statement costs nothing beyond the
     // parse that had to happen anyway.
     const std::optional<parser::Fingerprint> fingerprint =
-        run->parser.has_value() ? run->parser->fingerprint() : std::nullopt;
+        run->fingerprint;
 
     // **A D2 statement neither records a trail nor reads one** (AR1 §3,
     // D2): a row-volatile function makes its instance key name no stable
@@ -12311,7 +12390,8 @@ std::optional<Status> CommandDispatcher::AnalyzeWithReturning(
 }
 
 CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
-                                                             std::string_view statement) {
+                                                             std::string_view statement,
+                                                             const Session* session) {
     if (statement.empty() || statement_fetch_id_ == 0 || !admin_plans_->any_single()) return {};
     exec::CapturedKey key;
     key.fetch_id = statement_fetch_id_;
@@ -12320,7 +12400,9 @@ CommandDispatcher::WritePlan CommandDispatcher::WritePlanFor(catalog::Oid oid,
     WritePlan found;
     found.plan = admin_plans_->Find(key);
     if (found.plan == nullptr) return {};
-    found.variant = &found.plan->Choose(statement);
+    // A kept parse's arguments, its holes' values in place (EA-S2).
+    const parser::BoundStatement* kept = KeptFor(session, statement);
+    found.variant = &found.plan->Choose(statement, kept != nullptr ? &kept->arguments : nullptr);
     return found;
 }
 
@@ -12781,8 +12863,8 @@ DispatchOutcome CommandDispatcher::WithReturning(std::string_view line, Session&
     if (out.response.rfind("ERR", 0) == 0 || !ContainsWordIgnoringCase(line, "RETURNING")) {
         return out;
     }
-    parser::Parser parser(line);
-    auto parsed = parser.Parse();
+    // The statement's own parse again, or its kept parse (EA-S1).
+    auto parsed = ParseKeepingShape(line, &session);
     if (!parsed.ok()) return out;
     const parser::Returning* returning = nullptr;
     std::string schema;
@@ -13447,7 +13529,7 @@ DispatchOutcome CommandDispatcher::UpdateInner(std::string_view line, WriteScope
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context,
                                                std::vector<exec::SubqueryResult>& subqueries) {
-    auto parsed = ParseKeepingShape(line);
+    auto parsed = ParseKeepingShape(line, scope.session);
     if (!parsed.ok()) {
         return Refused(parsed.status());
     }
@@ -14480,7 +14562,8 @@ DispatchOutcome CommandDispatcher::UpdateParsed(parser::UpdateStmt& stmt, WriteS
     // an administrator gave its shape one, pins the arm it finds its rows
     // by (DU-S3); the window declared above is the statement's whatever arm
     // that is.
-    const WritePlan plan = arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement);
+    const WritePlan plan =
+        arm_target.has_value() ? WritePlan{} : WritePlanFor(ta.oid, statement, scope.session);
     if (!arm_target.has_value()) {
         walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
         NoteWritePlan(plan, walk.pin_declined());
@@ -18263,7 +18346,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
                                                WalkCursor resume_from,
                                                const exec::StatementContext& context) {
     // Keyed by its shape, as an INSERT and an UPDATE are (DF-Q11 (a)).
-    auto parsed = ParseKeepingShape(line);
+    auto parsed = ParseKeepingShape(line, scope.session);
     if (!parsed.ok()) return Refused(parsed.status());
     if (!std::holds_alternative<parser::DeleteStmt>(parsed.value())) {
         return {"ERR expected a DELETE statement", false};
@@ -18321,7 +18404,7 @@ DispatchOutcome CommandDispatcher::DeleteInner(std::string_view line, WriteScope
     // states the argument.
     const std::optional<txn::LockKey> declared = DeclaredWriteBorrow(ta, stmt.where);
     // DU-S1 and DU-S3, as UPDATE's: the bound, and the plan's pin.
-    const WritePlan plan = WritePlanFor(ta.oid, line);
+    const WritePlan plan = WritePlanFor(ta.oid, line, scope.session);
     walk.BoundBy(FoldTupleKeyWindow(ta, stmt.where), plan.pin());
     NoteWritePlan(plan, walk.pin_declined());
     if (declared.has_value()) {

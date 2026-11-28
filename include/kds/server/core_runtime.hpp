@@ -284,6 +284,8 @@ public:
             SuperBlock* superblock = nullptr;
             Latch* latch = nullptr;
             std::function<Status()> persist;
+            // The early carve's persist in halves (DZ-S3); empty: whole.
+            txn::StagedCeilingPersist staged;
         };
         TrxIdCeiling trx_id_ceiling;
     };

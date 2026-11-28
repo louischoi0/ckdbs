@@ -184,6 +184,16 @@ TEST_F(HeapHiddenKeyTest, OnConflictTakesNoTargetOnAHeap) {
     const std::string named = Run("INSERT INTO h VALUES (1, 2) ON CONFLICT (a) DO NOTHING");
     EXPECT_EQ(named.rfind("ERR", 0), 0u) << named;
     EXPECT_NE(named.find("tuple key is hidden"), std::string::npos) << named;
+    // No target names a heap's hidden Keystone (`heap-and-tuple.md` §3.1b,
+    // BZ-R4; EB-Q4 (a)), whichever arm the clause takes.
+    for (const char* tail : {"DO NOTHING", "DO UPDATE SET b = 0"}) {
+        const std::string keyed =
+            Run(std::string("INSERT INTO h (keyidentity, a, b) VALUES (1, 1, 2) ON CONFLICT "
+                            "(keyidentity) ") +
+                tail);
+        EXPECT_EQ(keyed.rfind("ERR", 0), 0u) << keyed;
+        EXPECT_NE(keyed.find("hidden Keystone"), std::string::npos) << keyed;
+    }
 }
 
 // ON CONFLICT DO UPDATE on a heap (CG-Q1 (b)): the one column of a unique

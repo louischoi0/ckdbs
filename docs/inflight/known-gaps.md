@@ -983,6 +983,20 @@ A bug entry `d83bd502` closed unreproduced is cited here as
     the net). A holder still in flight when its row's probe is granted
     polls `IsInFlight`; no cell reaches that arm and no writer is known to
     take it.
+  - **What a poll costs, measured at `046b09053`** (EE-S0,
+    `bench/v3.4.17/results-ee-s0-premise-v3.4.17-220-g046b09053.md`): a
+    polled wait ends at the waiter core's next drain tick, every core
+    arming the WAL drain at `wal_drain_interval_us` (1 ms by default), so
+    cross-core it answers 0.6-0.7 ms later at p50 than a slot-woken wait -
+    +630 us for an assertion group's reserver, +573 us for a `PURGE`'s
+    deleter. With the drain off (`wal_drain_interval_us = 0`) the idle
+    block's 10 ms ceiling bounds it, and 15 and 11 of 30 of those waits
+    ran past 2 ms toward it (4 and 3 past 9 ms). Of the polled arms only those two are reachable with a
+    lock table by any writer known. **Neither opens a `sys.lock_waits` row
+    or counts in `relation_stats`' `lock_waits`**, which count waits on a
+    slot only. On one hot row, eight sessions and 3.6 million waits, none
+    ended at the fault net; at 2 ms held inside the transaction a commit
+    cost 7 parks and the slowest transaction 344 ms.
   - A holder that never decides costs a cross-core writer the 1 s fault net
     and its defect warning, as a same-core writer pays.
 
@@ -1005,20 +1019,32 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   row mid-walk and be refused retryably. CP-Q4 (a) marks the form that
   avoids it, (α): the fence-taker waits out the statements that began
   before its publish, so no wait becomes a refusal. It is a design for its
-  own order. Read at `f5d310ec`; nothing of it is in the tree.
+  own order. Read at `f5d310ec`; nothing of it is in the tree. **Its order,
+  EE (`instructions/v3.2.0/workorder-ee-decide-slot.md`), was abandoned at
+  EE-S0 on 2026-11-27 with nothing built**: the poll it would replace
+  costs at most one drain tick, under a millisecond at the default, on
+  waits an operator reaches only at an assertion group's last unit of room
+  or by an administrator's `PURGE`, and no wait ended at the net (EE-Q1
+  (a)'s bar,
+  CLA's reading on the operator's standing go-ahead; "What a poll costs"
+  above).
 
 - **The per-relation lock header is not built, and its eight-core number
-  is not measured** (CP's C3, the order's §3, §8.4). A standing range
+  reproduces BP-H10's** (CP's C3, the order's §3, §8.4). A standing range
   fence costs every point write of the relation one walk of the 64
   partitions: about 1 µs a statement at four cores at CP-S0
   (`bench/v3.4.7/results-cp-s0-premise-v3.4.7-1-gcc54a296.md` §7), against
   a point write whose own floor is about 36 µs (CP-Q12 (a) reads the rule's
-  "floor" as the write's). BP-H10's +12 % of a statement's CPU at eight
-  cores was not reproduced because eight cores were not run, and the
-  four-core cells barely exercised cross-core partition contention. A
-  relation header holding its entry and its fences under one latch is the
-  design; it is re-proposed as its own item only if an eight-core run
-  reproduces the figure. Read at `f5d310ec`.
+  "floor" as the write's). **At eight cores and eight writers, measured at
+  `046b09053`** (EE-S0, EE-Q5 (a);
+  `bench/v3.4.17/results-ee-s0-premise-v3.4.17-220-g046b09053.md` §5), it
+  is **+1.78 µs of server CPU a statement** over an unfenced 12.1 µs, paired
+  over 22 blocks (t-interval +0.63 to +2.93 µs), about +15 % against
+  BP-H10's +12 %, with 2.4x the partition-latch waits; the client's p50
+  does not move outside its block spread at that concurrency. A relation
+  header holding its entry and its fences under one latch is the design;
+  **under EE-Q5 (a) it is re-proposed as its own item**, and no order for
+  it is written. Read at `f5d310ec`; the measurement at `046b09053`.
 
 - **A parent `UPDATE` no longer waits for child writers, and one class of
   deadlock replaced the one that removed** (CP-S2b, `766f6a6d`; `txn.md`
@@ -1690,13 +1716,24 @@ Written at BN's close on `worktree-bk-read-update-paths`, verified at `8679367e`
 `instructions/v3.0.0/workorder-bn-opt-read-update-path.md` and the specs each
 stage changed (`heap-and-tuple.md` §3.4, `types.md` §3.2b, `protocol.md` §5).
 
-- **A prepared statement is still substituted into its text and parsed again
-  at every execution** (BN-R1 not built, BN-Q13). Parse and compile are
-  1.1-4.5 µs of a point statement's server CPU after BN (5-15 % of it,
-  `bench/v3.0.0/archive/bn-close-v2.7.0-787-g8679367e/partsB.md`), and a
-  client that prepares is the only one a cached parse would help; no driver
-  in the tree prepares. A text parameter containing a single quote stays
-  unbindable at `C_BIND` for the same reason.
+- **A prepared statement's parse is kept only where it is a named
+  statement's and its bind carries no NULL** (EA-S1, verified on
+  `ea-prepared-statement-reuse`; `protocol.md` §5). The unnamed statement, a
+  bind with a NULL, a `?` the bind's walk does not reach (a `RETURNING`
+  item, a SET value's scalar subquery, a query-grammar form) and a `?`
+  against a byte it could fuse with still substitute and parse at every
+  execution - 11.9 - 20.9 % of a prepared statement's server CPU at EA-S0
+  (`bench/v3.4.17/results-ea-s0-premise-v3.4.17-202-g481d101aa.md`). **A text
+  value holding a quote binds only through a kept parse**: refused at
+  `C_BIND` elsewhere, and refused by name at its `?` by a form that reads
+  the statement's text again (the query layer after a native compile
+  declines). **The compiled chain is not kept** (EA-Q3 (a), CX-Q37 (a)):
+  with the parse gone, `exec::Compile` is 8.1 % of a prepared point
+  `SELECT`'s server CPU and 18.9 - 22.1 % of a three-relation join's.
+- **A text statement over KWP lexes its text twice**: `C_PARSE`'s
+  `FingerprintOf` for the informational `pattern_id`, then the statement's
+  own parse - 0.23 µs on a point statement and 0.86 µs on a three-relation
+  join, 3.4 - 8.1 % of its server CPU (EA-S0, same file). Left by EA-R4.
 - **Waystone records a trail for a point `SELECT` by tuple key only if an
   operator opted the shape in.** Closed for every shape not opted by CF-S1b
   and CF-S1c (verified on `cf-waystone-premise` at `46c632aa`): a `SELECT`
@@ -1779,39 +1816,64 @@ Verified at `e5a7e1b7` (BA's close,
 `results-ba-close-overhead-v2.7.0-736-ge5a7e1b7.md`; diagnosed in
 `results-ba-carve-diag-v2.7.0-736-ge5a7e1b7.md`). Owned by `docs/spec/wal.md`
 §11a and, for the checkpoint, BI (`workorder-bi-checkpoint-off-the-reactor.md`,
-closed 2026-10-11 at `ec827a19`).
+closed 2026-10-11 at `ec827a19`) and DZ
+(`workorder-dz-checkpoint-reactor-residue.md`, closed 2026-11-27 at
+`27e85e848`). The entries below DZ rewrote were verified at `27e85e848`,
+each saying so.
 
-- **A `relaxed` carve's longest stall is 226-258 ms per server life**
-  (median), against 20-46 ms at BA-S4; under `group` and `strict` it fell
-  to 3.6-5.9 ms. At `cores = 1` it is not BA-S13's, and at B it reads a
-  data-file `fsync` stall BA-S4's binary also meets; maxima above 300 ms,
-  `cores` 2 and 4, and carves inside the measured span are unexplained or
-  unmeasured (the diagnosis file). BA-S13's exit, a carve under 10 ms, is
-  not met.
-- **The checkpoint still holds its reactor past 10 ms, for writes** -
-  restated at BI's close (`ec827a19`,
-  `results-bi-s5-checkpoint-stall-v2.7.0-784-gec827a19.md`). Since BI a run
-  is a `system` task that parks for every sync, and its reactor time fell
-  about tenfold; what remains on the reactor is a step's and a publish
-  batch's `pwrite`s (single writes up to about 300 ms in the kernel's
-  writeback throttle) and the inline log gate after 16 deferrals at
-  `relaxed`. Under `relaxed` a run is 4-8x longer than before at `cores = 1`.
-  `bugs/a-checkpoint-run-holds-its-cores-reactor-for-its-whole-length.md`
-  (closed unreproduced at `d83bd502`) carried the numbers and what a fix
-  needs.
-- **A run's map halves can wait on its reactor for another caller's
-  data-file sync** (`[source-read]`, on `fix-map-flush-order` over
-  `27e9d03a`). The map write order (`page.md` §5) puts a sync between the
-  headerless and free maps whenever a headerless map changed. A blocking
-  flush - `SYNC`, a reclaim's `PersistMaps`, the synchronous anchor publish
-  - takes that sync inside `FlushMaps` under the map write barrier
-  (`map_flush_latch_`), a plain mutex, and the run task's
-  `WriteHeaderlessMaps` and `WriteFreeMaps` take the same barrier on the
-  reactor, so a run that meets one waits out its `fsync` there. Before the
-  map write order the barrier covered `pwrite`s only. It needs a pending
-  headerless change and a concurrent blocking flush at once; not measured.
-  Releasing the barrier across the wait would keep BF-R5 only with the run
-  re-parking on a newer ticket, a change to the halves' contract.
+- **A `relaxed` carve's longest stall is still a data-file `fsync` at
+  `cores = 1`** (re-verified at DZ's close, `27e85e848`,
+  `bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`): 86-610 ms
+  under BA's `insert1` shape, against 50-459 ms at DZ's base, and the
+  reactor's longest hold outside a checkpoint run equal to it. Since DZ-S3
+  the early carve's sync is off the reactor (`txn.md` §4.2), but at that
+  rate the window's last quarter - 1,024 ids, about 10 ms - drains before
+  the sync is done, and the `BEGIN` that drains it persists the pending
+  block whole on its path. At `group`, `cores = 2` the split is not shown to
+  help either: over 12 pairs the longest carve was 0.8-273 ms against
+  1.7-440 ms at DZ's base, medians 10.4 and 11.0 ms (9-12 ms in B's first
+  three pairs, 273 ms in its fourth). A block or a trigger sized to the sync
+  is not built; BA-S13's exit, a carve under 10 ms, is met at neither
+  shape.
+- **The early carve's page-0 write can wait out a staged checkpoint batch**
+  (DZ-S3's review, `[source-read]`, verified at `27e85e848`): when page 0
+  is in a step's staged batch, the carve's `WriteBack(kWait)` waits for that
+  batch's write (armed) on the tick's reactor; `kSkip` would be unsound, the
+  claimed copy possibly predating the raise. Not measured beside a run. A staged block drained
+  before its sync is done counts as two carves in `contention_carves`, and
+  no cell drives the expeditor's staged persist through a crash.
+- **What a cadence checkpoint still does on its reactor, since DZ** (verified
+  at `27e85e848` on `dz-checkpoint-reactor-residue`,
+  `bench/v3.5.0/results-dz-close-v3.4.17-209-g27e85e848.md`): no poll over
+  10 ms at 64 Ki, 256 Ki or 1 Mi dirty frames, `cores` 1 and 4 - the walks
+  in slices, the writes on the data-sync writer thread, the map halves tried
+  on a busy barrier (`wal.md` §11). What is left: a poll of up to 9.6 ms at
+  1 Mi between the last step and the publish's first batch that the census's
+  pieces do not name; the begin record's O(n) pieces over the walked table
+  (the redo start, the cursor's copy, the record's cut) in one poll, not
+  timed apart - the start phase's longest occurrence was 3.2-3.6 ms at 1 Mi,
+  equal to the longest walk slice in three of four cells; the inline log
+  gate after 16 deferrals at `relaxed`, and each tried site's blocking call
+  after 16 busy answers (the begin and end appends, the log flush, a map
+  half); the anchor page's write, which the census bench does not exercise,
+  and the begin and end appends and the assertion visit, which it does not
+  time apart. A synchronous run (mount, shutdown) still writes, walks and
+  waits on the map barrier on its thread.
+- **The collector's slice is sized and not measured apart** (DZ's close
+  review, verified at `27e85e848`): `dirty_table_collector.hpp` sizes a
+  slice at 0.3-0.7 ms from DZ-S0's per-chunk cost, and the close measured
+  the start's longest slice at 3.2-3.5 ms at 1 Mi; the slice that ends the
+  walk also sizes the sort's buffer and spends a sort slice, and no field
+  times it apart. Under the bar, by a margin the comment overstates.
+- **A claim staged across a park is longer than a write's** (DZ-S2's review,
+  `[source-read]`, verified at `27e85e848`): a step's pages
+  stay claimed from the copy until the writer thread has written the batch,
+  so a `kWait` writeback of one of them - `SYNC`, the carve's page 0, a
+  shutdown flush - waits out the batch (armed), or cleans it on its own
+  thread once written (unarmed), and `FreePage` answers `kDeferred` for that
+  long; a batch can take the kernel's writeback throttle's full time (DZ-S0:
+  up to 1.26 s a step). Not measured beside a run. `FreeUnbuiltTree`'s
+  documented leak on a deferred frame is likelier for it.
 - **A paced publish's map write can carry the bit of a page another core
   created unlogged after the collection** (BI-S4, `[source-read]`). The
   publish collects the dirty pages, writes them, then writes the maps; a
@@ -1827,23 +1889,26 @@ Verified at DO-S3's commit on the worktree `dg-wal-segment-body` (the
 order's §7 names it). Owned by `docs/spec/page.md` §8 and §12 and
 `instructions/v3.2.0/workorder-do-frame-table-long-holds.md`.
 
-- **The walking core is stalled for the whole of a checkpoint's dirty-table
-  walk**, longer since E2: about 49 ms for H1 at 1 Mi dirty frames under
-  three readers on DO's host (26 ms before E2), and the publish's walk
-  again - the sort, a table lookup a slot and a handover a chunk, all off
-  the latch but on the walker's reactor. No other core waits for it (no
-  hold over about 0.3 ms). A walk budget, or a handover every few chunks,
-  is not built.
+- **A synchronous dirty-table walk stalls its caller for the whole walk**
+  (`Flush`, `SYNC`, a mount's or shutdown's checkpoint): about 49 ms for H1
+  at 1 Mi dirty frames under three readers on DO's host. **A cadence run's
+  walks are sliced since DZ-S1** (`storage/dirty_table_collector.hpp`): its
+  longest walk slice at 1 Mi was 3.2-3.5 ms at DZ's close (`27e85e848`).
 - **A fetch can still wait milliseconds with no long hold**: up to 4.4 ms
   at 1 Mi frames and 2.3 ms at 64 Ki under three readers - the one mutex's
   unfairness between fetches (and against the walker's re-take, which the
   handover bounds but does not remove). CW's C1, not built: CW closed at
   V0.
-- **The fuzzy table rests on a premise the code states and does not
-  enforce**: no core yields between an append and its stamp (the one-hold
-  table rested on it too). The crash cells run the window's write on the
-  walking thread, so the fold - the cover across runs - is not exercised
-  by any cell.
+- **The fuzzy table's premise is checked in debug builds only, and
+  recorded, not fatal** (DZ-S1, DZ-Q8 (a); verified at `27e85e848`): the
+  suspend audit records a
+  suspension between a record's append and its page's stamp
+  (`wal/stamp_audit.hpp`), and only where the audit is installed - the
+  server's reactors and the rigs that install it, not the simulator.
+  Release builds check nothing. The crash cells run the window's write on
+  the walking thread of the one-core simulator, so the fold - the cover
+  across runs - is not exercised by any cell, and DZ-R1's two-core cell
+  waits for a simulator with cores (EC; DZ-Q7 (a)).
 - **The per-fetch holds are still the instance's one latch**: two a read
   hit, three a write hit, each a cache line moving between cores above one
   core. CW-S0 priced them against DO's tree at `6ddcae43`
@@ -2979,7 +3044,9 @@ by `docs/spec/txn.md` §1 ("The access mode"); the order is
 
 - **A multi-variant plan lexes the statement a second time at every
   compile**, to read its arguments (`parser::ArgumentsOf`); a one-variant
-  plan does not. And while any plan is enabled, every top-level join
+  plan does not, and neither does a statement run from a kept parse, whose
+  bound arguments the rule reads (EA-S2, verified on
+  `ea-prepared-statement-reuse`). And while any plan is enabled, every top-level join
   block's compile on every core probes the administrator's table - one
   partition latch - a tuple key chain's included, which the captured table
   is never asked of (CX-R6 as amended in the stage log). Neither is
@@ -3447,11 +3514,6 @@ Verified on `cv-ordered-index-walk` over `3ff0b377` (CV-S1). Owned by
   the subtree's right part, per step. Correct (the rig cell grows a level
   under the walk), not measured; a LIMIT keeps it short, and a filter that
   matches nothing walks it whole.
-- **A one-sided bound does not seed the reverse walk**: `WHERE id < ?
-  ORDER BY id DESC LIMIT 20` - keyset pagination - starts at the relation's
-  top and filters every row above the bound, because a one-sided bound is
-  no tuple key range (`TupleKeyRangeOf`). `BETWEEN` seeds it.
-
 - **A reverse walk's leaf miss is a blocking read on its reactor.** DE
   gives the forward walk's leaf fetch a read off the reactor and a park
   (`page.md` §12); the reverse walk (O2) fetches each leaf, and makes each
@@ -3840,11 +3902,14 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
   UPDATE by key 4 %. The 20-50 us btree cells' control spread (-20 % to
   +45 %) leaves a few percent there unresolved.
 
-- **A Keystone range is a full scan.** `WHERE keyidentity > 2` (or a range on
-  a declared Keystone) is answered by the walk with the range in the
-  residual; the Keystone index is not chosen for it, so a heap's key range
-  costs the relation, where `heap-and-tuple.md` §3.1b's index range walk
-  would cost the range.
+- **A heap's Keystone bounded at one end, with no order to stop it, is a
+  walk** (EB-S1, verified on `eb-key-forms-in-the-executor` over
+  `e2dec50f7`): `WHERE keyidentity > 2`
+  alone resolves no entry through the Keystone index, because a range open
+  at one end would resolve entry after entry where the walk reads in page
+  order. A window bounded at both ends, strict or inclusive, is the index's
+  range, and `ORDER BY keyidentity [DESC] LIMIT n` walks the index from the
+  bound (`index.md` IX9).
 - **A heap has no sampled planner prior.** `plan_stats`' descent-sampled
   prior reads no data page, so a heap is priced at constant fill and a join
   block holding one is not captured under `join_order = fixed`; `GATHER
@@ -3853,13 +3918,6 @@ Verified on worktree `dn-dd-s4-into-dn-s2` at `bc8c9d97` (DN-S2, DN-S3).
   declines (a set operation, a derived table, an outer join) answers
   `unknown column 'keyidentity'`: the layer's walk emits no hidden column.
   A refusal, never a wrong answer.
-- **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is admitted,
-  against `heap-and-tuple.md` §3.1b** ("`ON CONFLICT (<column>)` cannot name
-  a hidden Keystone"): `ResolveConflictArbiter` resolves the name through
-  `Schema::FindColumn` to column 0 and takes the tuple key as the arbiter
-  (`src/server/command_dispatcher.cpp:8263`); no test covers it. Whether the
-  code refuses it or the spec admits it is not decided. Read at `2403b86d`,
-  2026-11-22.
 - **Partly filled pages are abandoned at each restart.** The placement hints
   are memory only (DN-Q23): after a restart a core fills from the head and
   up to `cores` partly filled pages wait for a release to find their free
@@ -4080,12 +4138,18 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   host).
 - **The btree's walked `UPDATE` reads 5.9 % cheaper than at the commit DR
   opened from**, in 15 of 15 rounds, and nothing in DR accounts for it.
-- **A page by key is a walk on every structure** (DR-Q17): `WHERE key >= x
-  ORDER BY key LIMIT n` is a filtered scan from the head on a btree's tuple
-  key (1.0 ms at 100,000 rows) and a scan and a sort on a heap's Keystone
-  and on any index (5.8 ms to 9.0 ms), because a one-sided bound is a range
-  to no arm of the ladder. Served only behind an equality prefix (CV). Not
-  a primary key's gap, and its own order.
+- **A page by key keeps its cost beside a conjunct on another column**
+  (EB-S1, verified on `eb-key-forms-in-the-executor` over `e2dec50f7`):
+  `WHERE k >= x ORDER BY k LIMIT n` is a range of the tuple key's leaves
+  from `x` on a btree, and the Keystone index or any index walked from `x`
+  on a heap or an index key (DR-Q17's shapes,
+  `bench/v3.5.0/results-eb-s0-premise-v3.4.17-225-gb761306e0.md`). Beside
+  another conjunct it is not: on an index key the sort stays, because the
+  walk would resolve entry after entry at random to find its rows
+  (`index.md` IX9, CV-Q3 (a)); on a btree's tuple key an equality on an
+  unindexed column is a filter scan from the head, which the open range,
+  at the last rank, does not displace (the operator's ruling (a) of
+  2026-10-15). An index bounded at one end with no `ORDER BY` is no range.
 - **A moved key's old entry is purged only beside a retired slot, unless
   `index_purge_driver` is on** (DR-Q18): an `UPDATE` of a key column appends an entry and leaves the old
   one, which a reader's residual drops and the unique check passes over.
@@ -4098,13 +4162,23 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   `0c2092df8`; at `f85aa3042` the driver counts the updates that appended
   an entry, `key_updates`, and walks a heap, `index.md` §2.3); the key is
   off by default, and with it off nothing runs it.
-- **A join key enters an index by its leading column only**
-  (`CorrelatedIndexProbeOf`): a join on every column of a composite key
-  probes the first and filters the rest, so its cost follows the first
-  column's run, not the key's.
-- **A multi-column `ON CONFLICT` target is refused by the parser**, so a
-  composite primary key arbitrates no upsert (P2c, its own order,
-  DR-Q5 (a)).
+- **`ON CONFLICT DO NOTHING` on the tuple key skips a row whose key is held
+  before the row's own refusals are asked** (found by EB-S4's review,
+  verified on `eb-key-forms-in-the-executor` over `88164d7fb`; not EB's
+  change): `INSERT INTO t VALUES (1, NULL) ON CONFLICT DO NOTHING` into a
+  `NOT NULL` column, or a value of the wrong type, answers `rows=0` where
+  key 1 is held and is refused where it is free. PostgreSQL 18 refuses the
+  row before it asks the arbiter. The tuple key arm decides every row up
+  front (BU-Q18), before the row is encoded; a row that names a
+  `keyidentity` an embedded key does not encode to is refused either way
+  (EB-S4). A refusal turned into a skip, never a wrong row written.
+- **A point read costs about 1 % more server CPU since EB** (EB-Q11 (a),
+  `bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`, measured at
+  `4ab5d55d5`): +1.1 % on a heap's and an embedded key's, +1.2 % on a hashed
+  key's, +0.3 % on a btree's tuple key - 0.02 to 0.10 us of 6.5 to 8 us -
+  and writes inside noise. Not located (no profiler on the host). What was
+  located is gone: `Step`'s size (48 bytes cost about 2 %) and the whole-key
+  arms' work on a literal read.
 - **A string key's cost grows with the keys sharing its first 32 bytes**
   (DR-Q3 (a)): 0.25 us a key of the run on a read and 0.66 us on an insert,
   1.0 ms and 2.7 ms at a run of 4,096. A limit, stated in the spec.
@@ -4142,26 +4216,24 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
 - **A row may name another key's home**: `INSERT ... (keyidentity, ...)`
   on a hashed relation places the row at the id it wrote. It costs the
   home's own key its place and no answer.
-- **An embedded key's join is not keyed.** A join whose key is every
-  column of an embedded primary key is no lookup: the id is computed from
-  literals at compile, and nothing computes it from an outer row. The step
-  takes the statement-local build or a walk. Answers are right
-  (`btree_primary_key_test.cpp`); the cost is not measured.
-- **`ORDER BY` an embedded key is sorted, not elided.** The rows of such a
-  relation are in key order, and a range by the key reads them so, but the
-  elision reads `ORDER BY <tuple key>` only, so `ORDER BY a, b LIMIT n`
-  with no range is a walk and a top-N.
-- **`ON CONFLICT` on a relation whose key is embedded is refused
-  `NotImplemented`**, whatever its target - a column of another unique
-  index included, which the insert path could serve: no arbiter computes
-  the id the row's key encodes to, and the refusal is not narrowed to the
-  targets that need it.
-- **An embedded key's literal prefix on a joined relation is a range per
-  outer row.** `... JOIN e ON e.b = o.x WHERE e.a = 1` takes the tuple key
-  range of `a = 1` on `e`'s step, ahead of a correlated index probe and
-  the statement-local build, and walks that range once per outer row. It
-  is the rank an inclusive tuple key range has always had; answers are
-  right, the cost is not measured.
+- **A descending prefix of an embedded key is sorted** (EB-Q8 (a); EB-S3,
+  verified on `eb-key-forms-in-the-executor` over `78f98354b`): the key's
+  columns in key order all ascending, whole or a prefix, are elided, and the
+  whole key all descending is the reverse walk under a `LIMIT` over a walk,
+  a filter scan or a range, but `ORDER BY a DESC LIMIT n` on a key `(a, b)`
+  keeps its top-N,
+  because the reverse walk would return its ties by descending `b` where
+  the sort returns them ascending. So do mixed directions, the key's
+  columns out of key order, and a column past the key.
+- **An embedded key's literal prefix with a join on a column past the key
+  is a range per outer row** (EB-S2 narrowed it; verified on
+  `eb-key-forms-in-the-executor` over `cf3f5bb87`). Where every key column
+  is pinned - by literals and the outer row together, `... JOIN e ON e.b =
+  o.x WHERE e.a = 1` on a key `(a, b)` - the step descends by the id the
+  outer row's values encode to. Where only a prefix is pinned, the tuple key
+  range of the literal prefix still ranks ahead of a correlated index probe
+  and the statement-local build, and is walked once per outer row; answers
+  are right, the cost is not measured.
 - **`PURGE` on an embedded key names a live key by its id**: the refusal
   of a one-key window over a live row says `tuple key N is live`, not the
   key the statement wrote.

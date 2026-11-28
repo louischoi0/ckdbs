@@ -215,8 +215,8 @@ CREATE TABLE [<namespace>.]<name>
     and a range of the key (`a = 1 AND b BETWEEN 10 AND 20`, or `a = 1`
     alone) reads rows stored side by side. Its largest key - the largest
     value of every column together, where the key fills all 48 bits - is
-    refused. `ON CONFLICT` is not built for it, and a join by it is not
-    served by the key.
+    refused. `ON CONFLICT` arbitrates by it - no target, or `(a, b)` in any
+    order - and a join on every key column descends to the row by it.
   - **A statement that names the whole key is found by it**, a write as
     well as a read: `UPDATE`, `DELETE` and `SELECT ... FOR UPDATE ...
     WHERE a = 1 AND b = 2` go to the row, as they do for every unique
@@ -1158,7 +1158,9 @@ UPDATE accounts SET balance = 99.00 WHERE id = 42;
     every bound on a `HEAP` table - where no index stands;
   - otherwise the whole table is read.
 
-  This is the order a `SELECT` with the same `WHERE` chooses in, and
+  This is the order a `SELECT` with the same `WHERE` chooses in, but for a
+  bound with an open or a strict end, which a `SELECT` also reads as a range
+  where it would otherwise read the whole table, and a write does not; and
   `ANALYZE UPDATE ...` shows which was taken (ANALYZE, below). Two things
   follow from "the index is read for the rows". **A very large update
   through an index can cost more than reading the whole table would**:
@@ -1226,10 +1228,12 @@ UPDATE w SET tier = 5 WHERE id = 1 RETURNING id, tier;
   named by an earlier row of the statement - and decides it before the row
   is admitted, so a skipped row takes no foreign-key check, no assertion
   reservation and no id. The reply counts the rows placed (`rows=0` when
-  every row was skipped). **`ON CONFLICT (<col>)` may also name the one
-  column of a unique index**: a row whose value is held is skipped, decided
-  row by row - its foreign keys are still checked first, so a skipped row
-  can wait for a parent.
+  every row was skipped). **`ON CONFLICT (<col>, ...)` may also name the
+  columns of a unique index**, in any order - all of its key, and nothing
+  else: a row whose key is held is skipped, decided row by row - its
+  foreign keys are still checked first, so a skipped row can wait for a
+  parent. On a heap with a hidden key, `ON CONFLICT (keyidentity)` is
+  refused.
 - **`ON CONFLICT [(<col>)] DO UPDATE SET ...`** updates the row holding the
   conflicting tuple key, or unique value, instead of skipping, and inserts
   a row with no conflict. The SET list is an `UPDATE`'s: a bare column is
@@ -1768,8 +1772,14 @@ is one of (verified — the `PredicateKind` enum):
   window bounded at both ends (`BETWEEN`, `>=`/`<=`) as a range walk that stops
   past its high bound and, on a btree, seeks to its low one. A window with a strict end
   (`id >= a AND id < b`) is the same walk, but only when no other access path
-  (an index, a Cabin, a filter scan, a join build) applies; one bounded at a single
-  end is a walk from the head. A non-tuple-key equality is served
+  (an index, a Cabin, a filter scan, a join build) applies; then an index
+  window with a strict end (`k > 2 AND k < 9`, a `HEAP`'s `keyidentity`
+  too); and last a tuple key bounded at a single end (`id >= a`, `id < b`),
+  a walk from the bound to the table's end - so `WHERE id < ? ORDER BY id
+  DESC LIMIT 20` reads only its page. Under `ORDER BY` an index's column
+  and a `LIMIT`, a single bound on that column seeds an ordered walk of the
+  index where nothing else filters the rows; a `HEAP`'s `ORDER BY
+  keyidentity LIMIT n` walks its key index. A non-tuple-key equality is served
   by a secondary index, then a Cabin, then a filter scan, in that fixed
   preference order — selection is a function of shape and catalog, never of
   data statistics.

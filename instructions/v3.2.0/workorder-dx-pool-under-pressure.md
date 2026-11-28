@@ -1,9 +1,9 @@
 # Work order DX - the buffer pool under pressure: a full pool that waits for its writeback, and an abort that cannot be refused a frame
 
-Status: **CLOSED 2026-11-27 on the work branch, not landed** (`raft-marks-2026-11-27.md` §13): DX-S0..S3 at `8167fa139`, `7271241e4`, `5e25f1d26` and the close commit; a merge, a push, a tag and a version wait for the operator. **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
+Status: **CLOSED 2026-11-27 on the work branch, not landed** (`raft-marks-2026-11-27.md` §24): DX-S0..S3 at `8167fa139`, `7271241e4`, `5e25f1d26` and the close commit; a merge, a push, a tag and a version wait for the operator. **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
 (branch `worktree-dx-pool-under-pressure`) from `481d101aa`
 (`v3.4.17-202-g481d101aa`), under the operator's standing go-ahead of
-2026-11-27 (`raft-marks-2026-11-27.md` §11): every DX-Q item is **adopted
+2026-11-27 (`raft-marks-2026-11-27.md` §22): every DX-Q item is **adopted
 on that go-ahead, never marked by the operator item by item** (§4,
 "Marks"). Written 2026-11-26 on worktree
 `known-gaps-milestone-orders` (branch
@@ -130,7 +130,7 @@ each can cost:
 **Every row is CLA's proposal adopted on the operator's standing go-ahead
 of 2026-11-27 (go-ahead-achieving-milestone)** - *"go ahead until
 achieving milestone, I will follow CLA proposal if decision needed"*
-(`raft-marks-2026-11-27.md` §11) - and none is the operator's own mark on
+(`raft-marks-2026-11-27.md` §22) - and none is the operator's own mark on
 the item. Of DX-Q0..Q5 no item is tagged `[quiet-wrong]`; **DX-Q6 is**, written at DX-S2's review and adopted under the same word.
 
 | | adopted | note |

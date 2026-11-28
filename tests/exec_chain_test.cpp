@@ -1,3 +1,7 @@
+#include "kds/sched/clock.hpp"
+#include "kds/wal/manager.hpp"
+#include "kds/wal/memory_log_device.hpp"
+#include "kds/wal/stamp_audit.hpp"
 #include "kds/exec/step_vm.hpp"
 
 #include <functional>
@@ -435,6 +439,47 @@ TEST(ExecSuspendAuditTest, TheExecutorReportsALivePinAsUnsafeToSuspendUnder) {
     EXPECT_TRUE(sched::suspend_audit()().empty());
 
     exec::UninstallSuspendAudit();
+}
+
+// **DZ-S1's premise check** (`wal/stamp_audit.hpp`): a record appended that
+// names a page makes the suspension point unsafe until the page is stamped
+// at or past it; a PAGE_INIT, which nothing need stamp, does not.
+TEST(ExecSuspendAuditTest, ARecordAppendedAndNotYetStampedIsUnsafeToSuspendUnder) {
+#ifdef NDEBUG
+    GTEST_SKIP() << "the premise check notes nothing in a release build";
+#endif
+    auto device = storage::MemoryPageDevice::Create(/*extent_pages=*/8, /*initial_pages=*/0);
+    ASSERT_TRUE(device.ok()) << device.status().message();
+    auto store = storage::DevicePageStore::Open(*device.value(), ::kds::storage::FrameCapacity{4096}, /*first_new_page_id=*/16);
+    ASSERT_TRUE(store.ok()) << store.status().message();
+    PageId page = kInvalidPageId;
+    {
+        auto created = store.value()->CreateNew();
+        ASSERT_TRUE(created.ok()) << created.status().message();
+        page = created.value().first;
+    }
+    auto log = wal::MemoryLogDevice::Create();
+    ASSERT_TRUE(log.ok());
+    sched::ManualClock clock{1'000};
+    auto wal = wal::WalManager::Open(log.value().get(), clock, 0);
+    ASSERT_TRUE(wal.ok());
+
+    wal::ResetStampAuditForTest();
+    exec::InstallSuspendAudit();
+    EXPECT_TRUE(sched::suspend_audit()().empty());
+    const std::byte payload[8] = {};
+    auto lsn = wal.value()->Append({wal::RecordType::kHeapOverwrite, 7, page}, payload);
+    ASSERT_TRUE(lsn.ok()) << lsn.status().message();
+    EXPECT_NE(sched::suspend_audit()().find("stamp"), std::string_view::npos)
+        << "an append awaiting its stamp must make the suspension point unsafe";
+    ASSERT_TRUE(store.value()->StampPageLsn(page, lsn.value()).ok());
+    EXPECT_TRUE(sched::suspend_audit()().empty()) << "the stamp did not clear the append";
+
+    ASSERT_TRUE(wal.value()->Append({wal::RecordType::kPageInit, 7, page}, payload).ok());
+    EXPECT_TRUE(sched::suspend_audit()().empty()) << "a PAGE_INIT was owed a stamp";
+
+    exec::UninstallSuspendAudit();
+    wal::ResetStampAuditForTest();
 }
 
 // Another thread's pin on the same store is not this thread's: a peer core

@@ -1,0 +1,25 @@
+15:38:16 start A-r1-f65536-rd0 load=0.94
+15:38:16 end A-r1-f65536-rd0 rc=0 load=0.94
+15:38:16 start A-r1-f65536-rd3 load=0.94
+15:38:17 end A-r1-f65536-rd3 rc=0 load=0.95
+15:38:17 start A-r1-f262144-rd0 load=0.95
+15:38:23 end A-r1-f262144-rd0 rc=0 load=1.03
+15:38:23 start A-r1-f262144-rd3 load=1.03
+15:38:28 end A-r1-f262144-rd3 rc=0 load=1.51
+15:38:28 start A-r1-f1048576-rd0 load=1.51
+15:39:26 end A-r1-f1048576-rd0 rc=0 load=3.97
+15:39:26 start A-r1-f1048576-rd3 load=3.97
+15:40:49 end A-r1-f1048576-rd3 rc=0 load=7.73
+15:40:49 start A-r2-f65536-rd0 load=7.73
+15:40:53 end A-r2-f65536-rd0 rc=0 load=7.35
+15:40:53 start A-r2-f65536-rd3 load=7.35
+15:40:58 end A-r2-f65536-rd3 rc=0 load=7.40
+15:40:58 start A-r2-f262144-rd0 load=7.40
+15:41:18 end A-r2-f262144-rd0 rc=0 load=7.27
+15:41:18 start A-r2-f262144-rd3 load=7.27
+15:41:32 end A-r2-f262144-rd3 rc=0 load=6.94
+15:41:32 start A-r2-f1048576-rd0 load=6.94
+15:42:06 end A-r2-f1048576-rd0 rc=0 load=7.11
+15:42:06 start A-r2-f1048576-rd3 load=7.11
+15:43:16 end A-r2-f1048576-rd3 rc=0 load=9.33
+15:43:16 DONE

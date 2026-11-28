@@ -44,7 +44,11 @@ std::string_view BuildName(ArmPin::Build build) noexcept {
 
 const PlanVariant& AdminPlan::Choose(std::string_view statement) const {
     if (variants.size() == 1) return variants.front();
-    const std::vector<parser::StatementArgument> args = parser::ArgumentsOf(statement);
+    return Choose(std::span<const parser::StatementArgument>(parser::ArgumentsOf(statement)));
+}
+
+const PlanVariant& AdminPlan::Choose(std::span<const parser::StatementArgument> args) const {
+    if (variants.size() == 1) return variants.front();
     for (const PlanVariant& variant : variants) {
         if (PlanRuleHolds(variant.rule, args)) return variant;
     }

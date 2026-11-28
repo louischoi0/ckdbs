@@ -203,10 +203,20 @@ TEST_F(CheckpointDataSyncTest, TheRunParksWhileItsDataSyncIsHeld) {
         for (const auto& [kind, id] : held_->trace()) n += kind == 'w' ? 1 : 0;
         return n;
     };
-    for (int i = 0; i < 50; ++i) reactor_.RunOnce();
     // BI-Q13: no step waits for the data file - every snapshot page is
     // written while the first sync is still held - and the run then parks on
-    // the publish's sync and writes nothing past it.
+    // the publish's sync and writes nothing past it. The writes are the
+    // data-sync writer thread's since DZ-S2, so the turns run until they
+    // land, not a fixed count.
+    const auto all_written = [&] {
+        const auto t = held_->trace();
+        return std::all_of(pages_.begin(), pages_.end(), [&](PageId id) {
+            return std::any_of(t.begin(), t.end(),
+                               [id](const auto& e) { return e.first == 'w' && e.second == id; });
+        });
+    };
+    (void)TurnUntil(reactor_, all_written);
+    for (int i = 0; i < 50; ++i) reactor_.RunOnce();
     const auto trace = held_->trace();
     for (PageId id : pages_) {
         EXPECT_TRUE(std::any_of(trace.begin(), trace.end(),

@@ -1674,6 +1674,15 @@ TEST_F(AdminPlanTest, AOneRelationStatementTakesAPlanForItsArm) {
     EXPECT_EQ(CodeOf("CREATE PLAN q FOR SELECT pnl FROM results WHERE model_id = 3 AND pnl > 1 "
                      "VARIANT v ELSE ORDER (results) ACCESS results TUPLE_KEY"),
               StatusCode::kInvalidArgument);
+    // A tuple key bounded at one end is the tuple key class's since EB-S1 (an
+    // open range, `index.md` IX9), so the variant a TUPLE_KEY pin names fits
+    // a shape it was refused for before.
+    Ok("CREATE PLAN q FOR SELECT pnl FROM results WHERE id >= 3 "
+       "VARIANT v ELSE ORDER (results) ACCESS results TUPLE_KEY");
+    EXPECT_EQ(StepLine(Plan("SELECT pnl FROM results WHERE id >= 3"), 0).rfind("step 0 Range ", 0),
+              0u)
+        << Plan("SELECT pnl FROM results WHERE id >= 3");
+    Ok("DROP PLAN q");
     Ok("ALTER PLAN p REPLACE VARIANT v ELSE ORDER (results) ACCESS results INDEX results_model");
     EXPECT_EQ(StepLine(Plan(sql), 0).rfind("step 0 IndexProbe ", 0), 0u) << Plan(sql);
     Ok("ALTER PLAN p DISABLE");

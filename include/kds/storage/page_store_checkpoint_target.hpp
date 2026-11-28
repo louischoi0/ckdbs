@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "kds/storage/device_page_store.hpp"
+#include "kds/storage/dirty_table_collector.hpp"
 #include "kds/wal/checkpointer.hpp"
 
 // Adapter: a DevicePageStore seen as the thing a checkpoint flushes
@@ -34,7 +35,9 @@ public:
 
     std::vector<wal::CheckpointDirtyPage> DirtyTable() const override {
         std::vector<wal::CheckpointDirtyPage> table;
-        for (const auto& [page_id, rec_lsn] : store_.DirtyPagesWithRecLsn()) {
+        const auto pages = store_.DirtyPagesWithRecLsn();
+        table.reserve(pages.size());
+        for (const auto& [page_id, rec_lsn] : pages) {
             table.push_back(wal::CheckpointDirtyPage{page_id, rec_lsn});
         }
         return table;
@@ -47,16 +50,57 @@ public:
     StatusOr<std::size_t> WritePages(std::span<const PageId> page_ids, wal::Lsn* defer) override {
         return store_.WriteBackPages(page_ids, defer);
     }
+    // DZ-S2: the store's staged writeback, its writes on the data-sync thread.
+    StatusOr<std::shared_ptr<StagedPages>> StageWrite(std::span<const PageId> page_ids,
+                                                      wal::Lsn* defer) override {
+        auto staged = store_.StageWriteBack(page_ids, defer);
+        if (!staged.ok()) return staged.status();
+        return std::shared_ptr<StagedPages>(std::make_shared<Staged>(store_, std::move(staged.value())));
+    }
     std::uint64_t RequestSync() override { return store_.data_sync().Request(); }
     bool SyncDone(std::uint64_t ticket) override { return store_.data_sync().Done(ticket); }
     Status SyncResult(std::uint64_t ticket) override { return store_.data_sync().Result(ticket); }
 
     std::vector<PageId> DirtyPages() override { return store_.DirtyPageIds(); }
-    StatusOr<std::uint64_t> WriteHeaderlessMaps() override { return store_.WriteHeaderlessMaps(); }
-    Status WriteFreeMaps() override { return store_.WriteFreeMaps().status(); }
+    // Both tables are the store's one walk in slices (DZ-S1); the publish
+    // reads the page ids and leaves the recLSNs.
+    std::unique_ptr<wal::DirtyCollection> CollectDirty(wal::DirtyCollectionFor) override {
+        return std::make_unique<Collection>(store_, chunks_per_slice_);
+    }
+    // A cell's: the walk's slice in chunks, so a store of a few chunks takes
+    // several slices.
+    void SetChunksPerSliceForTest(std::size_t chunks) noexcept { chunks_per_slice_ = chunks; }
+    StatusOr<std::uint64_t> WriteHeaderlessMaps(bool* busy) override {
+        return store_.WriteHeaderlessMaps(busy);
+    }
+    Status WriteFreeMaps(bool* busy) override { return store_.WriteFreeMaps(busy).status(); }
 
 private:
+    class Staged final : public StagedPages {
+    public:
+        Staged(DevicePageStore& store, std::shared_ptr<DevicePageStore::StagedWrite> staged) noexcept
+            : store_(store), staged_(std::move(staged)) {}
+        bool Done() const override { return staged_->Done(); }
+        StatusOr<std::size_t> Finish() override { return store_.FinishStaged(*staged_); }
+
+    private:
+        DevicePageStore& store_;
+        std::shared_ptr<DevicePageStore::StagedWrite> staged_;
+    };
+
+    class Collection final : public wal::DirtyCollection {
+    public:
+        Collection(const DevicePageStore& store, std::size_t chunks) noexcept
+            : collector_(store, chunks) {}
+        bool Advance() override { return collector_.Advance(); }
+        std::vector<wal::CheckpointDirtyPage>& Table() override { return collector_.table(); }
+
+    private:
+        DirtyTableCollector collector_;
+    };
+
     DevicePageStore& store_;
+    std::size_t chunks_per_slice_ = DirtyTableCollector::kChunksPerSlice;
 };
 
 }  // namespace kds::storage

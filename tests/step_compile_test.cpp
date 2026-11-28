@@ -11,6 +11,7 @@
 #include "kds/parser/parser.hpp"
 #include "kds/server/superblock.hpp"
 #include "kds/storage/in_memory_page_store.hpp"
+#include "kds/storage/keystone.hpp"
 
 // V14 - the step compiler (docs/inflight/in-progress/parser-v2-workplan.md).
 //
@@ -184,15 +185,23 @@ TEST_F(StepCompileTest, StrictBoundsOnTheTupleKeyCompileToTheInclusiveRange) {
     EXPECT_FALSE(filtered.steps[0].range.has_value());
 }
 
-TEST_F(StepCompileTest, AStrictBoundThatAdmitsNoKeyOrOneEndAloneIsNotARange) {
+TEST_F(StepCompileTest, AStrictBoundThatAdmitsNoKeyIsNotARangeAndOneEndAloneIsAnOpenOne) {
     // `id < 0` holds for no key, and `> 10 AND < 11` inverts once made
     // inclusive: both stay scans whose residual answers empty.
     EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id >= 0 AND id < 0").steps[0].range);
     EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id > 10 AND id < 11").steps[0].range);
-    // One end alone is not a range: it promises nothing about how much of
-    // the relation it walks.
-    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id > 10").steps[0].range);
-    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id < 10").steps[0].range);
+    // One end alone is a range to the key space's end, at the last rank
+    // (EB-S1, `index.md` IX9): a subset of the walk's leaves.
+    const auto above = MustCompile("SELECT * FROM acct WHERE id > 10").steps[0];
+    ASSERT_TRUE(above.range.has_value());
+    EXPECT_EQ(above.range->low, 11u);
+    EXPECT_EQ(above.range->high, ::kds::kMaxKeystoneId);
+    const auto below = MustCompile("SELECT * FROM acct WHERE id < 10").steps[0];
+    ASSERT_TRUE(below.range.has_value());
+    EXPECT_EQ(below.range->low, 1u);
+    EXPECT_EQ(below.range->high, 9u);
+    // A bound above the key space holds for no key and stays a scan.
+    EXPECT_FALSE(MustCompile("SELECT * FROM acct WHERE id > 281474976710655").steps[0].range);
 }
 
 TEST_F(StepCompileTest, BetweenOnANonTupleKeyColumnIsNotARange) {

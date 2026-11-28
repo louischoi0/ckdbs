@@ -239,6 +239,7 @@ StatusOr<std::unique_ptr<CoreRuntime>> CoreRuntime::Open(Config config,
     // has.
     runtime->trx_ids_.emplace(*config.trx_id_ceiling.superblock, config.trx_id_ceiling.persist);
     runtime->trx_ids_->SetLatch(config.trx_id_ceiling.latch);
+    runtime->trx_ids_->SetStagedPersist(config.trx_id_ceiling.staged);
     // The undo log is already built - recovery wrote its compensations
     // through it above, before this stack existed.
     // The lock table: the instance's when handed one (AO-S5), else this

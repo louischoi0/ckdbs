@@ -1,14 +1,19 @@
 # Work order EB - the key forms in the executor: a key range that is a range, a join by a whole key, an order the rows already hold, an upsert by any key
 
-Status: **WRITTEN 2026-11-26, not opened.** Written on worktree
-`known-gaps-milestone-orders` (branch
-`worktree-known-gaps-milestone-orders`) from `8274c951`
-(`v3.4.17-148-g8274c951e`) on the operator's word of 2026-11-26
-(`raft-marks-2026-11-26.md` §3). No stage is started; EB-S0 waits for the
-operator's word and for the marks on §4's items. A `[source-read]` claim
-with a `path:line` was read at `8274c951`; a claim taken from
-`known-gaps.md` carries that entry's own verification commit and is not
-re-verified here.
+Status: **CLOSED 2026-11-27** at `4ab5d55d5` (`v3.4.17-234-g4ab5d55d5`) on
+worktree `eb-key-forms-in-the-executor`, every stage landed on the work
+branch (§7); **landed on `main` at `97ed790ee`**, pushed with the hook
+skipped on the operator's word. **OPENED 2026-11-27** on worktree `eb-key-forms-in-the-executor`
+(branch `worktree-eb-key-forms-in-the-executor`) from `9e7597d5d`
+(`v3.4.17-224-g9e7597d5d`), on the operator's standing go-ahead of
+2026-11-27 (go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §20).
+EB-Q0..Q11 are CLA's proposals adopted on that go-ahead (§4 "Marks"),
+none the operator's own per-item mark. Written 2026-11-26 on worktree
+`known-gaps-milestone-orders` from `8274c951` (`v3.4.17-148-g8274c951e`)
+on the operator's word of 2026-11-26 (`raft-marks-2026-11-26.md` §3). A
+`[source-read]` claim with a `path:line` in §1 was read at `8274c951`; the
+`known-gaps.md` lines it cites moved, and §7's "Opened" names where each
+now stands at `9e7597d5d`.
 
 Tags: `[operator]`, `[source-read]`, `[measured]`, `[design]`,
 `[quiet-wrong]`, as in DT's order.
@@ -136,6 +141,36 @@ outer row, a write by a unique key above one core.
 | EB-Q5 | A heap's sampled prior | (a) inside S5: a sample of data pages, so a heap's block can be captured; (b) outside - `GATHER STATISTICS` is the answer | (a) |
 | EB-Q6 | A view that carries its level (the hashed home inside a read-write transaction) | (a) outside EB: a snapshot's layout is the transaction manager's; (b) inside | (a) |
 | EB-Q7 | The heap's restart hints and `PURGE` by the Keystone index | (a) outside EB; (b) inside S5 | (a) |
+| EB-Q8 | A descending prefix of an embedded key (added at the opening, from the review) | (a) stays sorted: its ties would leave by descending tuple key where the sort's leave ascending (EB-R2); an ascending prefix, and the whole key either way, are elided; (b) elided, ties descending, as CV-Q4 (a) chose for an index walk | (a) |
+| EB-Q9 | The write ladder (added at the opening) | (a) EB moves the read ladder only: `WriteIndexArmOf` and `WriteRangeOutranksIndex` read the bounds as today, as `tests/keyed_write_test.cpp`'s "A one-sided range on the column is none to the ladder" and "A strict range ... rank below the index" pin, and §6 says the write side is DU's; (b) both ladders | (a) |
+| EB-Q11 | The point read's residual overhead at the close (added at EB-S6) | (a) accepted and stated: three remedies took it from +1.5 % to +3.2 % down to +0.3 % to +1.2 % (about 0.02 to 0.10 us), and it is not located further, the host having no profiler; (b) the milestone stays open until it is located | (a) |
+| EB-Q10 | Waystone and a computed-key probe (added at the opening) | (a) a probe whose key is computed from an outer row's columns records no trail and replays none, so invariants 8 and 9 are not reached; (b) the trail contract extended to it | (a) |
+
+### Marks
+
+All adopted on the operator's standing go-ahead of 2026-11-27
+(go-ahead-achieving-milestone), never the operator's own per-item mark
+(`raft-marks-2026-11-27.md` §20):
+
+- **EB-Q0 (a)**, **EB-Q1 (a)**, **EB-Q3 (a)** - confirmed by reading
+  `include/kds/parser/fingerprint.hpp`'s bump rule: making a refused
+  statement admitted moves no stored hash - **EB-Q4 (a)**, **EB-Q6 (a)**,
+  **EB-Q7 (a)**, **EB-Q8 (a)**, **EB-Q9 (a)**, **EB-Q10 (a)**.
+- **EB-Q2 revised, (a) to (b), and (b) adopted**: (a) priced the arm by the
+  planner's statistics, which `docs/spec/index.md` IX9 forbids (an arm is
+  `f(shape, catalog)`), and placed a range above other arms, which reopens
+  the operator's ruling (a) of 2026-10-15 at `TupleKeyRangeOf` ("a strict
+  range ranks last ... where a range belongs against those arms is
+  undecided"). As adopted: **a one-sided or strict end ranks where a
+  strict tuple key range ranks - it replaces a bare walk and nothing else -
+  and an index or a heap's Keystone index takes one only where its walk in
+  key order seeds an elided `ORDER BY ... LIMIT`** (CV's ordered walk), the
+  one place a range with an open end is known to stop early.
+- **EB-Q11 (a)**, added at EB-S6 (`bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`):
+  the residual cost is stated in `known-gaps.md`, as DU-Q8 (a) stated DU's.
+- **EB-Q5 revised, (a) to (b), and (b) adopted**: a heap's sampled prior is
+  the statistics steward's, shares no code with the key forms, and
+  `GATHER STATISTICS` already counts a heap exactly. S5 holds no item.
 
 ## 5. Stages
 
@@ -158,6 +193,304 @@ outer row, a write by a unique key above one core.
 - No write-side arm: DU's.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### Opened 2026-11-27
+
+On `eb-key-forms-in-the-executor` from `9e7597d5d`, on the operator's
+standing go-ahead (`raft-marks-2026-11-27.md` §20).
+
+**§1 read again at `9e7597d5d`.** Every item stands but one: **a two-sided
+inclusive range on a heap's Keystone is already an index range** - the
+Keystone index is one of `TableAccess::indexes` and `IndexProbeOf` does
+not skip it (`src/catalog/catalog.cpp:3023`, `docs/spec/index.md` §9a:
+"a read ranges a heap's Keystone only for `>=` with `<=`"); what is a walk
+is a strict end, a one-sided bound, and `ORDER BY keyidentity` under a
+`LIMIT` (`DriverOrderOf` drops the tuple key, the elision skips a heap).
+`known-gaps.md`'s lines, the order's then now: 3499 to 3927, 3641 to 4167,
+3103 to 3534, 3657 to 4185, 3701 to 4229, 3716 to 4243, 3706 to 4234,
+3661 to 4189, 3711 to 4238, 3513 to 3940, 3504 to 3932, 3508 to 3936, 3670
+to 4198, 3519 to 3947, 3528 to 3956, 3682 to 4210. `ResolveConflictArbiter`
+is at `src/server/command_dispatcher.cpp:8537`; the parser's target refusal
+at `src/parser/parser.cpp:2742`.
+
+**The review the writing left unfinished** (`critics-developer`, on the
+order against `9e7597d5d`, reading only). Applied: S1 moves the write
+ladder unless kept out (EB-Q9 added); the range kinds, the open ends'
+padding (`ProbeOverIndex`) and the reverse walk's seed from a `kRange`
+already exist, so S1 widens what reads bounds and adds no kind; the heap's
+two-sided Keystone range already served (above); EB-Q2 (a) against IX9 and
+ruling (a) (revised); a computed-key probe is `kProbe`-like and Waystone
+replays `kProbe` (EB-Q10 added); the one encoder is `exec::EmbeddedKeyId`
+(`include/kds/exec/embedded_key.hpp`), which EB-R3 names; S2 takes a
+prefix mixing literal and correlated equalities, the common case; EB-Q3
+needs no operator item (read and recorded); an ascending prefix of an
+embedded key can be elided (EB-Q8 added for the descending one); S5's
+items share no code with the key forms (EB-Q5 revised); the missing cells
+- `v >= NULL`, a bound above `2^48 - 1`, a strict end on a non-integer
+index column, a plan's `ACCESS` variant a new arm now meets - go into the
+stages that add each shape. **Rejected**: "measure only joins and order,
+at 100,000 rows" - the ranges' shapes S1 serves are not DR-Q17's (strict
+windows, a heap's page), and all of S0 fits its 20 minutes; "fold S4 into
+another stage" - a stage that lands whole costs nothing more for being
+small; EB-Q4's widening to every hidden Keystone - S4 reads the spec for a
+btree's hidden Keystone before it refuses anything the spec does not say.
+
+### EB-S0 - the premise, 2026-11-27
+
+Measured at `b761306e0` (`v3.4.17-225-gb761306e0`), whose build inputs are
+`9e7597d5d`'s. Results: `bench/v3.5.0/results-eb-s0-premise-v3.4.17-225-gb761306e0.md`.
+Each shape was run against a proxy, the cheapest statement or schema
+returning the same rows through an arm that exists:
+
+- **S1** (ranges) passes EB-Q1 (a)'s bar: 13.5x to 50.4x at 100,000 rows
+  and 119x to 391x at 1,000,000.
+- **S2** (joins) passes on its two whole-key cells: a composite index key
+  at 1,286x and 20,422x; an embedded key at 4,554x, and **refused** by the
+  row-touch budget at 1,000,000 rows.
+- **S3** (order) passes: 263x and 2,546x.
+- **The literal-prefix join is 2.77x and, as measured, 1.54x**: the
+  planner already reorders it to one range and a build. The S0 review
+  found the 1,000,000-row cell carrying about 95 us added to every arm
+  alike (bimodal latencies, a T - B gap unchanged at 81 us and 78 us), so
+  the estimate is about 2.6x. **It is built with S2**: its key is the
+  embedded key pinned whole, a literal and an outer column, and S2's
+  computed id outranks the literal prefix's window there.
+- **S4** is a refusal family, which the bar cannot price. CLA reads it as
+  built: what an operator writes instead is a transaction that reads and
+  then writes.
+
+These readings are CLA's, on the go-ahead. **The S0 review**
+(`critics-developer`, at `1192c47ce`) corrected the results file in place:
+J1's entry counts (1,000,000 and 10,000,000 resolved a statement, linear
+in `n` with the outer side fixed), the T2 bound (1.31 %), the budget's
+cuts at 100,000 rows, a refusal quoted short, units in the ratio cells,
+and the run-time `df -T` and per-arm `pgrep` the driver did not record.
+Its J3 finding is applied above. **Rejected**: "S4 read as built is the
+operator's call" - the go-ahead makes CLA's proposal the mark, and the
+reading is recorded as CLA's; a re-run of J3 on a quiet host - S2 builds
+it either way.
+
+### EB-S1 - ranges, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `e2dec50f7`. **A bound with an open
+or a strict end is served, at the rank EB-Q2 (b) as adopted gives it**
+(`docs/spec/index.md` IX8 and IX9's "open or strict end" item):
+
+- **a btree's tuple key bounded at one end** is a range to the key space's
+  end (`TupleKeyRangeOf`'s `open_ends`, `RangeBounds::open`), taken on a
+  bare walk only and last; it seeds the reverse walk, so keyset pagination
+  (`id < x ORDER BY id DESC LIMIT n`) reads its page;
+- **a window with a strict end on an index**, a heap's Keystone index
+  included, is the index's range on a bare walk (`BoundEnds::kStrict`), each
+  strict end read inclusively and the residual dropping its equal entries;
+- **an open end seeds CV's ordered walk** (`BoundEnds::kOpen`,
+  `OnlyBoundsOn`): with no prefix where every conjunct bounds the first
+  order key, after a prefix on the next key; and **a heap's `ORDER BY
+  keyidentity` walks its Keystone index** (`DriverOrderOf`).
+
+The write ladder reads the bounds it always read (EB-Q9 (a)); DU's tests
+pass unchanged. Two older cells pinned the behaviour S1 replaces and were
+rewritten to the new contract: `StepCompileTest.AStrictBoundThatAdmitsNoKeyIsNotARangeAndOneEndAloneIsAnOpenOne`
+and `IndexUsageRig.ARangeIsCountedApartFromAProbe` (a strict window now
+counts as a range). The index contract suite carries every new shape
+(EB-R1), and `tests/ordered_walk_test.cpp`'s `KeyBoundTest` the arms, the
+ranks, the heap and the string key past its stored prefix.
+
+**The review** (`critics-developer`, on the change over `1192c47ce`) found
+no correctness defect and read every `[quiet-wrong]` hazard put to it as
+safe - a strict end on a truncated string, the open end's padding against
+the `0x01` discriminator, a NULL or unencodable bound, the Cabin set's
+gate, the heap's elision, the pins, the embedded window, Waystone.
+**Applied**: an open range was priced by the join planner as a window as
+wide as the key space, so `t.id >= x` in a join block weighed the whole
+relation where a bound weighs `kRangeEndSelectivity` - `RangeBounds::open`
+now prices it as a bound (`join_order.cpp`); an open end could move a step
+the ladder put on another index's prefix-less range to the ordered walk,
+which that index's narrower range must keep - the ordered walk reads only
+inclusive bounds on any other index there; three cuts (`BoundsOnColumn`'s
+strictness flags, the last ranks as one chain, `OnlyBoundsOn` taking an
+empty residual); the `known-gaps.md` wording; four cells (a string past its
+prefix, a `TUPLE_KEY` pin on `id >= x` that now fits - a variant declined
+before is now met, EB-R4 - a heap's key set keeping its sort, a join with
+an open bound). **Rejected**: none.
+
+Overhead not measured; measured at the milestone's close.
+
+### EB-S2 - joins by a whole key, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `cf3f5bb87`.
+
+- **A correlated index probe takes every prefix column an equality pins**
+  (`docs/spec/index.md` IX17): a literal's, encoded at compile, or an outer
+  row's, encoded per outer row at its offset (`IndexProbe::key_from`, now
+  one entry a column). Of the indexes the longest prefix, ties to the
+  lowest oid; a literal probe yields to a correlated one only where the
+  correlated prefix is longer. EB-S0's J1 - a join on both columns of
+  `(a, b)` - descends by the whole key.
+- **An embedded primary key pinned whole by literals and an outer row is a
+  `kProbe` by the computed id** (`heap-and-tuple.md` §3.1c,
+  `Step::EmbeddedProbe`): the executor calls `exec::EmbeddedKeyId`, the
+  encoder every insert placed its row by (EB-R3); a NULL, a value past its
+  column's width and the one key 48 bits cannot name match nothing; any
+  other refusal is `Corruption`, never an empty answer. It ranks with the
+  key's window and above it, which serves EB-S0's J2 and J3. It records
+  and replays no trail (EB-Q10 (a); `IsTrailReplayable`).
+
+The cells: `tests/ordered_walk_test.cpp`'s `WholeKeyJoinTest` against a twin
+with no index or key, each column's type bounds, NULLs on either side, the
+2^48 key, a literal past its column, and `EmbeddedProbeTrailTest`; the
+index contract suite's whole-key join block (EB-R1).
+
+**The review** (`critics-developer`, report only) found no `[quiet-wrong]`
+defect: the `key_from` order, the templates, a NULL outer value, the stale
+chain's guard, every reader of the probe (Waystone, the pins, the ordered
+walk, the write paths, the hashed home), the residual's coverage of every
+operand, and the literals' coercion each read as sound. **Applied**: F1 -
+every `EmbeddedKeyId` refusal was read as "no match", where only a NULL and
+`OutOfRange` are known to match nothing (CU-Q11's rule); F2 - the join
+planner priced an embedded key bound whole as many rows, now at most one,
+as a unique index bound whole is; S1 - one source search,
+`EqualitySourceOn`, for both arms; S2 - a second coercion of a literal the
+lowering already coerced, removed. **Rejected**: S3 (the correlated search
+run twice at compile) - a compile-only cost, and returning the probe from
+the literal arm would widen that arm's contract for it; F3 (an embedded
+probe filed under column 0 in the access statistics) - a literal embedded
+lookup is already filed so, and the filing is the tuple key's.
+
+The full suite after the change, before the review's edits: 5,394 of 5,395,
+the one failure `SetExprTwoCoreRigTest.TwoCoresIncrementingOneRowLoseNoIncrement`,
+which failed 11 of 60 repeated alone on this tree - the rate memory records
+for it at base, on a two-core path S2 does not touch.
+
+Overhead not measured; measured at the milestone's close.
+
+### EB-S3 - the elided order, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `78f98354b`. **An `ORDER BY` an
+embedded primary key already holds is not sorted** (`parser-v2.md` I11,
+`EmbeddedKeyOrderOf`): the key's columns in key order all ascending, whole
+or a prefix, wherever the driving step emits tuple key order, and the whole
+key all descending under a `LIMIT` by the reverse walk. A descending prefix,
+mixed directions, the columns out of key order and a column past the key
+keep their sort (EB-Q8 (a)). A bare walk is not moved to a user index on the
+key's columns for that order: the walk holds it for nothing. The cells:
+`tests/ordered_walk_test.cpp`'s `EmbeddedOrderTest`, each against a twin
+whose tuple keys were issued in key order, so its sort's ties are the key's
+order too - every embeddable type (`int8` with negatives, `bool`, `date`,
+`int32`, `int16`), a join the embedded relation drives, a user index.
+
+**The review** (`critics-developer`, report only) found no `[quiet-wrong]`
+defect: the code is order-preserving for every embeddable type, the sort
+breaks ties by arrival so an ascending prefix's ties match, slot 0 is
+`steps[0]` after a reorder, and OFFSET, views, the query layer, folds,
+`FOR UPDATE` and `ALTER TABLE` cannot reach a wrong order. **Applied**: an
+ordered index walk took a bare walk's free order over (now declined in
+`OrderedIndexChoiceOf`); the four booleans folded into one direction and
+`EmbeddedKeyOrderOf`, and two dead checks removed; the `known-gaps.md`
+wording; three cells. **Rejected**: eliding the whole key followed by more
+columns (`ORDER BY a, b, v`) - outside S3's cells, which state that a
+column past the key keeps its sort, and a unique key's vacuous tail is a
+rule of its own to write.
+
+The full suite before the review's edits: 5,398 of 5,399, the one failure
+`DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, which failed 4 of
+30 repeated alone on that binary - the rate memory records for it at base,
+on the group commit's kick, which S3 does not touch. The suite after them
+ran with S4's code in the tree (S4's stage log).
+
+Overhead not measured; measured at the milestone's close.
+
+### EB-S4 - upserts by any key, 2026-11-27
+
+On `eb-key-forms-in-the-executor` over `88164d7fb`. **A conflict target is
+a column list** (`parser-v2.md` I20): the arbiter is the unique index whose
+key the columns are whole, in any order (`ResolveConflictArbiter`); **on a
+relation whose primary key is embedded the key is the tuple key**, no target
+or its columns in any order taking the tuple key arm at the id the row's key
+encodes to (`ConflictTupleKeyOf`, the insert's own `EmbeddedRowId`), and
+another unique index's key arbitrating there too (`heap-and-tuple.md`
+§3.1c); **`ON CONFLICT (keyidentity)` on a hidden-Keystone heap is refused**
+(EB-Q4 (a), BZ-R4). `kFingerprintVersion` did not move (EB-Q3 (a)): the
+fingerprint is the token stream's, and a statement the parser refused was
+never storable.
+
+**The differential against PostgreSQL 18** (`tools/eb_s4_difftest.py`, a
+throwaway `postgres:18` container, PostgreSQL 18.7): 13 statements over a
+unique index of two columns and a primary key of two narrow integers -
+`DO NOTHING` and `DO UPDATE` by the key written in either order, no target,
+the key's bounds, two rows naming one key under `DO UPDATE`, a target of
+one key column - and **no mismatch**: each statement ok or refused on both,
+and the rows equal after each.
+
+**The review** (`critics-developer`, report only, with probes against the
+built server). **Applied**: **a `[quiet-wrong]` defect** - on an embedded
+relation `ConflictTupleKeyOf` dropped the `keyidentity` a row wrote, so a
+row naming another id than its key's, which the insert refuses, was
+skipped under `DO NOTHING` and updated the key's row under `DO UPDATE`; it
+now reads the written id under `EmbeddedRowId`'s own rule and the row is
+refused, the cell in `btree_primary_key_test.cpp`; a refusal's byte pointed
+at the row's first value where the key's column stands elsewhere, now the
+key's (`ConflictKey::byte`, cell at byte 49); the `parser-v2.md` and
+`ast.hpp` wording; three cuts (one embedded test, the arbiter's refusal
+built once, `ta.oid` for a parameter). **Recorded, not EB's**: `DO NOTHING`
+on the tuple key turns a held key's row refusal into a skip
+(`known-gaps.md`). **Rejected**: none.
+
+Overhead not measured; measured at the milestone's close.
+
+### EB-S5 - nothing marked inside, 2026-11-27
+
+EB-Q5 (b), EB-Q6 (a) and EB-Q7 (a) put a heap's sampled prior, a view that
+carries its level and the heap's restart hints with `PURGE` by the
+Keystone index outside EB; no item is left for S5, and no code is written
+for it. The query layer's refusal of `keyidentity` (`known-gaps.md`) was
+listed beside them in §1 with no item, and stays.
+
+### EB-S6 - the close, 2026-11-27
+
+**The overhead A/B** (`ck-tester`, `bench/v3.5.0/results-eb-close-v3.4.17-231-ga610d007a.md`):
+at `a610d007a` the four built arms were 31x to 2,989x cheaper than at
+`9e7597d5d`, and every point read was +1.5 % to +3.2 % dearer in server
+CPU, reproduced by a second pass; writes and inserts were inside noise.
+**Three remedies within the milestone**
+(`bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`):
+
+- `f29dba427`: `Step`'s `residual` was put back inside one cache line. It
+  had no effect.
+- `3d7a8f6df`: the whole-key arms are gated on a correlated equality. About
+  1 point came off each form.
+- `4ab5d55d5`: `Step` is 744 bytes again (`ColdBox`). A base build padded
+  by 48 bytes had shown the size alone cost +0.9 % to +2.2 %.
+
+At the closing commit the point reads are +0.3 % (btree), +1.1 % (heap;
+its control read +0.9 %), +1.1 % (embedded) and +1.2 % (hashed). The
+writes and inserts are inside noise, and the built arms are 29x to 2,413x
+cheaper. The residual is EB-Q11 (a), stated in `known-gaps.md`. The
+remedies' own review is the suite and the diagnosis cells; no
+`critics-developer` review was run on them, a statement of fact.
+
+**The full suite at the closing commit** (`4ab5d55d5`, Debug, `ctest -LE
+bs-nightly -j4`, pinned to CPUs 8-23 beside the measurement): **5,404 of
+5,405**. The one failure is
+`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+which expires at its 60 s net. Repeated under the same pinning it failed
+**9 of 10 at the base `9e7597d5d`** (a Debug build of that commit) and 7 of
+10 on this tree; unpinned on this tree it failed 4 of 5. It is the
+group-commit flake this host's notes record, at a higher rate on this day,
+and EB did not cause it. It is not reported as a pass.
+
+**The documents**: `CLAUDE.md`'s Primary keys, Query language and
+`ORDER BY` rows; `index.md` IX8, IX9, IX17; `heap-and-tuple.md` §3.1c;
+`parser-v2.md` I11, I20; `manual/sql/sql.md`; `known-gaps.md`, as each
+stage logged.
+
+### Landed 2026-11-27
+
+`97ed790ee` on `main`: the merge of `worktree-eb-key-forms-in-the-executor`
+at `537921ae3` onto `origin/main` at `9e7597d5d`, pushed with
+`--no-verify` on the operator's word - the hook skipped, the last full
+suite 5,404 of 5,405 at `4ab5d55d5` (EB-S6 above). No tag, no version
+(`raft-marks-2026-11-27.md` §21).
 
 ### Written 2026-11-26
 
