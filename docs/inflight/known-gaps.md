@@ -861,6 +861,25 @@ A bug entry `d83bd502` closed unreproduced is cited here as
   not. Neither is built; the numbers are not re-measured and their results
   file is not in the working tree. Source structure re-read at `7dd9b789`.
 
+- **A moved row's undo head is read after the leaf visit, under a view
+  that holds back no floor** `[quiet-wrong]`, unverified. Found by EP-S1's
+  review on `ep-undo-chain-revisit` at `012820e3e`. This is a source read and
+  was not run. The reverse check collects a row an undecided writer moved
+  (`src/exec/fk_check.cpp:323`), then walks its undo only after
+  `BtreeVisit` returns (`:360`), under `MintCheckView`, which registers no
+  lease. Above one core, that writer could commit in the window, the floor
+  pass it, and its core's undo growth recycle the page that holds the head
+  record. The head read would then land on a foreign record.
+  `ResolveThroughUndo` does not compare the record's `tuple_key`, so the
+  result would be a wrong version, not a refusal: a child missed and a
+  parent `DELETE` admitted. Not reachable at `cores = 1`, where nothing runs
+  between the visit and the walk. **Method to check**: a two-core rig that
+  commits the writer and forces two undo growths between the visit's end
+  and the walk. **Proposal (CLA's)**: `ResolveThroughUndo` compares each
+  record's `tuple_key` with the row's, as the index backfill does
+  (`src/exec/index_ddl.cpp:382`), which turns a stale read into
+  `Corruption`. **Owner: none**; the operator's to open.
+
 **The check-to-write window closed at AY-S5** (D9(a), `foreign-keys.md`
 §2a, §3a), pinned on one thread by
 `FkParentHoldTest.AParentDeletedBetweenAChildsCheckAndItsWriteIsRefused`.

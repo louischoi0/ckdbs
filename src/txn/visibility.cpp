@@ -46,13 +46,16 @@ StatusOr<Visibility> ResolveThroughUndo(const ReadView& view, UndoLog& undo,
 
         trx_id = version.value().prior_trx_id;
         undo_ptr = version.value().prior_undo_ptr;
-        if (undo_ptr != kNoUndoPtr && guard.Revisits(undo_ptr)) {
+        const Visibility verdict = Classify(view, trx_id, deleted, undo_ptr);
+        if (verdict != Visibility::kNeedsUndoWalk) return verdict;
+
+        // **Only a link the walk follows is asked of the guard** (EP): a
+        // link whose writer the view sees may be stale, even self-naming
+        // (`undo_log.hpp`'s purge note).
+        if (guard.Revisits(undo_ptr)) {
             return Status::Corruption("undo chain revisits the record at " +
                                       std::to_string(undo_ptr) + "; the links are cyclic");
         }
-
-        const Visibility verdict = Classify(view, trx_id, deleted, undo_ptr);
-        if (verdict != Visibility::kNeedsUndoWalk) return verdict;
     }
 
     // Unreachable through Classify(), which answers kNoVersion for a

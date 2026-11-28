@@ -469,9 +469,17 @@ transaction updating one row 65,537 times, or a hot row updated under one
 long `SELECT` - and a length bound (`2^16` before G21) refused such a read
 as `Corruption`. The check is sound because a record's `prior_undo_ptr`
 names a record written before it, and no record is rewritten while a
-reader can reach it (§4.1) - outside the backfill's recycled-record
-window, which `known-gaps.md` records; there a revisit is answered as a
-failed read is (`index.md` §10.1, §10.3). `kMaxUndoChainLength` survives
+reader can follow a link to it (§4.1) - outside the backfill's
+recycled-record window, which `known-gaps.md` records; there a revisit is
+answered as a failed read is (`index.md` §10.1, §10.3). **A link a walk
+does not follow is never asked of the guard** (EP): a link whose writer
+the view sees may be stale, since the purge recycles a page once its
+newest writer is below the floor, and the first record a growth writes
+there lands at the address the page's first record had - its own
+`prior_undo_ptr`, when it supersedes that record. `ResolveThroughUndo`
+therefore classifies the stepped-back writer first and asks the guard only
+of a link it is about to read; `UndoLog::Walk` asks it only after its
+visitor returns `kContinue`. `kMaxUndoChainLength` survives
 only as how far a named key's undecided-insert test asks down a chain of
 in-flight versions before answering "not an insert".
 

@@ -252,3 +252,13 @@ landed (§16):
 | **Mark** | Four orders written, none opened, on `main` at `c43dbf46`, documents only, in a claude.ai session: **EP** (`workorder-ep-undo-chain-revisit.md`) for `docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`; and for the three things EO's close reads KDS behind on (`bench/v3.5.1/results-eo-close-v3.5.1-63-g9543cf720.md`), **EQ** (a commit that wrote nothing), **ER** (scenario 2's customer statement) and **ES** (four or more clients, measured at `cores = 8`). CLA proposes EP first, since its cause may be `[quiet-wrong]`. Every EP-, EQ-, ER- and ES-Q item carries CLA's proposal and **none is adopted**; EP-Q2 and EQ-Q2 change what a purge may reclaim and what a `COMMIT` promises, and wait for the operator's mark whatever the standing go-ahead says |
 | **Does not settle** | opening any of the four, any Q item, a tag or a version |
 | **Recorded at** | this file; the four orders; their rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 26. EP opened on the standing go-ahead; EP-Q0, Q1, Q3 (revised) and Q4 adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone ep`: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"*, the milestone named EP; then *"pull"* (CLA had stopped on finding no EP order; the pull brought `012820e3e`, which wrote it) |
+| **Mark** | **EP is opened** on worktree `ep-undo-chain-revisit` (branch `worktree-ep-undo-chain-revisit`) from `012820e3e` (`v3.5.1-78-g012820e3e`). **EP-Q0 (a), EP-Q1 (a), EP-Q3 (a) as revised at S0, and EP-Q4 (a), written at S2, are adopted as CLA proposed, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)**. These are CLA's proposals, not per-item marks by the operator. **EP-Q2 was not reached**: S0 disproved H1, so the purge's bound is unchanged |
+| **CLA's, not the operator's** | S0's verdict: the refusal was a false refusal. A stale link into a recycled undo page, never followed, was asked of the cycle guard before the walk's verdict on it (22 Release and 12 Debug dumps, every one a self-link whose prior writer the view sees; 0 refusals in 30 runs with the purge disarmed, against 13 in 30 armed). The revision of EP-Q3's premise; EP-Q1's Debug arm cut from 30 runs to 10 to fit the stage's budget |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; EP's order (§4's mark column, §7); EP's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

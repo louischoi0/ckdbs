@@ -335,6 +335,59 @@ TEST_F(VisibilityTest, ALiveWriterIsSteppedOverEvenBelowCommittedIds) {
     EXPECT_EQ(seen, "committed");
 }
 
+// **EP: a stale link the walk never follows is no revisit**
+// (`workorder-ep-undo-chain-revisit.md`; the mechanism is `undo_log.hpp`'s
+// purge note). Builds the self-link a recycle can leave: page A holds
+// writer 50's four records, page B writer 61's, the horizon passes 50 and
+// not 61, and writer 70's growth recycles A under a write that supersedes
+// A's first record - so its record lands at that record's address and
+// names itself. Returns the record's pointer, the tuple's `undo_ptr`.
+class StaleLinkTest : public VisibilityTest {
+protected:
+    std::uint64_t SelfLinkAfterRecycle() {
+        undo_->SetHorizonSource([this] { return horizon_; });
+        const std::uint64_t v50 =
+            Supersede(50, kAlwaysVisibleTrxId, kNoUndoPtr, UndoRecordType::kOverwrite, image_);
+        for (int i = 0; i < 3; ++i) {
+            Supersede(50, kAlwaysVisibleTrxId, kNoUndoPtr, UndoRecordType::kOverwrite, image_);
+        }
+        for (int i = 0; i < 4; ++i) {
+            Supersede(61, kAlwaysVisibleTrxId, kNoUndoPtr, UndoRecordType::kOverwrite, image_);
+        }
+        horizon_ = 60;
+        const std::uint64_t v70 = Supersede(70, /*prior_trx_id=*/50, /*prior_undo_ptr=*/v50,
+                                            UndoRecordType::kOverwrite, image_);
+        EXPECT_EQ(undo_->PagesRecycled(), 1u);
+        EXPECT_EQ(v70, v50) << "the premise: the recycled page's first record is at the old one's address";
+        return v70;
+    }
+
+    std::uint64_t horizon_ = 0;
+    // Four records a page, so every growth point is fixed.
+    const std::string image_ = std::string(kUndoPageCapacity / 4 - kUndoRecordHeaderSize, 'v');
+};
+
+// Fails before EP-S1 with "undo chain revisits the record": the guard was
+// asked of the link before the verdict that it is not followed.
+TEST_F(StaleLinkTest, AStalePriorPointerIntoARecycledPageIsNotARevisit) {
+    const std::uint64_t ptr = SelfLinkAfterRecycle();
+    // A view that sees 50 and not 70 reads 50's version, with no second step.
+    std::string seen;
+    auto verdict = Resolve(ViewAt(70), /*trx_id=*/70, /*deleted=*/false, ptr, "current", &seen);
+    ASSERT_TRUE(verdict.ok()) << verdict.status().message();
+    EXPECT_EQ(verdict.value(), Visibility::kVisible);
+    EXPECT_EQ(seen, image_);
+}
+
+// An ordering guard, not a reproduction (it passes before EP-S1 too): the
+// same self-link is still refused for a view that would follow it.
+TEST_F(StaleLinkTest, ACycleTheWalkWouldFollowIsStillRefused) {
+    const std::uint64_t ptr = SelfLinkAfterRecycle();
+    auto verdict = Resolve(ViewAt(50), /*trx_id=*/70, /*deleted=*/false, ptr, "current", nullptr);
+    ASSERT_FALSE(verdict.ok());
+    EXPECT_EQ(verdict.status().code(), StatusCode::kCorruption) << verdict.status().message();
+}
+
 TEST_F(VisibilityTest, AWriterSeesItsOwnUncommittedOverwrite) {
     const std::uint64_t ptr = Supersede(60, kAlwaysVisibleTrxId, kNoUndoPtr,
                                         UndoRecordType::kOverwrite, "committed");
