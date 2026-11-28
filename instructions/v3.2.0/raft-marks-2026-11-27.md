@@ -222,3 +222,12 @@ The operator's words of 2026-11-27 (UTC), recorded in English.
 | **Mark** | **DX-Q6 (a)** `[quiet-wrong]`, CLA's proposal written into the order's §4 at DX-S2's review and **adopted on the operator's standing go-ahead of 2026-11-27 (go-ahead-achieving-milestone)**, not the operator's own mark: an explicit transaction holding a pending assertion reservation keeps a pool refusal rather than re-run it, because a `DELETE` reserves its departure before its trail entry. Its premise was re-read against the tree before adoption (`DeleteInner`: `ReserveDelete`, then `AppendUndo`, then `NoteDeleteMark`, outside any no-refuse window). **DX is closed on `worktree-dx-pool-under-pressure`**, on CLA's readings of DX-S2's bar (the dirty-pool cell refused 2 clients in 173,915) and of the close (DX-R5 holds to the harness's 1-2 % resolution), each the order's §7 states |
 | **Does not settle** | **the landing**: no merge to `main`, no push, no tag and no version - each waits for the operator's word |
 | **Recorded at** | this file; the order's header, §4 and §7; its rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 25. DX pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, to the report of DX's close |
+| **Mark** | **DX landed**: `origin/main` (`0d6a8c526`: DZ, EA, EE, EB) merged into the work branch at `10cb82a27`, the store's writeback and the register resolved there, **the full suite green on that tree, 5,417 of 5,417** (`ctest -LE bs-nightly -j4`); `f8c42bb09` (`bench/` only, no build input) merged after it at `c1f750f5e`; that tree merged onto `origin/main` `--no-ff` at `7700ef254` and pushed, **the pre-push hook skipped**. The merge commit was made with `git commit-tree` from the work branch's tree, the session being held to its worktree; the main checkout's local `main` ref was not moved |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; `workorder-dx-pool-under-pressure.md` (header, §7 "Landed"); DX's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |

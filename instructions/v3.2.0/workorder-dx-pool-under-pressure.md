@@ -1,6 +1,6 @@
 # Work order DX - the buffer pool under pressure: a full pool that waits for its writeback, and an abort that cannot be refused a frame
 
-Status: **CLOSED 2026-11-27 on the work branch, not landed** (`raft-marks-2026-11-27.md` §24): DX-S0..S3 at `8167fa139`, `7271241e4`, `5e25f1d26` and the close commit; a merge, a push, a tag and a version wait for the operator. **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
+Status: **CLOSED 2026-11-27** (`raft-marks-2026-11-27.md` §24): DX-S0..S3 at `8167fa139`, `7271241e4`, `5e25f1d26` and `0d0af9bb0`; **landed on `main` at `7700ef254`**, pushed with the hook skipped on the operator's word (§7, "Landed"; `raft-marks-2026-11-27.md` §25). No tag, no version. **OPENED 2026-11-27** on worktree `dx-pool-under-pressure`
 (branch `worktree-dx-pool-under-pressure`) from `481d101aa`
 (`v3.4.17-202-g481d101aa`), under the operator's standing go-ahead of
 2026-11-27 (`raft-marks-2026-11-27.md` §22): every DX-Q item is **adopted
@@ -162,6 +162,22 @@ the item. Of DX-Q0..Q5 no item is tagged `[quiet-wrong]`; **DX-Q6 is**, written 
   whose cause is not found.
 
 ## 7. Stage log (CLA, appended as stages land)
+
+### Landed 2026-11-27
+
+`7700ef254` on `main`: the merge of `worktree-dx-pool-under-pressure` at
+`c1f750f5e` onto `origin/main` at `f8c42bb09`, pushed with `--no-verify`
+on the operator's word "push no verify" - the hook skipped. `origin/main`
+had moved from `481d101aa` to `0d6a8c526` (DZ, EA, EE, EB) and was merged
+into the work branch at `10cb82a27`: `DevicePageStore::WriteBack` kept as
+DZ-S2 staged it, with DX's `LeftPinned` skip, the `held` its gate asks and
+its stamp into the copy, which DZ-S2's staged run then carries unchanged;
+`DrainForPressure` and `DrainDirtyEvictionQueue(HeldFrames)` beside DZ's
+staged-write functions; the register's DX sections renumbered 22 to 24.
+**The full suite ran green on that tree**, 5,417 of 5,417
+(`ctest -LE bs-nightly -j4`, Debug). `f8c42bb09` (the PostgreSQL control
+run) was merged after it at `c1f750f5e` and carried `bench/` only, no build
+input. No tag, no version (`raft-marks-2026-11-27.md` §25).
 
 ### Written 2026-11-26
 
