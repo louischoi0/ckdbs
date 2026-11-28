@@ -89,9 +89,12 @@
 // to, so the side table needs no on-disk home - and the trigger is
 // growth: TailFor reclaims settled pages from the old end before it
 // allocates, and allocation prefers the recycle list to CreateNew(). A
-// freed page's stale `undo_ptr`s are harmless by the fact above; its
-// stale `prev_page_id` links are why LivePages() counts the in-memory
-// chain and no device walk remains.
+// freed page's stale `undo_ptr`s are harmless by the fact above - no walk
+// follows one, since its writer is below the floor - **and no walk asks
+// its cycle guard about a link it does not follow** (EP): a record a
+// growth writes into a recycled page can sit at the address a stale link
+// names, its own included. Its stale `prev_page_id` links are why
+// LivePages() counts the in-memory chain and no device walk remains.
 //
 // **Disarmed by default**: with no horizon source installed nothing is
 // freed. TransactionManager
@@ -176,7 +179,9 @@ public:
     // kNoUndoPtr. A chain that revisits a record is Corruption, found by
     // `kds::CycleGuard`; length alone is never refused. The check is sound
     // because a record's `prior_undo_ptr` names a record written before it
-    // and no record is rewritten while a reader can reach it, outside the
+    // and no record is rewritten while a reader can follow a link to it
+    // (the purge note above; the guard is asked only of a followed link,
+    // which `fn` chooses by returning `kContinue`), outside the
     // backfill's recycled-record window (txn.md section 3.7). **A visitor's
     // failure leaves by its Status**, as in every other walk
     // (`storage/visit.hpp`).

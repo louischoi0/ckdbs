@@ -1,5 +1,13 @@
 # EO close: six scenarios on KDS and PostgreSQL 18.7 through one Rust client
 
+> **Note added by EP (EP-Q3), 2026-11-28.** The "undo chain revisits the
+> record" refusals this file counts (the defect named in the stamp and in
+> the list of findings) were **false refusals of a legal chain**, fixed by EP
+> at `21dc920b4`: a stale link into a recycled undo page was asked of the
+> cycle guard before the walk's verdict on it. No wrong version could
+> result from them, and **no figure in this file is withdrawn or in doubt**
+> (`instructions/v3.2.0/workorder-ep-undo-chain-revisit.md` §7).
+
 **One line.** At `9543cf720` (`v3.5.1-63-g9543cf720`), through one Rust
 client that does the same work against both engines, **KDS is ahead of
 PostgreSQL on most reads at the larger sizes: a key range, a walk and an
