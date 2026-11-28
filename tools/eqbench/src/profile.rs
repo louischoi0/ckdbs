@@ -10,11 +10,11 @@
 //! | `parse` | not reported apart | not reported (a prepared statement parses once, outside the loop) | `parse time elapsed` less `hard parse elapsed time` |
 //! | `optimise` | not reported apart | `pg_stat_statements.total_plan_time` | `hard parse elapsed time` |
 //! | `parse_optimise` | `sys.statement_stats.compile_us` | the two above summed | the two above summed |
-//! | `execution` | `cpu_us` + `sched_us` + `other_us` less `compile_us` | `total_exec_time` less read | `sql execute elapsed time` less the waits below it |
-//! | `disk_read` | `io_us` + `page_reads` | `shared_blk_read_time` | wait class `User I/O` |
-//! | `commit` | `commit_us` | sampled `IO` `Wal*` waits | wait class `Commit` |
-//! | `lock` | `app_us` (and `sys.lock_waits` per wait) | sampled `Lock` and `LWLock` waits | wait classes `Application`, `Concurrency` |
-//! | `network` | `net_us` | sampled `Client`/`IPC` waits while active | wait class `Network` |
+//! | `execution` | `session_waits`' busy classes but the four below, less `compile_us` | `total_exec_time` less read and sampled lock | `sql execute elapsed time` less the waits below it |
+//! | `disk_read` | class User I/O (`io.*`) | `shared_blk_read_time` | wait class `User I/O` |
+//! | `commit` | class Commit (`commit.*`) | sampled `IO` `Wal*` and `LWLock` `WALWrite` | wait class `Commit` |
+//! | `lock` | class Application (`app.*`; `sys.lock_waits` per wait) | sampled `Lock` and other `LWLock` waits | wait classes `Application`, `Concurrency` |
+//! | `network` | class Network (`net.*`) | sampled `Client`/`IPC` waits while active | wait class `Network` |
 //!
 //! `formatting` is the harness's own (`decode_ns`), added by the runner:
 //! the server's encoding of a row is inside each engine's execution and no
@@ -84,28 +84,24 @@ pub struct KdsProfiler {
     q_stmt: Stmt,
     q_waits: Stmt,
     q_locks: Stmt,
-    last_lock_seq: i64,
+    /// `sys.lock_waits`' `seq` is each core's own count, so the last seen is
+    /// kept per core.
+    last_lock_seq: BTreeMap<i64, i64>,
     lock_rows: BTreeMap<(String, String), (f64, f64)>,
 }
 
-const KDS_STMT_COLS: [&str; 11] = [
-    "calls", "total_us", "compile_us", "cpu_us", "sched_us", "commit_us", "io_us", "net_us", "app_us", "other_us",
-    "page_reads",
-];
-
 impl KdsProfiler {
     pub fn new(mut e: Box<dyn Engine>) -> DbResult<KdsProfiler> {
-        let cols = KDS_STMT_COLS.join(", ");
-        let q_stmt = e.prepare(&format!("SELECT {cols}, shape_text FROM sys.statement_stats"))?;
+        let q_stmt = e.prepare("SELECT compile_us, page_reads, shape_text FROM sys.statement_stats")?;
         let q_waits = e.prepare("SELECT session_id, event, count, total_us FROM sys.session_waits")?;
-        let q_locks = e.prepare("SELECT seq, waited_us, unit, mode, outcome FROM sys.lock_waits")?;
+        let q_locks = e.prepare("SELECT core, seq, waited_us, unit, mode, outcome FROM sys.lock_waits")?;
         Ok(KdsProfiler {
             e,
             sessions: vec![],
             q_stmt,
             q_waits,
             q_locks,
-            last_lock_seq: -1,
+            last_lock_seq: BTreeMap::new(),
             lock_rows: BTreeMap::new(),
         })
     }
@@ -134,12 +130,14 @@ impl Profiler for KdsProfiler {
     fn snap(&mut self) -> DbResult<Snap> {
         let mut s = Snap::default();
         let mut rows = Rows::new();
+        // compile_us and page_reads are per statement shape for the whole
+        // instance (no session column): every run is alone on its server.
         self.e.query(self.q_stmt, &[], &mut rows)?;
         for r in &rows {
-            if r[KDS_STMT_COLS.len()].s().contains("sys.") {
+            if r[2].s().contains("sys.") {
                 continue;
             }
-            for (k, col) in KDS_STMT_COLS.iter().enumerate() {
+            for (k, col) in ["compile_us", "page_reads"].iter().enumerate() {
                 if let Val::I64(v) = r[k] {
                     *s.counters.entry(col.to_string()).or_insert(0.0) += v as f64;
                 }
@@ -156,45 +154,45 @@ impl Profiler for KdsProfiler {
             e.0 += r[2].i() as f64;
             e.1 += r[3].i() as f64;
         }
-        // Lock waits: a ring of rows, each one wait; accumulate the rows
-        // past the last seen sequence into running totals.
+        // Lock waits: a ring of rows per core, each one wait; the rows past
+        // a core's last seen sequence go into running totals.
         self.e.query(self.q_locks, &[], &mut rows)?;
-        let mut max_seq = self.last_lock_seq;
+        let mut seen = self.last_lock_seq.clone();
         for r in &rows {
-            let seq = r[0].i();
-            if seq <= self.last_lock_seq {
+            let (core, seq) = (r[0].i(), r[1].i());
+            if seq <= self.last_lock_seq.get(&core).copied().unwrap_or(0) {
                 continue;
             }
-            max_seq = max_seq.max(seq);
-            let name = format!("lock {} {} {}", r[2].s(), r[3].s(), r[4].s());
+            let m = seen.entry(core).or_insert(0);
+            *m = (*m).max(seq);
+            let name = format!("lock {} {} {}", r[3].s(), r[4].s(), r[5].s());
             let e = self.lock_rows.entry((name, "Lock".into())).or_insert((0.0, 0.0));
             e.0 += 1.0;
-            e.1 += r[1].i() as f64;
+            e.1 += r[2].i() as f64;
         }
-        self.last_lock_seq = max_seq;
+        self.last_lock_seq = seen;
         for (k, v) in &self.lock_rows {
             s.events.insert(k.clone(), *v);
         }
         Ok(s)
     }
-    /// The time split is `sys.statement_stats`' own (each statement's
-    /// session wait statistics at its end less at its head), so it covers
-    /// the measured statements only; the event list is `sys.session_waits`'.
+    /// The time split is the measured sessions' own `sys.session_waits`, by
+    /// each event's class; `compile_us` is `sys.statement_stats`' (wall
+    /// time from a statement's head to its chain compiled), taken out of
+    /// the CPU it is spent in.
     fn breakdown(&self, d: &Snap, ops: u64) -> BTreeMap<String, Option<f64>> {
         let mut b = BTreeMap::new();
         let compile = d.c("compile_us");
-        let exec = match (d.c("cpu_us"), d.c("sched_us"), d.c("other_us")) {
-            (None, None, None) => None,
-            (c, s, o) => Some(c.unwrap_or(0.0) + s.unwrap_or(0.0) + o.unwrap_or(0.0) - compile.unwrap_or(0.0)),
-        };
+        let class = |c: &str| d.class_us(|_, k| k == c);
+        let exec = d.class_us(|_, k| !matches!(k, "Commit" | "User I/O" | "Network" | "Application" | "Idle" | "Lock"));
         b.insert("parse".into(), None);
         b.insert("optimise".into(), None);
         b.insert("parse_optimise".into(), per(compile, ops));
-        b.insert("execution".into(), per(exec, ops));
-        b.insert("disk_read".into(), per(d.c("io_us"), ops));
-        b.insert("commit".into(), per(d.c("commit_us"), ops));
-        b.insert("lock".into(), per(d.c("app_us"), ops));
-        b.insert("network".into(), per(d.c("net_us"), ops));
+        b.insert("execution".into(), per(Some(exec - compile.unwrap_or(0.0)), ops));
+        b.insert("disk_read".into(), per(Some(class("User I/O")), ops));
+        b.insert("commit".into(), per(Some(class("Commit")), ops));
+        b.insert("lock".into(), per(Some(class("Application")), ops));
+        b.insert("network".into(), per(Some(class("Network")), ops));
         b
     }
 }
@@ -206,8 +204,16 @@ pub struct PgProfiler {
     params: String,
     sessions: Vec<i64>,
     sampler: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
-    samples: Arc<Mutex<(BTreeMap<(String, String), f64>, f64, f64)>>,
+    samples: Arc<Mutex<Samples>>,
     have_pss: bool,
+}
+
+/// The sampler's running totals: per (event, type), the samples and the µs
+/// they stand for.
+#[derive(Default)]
+struct Samples {
+    by: BTreeMap<(String, String), (f64, f64)>,
+    n: f64,
 }
 
 impl PgProfiler {
@@ -220,7 +226,7 @@ impl PgProfiler {
             params: params.to_string(),
             sessions: vec![],
             sampler: None,
-            samples: Arc::new(Mutex::new((BTreeMap::new(), 0.0, 0.0))),
+            samples: Arc::new(Mutex::new(Samples::default())),
             have_pss,
         })
     }
@@ -258,10 +264,10 @@ impl Profiler for PgProfiler {
             }
         }
         let g = self.samples.lock().unwrap();
-        for (k, v) in &g.0 {
-            s.events.insert(k.clone(), (*v, *v * g.1));
+        for (k, v) in &g.by {
+            s.events.insert(k.clone(), *v);
         }
-        s.counters.insert("wait_samples".into(), g.2);
+        s.counters.insert("wait_samples".into(), g.n);
         Ok(s)
     }
     fn phase_start(&mut self) {
@@ -277,12 +283,14 @@ impl Profiler for PgProfiler {
             let Ok(mut c) = postgres::Client::connect(&params, postgres::NoTls) else { return };
             let Ok(q) = c.prepare("SELECT state, coalesce(wait_event_type,''), coalesce(wait_event,'') FROM pg_stat_activity WHERE pid = ANY($1)") else { return };
             let interval = Duration::from_millis(1);
-            let t0 = Instant::now();
-            let mut n = 0.0;
+            let mut prev = Instant::now();
             while !st.load(Ordering::Relaxed) {
                 let next = Instant::now() + interval;
                 if let Ok(rows) = c.query(&q, &[&pids]) {
-                    n += 1.0;
+                    // Each sample stands for the time since the one before.
+                    let now = Instant::now();
+                    let dt = (now - prev).as_micros() as f64;
+                    prev = now;
                     let mut g = samples.lock().unwrap();
                     for r in rows {
                         let state: Option<String> = r.get(0);
@@ -292,11 +300,11 @@ impl Profiler for PgProfiler {
                             continue; // idle in transaction: the client's time
                         }
                         let key = if ty.is_empty() { ("CPU".to_string(), "CPU".to_string()) } else { (ev, ty) };
-                        *g.0.entry(key).or_insert(0.0) += 1.0;
+                        let e = g.by.entry(key).or_insert((0.0, 0.0));
+                        e.0 += 1.0;
+                        e.1 += dt;
                     }
-                    g.2 += 1.0;
-                    // µs a sample stands for, from the achieved rate
-                    g.1 = t0.elapsed().as_micros() as f64 / n;
+                    g.n += 1.0;
                 }
                 let now = Instant::now();
                 if next > now {
@@ -319,23 +327,21 @@ impl Profiler for PgProfiler {
         let exec = if pss { d.c("exec_us") } else { None };
         let read = if pss { d.c("blk_read_us") } else { None };
         // A COMMIT's flush runs after its utility statement returns, so
-        // pg_stat_statements does not time it: the sampled WAL waits do.
-        let commit = if pss { Some(d.class_us(|n, c| c == "IO" && n.starts_with("Wal"))) } else { None };
+        // pg_stat_statements does not time it: the sampled WAL waits do -
+        // the flush (IO Wal*) and the group commit's wait for it
+        // (LWLock WALWrite).
+        let is_commit = |n: &str, c: &str| (c == "IO" && n.starts_with("Wal")) || (c == "LWLock" && n == "WALWrite");
+        let commit = pss.then(|| d.class_us(is_commit));
+        // A lock wait inside a statement is inside its total_exec_time.
+        let lock = pss.then(|| d.class_us(|n, c| (c == "Lock" || c == "LWLock") && !is_commit(n, c)));
         b.insert("parse".into(), None);
         b.insert("optimise".into(), per(plan, ops));
         b.insert("parse_optimise".into(), per(plan, ops));
-        b.insert("execution".into(), per(exec.map(|e| e - read.unwrap_or(0.0)), ops));
+        b.insert("execution".into(), per(exec.map(|e| e - read.unwrap_or(0.0) - lock.unwrap_or(0.0)), ops));
         b.insert("disk_read".into(), per(read, ops));
         b.insert("commit".into(), per(commit, ops));
-        let sampled = |pred: &dyn Fn(&str) -> bool| -> Option<f64> {
-            if pss {
-                Some(d.class_us(|_, c| pred(c)))
-            } else {
-                None
-            }
-        };
-        b.insert("lock".into(), per(sampled(&|c| c == "Lock" || c == "LWLock"), ops));
-        b.insert("network".into(), per(sampled(&|c| c == "Client" || c == "IPC"), ops));
+        b.insert("lock".into(), per(lock, ops));
+        b.insert("network".into(), per(pss.then(|| d.class_us(|_, c| c == "Client" || c == "IPC")), ops));
         b
     }
 }

@@ -1,18 +1,25 @@
 //! Oracle through the `oracle` crate (ODPI-C over the Oracle client
 //! libraries): one `Statement` per scenario statement, built once and
 //! executed with bound values - OCI's own statement handle, so no execution
-//! parses again. Autocommit is on outside an explicit transaction, which
-//! makes OCI commit within the execute's own round trip; `begin` turns it
-//! off with no round trip, since an Oracle transaction opens at its first
-//! statement.
+//! parses again. (The server's hard parse is at a statement's first execute,
+//! so a scenario's untimed warm-up is what keeps it out of a phase.)
+//! Autocommit is on outside an explicit transaction, which makes OCI commit
+//! within the execute's own round trip; `begin` turns it off with no round
+//! trip, since an Oracle transaction opens at its first statement.
 //!
 //! **Fetch sizing** (EN-Q4): the fetch array and the prefetch are both
 //! `FETCH_ROWS`, so a result up to that many rows comes back in the
 //! execute's round trip, as KWP's 64 KiB batch and PostgreSQL's stream do.
+//!
+//! **Binds** (`OraP`): a string binds as `VARCHAR2(4000)`. The crate's own
+//! `&str` binds `NVARCHAR2(len)`, which makes the server convert the column
+//! (`SYS_OP_C2C`) and gives up an index on it - a full scan where the other
+//! engines probe (the S1 review's finding 1, measured on `eq-ora`). One
+//! constant size keeps one child cursor per statement.
 
 use crate::engine::*;
 use oracle::sql_type::{OracleType, ToSql};
-use oracle::{Connection, Statement};
+use oracle::{Connection, Row, RowValue, SqlValue, Statement};
 use std::time::Instant;
 
 pub const FETCH_ROWS: u32 = 10_000;
@@ -34,6 +41,49 @@ fn err_of(e: oracle::Error) -> DbError {
     DbError { class, msg: format!("ORA: {e}") }
 }
 
+/// One bound value: a NUMBER, a VARCHAR2 or a NULL.
+struct OraP<'a>(&'a Val);
+
+impl ToSql for OraP<'_> {
+    fn oratype(&self, _: &Connection) -> oracle::Result<OracleType> {
+        Ok(match self.0 {
+            Val::Str(_) => OracleType::Varchar2(4000),
+            _ => OracleType::Number(0, 0),
+        })
+    }
+    fn to_sql(&self, v: &mut SqlValue) -> oracle::Result<()> {
+        match self.0 {
+            Val::I64(i) => i.to_sql(v),
+            Val::Str(s) => s.as_str().to_sql(v),
+            Val::Null => v.set_null(),
+        }
+    }
+}
+
+/// A row decoded from the fetch buffers it borrows: a NUMBER that holds an
+/// integer is `I64`, anything else its text. An unscaled NUMBER (an
+/// aggregate's) is an integer when it holds one, as PostgreSQL's NUMERIC is.
+struct Decoded(Vec<Val>);
+
+impl RowValue for Decoded {
+    fn get(row: &Row) -> oracle::Result<Decoded> {
+        let vals = row.sql_values();
+        let mut r = Vec::with_capacity(vals.len());
+        for v in vals {
+            if v.is_null()? {
+                r.push(Val::Null);
+                continue;
+            }
+            let numeric = matches!(v.oracle_type()?, OracleType::Number(_, _) | OracleType::Int64);
+            r.push(match numeric.then(|| v.get::<i64>()) {
+                Some(Ok(i)) => Val::I64(i),
+                _ => Val::Str(v.get::<String>()?),
+            });
+        }
+        Ok(Decoded(r))
+    }
+}
+
 impl Ora {
     pub fn connect(user: &str, password: &str, connect: &str) -> DbResult<Ora> {
         let mut conn = Connection::connect(user, password, connect).map_err(err_of)?;
@@ -42,17 +92,12 @@ impl Ora {
     }
 }
 
-fn to_sql(params: &[Val]) -> Vec<Box<dyn ToSql>> {
-    params
-        .iter()
-        .map(|p| -> Box<dyn ToSql> {
-            match p {
-                Val::I64(v) => Box::new(*v),
-                Val::Str(s) => Box::new(s.clone()),
-                Val::Null => Box::new(Option::<i64>::None),
-            }
-        })
-        .collect()
+fn ctx(sql: &str) -> impl FnOnce(oracle::Error) -> DbError + '_ {
+    move |e| {
+        let mut d = err_of(e);
+        d.msg = format!("{} [{sql}]", d.msg);
+        d
+    }
 }
 
 impl Engine for Ora {
@@ -67,65 +112,33 @@ impl Engine for Ora {
             .fetch_array_size(FETCH_ROWS)
             .prefetch_rows(FETCH_ROWS)
             .build()
-            .map_err(|e| {
-                let mut d = err_of(e);
-                d.msg = format!("{} [prepare: {text}]", d.msg);
-                d
-            })?;
+            .map_err(ctx(&text))?;
         self.stmts.push(s);
         Ok(Stmt(self.stmts.len() - 1))
     }
     fn query(&mut self, s: Stmt, params: &[Val], out: &mut Rows) -> DbResult<()> {
         out.clear();
-        let hold = to_sql(params);
-        let refs: Vec<&dyn ToSql> = hold.iter().map(|b| b.as_ref()).collect();
-        let stmt = &mut self.stmts[s.0];
-        let rs = stmt.query(&refs).map_err(err_of)?;
-        let mut ints: Option<Vec<bool>> = None;
-        let mut dec = 0u64;
+        let ps: Vec<OraP> = params.iter().map(OraP).collect();
+        let refs: Vec<&dyn ToSql> = ps.iter().map(|p| p as &dyn ToSql).collect();
+        let rs = self.stmts[s.0].query_as::<Decoded>(&refs).map_err(err_of)?;
+        // The rows are in the prefetch buffers once the execute returns
+        // (up to FETCH_ROWS), so the iteration is the decode.
+        let t0 = Instant::now();
         for row in rs {
-            let row = row.map_err(err_of)?;
-            let t0 = Instant::now();
-            let vals = row.sql_values();
-            let ints = ints.get_or_insert_with(|| {
-                vals.iter()
-                    .map(|v| matches!(v.oracle_type(), Ok(OracleType::Number(_, 0)) | Ok(OracleType::Int64)))
-                    .collect()
-            });
-            let mut r = Vec::with_capacity(vals.len());
-            for (v, &is_int) in vals.iter().zip(ints.iter()) {
-                if v.is_null().map_err(err_of)? {
-                    r.push(Val::Null);
-                } else if is_int {
-                    r.push(Val::I64(v.get::<i64>().map_err(err_of)?));
-                } else {
-                    // An unscaled NUMBER (an aggregate's) is an integer when
-                    // it holds one; text otherwise, as PostgreSQL's NUMERIC.
-                    match v.get::<i64>() {
-                        Ok(i) => r.push(Val::I64(i)),
-                        Err(_) => r.push(Val::Str(v.get::<String>().map_err(err_of)?)),
-                    }
-                }
-            }
-            out.push(r);
-            dec += t0.elapsed().as_nanos() as u64;
+            out.push(row.map_err(err_of)?.0);
         }
-        self.decode_ns += dec;
+        self.decode_ns += t0.elapsed().as_nanos() as u64;
         Ok(())
     }
     fn exec(&mut self, s: Stmt, params: &[Val]) -> DbResult<u64> {
-        let hold = to_sql(params);
-        let refs: Vec<&dyn ToSql> = hold.iter().map(|b| b.as_ref()).collect();
+        let ps: Vec<OraP> = params.iter().map(OraP).collect();
+        let refs: Vec<&dyn ToSql> = ps.iter().map(|p| p as &dyn ToSql).collect();
         let stmt = &mut self.stmts[s.0];
         stmt.execute(&refs).map_err(err_of)?;
         stmt.row_count().map_err(err_of)
     }
     fn run(&mut self, sql: &str) -> DbResult<()> {
-        self.conn.execute(sql, &[]).map(|_| ()).map_err(|e| {
-            let mut d = err_of(e);
-            d.msg = format!("{} [{sql}]", d.msg);
-            d
-        })
+        self.conn.execute(sql, &[]).map(|_| ()).map_err(ctx(sql))
     }
     fn begin(&mut self) -> DbResult<()> {
         self.conn.set_autocommit(false);

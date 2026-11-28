@@ -4,7 +4,9 @@ Status: **OPENED 2026-11-28** on worktree `three-engine-equal-client-bench`
 (branch `worktree-three-engine-equal-client-bench`) from `e571ae574`
 (`v3.5.1-57-ge571ae574`), on the operator's words of 2026-11-28
 (`raft-marks-2026-11-28.md` §17). Written and opened in one session. A
-benchmark order: no engine code is changed by it.
+benchmark order: no engine code is changed by it. **EN-Q3..Q8 adopted as
+CLA proposed, on the operator's standing go-ahead of 2026-11-28
+(go-ahead-achieving-milestone; `raft-marks-2026-11-28.md` §18)**.
 
 Tags: `[operator]`, `[source-read]`, `[measured]`, `[design]`,
 `[assumed]`, as in DT's order.

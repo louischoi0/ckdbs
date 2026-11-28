@@ -40,8 +40,13 @@ impl Kind {
     }
 }
 
-/// One decoded value. Integers of every width, dates (epoch days),
-/// timestamps (epoch microseconds) and booleans are `I64`; text is `Str`.
+/// One decoded value. Integers of every width and booleans are `I64`; text
+/// is `Str`. **A scenario's columns are integers and strings only** (`Ty`):
+/// money in minor units, days and instants as integers. A DECIMAL, DATE or
+/// TIMESTAMP column would decode differently on the three engines (KDS's
+/// unscaled integer, PostgreSQL's text at its scale, Oracle's number), so
+/// none is declared; an aggregate over integers decodes to `I64` on all
+/// three.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Val {
     Null,

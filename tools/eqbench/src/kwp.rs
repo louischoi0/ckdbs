@@ -172,12 +172,13 @@ fn decode(oid: u32, raw: &[u8]) -> Val {
         T_INT8 | T_INT16 | T_INT32 | T_INT64 | T_DATE | T_TIMESTAMP | T_DECIMAL => Val::I64(int_le(raw, true)),
         T_UINT64 | T_BOOL => Val::I64(int_le(raw, false)),
         T_DECIMAL_WIDE => {
-            let mut b = [0u8; 16];
             let n = raw.len().min(16);
+            let fill = if n > 0 && raw[n - 1] & 0x80 != 0 { 0xFF } else { 0 };
+            let mut b = [fill; 16];
             b[..n].copy_from_slice(&raw[..n]);
             Val::Str(i128::from_le_bytes(b).to_string())
         }
-        T_VARCHAR | T_CHAR => Val::Str(String::from_utf8_lossy(raw).into_owned()),
+        // varchar, char, and a type this client does not know: the bytes.
         _ => Val::Str(String::from_utf8_lossy(raw).into_owned()),
     }
 }
@@ -199,7 +200,6 @@ impl Kwp {
             decode_ns: 0,
             field_types: Vec::new(),
         };
-        k.out.clear();
         frame(&mut k.out, C_HELLO, |b| {
             put_u32(b, MAGIC);
             put_u16(b, VERSION);
@@ -334,6 +334,9 @@ impl Kwp {
                 S_ROW_BATCH => {
                     let t0 = Instant::now();
                     let d = &self.buf[a..b];
+                    if d.len() < 2 {
+                        return Err(other("truncated row batch"));
+                    }
                     let count = u16::from_le_bytes([d[0], d[1]]) as usize;
                     let mut at = 2;
                     for _ in 0..count {
@@ -344,8 +347,10 @@ impl Kwp {
                             }
                             let n = i32::from_le_bytes(d[at..at + 4].try_into().unwrap());
                             at += 4;
-                            if n < 0 {
+                            if n == -1 {
                                 row.push(Val::Null);
+                            } else if n < -1 {
+                                return Err(other("negative field length"));
                             } else {
                                 let n = n as usize;
                                 if at + n > d.len() {
@@ -361,7 +366,11 @@ impl Kwp {
                     }
                     self.decode_ns += t0.elapsed().as_nanos() as u64;
                 }
-                S_PORTAL_SUSPENDED => return Err(other("portal suspended with max_rows 0")),
+                // Read on to S_READY whatever came: an early return would
+                // leave this answer's frames in front of the next one's.
+                S_PORTAL_SUSPENDED => {
+                    err.get_or_insert_with(|| other("portal suspended with max_rows 0"));
+                }
                 S_COMPLETE => {
                     let mut r = Rd { d: &self.buf[a..b], at: 0 };
                     r.text()?;
@@ -373,7 +382,9 @@ impl Kwp {
                     }
                 }
                 S_READY => break,
-                _ => return Err(other(format!("unexpected KWP frame {t}"))),
+                _ => {
+                    err.get_or_insert_with(|| other(format!("unexpected KWP frame {t}")));
+                }
             }
         }
         match err {

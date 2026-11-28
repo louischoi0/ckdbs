@@ -4,7 +4,9 @@
 //! decode the harness times is this module's code as KWP's is `kwp.rs`'s.
 
 use crate::engine::*;
-use postgres::types::{FromSql, ToSql, Type};
+use bytes::BytesMut;
+use postgres::fallible_iterator::FallibleIterator;
+use postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use postgres::{Client, NoTls, Statement};
 use std::error::Error as StdError;
 use std::time::Instant;
@@ -42,8 +44,7 @@ fn numeric(raw: &[u8]) -> Val {
     let digits: Vec<i32> = (0..ndigits).map(|k| rd(8 + 2 * k) as i32).collect();
     if dscale == 0 {
         let mut v: i128 = 0;
-        for (k, d) in digits.iter().enumerate() {
-            let _ = k;
+        for d in &digits {
             v = v * 10000 + *d as i128;
         }
         let shift = weight + 1 - ndigits as i32;
@@ -96,7 +97,8 @@ impl<'a> FromSql<'a> for AnyVal {
             Type::DATE => Val::I64(be_i64(raw) + 10_957),
             Type::TIMESTAMP | Type::TIMESTAMPTZ => Val::I64(be_i64(raw) + 946_684_800_000_000),
             Type::NUMERIC => numeric(raw),
-            _ => Val::Str(String::from_utf8_lossy(raw).into_owned()),
+            Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => Val::Str(String::from_utf8_lossy(raw).into_owned()),
+            _ => return Err(format!("eqbench decodes no {ty} value").into()),
         };
         Ok(AnyVal(v))
     }
@@ -128,23 +130,33 @@ impl Pg {
         Ok(Pg { client, stmts: Vec::new(), decode_ns: 0 })
     }
 
-    /// Each value as the type the server inferred for its parameter.
-    fn bind<'b>(stmt: &Statement, params: &'b [Val]) -> Vec<Box<dyn ToSql + Sync + 'b>> {
-        let mut hold: Vec<Box<dyn ToSql + Sync + 'b>> = Vec::with_capacity(params.len());
-        for (p, ty) in params.iter().zip(stmt.params()) {
-            let b: Box<dyn ToSql + Sync + 'b> = match (p, ty) {
-                (Val::I64(v), &Type::INT2) => Box::new(*v as i16),
-                (Val::I64(v), &Type::INT4) => Box::new(*v as i32),
-                (Val::I64(v), &Type::BOOL) => Box::new(*v != 0),
-                (Val::I64(v), &Type::TEXT) | (Val::I64(v), &Type::VARCHAR) => Box::new(v.to_string()),
-                (Val::I64(v), _) => Box::new(*v),
-                (Val::Str(s), _) => Box::new(s.as_str()),
-                (Val::Null, _) => Box::new(Option::<i64>::None),
-            };
-            hold.push(b);
+}
+
+/// One bound value, encoded as the type the server inferred for its
+/// parameter: an integer narrowed by `try_from` (never truncated), a NULL
+/// as SQL NULL whatever the type.
+#[derive(Debug)]
+struct PgP<'a>(&'a Val);
+
+impl ToSql for PgP<'_> {
+    fn to_sql(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn StdError + Sync + Send>> {
+        match self.0 {
+            Val::Null => Ok(IsNull::Yes),
+            Val::I64(v) => match *ty {
+                Type::INT2 => i16::try_from(*v)?.to_sql(ty, out),
+                Type::INT4 => i32::try_from(*v)?.to_sql(ty, out),
+                Type::INT8 => v.to_sql(ty, out),
+                Type::BOOL => (*v != 0).to_sql(ty, out),
+                Type::TEXT | Type::VARCHAR | Type::BPCHAR => v.to_string().as_str().to_sql(ty, out),
+                _ => Err(format!("eqbench binds no integer as {ty}").into()),
+            },
+            Val::Str(s) => s.as_str().to_sql(ty, out),
         }
-        hold
     }
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+    to_sql_checked!();
 }
 
 impl Engine for Pg {
@@ -164,9 +176,10 @@ impl Engine for Pg {
     fn query(&mut self, s: Stmt, params: &[Val], out: &mut Rows) -> DbResult<()> {
         out.clear();
         let stmt = &self.stmts[s.0];
-        let hold = Pg::bind(stmt, params);
-        let refs: Vec<&(dyn ToSql + Sync)> = hold.iter().map(|b| b.as_ref() as &(dyn ToSql + Sync)).collect();
-        let rows = self.client.query(stmt, &refs).map_err(err_of)?;
+        // query_raw takes the values as an iterator: no per-call vector of
+        // boxes. The rows are all read before the decode is timed.
+        let rows: Vec<postgres::Row> =
+            self.client.query_raw(stmt, params.iter().map(PgP)).and_then(|it| it.collect()).map_err(err_of)?;
         let t0 = Instant::now();
         for row in &rows {
             let mut r = Vec::with_capacity(row.len());
@@ -180,10 +193,11 @@ impl Engine for Pg {
         Ok(())
     }
     fn exec(&mut self, s: Stmt, params: &[Val]) -> DbResult<u64> {
-        let stmt = &self.stmts[s.0];
-        let hold = Pg::bind(stmt, params);
-        let refs: Vec<&(dyn ToSql + Sync)> = hold.iter().map(|b| b.as_ref() as &(dyn ToSql + Sync)).collect();
-        self.client.execute(stmt, &refs).map_err(err_of)
+        // The sync client has no execute_raw: a row stream that returns no
+        // row answers the command tag's count once it is drained.
+        let mut it = self.client.query_raw(&self.stmts[s.0], params.iter().map(PgP)).map_err(err_of)?;
+        while it.next().map_err(err_of)?.is_some() {}
+        Ok(it.rows_affected().unwrap_or(0))
     }
     fn run(&mut self, sql: &str) -> DbResult<()> {
         self.client.batch_execute(sql).map_err(|e| {

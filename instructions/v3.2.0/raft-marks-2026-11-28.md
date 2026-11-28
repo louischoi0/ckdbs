@@ -174,3 +174,12 @@ landed (§16):
 | **Word 3's reach** | this session only: the 20-minute stage and one-hour milestone budgets of `CLAUDE.md` do not bind EN's measurements in this session, and stand again for any other session |
 | **Does not settle** | a tag, a version or a push |
 | **Recorded at** | this file; EN's order; `bench/README.md`; `.claude/agents/ck-tester.md` |
+
+## 18. EN taken to its close on the standing go-ahead; EN-Q3..Q8 adopted
+
+| | |
+|---|---|
+| **Word** | `/go-ahead-achieving-milestone`, invoked while EN was open: *"go ahead until achieving milestone, I will follow CLA proposal if decision needed, keep going in this session"* |
+| **Mark** | EN-Q3 (the kind rule), EN-Q4 (what an equal client is), EN-Q5 (every engine durable at commit), EN-Q6 (KDS at `cores = 1`, servers on CPUs 0-7, the harness on 8-23), EN-Q7 (Oracle Free's image, host networking, port 1521 checked free) and EN-Q8's sources are **adopted as CLA proposed, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)**, not marked by the operator item by item; EN-Q1, EN-Q2 and Word 7 are the operator's own (§17) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; EN's header and §2 |

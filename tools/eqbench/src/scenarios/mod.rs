@@ -94,7 +94,22 @@ impl Ctx {
         F: Fn(usize, &mut dyn Engine, &mut Recorder) + Sync,
     {
         self.note_status(&format!("phase {name}"));
-        let keys: Vec<i64> = engines.iter_mut().map(|e| e.session_key().unwrap_or(-1)).collect();
+        // A profiled phase needs every session's key; a key that cannot be
+        // read is asked again, never replaced by one that filters nothing.
+        let keys: Vec<i64> = engines
+            .iter_mut()
+            .map(|e| {
+                let mut last = None;
+                for _ in 0..50 {
+                    match e.session_key() {
+                        Ok(k) => return k,
+                        Err(err) => last = Some(err),
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                panic!("session key: {}", last.unwrap())
+            })
+            .collect();
         let mut snap0 = None;
         if let Some(p) = self.profiler.as_mut() {
             p.set_sessions(keys);
@@ -140,7 +155,9 @@ impl Ctx {
             client_cpu_us_per_op: per_op(rec.cpu_ns as f64 / 1000.0, ops),
             client_decode_us_per_op: per_op(rec.decode_ns as f64 / 1000.0, ops),
             server_cpu_us_per_op: match (cpu0, cpu1) {
-                (Some(a), Some(b)) => Some(per_op((b - a) as f64 / 1000.0, ops)),
+                // A thread that exits mid-phase takes its time with it, so
+                // the sum can fall: no figure rather than a wrapped one.
+                (Some(a), Some(b)) => b.checked_sub(a).map(|d| per_op(d as f64 / 1000.0, ops)),
                 _ => None,
             },
             ..Default::default()
@@ -226,17 +243,13 @@ pub fn create_table(k: Kind, t: &Table) -> String {
     let mut cols = Vec::new();
     for (i, (c, tt)) in t.cols.iter().enumerate() {
         let mut d = format!("{c} {}", ty(k, *tt));
-        if let Some((_, parent)) = t.refs.iter().find(|(col, _)| col == c) {
-            d.push_str(&format!(" REFERENCES {parent}"));
-            if k == Kind::Kds {
-                // KDS: NOT NULL is the default
-            } else {
-                d.push_str(" NOT NULL");
-            }
-        } else if i == 0 {
+        if i == 0 {
             d.push_str(" PRIMARY KEY");
         } else if k != Kind::Kds {
-            d.push_str(" NOT NULL");
+            d.push_str(" NOT NULL"); // KDS: NOT NULL is the default
+        }
+        if let Some((_, parent)) = t.refs.iter().find(|(col, _)| col == c) {
+            d.push_str(&format!(" REFERENCES {parent}"));
         }
         cols.push(d);
     }

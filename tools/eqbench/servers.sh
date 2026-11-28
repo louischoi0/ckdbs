@@ -77,6 +77,7 @@ kds-up)
   kpid=$!
   for _ in $(seq 1 150); do (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null && break; sleep 0.2; done
   kill -0 $kpid 2>/dev/null || { echo "kds did not start" >&2; exit 1; }
+  echo $kpid > "$dir/pid"
   echo $kpid
   ;;
 pg-down) podman rm -f $PG_NAME >/dev/null 2>&1 || true ;;
