@@ -19,13 +19,14 @@ their `tools/pg_*` twins; `docs/spec/protocol.md` §2-§9.
 
 ## 0. What EN is
 
-`[operator]` Six words (§17): Oracle Database Free as a control beside
+`[operator]` Seven words (§17): Oracle Database Free as a control beside
 PostgreSQL, its comparison for internal analysis only and never marketing;
 every scenario's relations given the kind that suits them, with no cell
 comparing the kinds; missing cells measured; the scenario time budget
 lifted for the session; the three engines measured through clients as equal
 as possible, Rust considered; every result before 3.4.9 deleted, 3.4.9
-included; and a new scenario for commercial OLTP.
+included; a new scenario for commercial OLTP; and every case's delay
+broken down by phase, with its lock events (EN-Q8).
 
 `[measured]` The Python drivers' clients differ per engine: EF-S0 put
 16.6 µs a statement of client work on the KDS side against 0.8 µs
@@ -73,18 +74,28 @@ says "suite not executed: no build input changed".
   PostgreSQL `BEGIN` is a round trip and Oracle's transaction opens on
   its first statement, and the harness's README names it.
 - **EN-Q5, the durability compared** (`[design]`): every engine durable at
-  commit - KDS `group` and `strict` (both survive a crash, `protocol.md`
-  §9), PostgreSQL `synchronous_commit = on` (its default), Oracle's default
+  commit - KDS `group` and `strict` (both acknowledged only once the commit
+  record is durable, `wal.md` §8 rule 2, `protocol.md` §9), PostgreSQL
+  `synchronous_commit = on` (its default), Oracle's default
   `COMMIT WRITE IMMEDIATE WAIT`. No engine is measured at a rung that loses
   an acknowledged commit.
 - **EN-Q6, KDS's configuration** (`[design]`): `cores = 1` as EF, a fresh
   server and data file a cell, the server pinned to CPUs 0 to 7 and the
-  harness to 8 to 23 (`bench/README.md`, the hybrid host), PostgreSQL's
-  and Oracle's server processes pinned the same way.
+  harness to 8 to 23, as EF ran (the host is P/E hybrid, P-cores 0 to 7;
+  `bench/v3.5.1/results-ef-s1-drivers-v3.5.1-6-g72580aa04.md`),
+  PostgreSQL's and Oracle's server processes pinned the same way.
+- **EN-Q7, Oracle's configuration** (`[design]`): the `gvenzl/oracle-free`
+  image already on the host, host networking so no port forwarder sits in
+  its path as none sits in the others', a password generated per run and
+  never committed, defaults otherwise. **1521 is the port chosen** (`bench/README.md` rule 5):
+  the image's listener does not move under host networking, so each cell
+  checks it free (`ss -ltn`) before the container starts and the results
+  file records the check.
 - **EN-Q8, where a case's time goes** (`[operator]`, §17 Word 7: *"collect
   statistics for every case: the share of the delay between parse,
-  optimise, execution, disk read and formatting, by each database's
-  architecture, and what lock events occurred"*; the sources `[design]`).
+  optimise, execution, disk read and formatting, according to each
+  database's architecture, and what lock events occurred"*; the sources
+  `[design]`).
   Every phase of every scenario carries a breakdown read from the engine's
   own accounting, a delta between the phase's head and its end, read on a
   second connection outside the timed loop:
@@ -117,10 +128,6 @@ says "suite not executed: no build input changed".
   - A share no engine can give is written "not reported by the engine",
     never 0: KDS's parse apart from its plan, PostgreSQL's parse of a
     prepared statement (once, at the prepare, outside the loop).
-- **EN-Q7, Oracle's configuration** (`[design]`): the `gvenzl/oracle-free`
-  image already on the host, host networking so no port forwarder sits in
-  its path as none sits in the others', a password generated per run and
-  never committed, defaults otherwise.
 
 ## 3. What each scenario checks
 

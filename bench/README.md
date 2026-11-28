@@ -3,8 +3,9 @@
 Results files, by the version of record they were measured at, and the
 rules a run is invalid without. **The oldest directory kept is
 `bench/v3.4.10/`**: `v3.0.0` through `v3.4.9` were deleted on 2026-11-28
-and are held at `e571ae574` (the table at the end). **`bench/v3.0.0/` is a fresh series and
-carries no delta against any v2.x number** (AR0 D15): every v2.x number
+and are held at `e571ae574` (the table at the end). **The v3 series, from
+`bench/v3.0.0/` on, is fresh and carries no delta against any v2.x number**
+(AR0 D15): every v2.x number
 measured the engine AR0 replaces, and a per-core-WAL number set beside a
 single-stream one reads as a regression or a win that neither ran.
 
@@ -76,6 +77,11 @@ meets an older table reads its heading, as that table's own commit intended.
 
 ## A ratio against another engine names both clients - since 2026-11-28 (EF)
 
+**Since EN this section governs the Python drivers' files, the
+verification paths and an A/B between two KDS binaries**; a number set
+beside another engine's comes from the harness (the next section), whose
+README names each engine's client difference.
+
 A latency timed in a Python client is the server's plus the client's, and
 the two engines' clients do different work: KWP's rows arrive typed and
 must be rendered by the client, PostgreSQL's arrive as text. Twice
@@ -108,7 +114,7 @@ of added client work on one side and 0.8 µs on the other).
 ## What a relation is stored as — the kind its access asks for, since 2026-11-28 (EN)
 
 The operator's words of 2026-11-28 (`instructions/v3.2.0/raft-marks-2026-11-28.md`
-§17): *"in benchmarking, lift the heap suspension, give every scenario the
+§17): *"in benchmarking lift the heap suspension, give every scenario the
 btree or heap tree type that suits it (no benchmark of KDS's internal
 difference by table type)"*. This replaces AS-Q6's BTREE-only rule of
 2026-09-08 (`instructions/v3.0.0/raft-marks-2026-09-08-as-q6.md`).
@@ -118,11 +124,12 @@ difference by table type)"*. This replaces AS-Q6's BTREE-only rule of
   one table (`tools/eqbench/README.md`, "Relation kinds"). The rule CLA
   applies (EN-Q3, `[design]`): `BTREE` where the statements reach rows by
   the tuple key - a point, a range, an order by it - since a btree answers
-  that in one descent and a heap in two (its Keystone index, then the
-  page); `HEAP` where they reach rows chiefly through a secondary index,
-  or only append and walk, since a heap's index entry carries the rowid
-  and a probe fetches the page with no second descent
-  (`docs/spec/heap-and-tuple.md` §3.1b).
+  a point in one descent of its own tree, where a heap descends its
+  Keystone index and then fetches the rowid's page, and a heap's walk is
+  bounded by no tuple key range and read in no key order; `HEAP` where
+  they reach rows chiefly through a secondary index, or only append and
+  walk, since a heap's index entry carries the rowid and a probe fetches
+  the page with no second descent (`docs/spec/heap-and-tuple.md` §3.1b).
 - **No cell compares the two kinds on KDS.** A kind is a property of the
   scenario, fixed in its driver; a run that varied it would measure a
   question the operator declined.
@@ -144,9 +151,12 @@ kdbs, under client conditions as equal as possible; consider Rust too"*.
   only each engine's wire protocol and its own client library, and the
   harness's README names each difference.
 - **Each cell carries the harness's own CPU per operation**
-  (`getrusage(RUSAGE_THREAD)`) beside the server's (the server process's
-  `/proc/<pid>/stat`, or its container's cgroup `cpu.stat`), so a reader sees
-  how far apart the three clients are and what each server spent.
+  (`getrusage(RUSAGE_THREAD)`) beside the server's, **counted over every
+  process and thread of the server**: KDS's one process from
+  `/proc/<pid>/stat` (all its threads), PostgreSQL's and Oracle's container
+  from its cgroup's `cpu.stat` (every backend and background process - a
+  walwriter, a checkpointer, a log writer). So a reader sees how far apart
+  the three clients are and what each whole server spent.
 - The Python scenario drivers stay for verification and for an A/B between
   two KDS binaries; **a number set beside another engine's is the
   harness's** from EN on.
@@ -155,7 +165,7 @@ kdbs, under client conditions as equal as possible; consider Rust too"*.
 
 The operator's words of 2026-11-28 (§17): *"add Oracle with the basic
 licence as a benchmark control too, and state that the comparison produces
-results for internal analysis only and will not be used for marketing
+results only for internal analysis and will not be used for marketing
 later"*; and, asked where its results live, *"commit the drivers only"*.
 
 - **Oracle Database Free at its defaults** (Free's own limits: 2 CPU
@@ -209,12 +219,13 @@ by this table:
   match the same globs and are held at `9a0525d`.
 
 **The rebaseline's files stay the comparator** for a later delta of the
-same driver and shape until the scenario is re-run. A delta against any
+same Python driver and shape, with its relations' kinds unchanged, until
+the scenario is re-run; no harness number takes a delta against them. A delta against any
 deleted file names the commit that holds it and the commit it measured, and
 says how far apart the two runs are in commits and milestones. The
 `f6ed10c` HEAP files are compared against nothing.
 
-The three entries as they were last written in full, with the 2026-09-08
+The first three entries as they were last written in full, with the 2026-09-08
 re-measurement's account:
 [`bench/README.md` at `1ad75954`](https://github.com/louischoi0/ckdbs/blob/1ad759540c612efb2d96bc8c6dcc695f4001f6c8/bench/README.md),
 or `git show 1ad75954:bench/README.md`.

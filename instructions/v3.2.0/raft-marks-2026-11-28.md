@@ -155,7 +155,6 @@ The operator's words of 2026-11-28 (UTC), recorded in English.
 | **Does not settle** | a tag or a version |
 | **Recorded at** | this file; the three orders' landed rows in `instructions/milestones.md` |
 
-
 ## 17. Oracle as a second control, the relation kinds, one client for three engines, a commercial OLTP scenario, and the old results deleted
 
 The operator's words, in the order given, one session, after EF, EG and EH
