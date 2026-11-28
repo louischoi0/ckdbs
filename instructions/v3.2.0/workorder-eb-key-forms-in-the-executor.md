@@ -1,10 +1,12 @@
 # Work order EB - the key forms in the executor: a key range that is a range, a join by a whole key, an order the rows already hold, an upsert by any key
 
-Status: **OPENED 2026-11-27** on worktree `eb-key-forms-in-the-executor`
+Status: **CLOSED 2026-11-27** at `4ab5d55d5` (`v3.4.17-234-g4ab5d55d5`) on
+worktree `eb-key-forms-in-the-executor`, every stage landed on the work
+branch (§7). **OPENED 2026-11-27** on worktree `eb-key-forms-in-the-executor`
 (branch `worktree-eb-key-forms-in-the-executor`) from `9e7597d5d`
 (`v3.4.17-224-g9e7597d5d`), on the operator's standing go-ahead of
 2026-11-27 (go-ahead-achieving-milestone; `raft-marks-2026-11-27.md` §20).
-EB-Q0..Q10 are CLA's proposals adopted on that go-ahead (§4 "Marks"),
+EB-Q0..Q11 are CLA's proposals adopted on that go-ahead (§4 "Marks"),
 none the operator's own per-item mark. Written 2026-11-26 on worktree
 `known-gaps-milestone-orders` from `8274c951` (`v3.4.17-148-g8274c951e`)
 on the operator's word of 2026-11-26 (`raft-marks-2026-11-26.md` §3). A
@@ -140,6 +142,7 @@ outer row, a write by a unique key above one core.
 | EB-Q7 | The heap's restart hints and `PURGE` by the Keystone index | (a) outside EB; (b) inside S5 | (a) |
 | EB-Q8 | A descending prefix of an embedded key (added at the opening, from the review) | (a) stays sorted: its ties would leave by descending tuple key where the sort's leave ascending (EB-R2); an ascending prefix, and the whole key either way, are elided; (b) elided, ties descending, as CV-Q4 (a) chose for an index walk | (a) |
 | EB-Q9 | The write ladder (added at the opening) | (a) EB moves the read ladder only: `WriteIndexArmOf` and `WriteRangeOutranksIndex` read the bounds as today, as `tests/keyed_write_test.cpp`'s "A one-sided range on the column is none to the ladder" and "A strict range ... rank below the index" pin, and §6 says the write side is DU's; (b) both ladders | (a) |
+| EB-Q11 | The point read's residual overhead at the close (added at EB-S6) | (a) accepted and stated: three remedies took it from +1.5 % to +3.2 % down to +0.3 % to +1.2 % (about 0.02 to 0.10 us), and it is not located further, the host having no profiler; (b) the milestone stays open until it is located | (a) |
 | EB-Q10 | Waystone and a computed-key probe (added at the opening) | (a) a probe whose key is computed from an outer row's columns records no trail and replays none, so invariants 8 and 9 are not reached; (b) the trail contract extended to it | (a) |
 
 ### Marks
@@ -162,6 +165,8 @@ All adopted on the operator's standing go-ahead of 2026-11-27
   and an index or a heap's Keystone index takes one only where its walk in
   key order seeds an elided `ORDER BY ... LIMIT`** (CV's ordered walk), the
   one place a range with an open end is known to stop early.
+- **EB-Q11 (a)**, added at EB-S6 (`bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`):
+  the residual cost is stated in `known-gaps.md`, as DU-Q8 (a) stated DU's.
 - **EB-Q5 revised, (a) to (b), and (b) adopted**: a heap's sampled prior is
   the statistics steward's, shares no code with the key forms, and
   `GATHER STATISTICS` already counts a heap exactly. S5 holds no item.
@@ -439,6 +444,34 @@ carries its level and the heap's restart hints with `PURGE` by the
 Keystone index outside EB; no item is left for S5, and no code is written
 for it. The query layer's refusal of `keyidentity` (`known-gaps.md`) was
 listed beside them in §1 with no item, and stays.
+
+### EB-S6 - the close, 2026-11-27
+
+**The overhead A/B** (`ck-tester`, `bench/v3.5.0/results-eb-close-v3.4.17-231-ga610d007a.md`):
+at `a610d007a` the four built arms were 31x to 2,989x cheaper than at
+`9e7597d5d`, and every point read was +1.5 % to +3.2 % dearer in server
+CPU, reproduced by a second pass; writes and inserts were inside noise.
+**Three remedies within the milestone**
+(`bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`):
+
+- `f29dba427`: `Step`'s `residual` was put back inside one cache line. It
+  had no effect.
+- `3d7a8f6df`: the whole-key arms are gated on a correlated equality. About
+  1 point came off each form.
+- `4ab5d55d5`: `Step` is 744 bytes again (`ColdBox`). A base build padded
+  by 48 bytes had shown the size alone cost +0.9 % to +2.2 %.
+
+At the closing commit the point reads are +0.3 % (btree), +1.1 % (heap;
+its control read +0.9 %), +1.1 % (embedded) and +1.2 % (hashed). The
+writes and inserts are inside noise, and the built arms are 29x to 2,413x
+cheaper. The residual is EB-Q11 (a), stated in `known-gaps.md`. The
+remedies' own review is the suite and the diagnosis cells; no
+`critics-developer` review was run on them, a statement of fact.
+
+**The documents**: `CLAUDE.md`'s Primary keys, Query language and
+`ORDER BY` rows; `index.md` IX8, IX9, IX17; `heap-and-tuple.md` §3.1c;
+`parser-v2.md` I11, I20; `manual/sql/sql.md`; `known-gaps.md`, as each
+stage logged.
 
 ### Written 2026-11-26
 

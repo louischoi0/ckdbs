@@ -1,0 +1,1031 @@
+{
+ "rows": 100000,
+ "reps": 18,
+ "scale": 1.0,
+ "arms": {
+  "base": {
+   "binary_sha256": "c4ad5c210a12130abd264a5e7efa8750056be9a207a595377a60f76d48a34c84",
+   "binary_mtime": 1795820829.0816662,
+   "load_s": 1.5
+  },
+  "s1": {
+   "binary_sha256": "c4326866f8e8f2f43d7ffeabe8546200b96b495befd0268293d9c91a0c77fd7f",
+   "binary_mtime": 1795822175.3697693,
+   "load_s": 1.6
+  },
+  "s2": {
+   "binary_sha256": "215e719ceba254424caf23827ac284ea1c84bd8f187aa0794ab7264f0ebc39ef",
+   "binary_mtime": 1795822201.221345,
+   "load_s": 1.5
+  }
+ },
+ "cells": [
+  {
+   "cell": "OH-bt-read",
+   "kind": "ro",
+   "statements_per_block": 12000,
+   "arms": {
+    "base": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      6.43,
+      6.523,
+      6.467,
+      6.535,
+      6.611,
+      6.686,
+      6.446,
+      6.535,
+      6.479,
+      6.487,
+      6.576,
+      6.541,
+      6.448,
+      6.486,
+      6.54,
+      6.502,
+      6.578,
+      6.553
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 15.8,
+      "p25_us": 16.7,
+      "p50_us": 16.9,
+      "p95_us": 17.9,
+      "p99_us": 18.7,
+      "max_us": 521.2
+     },
+     "host": [
+      {
+       "loadavg": "3.18 2.79 2.44 1/1510 1528414",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1517 1528423",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1516 1528424",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 2/1516 1528424",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 2/1517 1528427",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 3/1570 1528571",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1503 1528583",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1503 1528594",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 4/1496 1528596",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1496 1528596",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1489 1528598",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1490 1528601",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528601",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528802",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1484 1528815",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1485 1528816",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1478 1528819",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 3/1485 1528827",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    },
+    "s1": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.454,
+      6.569,
+      6.488,
+      6.582,
+      6.63,
+      6.708,
+      6.507,
+      6.563,
+      6.543,
+      6.584,
+      6.644,
+      6.585,
+      6.514,
+      6.548,
+      6.509,
+      6.607,
+      6.617,
+      6.555
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 16.0,
+      "p25_us": 16.7,
+      "p50_us": 16.9,
+      "p95_us": 17.9,
+      "p99_us": 18.9,
+      "max_us": 2980.7
+     },
+     "host": [
+      {
+       "loadavg": "3.18 2.79 2.44 1/1510 1528415",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1517 1528422",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1516 1528424",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 2/1516 1528426",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 3/1510 1528428",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1510 1528429",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1495 1528584",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 2/1503 1528594",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1496 1528595",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1489 1528598",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528599",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1490 1528600",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1490 1528601",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528802",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528803",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1485 1528818",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1478 1528819",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1478 1528819",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    },
+    "s2": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      6.531,
+      6.699,
+      6.574,
+      6.669,
+      6.659,
+      6.635,
+      6.529,
+      6.544,
+      6.542,
+      6.601,
+      6.651,
+      6.649,
+      6.537,
+      6.767,
+      6.574,
+      6.62,
+      6.654,
+      6.658
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 16.1,
+      "p25_us": 16.8,
+      "p50_us": 17.0,
+      "p95_us": 18.0,
+      "p99_us": 18.8,
+      "max_us": 1180.7
+     },
+     "host": [
+      {
+       "loadavg": "3.18 2.79 2.44 2/1517 1528422",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1517 1528422",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1516 1528424",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1516 1528426",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1517 1528427",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1503 1528583",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1496 1528587",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.18 2.79 2.44 1/1503 1528594",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1496 1528596",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 3/1489 1528597",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1489 1528598",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528601",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1490 1528602",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1489 1528603",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 2/1490 1528804",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.76 2.43 1/1485 1528816",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 3/1485 1528819",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528828",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    }
+   },
+   "analyze": {},
+   "sql_example": "SELECT v FROM bt WHERE id = 17612",
+   "answer_sample": [
+    1,
+    1,
+    1
+   ],
+   "answers_equal_across_arms": true
+  },
+  {
+   "cell": "OH-e-read",
+   "kind": "ro",
+   "statements_per_block": 12000,
+   "arms": {
+    "base": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.263,
+      7.342,
+      7.311,
+      7.293,
+      7.412,
+      7.381,
+      7.291,
+      7.375,
+      7.284,
+      7.278,
+      7.431,
+      7.607,
+      7.301,
+      7.349,
+      7.288,
+      7.309,
+      7.422,
+      7.506
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 16.9,
+      "p25_us": 17.6,
+      "p50_us": 17.8,
+      "p95_us": 18.8,
+      "p99_us": 19.6,
+      "max_us": 1237.6
+     },
+     "host": [
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528828",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1485 1528834",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528837",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1478 1528837",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 3/1471 1528976",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1478 1528985",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1479 1528986",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1478 1528988",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1477 1528991",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1477 1528991",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1477 1528993",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1483 1529002",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1482 1529203",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1496 1529220",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 2/1496 1529222",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1497 1529223",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 3/1497 1529225",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1496 1529234",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    },
+    "s1": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.395,
+      7.357,
+      7.322,
+      7.358,
+      7.502,
+      7.416,
+      7.299,
+      7.367,
+      7.271,
+      7.378,
+      7.429,
+      7.383,
+      7.372,
+      7.411,
+      7.306,
+      7.364,
+      7.418,
+      7.398
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 16.4,
+      "p25_us": 17.6,
+      "p50_us": 17.8,
+      "p95_us": 18.7,
+      "p99_us": 19.5,
+      "max_us": 1298.8
+     },
+     "host": [
+      {
+       "loadavg": "3.00 2.77 2.44 2/1485 1528829",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528834",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528835",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1478 1528839",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1471 1528976",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1471 1528977",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1479 1528987",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1479 1528988",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1477 1528989",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1477 1528993",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1476 1528993",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1476 1528994",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1482 1529205",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1496 1529220",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1496 1529221",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1497 1529225",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1490 1529225",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 2/1497 1529233",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    },
+    "s2": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.385,
+      7.425,
+      7.409,
+      7.494,
+      7.665,
+      7.554,
+      7.386,
+      7.41,
+      7.39,
+      7.487,
+      7.515,
+      7.512,
+      7.408,
+      7.437,
+      7.392,
+      7.46,
+      7.52,
+      7.54
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 17.0,
+      "p25_us": 17.7,
+      "p50_us": 17.9,
+      "p95_us": 18.9,
+      "p99_us": 19.6,
+      "max_us": 1864.3
+     },
+     "host": [
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528834",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1485 1528834",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1485 1528837",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1478 1528837",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1478 1528839",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 3/1479 1528986",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1479 1528988",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1479 1528988",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1477 1528991",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 3/1477 1528992",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 2/1477 1528993",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "3.00 2.77 2.44 1/1482 1529203",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1482 1529206",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1489 1529213",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1496 1529222",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1497 1529224",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 3/1497 1529225",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1504 1529242",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    }
+   },
+   "analyze": {},
+   "sql_example": "SELECT v FROM e WHERE a = 17 AND b = 611",
+   "answer_sample": [
+    1,
+    1,
+    1
+   ],
+   "answers_equal_across_arms": true
+  },
+  {
+   "cell": "OH-w-read",
+   "kind": "ro",
+   "statements_per_block": 12000,
+   "arms": {
+    "base": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.846,
+      7.895,
+      7.848,
+      7.812,
+      7.998,
+      7.996,
+      7.844,
+      7.941,
+      7.902,
+      8.141,
+      7.988,
+      7.958,
+      7.868,
+      7.934,
+      7.874,
+      7.817,
+      7.984,
+      7.951
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 17.4,
+      "p25_us": 18.2,
+      "p50_us": 18.4,
+      "p95_us": 19.5,
+      "p99_us": 20.2,
+      "max_us": 1136.0
+     },
+     "host": [
+      {
+       "loadavg": "2.76 2.72 2.43 1/1504 1529243",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1509 1529254",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 4/1509 1529393",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1509 1529394",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1509 1529396",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1516 1529404",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1516 1529406",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1509 1529408",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1509 1529409",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1516 1529417",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1517 1529619",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1510 1529619",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1510 1529621",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 3/1496 1529625",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1489 1529636",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 2/1496 1529643",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 1/1489 1529645",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 1/1490 1529648",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    },
+    "s1": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.921,
+      7.99,
+      8.139,
+      7.961,
+      8.051,
+      7.95,
+      7.915,
+      7.949,
+      7.917,
+      7.992,
+      8.074,
+      7.935,
+      7.898,
+      7.976,
+      7.927,
+      8.024,
+      8.023,
+      7.927
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 17.4,
+      "p25_us": 18.2,
+      "p50_us": 18.5,
+      "p95_us": 19.4,
+      "p99_us": 20.2,
+      "max_us": 717.1
+     },
+     "host": [
+      {
+       "loadavg": "2.76 2.72 2.43 2/1504 1529244",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1511 1529251",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 6/1513 1529258",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1509 1529395",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1516 1529404",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1516 1529404",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1516 1529406",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1516 1529407",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1509 1529408",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1517 1529617",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1517 1529619",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1517 1529619",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 2/1511 1529622",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1504 1529625",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 2/1497 1529634",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 1/1496 1529643",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 2/1489 1529645",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 1/1490 1529647",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    },
+    "s2": {
+     "statements": 216000,
+     "cpu_us_per_stmt_by_rep": [
+      7.996,
+      7.958,
+      8.027,
+      8.106,
+      8.168,
+      8.146,
+      8.034,
+      7.961,
+      8.028,
+      8.099,
+      8.164,
+      8.12,
+      8.047,
+      7.989,
+      8.063,
+      8.115,
+      8.13,
+      8.368
+     ],
+     "latency": {
+      "n": 216000,
+      "p0_us": 17.5,
+      "p25_us": 18.3,
+      "p50_us": 18.6,
+      "p95_us": 19.6,
+      "p99_us": 20.4,
+      "max_us": 1903.8
+     },
+     "host": [
+      {
+       "loadavg": "2.76 2.72 2.43 2/1511 1529251",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.76 2.72 2.43 1/1511 1529251",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1509 1529393",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1509 1529395",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1509 1529395",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1516 1529404",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 2/1516 1529406",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.54 2.68 2.41 1/1516 1529406",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1509 1529408",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 3/1535 1529615",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1517 1529618",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 4/1510 1529621",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1511 1529622",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1504 1529624",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1490 1529635",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.41 2.65 2.41 1/1496 1529643",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 2/1489 1529645",
+       "build_or_ctest_processes": 0
+      },
+      {
+       "loadavg": "2.30 2.62 2.40 2/1490 1529649",
+       "build_or_ctest_processes": 0
+      }
+     ]
+    }
+   },
+   "analyze": {},
+   "sql_example": "SELECT v FROM w WHERE k = 'key-017612' AND n = 612",
+   "answer_sample": [
+    1,
+    1,
+    1
+   ],
+   "answers_equal_across_arms": true
+  }
+ ],
+ "host_start": {
+  "loadavg": "3.58 2.85 2.46 3/1467 1528113",
+  "build_or_ctest_processes": 0
+ },
+ "host_end": {
+  "loadavg": "2.30 2.62 2.40 1/1463 1529789",
+  "build_or_ctest_processes": 0
+ }
+}

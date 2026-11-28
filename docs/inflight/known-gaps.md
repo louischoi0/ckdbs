@@ -4189,6 +4189,13 @@ at `e9df68d0` for what the tree did before DR (DR-S0's census, the order's
   front (BU-Q18), before the row is encoded; a row that names a
   `keyidentity` an embedded key does not encode to is refused either way
   (EB-S4). A refusal turned into a skip, never a wrong row written.
+- **A point read costs about 1 % more server CPU since EB** (EB-Q11 (a),
+  `bench/v3.5.0/results-eb-close-v3.4.17-234-g4ab5d55d5.md`, measured at
+  `4ab5d55d5`): +1.1 % on a heap's and an embedded key's, +1.2 % on a hashed
+  key's, +0.3 % on a btree's tuple key - 0.02 to 0.10 us of 6.5 to 8 us -
+  and writes inside noise. Not located (no profiler on the host). What was
+  located is gone: `Step`'s size (48 bytes cost about 2 %) and the whole-key
+  arms' work on a literal read.
 - **A string key's cost grows with the keys sharing its first 32 bytes**
   (DR-Q3 (a)): 0.25 us a key of the run on a read and 0.66 us on an insert,
   1.0 ms and 2.7 ms at a run of 4,096. A limit, stated in the spec.

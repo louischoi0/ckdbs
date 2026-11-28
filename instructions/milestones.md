@@ -68,7 +68,7 @@ awk -F' *[|] *' '$2 ~ /^[A-Z][A-Z]$/ && $7 ~ /^2026-11-/ {print $7, $2, $3}' ins
 
 | id | status | last | written | opened | closed | landed | tag | title | order |
 |---|---|---|---|---|---|---|---|---|---|
-| EB | open | 2026-11-27 | 2026-11-26 | 2026-11-27 | - | - | - | the key forms in the executor: ranges, joins by a whole key, an elided order, an upsert by any key | v3.2.0/workorder-eb-key-forms-in-the-executor.md |
+| EB | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | - | - | the key forms in the executor: ranges, joins by a whole key, an elided order, an upsert by any key | v3.2.0/workorder-eb-key-forms-in-the-executor.md |
 | EE | abandoned | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | da8b9436 | - | the decide slot: one wake behind every wait for a transaction's decide | v3.2.0/workorder-ee-decide-slot.md |
 | DZ | closed | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 238db14c | - | what a checkpoint still does on its reactor: the dirty-table walk, the page writes, the map barrier | v3.2.0/workorder-dz-checkpoint-reactor-residue.md |
 | DV | closed-narrow | 2026-11-27 | 2026-11-26 | 2026-11-27 | 2026-11-27 | 8dd5ce8e | - | pages no root reaches: counted, then reclaimed | v3.2.0/workorder-dv-unreachable-page-reclaim.md |
