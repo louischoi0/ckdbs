@@ -1,6 +1,8 @@
 # PostgreSQL 18.7 against KDS on one host, scenarios 1 to 4: a comparison of two existing measurements
 
-**One line.** On this host, with both servers pinned to the P-cores, KDS at `6c98f7c32` is ahead of PostgreSQL 18.7 where a statement examines many rows and discards them (an unindexed equality, a correlated subquery, a join, a 10,000-row tape: 1.35x to 2.94x), and behind it on three things: the fixed cost of a short statement (0.73x to 0.76x), the durable commit path (0.81x to 0.84x) and a full-scan aggregate (0.47x). **Nothing was measured for this file**: it sets two results files side by side, and the KDS side is an engine 28 first-parent commits older than `main`.
+**One line.** On this host, with both servers pinned to the P-cores, the scenario drivers read KDS at `6c98f7c32` ahead of PostgreSQL 18.7 where a statement examines many rows and discards them (1.35x to 2.94x) and behind it on a short read (0.73x to 0.76x), a one-booker booking (0.84x) and a full-scan aggregate (0.47x). **Only the last of the three "behind" readings is the engine's on the evidence in the tree, and the matrix understates KDS wherever a statement returns rows**: the KDS drivers time a client that decodes and renders every field and the PostgreSQL twins time one that counts rows (bound 1 below); the commit's sync is at parity (135.5 µs against 138.2 µs). **Nothing was measured for this file**: it sets two results files side by side, and the KDS side is an engine 28 first-parent commits older than `main`.
+
+**Corrected 2026-11-28**, the day it was written: the first version read "the fixed cost of a short statement" and "the durable commit path" as PostgreSQL's leads. Both readings were CLA's and neither is supported: see "What the matrix says".
 
 Every ratio is KDS over PostgreSQL in throughput terms (above 1, KDS is faster); for the scenario-4 latencies it is PostgreSQL's mean latency over KDS's.
 
@@ -17,12 +19,13 @@ Every ratio is KDS over PostgreSQL in throughput terms (above 1, KDS is faster);
 
 ## What bounds every ratio below
 
-1. **The KDS engine is not `main`.** `6c98f7c32` is 28 first-parent commits and 75 files of `src/` and `include/` behind `7556a5596`; EA (a prepared statement parsed once) and EB (the key forms in the executor) landed in between. Whether any of them moved a shape below is unverified.
-2. **The two sides are about 24 hours apart**, on a host that runs other projects' containers throughout.
-3. **Scenario 4 is not the same procedure on the two sides**: KDS runs three paced days and the figure is the median of nine day-runs of the `off` arm (no Cabin) or the `declared` arm; PostgreSQL runs day 1 once per run, unpaced, with no index on `symbol`.
-4. **Scenario 1's KDS cells are `group` durability** and PostgreSQL's are `synchronous_commit = on`. The read shapes are unaffected; `result-insert` may carry the difference (unverified).
-5. **The KDS scenario-3 A/B's size is `[assumed]` 10,000 loans**: the interim file does not state it, the `9f8f8b354` pinned A/B it follows was 10,000 loans, and the raw JSON of the `6c98f7c32` run is no longer on the host.
-6. **No percentile is compared.** The KDS side survives as medians and spreads only.
+1. **The two sides are timed through unequal clients.** Every KDS scenario driver times `ckdbs_cli.send_command` (`tools/scenario1_backtest.py:400`, `scenario2_freight.py:298`, `scenario3_library.py:232`, `scenario4_cabinopt_days.py:250`), which decodes every field into a Python object and renders it to text (`tools/ckdbs_cli.py:191-228`); every PostgreSQL twin times `pg_wire.PgConnection.query`, which counts rows and decodes no field (`tools/pg_wire.py:224-262`). `bench/v3.2.0/results-pg-parity-v3.2.0-171-ge81ac7cd.md` measured the difference on its host, at `e81ac7cd`: **29.0 µs against 5.0 µs of client CPU per point statement and 6.3 µs against 2.5 µs per returned 9-column row**, and on equal clients the tuple key lookup read 1.30x and `bar-range` 1.42x of PostgreSQL's rate. What the difference is on this host and this Python is not measured. Every KDS figure below for a statement that returns rows carries it; a write, which returns none, does not.
+2. **The KDS engine is not `main`.** `6c98f7c32` is 28 first-parent commits and 75 files of `src/` and `include/` behind `7556a5596`; EA (a prepared statement parsed once) and EB (the key forms in the executor) landed in between. Whether any of them moved a shape below is unverified.
+3. **The two sides are about 24 hours apart**, on a host that runs other projects' containers throughout.
+4. **Scenario 4 is not the same procedure on the two sides**: KDS runs three paced days and the figure is the median of nine day-runs of the `off` arm (no Cabin) or the `declared` arm; PostgreSQL runs day 1 once per run, unpaced, with no index on `symbol`.
+5. **Scenario 1's KDS cells are `group` durability** and PostgreSQL's are `synchronous_commit = on`. The read shapes are unaffected; `result-insert` may carry the difference (unverified).
+6. **The KDS scenario-3 A/B's size is `[assumed]` 10,000 loans**: the interim file does not state it, the `9f8f8b354` pinned A/B it follows was 10,000 loans, and the raw JSON of the `6c98f7c32` run is no longer on the host.
+7. **No percentile is compared.** The KDS side survives as medians and spreads only.
 
 ## The matrix
 
@@ -63,12 +66,25 @@ PostgreSQL's scenario-4 latencies are 1,000,000 / qps of its results file's medi
 
 ## What the matrix says
 
-1. **PostgreSQL's fixed cost of a statement is about 8.7 µs lower.** The `pk` control is 23.2 µs against 31.9 µs, and the 200-row tape differs by 11.9 µs the same way. A statement that returns a few rows is decided by that term.
-2. **KDS is cheaper per row examined, and the lead grows with the rows examined**: the tape reads 0.74x at 200 rows, 0.91x at 1,000 and 1.49x at 10,000, and scenario 3's unindexed equalities and correlated subquery read 1.35x to 2.78x. The per-row term in nanoseconds is not derived here (no KDS percentile or latency split survives).
-3. **PostgreSQL's durable commit path is 16 % to 19 % faster**: one booker reads 0.84x and an autocommit insert 0.81x. PostgreSQL's commit is 138.2 µs, 29.0 % of a booking; the KDS commit's share on this host is not in the interim file.
-4. **PostgreSQL's full-scan aggregate is 2.1x faster** (`close`, 0.47x), the largest gap in the matrix. Its cause is not attributed.
+1. **A short read is 8.7 µs slower through these drivers, and the tree does not support reading that as the engine's.** The `pk` control is 23.2 µs against 31.9 µs and the 200-row tape differs by 11.9 µs the same way. Bound 1 puts more than that difference in the KDS client on the parity file's host, where the same lookup read 1.30x on equal clients; a text point `SELECT` is 6.4 µs of server CPU at `481d101aa` (`bench/v3.4.17/results-ea-close-v3.4.17-205-g2c5c195f7.md`). The writes agree: they return no rows and show no such term (item 3's table).
+2. **KDS is cheaper per row examined, and the lead grows with the rows examined**: the tape reads 0.74x at 200 rows, 0.91x at 1,000 and 1.49x at 10,000, and scenario 3's unindexed equalities and correlated subquery read 1.35x to 2.78x. Bound 1 makes each of these a lower bound.
+3. **The commit is at parity; the booking's 16 % is in its four reads.** From the archived JSON (KDS: the pinned A/B's new arm at `9f8f8b354`, five runs, `bench/v3.5.0/archive/scenario2-v3.4.17-159-g9f8f8b354/json/pin-ab-new*-b1-s2-c1-s.json`, the engine the interim file reads as `6c98f7c32`'s; PostgreSQL: the control run's three), mean per statement:
+
+   | statement | KDS | PostgreSQL |
+   |---|---|---|
+   | `commit` | 135.5 µs | 138.2 µs |
+   | `cargo-lookup` | 35.4 µs | 25.1 µs |
+   | `credit-lookup` | 30.2 µs | 22.6 µs |
+   | `capacity-read` | 29.5 µs | 21.9 µs |
+   | `recipe-read` | 67.3 µs | 38.8 µs |
+   | `freight-insert` | 24.4 µs | 29.6 µs |
+   | `charge-insert` (5.6 a booking) | 21.0 µs | 19.6 µs |
+   | `operation-update` / `org-update` | 23.3 µs / 21.8 µs | 23.2 µs / 20.9 µs |
+
+   The reads are bound 1's statements. `recipe-read` is also a different access on the two sides: an index on PostgreSQL, a walk of 93 rows on KDS, by the drivers' design. **`result-insert`'s 0.81x is not attributed**: scenario 2's autocommit loads at `strict` read 136.0 µs to 152.4 µs on KDS against 146.7 µs to 153.6 µs on PostgreSQL, so an autocommit insert is not slower as such; scenario 1's cell is `group` and its statement is not examined here.
+4. **The full-scan aggregate is behind, and part of it is the engine's.** `close` is four statements, three rounds: `COUNT(*)` and `SUM(qty)` over the board, `COUNT(*)` over the 10,000-row tape, and `symbol, COUNT(*) ... GROUP BY symbol`, which returns 1,000 rows (`tools/scenario4_cabinopt_days.py:434-443`), so bound 1 is in the 0.47x and its share is not measured. On equal clients at `e81ac7cd` the parity file read `agg-global` at 0.61x of PostgreSQL's rate on 1.63x its server CPU, about 95 ns against 59 ns per row folded; that is the engine, and nothing since is known to have moved it.
 
 ## What this file does not carry
 
 - No measurement of its own, no percentile table and no wait breakdown: both are in the PostgreSQL results file for its side, and absent for the KDS side.
-- No KDS number at `main`. A same-window, same-pinning KDS run of the matched cells (the PostgreSQL file's section 2 names them) is what would replace this file.
+- No KDS number at `main`, and none through an equal client. A same-window, same-pinning KDS run of the matched cells (the PostgreSQL file's section 2 names them), **timed through `kwp.Connection.query`** (`tools/kwp.py:654`, the counterpart of `pg_wire`'s `query`), is what would replace this file.
