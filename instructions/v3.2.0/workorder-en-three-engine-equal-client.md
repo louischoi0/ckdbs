@@ -1,6 +1,6 @@
 # Work order EN - three engines on one client: KDS, PostgreSQL and Oracle through one Rust harness, every scenario's relations their own kind, and a commercial OLTP scenario
 
-Status: **OPENED 2026-11-28** on worktree `three-engine-equal-client-bench`
+Status: **CLOSED 2026-11-28 at S4** (`bench/v3.5.1/results-en-close-v3.5.1-63-g9543cf720.md`; the three-engine file is kept uncommitted under `bench/private/`); not landed: the work branch waits for the operator's word. **OPENED 2026-11-28** on worktree `three-engine-equal-client-bench`
 (branch `worktree-three-engine-equal-client-bench`) from `e571ae574`
 (`v3.5.1-57-ge571ae574`), on the operator's words of 2026-11-28
 (`raft-marks-2026-11-28.md` §17). Written and opened in one session. A
@@ -163,3 +163,22 @@ its lines.
   `Effect`: the port is reachable from the network while a run is up; the
   password is generated per run and the container removed at the run's
   end.
+
+## 6. EN-Q9, scenario 4's kinds (`[design]`, adopted on the operator's standing go-ahead of 2026-11-28, go-ahead-achieving-milestone)
+
+On `off`, the arm every engine runs, scenario 4's tapes and its second
+board are only walked, which EN-Q3 makes HEAP. (a) **Keep every relation
+BTREE on both arms**: the scenario's subject is the declared Cabin, whose
+authority is the tuple key and which resolves through the clustered tree,
+and the arms keep one kind so the arm comparison isolates the Cabin; (b)
+HEAP on both arms. **Adopted: (a)**, recorded in the scenario's header.
+
+## 7. Stages as landed
+
+| Stage | Commit | Review |
+|---|---|---|
+| S0 | `237896433`, `f7f2ccf4b` | 8 errors fixed by the reviewer (a quotation count, EN-Q5's and EN-Q6's citations, the heap point-read wording, a contradiction with rule 5); CLA applied its 7 reported items but the cosmetic blank line, which was fixed too |
+| S1 | `6cebe2bf0`, applied in `640a27f92` | 13 correctness items. Applied: Oracle string binds as `VARCHAR2` (the crate's `NVARCHAR2` bind made a `VARCHAR2` index unusable, measured), decode from the borrowed row; PostgreSQL's typed bind wrapper; KDS's split from the measured sessions' `sys.session_waits`, lock waits per core; PostgreSQL's sampler time per sample, lock out of execution, `WALWrite` into commit; a falling server-CPU sum gives no figure; the session key retried; KWP reads to `S_READY` on every path. **Rejected**: one canonical decimal and date decode (no scenario declares a DECIMAL, DATE or TIMESTAMP column, `engine.rs`' `Val` says so); dropping `--kds-durability` (`matrix.py` passes the server's rung to both, so one run never commits at two); moving KDS into a cgroup (the per-thread `schedstat` sum with a checked difference serves); `#![allow(dead_code)]` kept for the framework's helpers that only some scenarios call |
+| S2 | `640a27f92`, `9543cf720` | Ported by five passes, one a scenario. A defect found: `docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md` (reproduced by CLA, 3 runs of 6; 10 refusals in the close measurement, in scenario 0 at its defaults and in scenario 5). Review: 8 fixed by the reviewer (write warm-ups, scenario 5's alone phases doing unequal work, its warm-up below PostgreSQL's generic plan, figures from failed rounds, scenario 4's cell names, a torn count, a missing row passed, the matrix's rotation, kill, attempts and watchdog pid); of 9 reported, CLA applied the warm-up helper, EN-Q9, a fresh PostgreSQL a cell, scenario 5's order and in-phase clock, the watchdog's cap and the README's CPU source. **Rejected**: an `ErrClass` name helper (within a scenario every engine records the same spelling, so no comparison is affected); `Option` client CPU for scenario 0's derived phases (their `0.0` is labelled derived in `meta.derived_phases`); scenario 2's deadline (its phase ends at the booking target, the deadline a cap the defaults never reach); Oracle fresh a cell (its start takes minutes; it is fresh a round and the results say so) |
+| S3 | `21a6f99ba` | reviewed with S2 |
+| S4 | this close's commit | 188 runs (57 cells x 3 rounds, 17 PostgreSQL profile cells), every check passing, 08:54 to 10:11 UTC; the milestone A/B not applicable (no engine build input changed, `e571ae574` to `9543cf720`); the suite not executed (no build input changed) |

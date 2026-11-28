@@ -183,3 +183,12 @@ landed (§16):
 | **Mark** | EN-Q3 (the kind rule), EN-Q4 (what an equal client is), EN-Q5 (every engine durable at commit), EN-Q6 (KDS at `cores = 1`, servers on CPUs 0-7, the harness on 8-23), EN-Q7 (Oracle Free's image, host networking, port 1521 checked free) and EN-Q8's sources are **adopted as CLA proposed, on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone)**, not marked by the operator item by item; EN-Q1, EN-Q2 and Word 7 are the operator's own (§17) |
 | **Does not settle** | a push, a merge to `main`, a tag or a version |
 | **Recorded at** | this file; EN's header and §2 |
+
+## 19. EN closed on the standing go-ahead
+
+| | |
+|---|---|
+| **Word** | the standing go-ahead of §18 |
+| **Mark** | **EN closes at S4**: six scenarios on KDS, PostgreSQL and Oracle Free through one Rust client, 188 runs, every check passing (`bench/v3.5.1/results-en-close-v3.5.1-63-g9543cf720.md`; Oracle's figures under `bench/private/`, uncommitted). EN-Q9 (scenario 4's kinds) adopted as CLA proposed. A defect found and recorded, not fixed (`docs/inflight/bugs/undo-chain-cyclic-on-a-concurrently-updated-row.md`) |
+| **Does not settle** | a push, a merge to `main`, a tag or a version |
+| **Recorded at** | this file; EN's order; the index; `instructions/milestones.md` |
