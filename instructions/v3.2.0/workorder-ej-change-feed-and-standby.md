@@ -69,14 +69,24 @@ one.**
   version; `HEAP_DELETE_MARK` the flag and the writer; the before-image is
   the `UNDO_WRITE` that precedes an `UPDATE`'s overwrite; a spilled value
   is its own `VARHEAP_APPEND` (`docs/spec/wal.md:96-103`, `:178-179`).
+- **Not every row arrives as a row record.** On a btree a placed row is a
+  `BTREE_INSERT`, or lies inside a `BTREE_SPLIT`'s full page images
+  (`docs/spec/wal.md:101-102`); a `FULL_PAGE_IMAGE`, a
+  `PACKED_PAGE_IMAGE` and `PURGE INDEX`'s images carry a page's state,
+  not a row's change.
 - **A record names a page, not a relation.** The relation's oid is in the
-  page's common header, stamped by `PAGE_INIT` (`docs/spec/wal.md:99`),
-  and a tuple's bytes mean nothing without the relation's columns as they
-  stood at that LSN, which are catalog rows changed by ordinary logged
-  writes (`docs/spec/txn.md:1404-1419`).
+  page's common header, stamped by `PAGE_INIT` (`docs/spec/wal.md:99`;
+  `docs/spec/page.md:48`, `:50`), and a burned oid - a failed `CREATE
+  TABLE`'s - can be issued again (`docs/spec/page.md:55`). A tuple's
+  bytes mean nothing without the relation's columns as they stood at that
+  LSN, which are catalog rows changed by ordinary logged writes
+  (`docs/spec/txn.md:1404-1419`).
 - **One stream gives every commit one LSN in one order**, and the
   instance read view carries a window `trx_id -> commit_lsn` for every
   transaction committed and not yet reclaimed (`docs/spec/txn.md:504-511`).
+- **A commit is visible before it is durable** at `group` and `relaxed`
+  (`docs/spec/txn.md:532-541`; EL §1.1 states it and what follows from
+  it): what a reader can see, a crash can still withdraw.
 
 ### 1.3 What a polling client meets today
 
@@ -87,12 +97,13 @@ one.**
 - **`FOR UPDATE` is the one locking clause**; `FOR SHARE`, `FOR KEY
   SHARE`, `FOR NO KEY UPDATE` and every option are refused by name
   (`docs/spec/parser-v2.md:135`), so two relays cannot divide one queue
-  by skipping each other's claimed rows.
-- **A statement can park and be woken across cores**: the lock family's
-  waits, a streamed reply's back-pressure and the page reader all park a
-  statement, and the one cross-core path is write-then-kick through the
-  instance's wake registry (`docs/spec/sched.md:66-68`). Nothing parks a
-  read until "a row was committed".
+  by skipping each other's claimed rows. A `FOR UPDATE` over a tuple key
+  window does wait out the undecided inserts already placed in it
+  (`docs/spec/txn.md:1107-1111`); it cannot see an id issued and not yet
+  placed.
+- **Nothing parks a read until "a row was committed"**, though a
+  statement can park and be kicked across cores
+  (`docs/spec/sched.md:66-68`).
 
 ## 2. The candidates `[design]`
 
@@ -107,21 +118,26 @@ None is designed past what S0 needs to judge it.
   id 7 when its writer commits later. `[quiet-wrong]` for the consumer:
   a committed message never delivered, with no error anywhere. The
   field's workarounds - a relay that waits out every open writer, a
-  single writer, a gap list - are the client's.
+  single writer, a gap list - are the client's; the best this engine
+  offers one today is a `FOR UPDATE` over the window (§1.3), which S0
+  runs beside the plain poll.
 - **F1 - a read in commit order.** The engine answers "the rows of `t`
   committed after position `p`, and the position this answer is complete
-  up to", `p` a commit LSN. The position is the instance's own order
-  (§1.2's third item), so no row is skipped and none repeated. What S0
-  must find: where a row's commit position can be read once its writer's
-  entry has left the view's window (the header carries a `trx_id`, not an
-  LSN), and what bounds the answer when it cannot.
+  up to", `p` a commit LSN **never above the durable one** (EJ-R1). The
+  position is the instance's own order (§1.2), so no row is skipped and
+  none repeated. What S0 must find: where a row's commit position can be
+  read once its writer's entry has left the view's window (the header
+  carries a `trx_id`, not an LSN), and what bounds the answer when it
+  cannot.
 - **F2 - the log decoded.** A reader of sealed segments (the archive's
   tap) turns records into row changes: page to relation by the page's
   owner, bytes to columns by the catalog as of that LSN, before-images
-  from undo, only winners. It is complete and ordered by construction and
-  off the statement path; it needs a catalog history the engine does not
-  keep in decodable form, and its lag is a segment's fill time unless it
-  reads the unsealed tail.
+  from undo, only winners. It is ordered by construction and off the
+  statement path. What S0's census must settle before it is called
+  complete: a row that exists in the log only inside a split's or a
+  healing's page image (§1.2), a burned oid issued again, a catalog
+  history the engine does not keep in decodable form, and a lag of one
+  segment's fill time unless it reads the unsealed tail.
 - **F3 - a read that waits.** A statement that parks until a commit
   touches a named relation (or F1's position moves), in place of a
   client's poll interval: `LISTEN`/`NOTIFY`'s use without its channel
@@ -133,10 +149,15 @@ None is designed past what S0 needs to judge it.
   backup and every archived segment after it. It is a cold copy: it does
   not open short of a stop, and each restore draws a new lineage.
 - **H1 - a warm standby by continuous restore.** A mounted instance that
-  keeps applying archived segments as they arrive and serves nothing (or
-  `READ ONLY` at its applied point) until promoted. Its loss bound is one
-  unsealed segment plus the archive's lag; its distance from H0 is S0's
-  census.
+  keeps applying archived segments as they arrive and serves nothing
+  until promoted. Its loss bound is one unsealed segment plus the
+  archive's lag, **with no bound in time**: no setting that seals a
+  segment at an age was found in `backup.md` §1 or §3 to §5. Serving
+  `READ ONLY` at its applied point is a separate, larger matter: the
+  read view answers "committed" below its floor on the ground that every
+  loser was undone (EI §1), and a copy still applying has undone none;
+  B2 also refuses a mount short of a stop. Its distance from H0 is S0's
+  census, these two items first.
 - **H2 - the log's tail shipped.** A peer receives appended bytes as they
   become durable; `strict` and `group` may wait for its acknowledgement,
   under the ack timeout `txn.md` §1 already names. Zero-loss failover, a
@@ -144,10 +165,11 @@ None is designed past what S0 needs to judge it.
 
 ## 3. Rules
 
-- **EJ-R1. A feed delivers every committed change of what it covers, in
-  commit order, and nothing uncommitted** `[quiet-wrong]`: a skipped
-  commit, a rolled-back row published, or two commits reordered are each
-  a wrong answer no client can detect.
+- **EJ-R1. A feed delivers every durably committed change of what it
+  covers, in commit order, and nothing a crash can still withdraw**
+  `[quiet-wrong]`: a skipped commit, a rolled-back row published, a
+  commit published from the visible ceiling and lost before its sync, or
+  two commits reordered are each a wrong answer no client can detect.
 - **EJ-R2. A feed position is the instance's commit order**, never a
   tuple key, a wall clock or a transaction id; a position that cannot be
   honoured (recycled log, a purged version) is **refused by name**, never
@@ -182,7 +204,7 @@ None is designed past what S0 needs to judge it.
 
 | stage | what | ends in |
 |---|---|---|
-| **EJ-S0** | The census and the premise. **Feed**: a cell on the two-core rig that makes F0's skip happen (two writers, the lower id committing second, a polling reader between), so the defect is `[measured]` and not argued; where a commit position is and is not readable for a row (F1); what F2 would need of the catalog, read against `catalog.md` and `ddl-transactional.md`. **Standby**: H0 run once on this host - a backup, a load that fills segments, a restore to `latest` - reporting the seconds a segment takes to fill under a named load (H1's loss bound) and to apply (its catch-up rate), in `build-release`, inside the stage budget | a results file under `bench/<version>/`, named by `git describe --tags`; a verdict per arm; the operator's word |
+| **EJ-S0** | The census and the premise. **Feed**: a cell on the two-core rig that makes F0's skip happen (two writers, the lower id committing second, a polling reader between), run as a plain poll and as a `FOR UPDATE` over the window, so the defect and the best recipe against it are `[measured]` and not argued; where a commit position is and is not readable for a row (F1); F2's four items of §2.1, read against `wal.md` §5.2, `catalog.md` and `ddl-transactional.md`. **Standby**: H1's two items of §2.2 read against `txn.md` §4.1 and `backup.md`; H0 run once on this host - a backup, a load that fills segments, a restore to `latest` - reporting the seconds a segment takes to fill under a named load and to apply (its catch-up rate), in `build-release`, inside the stage budget | a results file under `bench/<version>/`, named by `git describe --tags`; a verdict per arm; the operator's word |
 | **EJ-S1** | (gated on EJ-Q3) The feed's proof of concept: F1 over one relation, EJ-R1 pinned by a cell that runs the S0 skip shape and a history of commits against the feed's output | the suite; what the proof did not carry (relations, DDL, retention) |
 | **EJ-S2** | (gated on EJ-Q5) The standby's proof of concept, if the operator opens one | the sim corpus and the suite |
 | **EJ-S3** | The close: the owning spec sections (`backup.md` §5's "does not do" list, a feed's section where one was built), `known-gaps.md`, the overhead measurement over the milestone's change | the operator's word on landing |
@@ -206,3 +228,14 @@ None is designed past what S0 needs to judge it.
 On `service-txn-orders` from `72580aa04`, on the operator's word. No stage
 is opened and no code is written. F0's skip is `[design]` until EJ-S0's
 cell shows it: it follows from §1.3's first item and has not been run.
+
+**The opening review** (`critics-developer`, the same day, at `5d8dd1ddf`)
+found four things the first writing lacked, each taken above: a feed
+position taken at the visible ceiling publishes commits a crash can
+withdraw (EJ-R1, F1); the log does not carry every row as a row record,
+and a burned oid can be issued again (§1.2, F2); a standby that serves
+while applying meets the read view's floor, and H1's loss has no bound in
+time (§2.2); and `FOR UPDATE` over a key window is a better client recipe
+than the plain poll (§1.3, S0). It moved the owner stamp's citation to
+`page.md`; `wal.md:99` is kept beside it, since that line states the
+stamp too.

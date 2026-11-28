@@ -64,6 +64,14 @@ to refute it.
   transaction `kWinner`, `kAborted` or `kLoser`
   (`include/kds/wal/analysis.hpp:62-68`), and every loser is rolled back at
   mount before the database is served (`docs/spec/txn.md:1426-1434`).
+- **Visibility rests on that undo.** Below the read view's floor an id
+  answers "committed" with no lookup, "*only* because an aborted
+  transaction's page changes are physically undone ... and, across a
+  crash, by recovery's undo phase ... which rolls back every loser before
+  the database is served. That is the load-bearing assumption of the
+  whole design"; the floor is an id below which every transaction is
+  resolved and no id will be issued again (`docs/spec/txn.md:500`,
+  `:514-523`).
 - **No lock outlives a crash.** "The lock family holds no bit on the page
   (AO-R3: no persisted lock bit, no page bit, no superblock field; a crash
   releases every lock because the loser is rolled back at mount)"
@@ -88,20 +96,29 @@ None is designed past what S0 needs to judge it.
   it commits, as now. Atomicity across services is the client's saga or
   outbox, and the engine's part is EL's token and EJ's feed. Costs
   nothing; leaves a coordinator-based client (XA, a transaction manager)
-  unserved, refused by name.
+  unserved.
 - **P - a prepared state a client names.** `PREPARE` makes the
   transaction's writes and its promise to commit durable, ends the
   session's hold on it, and leaves it **in doubt** until a `COMMIT
   PREPARED` or `ROLLBACK PREPARED` naming it arrives on any session, across
   a restart. What it would have to add, each an item of S0's census:
   1. a fourth recovery outcome, **in doubt**: neither undone nor a winner,
-     its undo kept, its id still in flight after the mount;
-  2. **its claims rebuilt at mount.** Every row it wrote carries its id in
-     the header, which every writer reads as an undecided holder, so the
-     first-updater verdict survives by itself; what does not survive is
-     everything the lock table alone held - a declared range, a unique
-     index's key unit, a foreign key's `S`, a relation `IX` a DDL must
-     meet, an assertion's reservation;
+     its undo kept, its id still in flight after the mount. **It
+     contradicts the assumption §1 quotes**: an id in doubt after a mount
+     is one whose changes were not undone, and nothing a row's header
+     carries says "undecided" - so either the floor is held below that id
+     for as long as it stays in doubt, with the window and its
+     reclamation behind it, or every reader sees its rows (EI-R1);
+  2. **its claims rebuilt at mount**, which follows only from item 1.
+     With its id in flight again, a row it wrote is claimed by its
+     header, and a unique index's check finds that row busy - the key
+     unit itself is given back at the append
+     (`docs/spec/index.md:1049-1053`). An assertion's reservation is
+     logged (`ASSERT_RESERVE`, `docs/spec/wal.md:182`) and today given
+     back at the mount for a loser; for a transaction in doubt the mount
+     must keep it. What the lock table alone held, and nothing rebuilds:
+     a declared range, a foreign key's `S` on a parent row, the relation
+     `IX` a DDL must meet;
   3. **the read horizon held with no session behind it**, so a prepared
      transaction nobody decides stops the purges for the instance;
   4. **a rule against the lifetime ceiling**: a prepared transaction may
@@ -125,18 +142,20 @@ None is designed past what S0 needs to judge it.
   rows, answers a state no coordinator decided.
 - **EI-R2. A claim a prepared transaction held is held after the mount, or
   the prepare is refused** `[quiet-wrong]`: a unit the lock table alone
-  carried and the mount did not rebuild lets a second writer place the
-  duplicate key, delete the parent, or take the assertion's room, and the
-  later `COMMIT PREPARED` then commits a state the engine's own invariants
-  refuse.
+  carried and the mount did not rebuild lets a second writer insert into
+  a window the prepared transaction declared, delete the parent its child
+  row names, or drop its relation - and a reservation the mount gave back
+  lets one take the assertion's room - so the later `COMMIT PREPARED`
+  commits a state the engine's own invariants refuse.
 - **EI-R3. The lifetime ceiling keeps its sentence or the spec changes it
   in words**: no path makes a transaction outlive the sweep without the
   operator's mark on EI-Q3.
 - **EI-R4. The retired kind stays retired** (BP-R4): `TXN_PREPARE` (27) is
   refused as now; a new prepare is a new kind and a superblock version.
-- **EI-R5. Nothing of §2 is spelled before it is built**: `PREPARE
-  TRANSACTION` and its siblings are refused by name until then, and no
-  frame, bit or code is reserved by this order.
+- **EI-R5. Nothing of §2 is spelled before it is built**: no stage
+  accepts `PREPARE TRANSACTION` or a sibling until the state behind it
+  exists, and no frame, bit, keyword or code is reserved by this order.
+  What the engine answers such a statement today was not read.
 - The standing rules, as DT's order lists them.
 
 ## 4. Items for the operator (EI-Q), CLA's proposals
@@ -174,3 +193,13 @@ None is designed past what S0 needs to judge it.
 On `service-txn-orders` from `72580aa04`, on the operator's word. No stage
 is opened and no code is written. The survey the order answers was given
 in conversation and is in no file; its item C1 is §0's first paragraph.
+
+**The opening review** (`critics-developer`, the same day, at `5d8dd1ddf`)
+found §2's P wrong in two places, each corrected above: the first writing
+said a prepared transaction's rows keep their first-updater verdict "by
+itself", where the read view's floor answers every old id as committed
+(`txn.md:500`, `:514-523`), so item 1 now names the assumption P
+contradicts; and it listed a unique index's key unit and an assertion's
+reservation as the lock table's alone, where the first is released at the
+append and the second is logged. EI-R5 claimed a refusal by name that was
+not read; reworded.
