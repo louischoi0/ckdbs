@@ -233,3 +233,13 @@ landed (§16):
 | **CLA's, not the operator's** | the reading of that lean as code placement (a prepared point `SELECT`, which runs no EM code, leans as much), which no arm measured; EM-Q12, written at S1 and adopted; the pre-existing stale relation-name window recorded in `known-gaps.md`, not fixed; the refusal-byte divergence recorded in `docs/inflight/bugs/`, not fixed |
 | **Does not settle** | a push, a merge to `main`, a tag or a version; which refusal byte a statement with leading whitespace should name |
 | **Recorded at** | this file; EM's order (header, §8); EM's rows in `instructions/v3.2.0/index.md` and `instructions/milestones.md` |
+
+## 24. EM pushed to `main` with the hook skipped
+
+| | |
+|---|---|
+| **Word** | *"push no verify"*, at CLA's push gate for EM |
+| **Mark** | **EM lands on `main`** in one `--no-ff` merge of `worktree-em-front-end-reuse`, `a398b2f4f`, over `origin/main` at `b46ac5140`, pushed with `--no-verify` |
+| **Skipped, on the word** | the pre-push hook. The suite was last run at `aa8eaebbc`, the last commit with a build input: 5,442 of 5,444, the two failures a `/tmp` quota error and the `ContentionCountersTest` two-core flake, each passing on rerun. It was not a green run, and this push does not report it as one |
+| **Does not settle** | a tag or a version |
+| **Recorded at** | this file; EM's landed column in `instructions/milestones.md` |
