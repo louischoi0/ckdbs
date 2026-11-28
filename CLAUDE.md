@@ -217,12 +217,11 @@ Numbered to match `docs/spec/heap-and-tuple.md` §8.
 - **A feature is built and improved for the concept KDS is: a
   high-performance OLTP engine that guarantees consistency, optimized for
   modern software environments such as a microservice architecture**
-  (operator, 2026-11-28: "bear in mind that KDBS is, in concept, a
-  high-performance OLTP engine that guarantees consistency, optimized for
-  modern software environments such as a microservice architecture;
-  features must be implemented and improved with that in mind"). It is a
-  direction for design, as the weights are: "What This Project Is" still
-  bounds the scope, and this rule opens no feature by itself.
+  (operator, 2026-11-28: "features must be implemented and improved
+  taking into account that kdbs [KDS] is, in concept, a high-performance
+  OLTP engine that guarantees consistency, optimized for modern software
+  environments such as a microservice architecture"). "What This Project
+  Is" bounds the scope.
 - **Measure in `build-release`, never `./build` (Debug)** — Debug has
   reported the wrong sign. Per-statement fixed costs: server CPU,
   interleaved A/B. **Re-measure a premise before building the fix.**
