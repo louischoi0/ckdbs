@@ -66,7 +66,10 @@ the chain's row stream. It does not say the stream must pass through the
 frame. For one shape it does not: **a fold with no `GROUP BY` and no
 `DISTINCT`, over a chain of one step that keeps every visible row** - no
 conjunct of any kind, no sub-chain, no index order, no trail entry, no Cabin
-recording live - **whose every argument is a column of that relation other
+recording live - and decodes a column mask, so no sub-chain anywhere in the
+chain (a hoisted `EXISTS` included) and a relation of at most 64 columns,
+since a step that decodes every column reads, and may refuse, cells the
+fold never reads - **whose every argument is a column of that relation other
 than a `varchar`**. For it the executor hands the fold the visible version's
 payload under the leaf's hold, and the fold decodes the cells its items read
 with the row decoder the frame's path uses and folds each value through the
