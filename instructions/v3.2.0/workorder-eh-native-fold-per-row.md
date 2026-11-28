@@ -295,6 +295,22 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
   alone at this tree), which folds nothing.
 - **`docs/spec/aggregate.md` §1** states the bytes path and what AG1 still
   promises (EH-Q3 (a)).
+- **After the review** (`6e55671ef`, `e2f13279d`, and this commit): **one
+  defect, fixed by the reviewer** - a step whose decode is every column
+  (`read_columns` is `kAllColumns`: a chain with a hoisted sub-chain, a
+  relation over 64 columns) refuses a corrupt `varchar` cell on the frame's
+  path even where the statement reads no such column, and the bytes path
+  answered instead (EH-R4); the fold is no longer armed there, and a cell
+  pins it by mutation. Two cells added: the remaining fixed-width types
+  (`int8`, `bool`, `decimal(30,4)`, `uint64` above `INT64_MAX`) and a
+  writer's own uncommitted rows and a `REPEATABLE READ` view across a
+  commit, both paths. The arm returns from inside the span's scope. **Not
+  taken from the review**: `ANALYZE` passing the fold - its sink counts and
+  caps the rows it reports, so a fold that bypassed it would change what
+  `ANALYZE` prints; `aggregate.md` says `ANALYZE` runs the frame's path.
+  The shared item loop between `FoldInto` and `AccumulateBytes` (four lines
+  twice, against a template for both) and the probably-dead clauses
+  (`!recording_here`, the trail test), kept as the cheap guard each is.
 - **Measured** (`bench/v3.5.1/results-eh-s1-in-place-v3.5.1-41-g6142f32f1.md`,
   interleaved against the engine EH opened from): a global fold of four
   aggregates is 29.1 ns of server CPU a row against 38.8 ns before and

@@ -82,8 +82,11 @@ one body both paths share (`Aggregator::FoldValue`). What stays as it was:
   length other than the layout's, whose decode refuses it.
 - **Nothing of the page is kept**: the values are decoded into the fold's own
   slots inside the call, which is why a `varchar` argument - whose value may
-  be a spill behind a fetch - keeps the frame's path, as `DISTINCT` does (its
-  set grows by allocating).
+  be a spill behind a fetch - keeps the frame's path. `DISTINCT` keeps it too:
+  its set is work without a bound per row, taken under nobody's hold today and
+  not to be taken under a leaf's. **`ANALYZE` of such a fold runs the frame's
+  path**: its sink counts and caps the rows it reports, and a fold that bypassed
+  the sink would report different counts for the same statement.
 - **A row is examined, charged and matched as the row sink's rows are**, in
   that order, so a budget's refusal falls on the same row and comes before the
   fold's own, and `ANALYZE` reports the same counts.

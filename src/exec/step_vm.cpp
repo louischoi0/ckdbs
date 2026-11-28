@@ -2965,9 +2965,6 @@ private:
                    ScanKernelRejects(*kernel, access.layout, payload);
         };
         bool kernel_rejected = false;
-        // EH-S1: the row was handed to the statement's fold under the span.
-        bool folded = false;
-        Status fold_status;
         {
             PageSpanGuard span;
             // Read with no Status (BT-S2): a slot ReadTupleIn() would refuse -
@@ -3015,16 +3012,16 @@ private:
                         // same row and comes before the fold's own.
                         if (fold_ready_ && !recording_here &&
                             tuple.payload.size() == access.layout.row_size) {
-                            folded = true;
                             StepStats& fold_stats = stats_.For(step.step_id);
                             ++fold_stats.rows_examined;
-                            fold_status = budget_.ChargeRow();
-                            if (fold_status.ok()) {
+                            Status folded = budget_.ChargeRow();
+                            if (folded.ok()) {
                                 ++fold_stats.rows_matched;
                                 ++fold_stats.rows_folded_in_place;
-                                fold_status = fold_->AccumulateBytes(tuple.payload);
+                                folded = fold_->AccumulateBytes(tuple.payload);
                             }
-                            break;
+                            span.Release();
+                            return folded;
                         }
                         // **The row's bytes, copied; the row itself, not
                         // built yet.** The copy is fixed-size (invariant 13)
@@ -3044,7 +3041,6 @@ private:
             // in scope but finished with. Everything below may fetch.
             span.Release();
         }
-        if (folded) return fold_status;
 
         // ---- MVCC, phase 2: the walk, with no span live -----------------
         if (needs_walk) {
