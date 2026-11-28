@@ -438,5 +438,31 @@ TEST(KeptParseTest, ATextPastTheCapKeepsNoParse) {
     EXPECT_FALSE(KeptParse::Of(sql).has_value()) << "EA-R6";
 }
 
+// ---- EM's C3: the arguments a parse collects -----------------------------
+//
+// A parse asked to collect gives `ArgumentsOf` of its text, kind for kind and
+// byte for byte, whenever it succeeds: what an administrator's plan reads as
+// `ARG(k)` (`exec/plan_rule.hpp`) is then the same from the parse as from a
+// second lex, so a plan chooses the same variant either way. The dispatcher
+// checks the same equality at every plan-governed compile of a debug build.
+
+TEST(KeptParseTest, ACollectingParseGivesArgumentsOfItsText) {
+    std::vector<std::string> statements = CorpusStatements();
+    for (const char* extra : kExtra) statements.emplace_back(extra);
+    std::size_t compared = 0;
+    for (const std::string& sql : statements) {
+        Parser parser(sql);
+        parser.CollectArguments();
+        if (!parser.Parse().ok()) continue;
+        ASSERT_NE(parser.arguments(), nullptr);
+        EXPECT_TRUE(*parser.arguments() == ArgumentsOf(sql)) << sql;
+        ++compared;
+    }
+    EXPECT_GT(compared, 200u);  // a `?` text parses only with holes admitted
+    Parser unasked("SELECT * FROM t WHERE id = 1");
+    ASSERT_TRUE(unasked.Parse().ok());
+    EXPECT_EQ(unasked.arguments(), nullptr);
+}
+
 }  // namespace
 }  // namespace kds::parser

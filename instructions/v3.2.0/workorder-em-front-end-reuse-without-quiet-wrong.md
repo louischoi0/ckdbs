@@ -626,3 +626,36 @@ comment and test edits. The one failure is
 the `/tmp` quota held by other sessions' files, and it passes when rerun.
 After the edits, `CatalogNamespaceCacheTest` passes. The full suite runs
 again at S2b over both stages.
+
+### EM-S2b - C3, a plan's arguments from the parse (2026-11-28)
+
+On `em-front-end-reuse` from `e54ac0685`, the S1 spike's C3. The lexer
+collects the arguments as it lexes, when asked (`Lexer::CollectArguments`,
+fed in `ReadToken` beside the fingerprint, one `AppendArgument` shared with
+`ArgumentsOf`). `HandleSelect` asks while an administrator's plan is
+enabled, and `SelectBody` hands the compile the run's parse's arguments
+where no kept parse does. A debug build compares them with `ArgumentsOf`
+at every such compile and aborts on a difference. The writes'
+`FindWritePlan` keeps its lex, which S0 did not measure. The harness is
+kept as `KeptParseTest.ACollectingParseGivesArgumentsOfItsText`. A mutant
+collector that dropped integer arguments aborted `admin_plans_test` at the
+debug check, so the plan tests' own statements exercise it. Overhead not
+measured; measured at the milestone's close.
+
+**Review** (`critics-developer`, the stage's diff). No bug: it traced the
+parser's text against `line`, a failed parse, the whole token stream of a
+successful one, the DDL lexer copies, `ANALYZE`, a subquery, an absorbed
+view, re-runs, the views' lifetime across yields, `any()` changing between
+parse and compile, and `KeptFor` at both sites. **Applied**: a defaulted
+`StatementArgument::operator==`, which replaces both comparison loops, and
+the redundant `!line.empty()` dropped. **Not taken**: one accessor
+fewer on the lexer (`collects_arguments`). It saves one line and moves the
+lexer's public surface. **Noted for the close**: `ReadToken` now tests one
+flag on every token of every lex, which EM-R7's measurement prices.
+
+**Suite**: 5,442 of 5,444 before the review's cuts. The two failures are
+`DropTableReclaimCrashTest`, on the `/tmp` quota (it passes rerun on disk),
+and `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the
+two-core flake memory records at about 1 in 5 at base (4 of 5 rerun).
+After the cuts, the parser, plan and kept-parse cells (195) pass. The
+whole suite runs again at the close.

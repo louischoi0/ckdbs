@@ -61,6 +61,7 @@ struct StatementArgument {
     enum class Kind : std::uint8_t { kInt, kStr, kUnbound };
     Kind kind = Kind::kUnbound;
     std::string_view text;
+    friend bool operator==(const StatementArgument&, const StatementArgument&) = default;
 };
 std::vector<StatementArgument> ArgumentsOf(std::string_view sql);
 
@@ -94,6 +95,16 @@ public:
         return fingerprint_.Result();
     }
 
+    // **The arguments as they are lexed** (EM's C3): asked before the first
+    // token, every token produced is also collected as `ArgumentsOf` would
+    // collect it, by the same hook as the fingerprint, so the two cannot see
+    // different streams. Equal to `ArgumentsOf(sql)` once the lexer has
+    // produced `kEof` with no `kError` before it, which a successful parse
+    // guarantees; before that, a prefix of it. Unasked, nothing is kept.
+    void CollectArguments() noexcept { collect_arguments_ = true; }
+    bool collects_arguments() const noexcept { return collect_arguments_; }
+    const std::vector<StatementArgument>& arguments() const noexcept { return arguments_; }
+
 private:
     // ReadToken() skips to the token, calls ScanToken() for it, and stamps
     // the byte range it covered. ScanToken() never sets a position: doing
@@ -107,6 +118,8 @@ private:
     Token peeked_;
     bool has_peeked_ = false;
     FingerprintAccumulator fingerprint_;
+    bool collect_arguments_ = false;
+    std::vector<StatementArgument> arguments_;
 };
 
 }  // namespace kds::parser
