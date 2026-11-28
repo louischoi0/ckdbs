@@ -66,6 +66,9 @@ pub struct Recorder {
     pub rows: u64,
     pub cpu_ns: u64,
     pub decode_ns: u64,
+    /// Latencies by operation kind, for a phase that mixes kinds (each
+    /// operation is also in `lat_ns`).
+    pub kinds: BTreeMap<&'static str, Vec<u64>>,
     cpu0: u64,
     dec0: u64,
 }
@@ -87,6 +90,13 @@ impl Recorder {
     pub fn add(&mut self, t0: Instant) {
         self.lat_ns.push(t0.elapsed().as_nanos() as u64);
     }
+    /// `add`, and the same latency under `kind`.
+    #[inline]
+    pub fn add_kind(&mut self, kind: &'static str, t0: Instant) {
+        let ns = t0.elapsed().as_nanos() as u64;
+        self.lat_ns.push(ns);
+        self.kinds.entry(kind).or_default().push(ns);
+    }
     pub fn error(&mut self, what: &str) {
         *self.errors.entry(what.to_string()).or_insert(0) += 1;
     }
@@ -94,6 +104,9 @@ impl Recorder {
         self.lat_ns.extend(o.lat_ns);
         for (k, v) in o.errors {
             *self.errors.entry(k).or_insert(0) += v;
+        }
+        for (k, v) in o.kinds {
+            self.kinds.entry(k).or_default().extend(v);
         }
         self.rows += o.rows;
         self.cpu_ns += o.cpu_ns;
@@ -143,6 +156,8 @@ pub struct PhaseOut {
     pub terminals: u32,
     pub errors: BTreeMap<String, u64>,
     pub rows: u64,
+    /// Latency by operation kind, where the phase mixes kinds.
+    pub kinds: BTreeMap<String, Latency>,
     pub client_cpu_us_per_op: f64,
     pub client_decode_us_per_op: f64,
     pub server_cpu_us_per_op: Option<f64>,

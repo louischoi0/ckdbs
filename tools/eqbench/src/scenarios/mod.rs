@@ -136,6 +136,7 @@ impl Ctx {
             terminals,
             errors: rec.errors,
             rows: rec.rows,
+            kinds: rec.kinds.iter().map(|(k, v)| (k.to_string(), latency(v))).collect(),
             client_cpu_us_per_op: per_op(rec.cpu_ns as f64 / 1000.0, ops),
             client_decode_us_per_op: per_op(rec.decode_ns as f64 / 1000.0, ops),
             server_cpu_us_per_op: match (cpu0, cpu1) {
