@@ -24,6 +24,7 @@
 //
 //   cached, dropped on the DDL version bump:
 //     name -> oid                    (sys.objects)
+//     namespace name -> oid          (sys.objects)
 //     oid  -> TableAccess            (sys.tables + sys.columns)
 //     the table list                 (sys.objects)
 //     the opted patterns, fetch_id -> PatternAccess (sys.patterns), whole
@@ -103,6 +104,14 @@ public:
     // rule). Already-present keys are left alone, so a pointer handed out
     // earlier keeps pointing at the same value.
     void PutOidByName(Oid namespace_oid, std::string_view name, Oid oid);
+
+    // ---- namespace name -> oid (sys.objects) -----------------------------
+    //
+    // A live user namespace's oid by its name (EM's C4), positive only; its
+    // one reader and why it is sound: `Catalog::ResolveNamespace`. nullptr on
+    // a miss; valid until the next Invalidate().
+    const Oid* FindNamespaceOid(std::string_view name) noexcept;
+    void PutNamespaceOid(std::string_view name, Oid oid);
 
     // ---- oid -> TableAccess (sys.tables + sys.columns) -------------------
 
@@ -290,6 +299,9 @@ private:
     // Namespace oid -> name -> relation oid: nested so a lookup by
     // string_view needs no composite key built per statement.
     std::unordered_map<Oid, NameMap> name_to_oid_;
+    // `FindNamespaceOid`'s map. Not retired under a pin: no caller holds an
+    // entry past its lookup.
+    NameMap namespace_oids_;
 
     // Node-based for the same reference-stability reason as table_access_:
     // the trail recorder holds an entry across its write. Opted rows only,

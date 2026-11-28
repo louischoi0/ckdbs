@@ -11350,9 +11350,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session& 
     // statement was bound for this text: its AST, holes filled, and the
     // substituted text's fingerprint.
     const parser::BoundStatement* kept = KeptFor(&session, line);
+    // **A multi-variant plan reads its arguments off this parse** (EM's C3):
+    // collected only while an administrator's plan is enabled, the one
+    // reader, so a statement under none collects nothing.
+    if (kept == nullptr) {
+        run->parser.emplace(line);
+        if (admin_plans_->any()) run->parser->CollectArguments();
+    }
     StatusOr<parser::Statement> parsed =
-        kept != nullptr ? StatusOr<parser::Statement>(kept->Materialize())
-                        : run->parser.emplace(line).Parse();
+        kept != nullptr ? StatusOr<parser::Statement>(kept->Materialize()) : run->parser->Parse();
     run->fingerprint = kept != nullptr ? std::optional<parser::Fingerprint>(kept->fingerprint)
                                        : run->parser->fingerprint();
     // `sys.statement_stats` (BO-S5): the first parse of the statement keys
@@ -11601,9 +11607,25 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>& 
         plan.admin = admin_plans_;
         plan.search = join_order != exec::JoinOrder::kWritten;
         plan.statement = line;
-        // A kept parse's arguments, its holes' values in place (EA-S2).
+        // A kept parse's arguments, its holes' values in place (EA-S2); else
+        // the run's own parse's (EM's C3), or nullptr, and the plan lexes.
         const parser::BoundStatement* kept = KeptFor(&session, line);
-        plan.arguments = kept != nullptr ? &kept->arguments : nullptr;
+        plan.arguments = kept != nullptr              ? &kept->arguments
+                         : run->parser.has_value() ? run->parser->arguments()
+                                                   : nullptr;
+#ifndef NDEBUG
+        if (kept == nullptr && plan.arguments != nullptr) {
+            const auto lexed = parser::ArgumentsOf(line);
+            if (*plan.arguments != lexed) {
+                std::fprintf(stderr,
+                             "EM C3: the parse's arguments disagree with ArgumentsOf of the "
+                             "statement's text (%zu against %zu); a plan's ARG(k) would read "
+                             "another argument than its text holds\n",
+                             plan.arguments->size(), lexed.size());
+                std::abort();
+            }
+        }
+#endif
         // A query layer walk (`WalkForLayer`) carries a statement and no
         // parser, so it has no fingerprint to key the memo by.
         if (const auto& fingerprint = run->fingerprint; fingerprint.has_value()) {

@@ -81,6 +81,7 @@ add_executable(kds_tests
     assertion_enforce_test.cpp
     assertion_race_test.cpp
     catalog_name_race_test.cpp
+    catalog_namespace_cache_test.cpp
     catalog_name_rig_test.cpp
     inflight_publication_rig_test.cpp
     dt9_across_cores_rig_test.cpp

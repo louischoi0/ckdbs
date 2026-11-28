@@ -1,13 +1,18 @@
 # Work order EM - the statement front end's repeated work, cut only where no cut can change an answer
 
-Status: **WRITTEN 2026-11-28, not opened.** Written on worktree
-`front-end-parse-reuse-order` (branch `worktree-front-end-parse-reuse-order`)
-from `72580aa04` (`v3.5.1-6-g72580aa04`) on the operator's word of
-2026-11-28 (`raft-marks-2026-11-28.md` §8). No stage is started and no code
-is written; EM-S0 waits for the operator's word and for the marks on §5's
-items. Every `[source-read]` claim with a `path:line` was read by CLA at
-`72580aa04`. A claim marked "EA's census" was read by EA's session at
-`481d101aa` and is re-verified at S0.
+Status: **OPENED 2026-11-28 on the operator's standing go-ahead
+(go-ahead-achieving-milestone, `raft-marks-2026-11-28.md` §22), on worktree
+`em-front-end-reuse` (branch `worktree-em-front-end-reuse`) from `b46ac5140`
+(`v3.5.1-69-gb46ac5140`).** EM-Q0..Q9 are adopted as CLA proposed, and so
+are EM-Q10 and EM-Q11, written at S0. Each is CLA's proposal, adopted under
+that word, and none is a per-item mark by the operator (§5's mark column).
+**CLOSED 2026-11-28 on the work branch**: C4 and C3 are built (EM-S2a, EM-S2b); C1 failed G1, and C2 and C5 were dropped at G0. The close measured EM-R7 as a lean of up to +1.5 % that the floor does not exclude (§8, EM-Sz). Not merged to `main`.
+Written on worktree `front-end-parse-reuse-order` from `72580aa04`
+(`v3.5.1-6-g72580aa04`) on the operator's word of 2026-11-28
+(`raft-marks-2026-11-28.md` §8). The `[source-read]` claims in §1 were
+read by CLA at `72580aa04` and re-read at S0 at `b46ac5140` (§8). A claim
+marked "EA's census" was read by EA's session at `481d101aa` and is
+re-verified at S0.
 
 Tags: `[operator]`, `[source-read]`, `[measured]`, `[design]`, `[assumed]`,
 `[quiet-wrong]`, as in DT's order.
@@ -277,18 +282,21 @@ Each candidate is named with its worst failure under a defect of its own
 
 ## 5. Items for the operator (EM-Q), CLA's proposals
 
-| | item | options | CLA proposes |
-|---|---|---|---|
-| EM-Q0 | Is EM opened, and with what scope? | (a) S0, then S1 for every candidate G0 admits, then one implementation stage per candidate G1 passes; (b) S0 alone | (a) |
-| EM-Q1 | The bar | (a) the net removable cost is at least 3 % of the shape's server CPU, EA-Q1's line, on a shape the candidate serves; for C2 the denominator is the resumed slice's server CPU; (b) 1 %; (c) no bar, every admitted candidate built | (a) |
-| EM-Q2 | The admission test | (a) §0's test: by construction, the worst failure is a refusal, a slower plan or a debug abort; (b) (a), and also a candidate whose only wrong answer needs a 64-bit hash collision | (a). (b) admits the excluded auto-prepare of §0.1 |
-| EM-Q3 | EA-R4 ("A statement that is not prepared executes no new instruction") | (a) amended by EM for the unnamed no-`?` DML statement only, with EM-R1 as the condition and EM-R7 as the cost check; (b) kept, so C1 and C5 are not built | (a) |
-| EM-Q4 | The `pattern_id` in `C_PARSE`'s reply | (a) the parse's fingerprint where the parse reached the end of the statement, and `FingerprintOf` otherwise; the reply is unchanged on the wire; (b) a protocol change that defers it to `C_EXECUTE` | (a). (b) moves a pinned frame |
-| EM-Q5 | C4 inside EM? | (a) inside: it is the front end's name resolution, found in the session that asked for EM; (b) its own order | (a) |
-| EM-Q6 | C3 inside EM? | (a) inside, under EM-R2 and its debug cross-check; (b) outside: its worst failure is a plan, not an answer, but the operator may rank a plan contract with answers | (a) |
-| EM-Q7 | C5 | (a) explored at S0 only. A census of identical-literal repeats over the scenario drivers and the BS corpus decides it, and it is built only through G0 and G1; (b) not explored | (a) |
-| EM-Q8 | C1's mechanism | (a) a zero-hole `KeptParse` for the unnamed no-`?` statement, copied out per consumer by `Materialize`: EA's reviewed path, with its `!name->empty()` test (`kwp_session.cpp:676`) relaxed for no-`?` text; (b) a take-once slot cleared with `std::exchange`, with every consumer after the first parsing as today | (a). (b) saves the copy for the first consumer only, and a missed clear hands a moved-from AST on |
-| EM-Q9 | C4's callers | (a) every one of the six callers reads the cache once S0 has shown, per caller, that a stale entry ends in a refusal; (b) `ResolveRelation` and `ResolveView` only, the DDL and `USE` callers scanning as today | (b). The two resolution callers are the hot ones, and the DDL callers keep their unfiltered collision checks unchanged |
+| | item | options | CLA proposes | mark |
+|---|---|---|---|---|
+| EM-Q0 | Is EM opened, and with what scope? | (a) S0, then S1 for every candidate G0 admits, then one implementation stage per candidate G1 passes; (b) S0 alone | (a) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q1 | The bar | (a) the net removable cost is at least 3 % of the shape's server CPU, EA-Q1's line, on a shape the candidate serves; for C2 the denominator is the resumed slice's server CPU; (b) 1 %; (c) no bar, every admitted candidate built | (a) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q2 | The admission test | (a) §0's test: by construction, the worst failure is a refusal, a slower plan or a debug abort; (b) (a), and also a candidate whose only wrong answer needs a 64-bit hash collision | (a). (b) admits the excluded auto-prepare of §0.1 | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q3 | EA-R4 ("A statement that is not prepared executes no new instruction") | (a) amended by EM for the unnamed no-`?` DML statement only, with EM-R1 as the condition and EM-R7 as the cost check; (b) kept, so C1 and C5 are not built | (a) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q4 | The `pattern_id` in `C_PARSE`'s reply | (a) the parse's fingerprint where the parse reached the end of the statement, and `FingerprintOf` otherwise; the reply is unchanged on the wire; (b) a protocol change that defers it to `C_EXECUTE` | (a). (b) moves a pinned frame | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q5 | C4 inside EM? | (a) inside: it is the front end's name resolution, found in the session that asked for EM; (b) its own order | (a) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q6 | C3 inside EM? | (a) inside, under EM-R2 and its debug cross-check; (b) outside: its worst failure is a plan, not an answer, but the operator may rank a plan contract with answers | (a) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q7 | C5 | (a) explored at S0 only. A census of identical-literal repeats over the scenario drivers and the BS corpus decides it, and it is built only through G0 and G1; (b) not explored | (a) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone); C5 dropped at G0 (§8) |
+| EM-Q8 | C1's mechanism | (a) a zero-hole `KeptParse` for the unnamed no-`?` statement, copied out per consumer by `Materialize`: EA's reviewed path, with its `!name->empty()` test (`kwp_session.cpp:676`) relaxed for no-`?` text; (b) a take-once slot cleared with `std::exchange`, with every consumer after the first parsing as today | (a). (b) saves the copy for the first consumer only, and a missed clear hands a moved-from AST on | (a) as revised at S0 (§8, EM-Q11), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q9 | C4's callers | (a) every one of the six callers reads the cache once S0 has shown, per caller, that a stale entry ends in a refusal; (b) `ResolveRelation` and `ResolveView` only, the DDL and `USE` callers scanning as today | (b). The two resolution callers are the hot ones, and the DDL callers keep their unfiltered collision checks unchanged | (b), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q10 | C1's text whose parse fails (written at S0) | (a) the failure is kept beside the statement - its refusal, the parser's lock-clause fact and its fingerprint, each a function of the trimmed text alone - and the dispatcher serves it in place of a native parse of the same text that would fail the same way; (b) nothing is kept, and a statement the native grammar declines pays one native parse more, at `C_PARSE`; (c) C1 is not built | (a). (b) breaks EM-R7 by construction: the query-layer `SELECT` would pay a second failed native parse, one of the 3 parse calls its 1.59 µs of parsing is (§8; the failed one's share not measured). (a) moves the failed parse from the dispatcher to `C_PARSE`, so the statement pays what it pays today | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q11 | C1's zero-hole parse (written at S0) | (a) a statement with no `?` is parsed once, with no `HolesDelimited` scan and no hole walk (no `?` means no hole, so both answer true by construction), its fingerprint taken from the parse, and its arguments collected by the same parse (C3's mechanism, so C3 lands first); (b) EA's `KeptParse::Of` as it stands | (a). (b) lexes the text three times to remove one lex: S0 measured it 0.33 to 0.76 µs dearer than the text path it replaces (§8) | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone) |
+| EM-Q12 `[quiet-wrong]` | C4's stale entry within a statement (written at S1) | (a) the namespace map is read and filled only while `Catalog::MemoIsCurrent()` holds, so no entry served is older than the scan it replaces; (b) C4 as first written, its stale entry reaching the relation cache's stale entry as an unqualified name already can (the review's restatement); (c) C4 dropped | (a). (b) adds a window to qualified names that today scan fresh, and that window's outcome, a dropped relation's rows or a refusal, is unsettled (§8). (a) costs one acquire load a lookup | (a), adopted on the operator's standing go-ahead of 2026-11-28 (go-ahead-achieving-milestone); its premise re-read at `b46ac5140` (§8) |
 
 ## 6. Stages
 
@@ -353,3 +361,357 @@ EA's `KeptParse::Of(stmt.sql)` parses the untrimmed text
 prepared and a text statement with leading whitespace may therefore name
 different refusal bytes. EA-R3 permits this, but the two paths diverge.
 S0 (iv) runs the check. Rejected: none.
+
+### Opened 2026-11-28
+
+On the operator's standing go-ahead (`/go-ahead-achieving-milestone EM`,
+`raft-marks-2026-11-28.md` §22), on worktree `em-front-end-reuse` from
+`b46ac5140` (`v3.5.1-69-gb46ac5140`), which is `origin/main`. EM-Q0..Q9 are
+adopted as CLA proposed: (a) for each, and (b) for EM-Q9. None is
+`[quiet-wrong]`-tagged. EM-Q2 is the item a wrong choice would turn into
+one, because (b) admits a hash-collision answer. Its premise, that §0.1's
+exclusions are the only candidates a hash could serve, was re-read
+against the tree before the adoption and holds: C1 to C5 each compare their
+key whole (EM-R2).
+
+### EM-S0 - census, proof obligations, premise; G0 (2026-11-28)
+
+On `em-front-end-reuse` at `b46ac5140`. The measurement is
+`bench/v3.5.1/results-em-s0-premise-v3.5.1-69-gb46ac5140.md`; the figures
+below are its medians.
+
+**(i) Census `[source-read]`.** Since `72580aa04`, of the files §1 cites,
+three moved. `command_dispatcher.cpp` (144 lines in, 32 out): §1's numbers
+below `:7756` stand, `:8022-8050` are 79 low, `:11262-11499` 90 low and
+those past `:11716` 112 low. `known-gaps.md` (110 in): every line this
+order cites in it is 110 low (`:1843-1846`, `:3155-3161`, `:3168`,
+`:3171-3172`). `command_dispatcher.hpp` (15 in) is cited at `b46ac5140`
+only. The rest still stand. Every parse
+site in `src/` outside the parser:
+
+- **DML**, one parse a statement: `HandleSelect` (`command_dispatcher.cpp:11355`),
+  and `ParseKeepingShape` (`:8109`) for `InsertInner` (`:8134`),
+  `UpdateInner` (`:13644`), `DeleteInner` (`:18461`) and `WithReturning`
+  (`:12979`, a second parse of a write with `RETURNING`).
+- **Read again from text**: `TryQueryLayer` (`:13590`), `RunScalarSubquery`
+  (`:12878`), `DescribeBody` (`:13216`), a view body (`exec/view_absorb.cpp:120`),
+  a multi-variant plan's `ArgumentsOf` (`exec/admin_plans.cpp:47`), and the
+  whole-statement re-runs (`session.hpp:379-381`).
+- **DDL and utility** (`HandleIndex`, `HandleCabin`, `HandleAlter`,
+  `HandleDropTable`, `HandleNamespace`, `HandleAssertion`,
+  `HandleTransition`, `HandleCreateTableSql`, `HandleView`,
+  `HandleWaystone`, `HandleCreatePlan`, `HandleAdvisePlan`, `HandlePurge`;
+  `exec/transition.cpp:202`, `exec/plan_catalog.cpp:616`). None of these is a
+  candidate's site.
+
+`FindNamespaceOidByName`'s six callers: `ResolveRelation`
+(`catalog.cpp:2365`), `ResolveView` (`:4274`), and the dispatcher's
+`:5618` (`HandleNamespace`), `:6610`, `:7018` (a foreign key's
+`references_schema`) and `:15806`.
+
+**(ii) Proof obligations `[source-read]`.**
+
+- **The parse depends on the text alone.** `src/parser/` holds no
+  thread-local, static mutable, clock, environment or configuration state.
+  Its `catalog::` uses are constants. Its one mode switch, `AdmitHoles`,
+  acts only on a `kParam` token (`parser.cpp:323`).
+- **A parse that succeeded reached the end of the statement.** After a
+  successful parse only `kEof` may remain (`parser.cpp:4047-4050`), so the
+  fingerprint accumulator has been fed `kEof`. The parse's fingerprint is
+  therefore `FingerprintOf`'s, which is built on the same accumulator
+  (`fingerprint.hpp:280-282`).
+- **No `?` in C1's text.** `PlaceholderCount` is a byte scan, not a lex
+  (`kwp_session.cpp:268-274` over `ScanPlaceholders`, `:152-176`). C1 therefore parses with a plain `Parser`,
+  no `AdmitHoles`, the constructor and text the dispatcher uses, so a `?`
+  the scan misses is refused by both parses in the same words.
+- **The compile edits its statement.** It still does (`SelectBody`;
+  `AbsorbViews`), and C1 copies out per consumer (`Materialize`), as EA
+  does.
+- **No write through a shared subtree.** No write through a shared
+  `subquery` was found beyond EA's copy-before-write sites
+  (`kept_parse.cpp:102-106`, `view_absorb.cpp:65-70`). EM-R3's
+  `shared_ptr<const SelectStmt>` binds C2 and C5, which G0 drops.
+- **Namespace DDL.** A namespace's oid is `GenerateUserOid`'s
+  (`catalog.cpp:2469`), never issued again. `DropNamespace` bumps the
+  version (`:2547`). `CreateNamespace` bumps it too, through
+  `InsertObjectRow`'s `sys.objects insert` (`:1299`; correction at S2a's
+  review, where this line read "does not"), and C4 needs no bump from it: it
+  refuses a live name (`CheckNameFree`), so a name a positive entry holds
+  is free only after a drop, which bumped. No rename exists.
+- **The route C4 sits on.** Every resolution goes through `ResolveNames`
+  (`command_dispatcher.hpp:1415-1458`). It hands the catalog no view, the
+  unfiltered route, unless some transaction holds uncommitted DDL, and
+  re-resolves under a minted view when a DDL opened meanwhile. A cache read
+  and filled only on that route, as `FindTableOidByName`'s is
+  (`catalog.cpp:1717-1746`), serves no uncommitted namespace: a fill can
+  race an opening DDL, but `ViewFor` mints a view while any DDL is open and
+  both endings move the word (`EndDdlScopeById`,
+  `command_dispatcher.cpp:10430-10438`).
+- **Correction** (found by CLA at S1 and by the stage's review, each
+  independently). The line that stood here, "a stale entry can name only a
+  namespace dropped within the core's current task, which RESTRICT and CT7
+  keep empty, so the relation lookup under it ends in `NotFound`", is
+  false. The memo is checked at the statement's head only
+  (`command_dispatcher.cpp:1372-1375`). Between core A's head and A's
+  resolution, core B can drop `ns1.t` and `ns1` and create both again. A
+  cached `ns1 -> X` then leads to the relation cache's `(X, t)`, the dropped
+  relation's oid, where today's scan answers the new `t`. RESTRICT keeps
+  `X` empty at its drop, not at A's head. C4 as first written would
+  therefore extend to qualified names the window `known-gaps.md` records
+  for a cached relation name (the head's reading, "Not reproduced"), and
+  whether that window can give a wrong row is not settled.
+  **EM-Q12 (a) closes it for C4**: the map is read and filled only while
+  `Catalog::MemoIsCurrent()` holds (`catalog.hpp:317`, the check a writer's
+  first `IX` makes). An entry served is then no older than the scan it
+  replaces, so it names what that scan would.
+
+**(iii) Premise `[measured]`.** As a share of the shape's server CPU,
+C1's net removable cost is 1.3 % to 1.8 % on the four point shapes and
+6.4 % on the three-relation join. C2's is 0.02 % of a slice: about 3.3 µs
+a re-parse against about 20 ms a slice, 6 parses over a walked `UPDATE` of
+60,000 rows. C3's is 5.7 % on the join under a two-variant plan, gross.
+C4's is 5.9 % on `ns1.t2`, 10.2 % with one view in the instance (two
+scans) and 29.1 % with the view and 100 more relations, because the scan
+reads every `sys.objects` row. **C1 through today's `KeptParse::Of` would
+cost more than it removes**: at `C_PARSE` it lexes three times
+(`HolesDelimited`, the parse, `ArgumentsOf`) and walks for holes, 1.08 to
+3.44 µs, and net of the parse it moves and of the lex it removes it is
+0.33 to 0.42 µs dearer than today's text path on a point shape and
+0.76 µs on the join. EM-Q11 therefore states C1's zero-hole path. **The
+query-layer `SELECT` (EM-R7)** parses 3 times (1.59 µs). Under
+C1 as first written, a native parse that fails would run once more, at
+`C_PARSE`. EM-Q10 keeps the failure instead.
+
+**C5's census.** `tools/eqbench` times every DML statement as a named
+statement with `?` holes, which EA's kept parse already serves. `sim/`
+draws its literals from a seed. No shape class repeats its literals.
+
+**(iv) The refusal byte** (§8, "Found on the way"): confirmed. With two
+leading spaces, a named statement names a byte 2 higher than the same text
+unnamed, in six of seven statements tried. This predates EM, and EM-R1
+keeps it. It is recorded at
+`docs/inflight/bugs/kept-parse-refusal-byte-counts-leading-whitespace.md`.
+C1 parses `Trim(sql)`.
+
+**G0.**
+
+| candidate | obligation | bar | G0 |
+|---|---|---|---|
+| C1 | holds, with EM-Q10 (a) and EM-Q11 (a) | met on the join (6.4 %) | **admitted** |
+| C2 | not examined further | 0.02 % | **dropped**: the parse is noise against a slice |
+| C3 | holds, with a debug cross-check against `ArgumentsOf` | met (5.7 %, gross) | **admitted** |
+| C4 | holds on `ResolveRelation` and `ResolveView` (EM-Q9 (b)) | met (5.9 % to 29.1 %) | **admitted** |
+| C5 | - | no shape class | **dropped** |
+
+**C1 as admitted.** At an unnamed `C_PARSE` whose text has no `?`, is at
+most `KeptParse::kMaxText` and whose first word is `SELECT`, `INSERT`,
+`UPDATE` or `DELETE`, the trimmed text is parsed once, by the parser the
+dispatcher would use:
+
+- **A DML parse that succeeds** is kept as a zero-hole `KeptParse`. Its
+  fingerprint and arguments come from that parse (EM-Q11, C3's
+  collection), and the reply's `pattern_id` is the parse's (EM-Q4 (a)).
+- **One that fails** keeps its refusal, its lock-clause fact and its
+  fingerprint (EM-Q10 (a)). `FingerprintOf` answers the reply as today.
+- **Every other text** takes today's path, byte for byte (EM-R5).
+
+**The stage order.** S1 spikes C4, C3 and C1 in one binary. They serve
+disjoint cells (qualified names, plan-governed text, plain text), so one
+interleaved A/B, against an A2 copy of A, attributes each. S2's order,
+provisional until G1's figures (§6): C4 first (the largest saving), then
+C3, then C1. C3 goes before C1 because C1's kept parse takes its arguments
+from C3's collection, and that dependency, not their S0 savings (0.66 µs
+and 0.68 µs, a tie; S0 ran no floor), puts C3 first.
+
+**Review** (`critics-developer`, at the step's diff on `b46ac5140`). It
+corrected in place the C4 percentages (now the scan over the qualified
+cell, 5.9 % to 29.1 %), the `KeptParse::Of` comparison (0.33 to 0.76 µs
+dearer, net of the parse it moves), the census's line drift, two
+citations, and an unmeasured share stated as measured. Its other
+findings:
+
+- **Taken**: a kept failure is consulted only where the dispatcher would
+  parse, and `C_BIND` runs `Substitute` exactly as today, so an
+  unterminated string is still refused at `C_BIND` in today's words.
+  C1's head test is the dispatcher's own routing (its first token, split as
+  `SplitFirstToken` splits it, with `DELETE STATISTICS` and every utility
+  form excluded), so no text the dispatcher does not route as DML pays a
+  parse at `C_PARSE` (EM-R5).
+- **Taken**: S1's C4 harness covers `DROP TABLE` and a re-create of the
+  namespace and the relation between a head and a resolution.
+- **Rejected**: the review's restatement of C4's proof as "a stale entry
+  resolves as the session-namespace oid of `USE` already does". It is
+  true of the code, but it admits into C4 a window whose outcome is not
+  shown to be a refusal, so C4 would no longer pass §0's test by
+  construction. EM-Q12 (a) gates the map instead.
+- **Not taken**: the driver's two `USE` statements inside the timed `nsu`
+  block, about 0.01 µs against C4's 0.48 µs, and its duplicated
+  parts-delta loop. The run is archived as it ran, and the review found
+  that no verdict changes.
+
+### EM-S1 - the spikes; G1 (2026-11-28)
+
+On `em-front-end-reuse` from `259a7fa3a`, the spikes applied to detached
+copies of `b46ac5140`. The measurement is
+`bench/v3.5.1/results-em-s1-poc-v3.5.1-70-g259a7fa3a.md`.
+
+- **C4 passes G1**: −0.40 µs on `ns1.t2` (−5.7 %) and −0.77 µs with a view
+  (−10.6 %), the A2 floor within ±0.4 %. EM-Q12 (a) is in the measured
+  spike. Its harness cell is red against the spike without the gate:
+  core 1 answers the dropped relation's oid, which measures EM-Q12's
+  premise.
+- **C3 passes G1**: −0.67 µs on the join under a two-variant plan
+  (−5.7 %).
+- **C4 and C3 together** lean +0.04 µs (+0.6 %, +0.7 %) on the point
+  `SELECT`, text and prepared, and +0.03 µs (+0.4 %) on the query-layer
+  `SELECT`. Each is outside its floor but inside A's spread, and is
+  reported as a lean (EM-R7).
+- **C1 fails G1, and EM-R7 refuses it.** It adds +0.36 to +0.45 µs to each
+  of the four text point shapes and +0.41 µs to the query-layer `SELECT`, and saves
+  0.08 µs on the join. The parse moved to `C_PARSE` runs 0.12 to 0.14 µs
+  dearer, and the kept parse's allocations and copies cost more than the
+  0.19 to 0.24 µs lex removed. **C1 is not implemented.** EM-Q3, EM-Q4,
+  EM-Q10 and EM-Q11 therefore govern nothing built. They stand as adopted
+  for the record, and EA-R4 stays unamended. Its equality harness (green)
+  and the spike are archived as figures, not code (EM-R8).
+- **A pre-existing window, measured at catalog level and not fixed**: an
+  unqualified relation name resolved within a statement, after another
+  core dropped and re-created it, answers the dropped relation's oid. This
+  is now recorded in the existing `known-gaps.md` entry ("A DDL that opens
+  and closes inside one statement..."), whose full close is unchanged.
+  C4's gate keeps qualified names out of it.
+- **The suite was not run on the spike trees.** C4's and C3's stages build
+  the same code with the harness as tests, and the full suite gates each.
+
+**The stages.** S2a builds C4, the larger saving. S2b builds C3. There is no
+S2c.
+
+**EM-S1 review** (`critics-developer`, at `cb768add9`). It recomputed every
+cell of the results file's table from the raw runs and found them right,
+and the G1 verdicts with them. It corrected the prose: C1's own figure is
+ALL against C43 (+0.36 to +0.45 µs, +6.0 % to +6.9 % of A); the lex it
+removes is 0.19 to 0.24 µs; the three-arm run's floor was not within
+±0.4 %; and the leans of C4 with C3 include the query-layer `SELECT`
+(+0.03 µs, +0.4 %). Applied at `60ad34bfe`, with the driver's docstring
+and its rotation check. Not taken: none.
+
+### EM-S2a - C4, the namespace map (2026-11-28)
+
+On `em-front-end-reuse` from `60ad34bfe`: the S1 spike's C4, with EM-Q12
+(a)'s gate (`Catalog::ResolveNamespace`, `CatalogCache::FindNamespaceOid`,
+`PutNamespaceOid`, cleared by `Invalidate`). Its harness is kept as
+`CatalogNamespaceCacheTest`, five cells. The first is red against the
+gate's removal; the last asserts the namespace's own refusal. The
+pre-existing window is now in `known-gaps.md`, at its existing entry.
+Overhead not measured; measured at the milestone's close.
+
+**Review** (`critics-developer`, the stage's diff). No correctness bug:
+every path it traced answers what `FindNamespaceOidByName(name, view)`
+would at that moment. These include another core's namespace or relation
+DDL after a head, a fill racing a bump, an uncommitted create, a rolled-back
+drop, the graveyard, `Bootstrap`, `DropCache` and a catalog with no
+instance words. Its other findings:
+
+- **Corrected**: S0's "`CreateNamespace` does not bump". It does,
+  through `InsertObjectRow` (`catalog.cpp:1299`), which only strengthens
+  the proof.
+- **Applied**: two comments, the reasoning written once at
+  `ResolveNamespace`'s body, and the weak last cell, which now asserts the
+  message, so a map not cleared at the head turns it red.
+- **Not taken**: none.
+
+**Suite**: 5,442 of 5,443 at the stage's code before the review's
+comment and test edits. The one failure is
+`DropTableReclaimCrashTest.AReclaimCutAnywhereIsFinishedByTheNextMount` on
+the `/tmp` quota held by other sessions' files, and it passes when rerun.
+After the edits, `CatalogNamespaceCacheTest` passes. The full suite runs
+again at S2b over both stages.
+
+### EM-S2b - C3, a plan's arguments from the parse (2026-11-28)
+
+On `em-front-end-reuse` from `e54ac0685`, the S1 spike's C3. The lexer
+collects the arguments as it lexes, when asked (`Lexer::CollectArguments`,
+fed in `ReadToken` beside the fingerprint, one `AppendArgument` shared with
+`ArgumentsOf`). `HandleSelect` asks while an administrator's plan is
+enabled, and `SelectBody` hands the compile the run's parse's arguments
+where no kept parse does. A debug build compares them with `ArgumentsOf`
+at every such compile and aborts on a difference. The writes'
+`FindWritePlan` keeps its lex, which S0 did not measure. The harness is
+kept as `KeptParseTest.ACollectingParseGivesArgumentsOfItsText`. A mutant
+collector that dropped integer arguments aborted `admin_plans_test` at the
+debug check, so the plan tests' own statements exercise it. Overhead not
+measured; measured at the milestone's close.
+
+**Review** (`critics-developer`, the stage's diff). No bug: it traced the
+parser's text against `line`, a failed parse, the whole token stream of a
+successful one, the DDL lexer copies, `ANALYZE`, a subquery, an absorbed
+view, re-runs, the views' lifetime across yields, `any()` changing between
+parse and compile, and `KeptFor` at both sites. **Applied**: a defaulted
+`StatementArgument::operator==`, which replaces both comparison loops, and
+the redundant `!line.empty()` dropped. **Not taken**: one accessor
+fewer on the lexer (`collects_arguments`). It saves one line and moves the
+lexer's public surface. **Noted for the close**: `ReadToken` now tests one
+flag on every token of every lex, which EM-R7's measurement prices.
+
+**Suite**: 5,442 of 5,444 before the review's cuts. The two failures are
+`DropTableReclaimCrashTest`, on the `/tmp` quota (it passes rerun on disk),
+and `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the
+two-core flake memory records at about 1 in 5 at base (4 of 5 rerun).
+After the cuts, the parser, plan and kept-parse cells (195) pass. The
+whole suite runs again at the close.
+
+### EM-Sz - the close (2026-11-28)
+
+On `em-front-end-reuse`, the code at `aa8eaebbc` (`v3.5.1-74-gaa8eaebbc`)
+against `b46ac5140`, measured by `ck-tester`
+(`bench/v3.5.1/results-em-close-v3.5.1-74-gaa8eaebbc.md`; two runs of 9
+rounds, A2 a byte copy of A):
+
+- **C4 holds its saving**: −0.38 µs on `ns1.t2` (−5.6 %), −0.71 µs with a
+  view (−10.0 %), each more than nine times its cell's floor.
+- **C3 holds its**: −0.5 to −0.9 µs (4 to 8 %) on the join under a
+  two-variant plan. The direction holds in both runs, and the cell's floor
+  is wide (−1.5 %, −4.0 %).
+- **EM-R7 is not shown to hold to the floor.** The point `SELECT` leans
+  +1.0 % text and +1.3 % prepared, `DELETE` +0.9 %, and `t2` under `USE`
+  +1.5 %: +0.05 to +0.09 µs, each inside A's spread in one run or the
+  other, with the sign repeating across both runs and EM-S1's C43 arm.
+  The query-layer `SELECT`, `INSERT` and both joins are inside the floor.
+  **CLA's reading, not measured**: the prepared point `SELECT` runs none of
+  EM's code (no parse, no qualifier, no plan) and leans as much as the text
+  cells, which points to code placement in the binary rather than to EM's
+  work. No arm separates C3 from C4, so the lean is not attributed. It is
+  reported as a lean, not as a pass and not as a separated regression.
+
+**Documents.**
+
+- `catalog.md` CT3 states C4.
+- `parser-v2.md`'s plan paragraph states C3.
+- `known-gaps.md`: the second-lex entry records C1's measured failure, the
+  multi-variant entry narrows to writes, and the stale-memo entry records
+  the pre-head form.
+- `docs/inflight/bugs/kept-parse-refusal-byte-counts-leading-whitespace.md`
+  is new.
+- `CLAUDE.md`'s Namespaces and Query language rows.
+- The SQL surface is unchanged, so the manual is too.
+- `protocol.md` §5 is unchanged, since C1 was not built and EA-R4 stands.
+
+**The sync.** `git fetch origin` found `origin/main` still at `b46ac5140`,
+so there was nothing to merge.
+
+**Achieved, narrowed.** Two of the five candidates are built:
+
+| candidate | outcome |
+|---|---|
+| C2 | dropped at G0 |
+| C5 | dropped at G0 |
+| C1 | dropped at G1 |
+| C3 | built |
+| C4 | built |
+
+**Suite at the close** (`aa8eaebbc`'s code): 5,442 of 5,444. The two
+failures are `DropTableReclaimCrashTest`, on the `/tmp` quota held by other
+sessions' files (it passes rerun on disk), and
+`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+the two-core flake memory records (2 of 3 rerun). Neither is a green run
+of the whole suite, and this log does not report one.

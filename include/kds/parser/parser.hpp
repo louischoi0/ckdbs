@@ -53,6 +53,14 @@ public:
     // not SELECT/INSERT/UPDATE/DELETE - which is not an error and never was.
     std::optional<Fingerprint> fingerprint() const noexcept { return lexer_.fingerprint(); }
 
+    // The statement's arguments, collected by the parse's own lexer (EM's
+    // C3, `Lexer::CollectArguments`): asked before `Parse()`, and after a
+    // successful one equal to `ArgumentsOf` of the text. nullptr unasked.
+    void CollectArguments() noexcept { lexer_.CollectArguments(); }
+    const std::vector<StatementArgument>* arguments() const noexcept {
+        return lexer_.collects_arguments() ? &lexer_.arguments() : nullptr;
+    }
+
     // Whether the parse met a locking clause (`ParseLockClause` consumed a
     // `FOR`), accepted or refused. A statement that reached one is answered
     // by the grammar that read it up to there, never by a fallback to the
