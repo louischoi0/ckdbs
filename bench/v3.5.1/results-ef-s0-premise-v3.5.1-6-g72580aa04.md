@@ -1,6 +1,6 @@
 # EF-S0: a short read through equal clients on `main`, and what each scenario client adds
 
-**One line.** On `main` at `72580aa04`, through clients that count rows on both sides, a tuple key lookup is 20.1 µs on KDS against 22.1 µs on PostgreSQL 18.7 (1.10x, on 7.0 µs against 10.9 µs of server CPU), and every row-returning shape is 1.47x to 2.01x; **the scenario drivers' KDS client adds 16.6 µs a statement and 1.4 µs to 1.7 µs a returned 8-column row, where PostgreSQL's decoding client adds 0.8 µs and 0.7 µs to 0.8 µs**, which turns the same lookup into 0.62x to 0.63x. The premise EF was asked for - a short read's fixed cost is PostgreSQL's lead - is the client's on this host, and EF-Q1's gate reads "the engine stage does not open" on this evidence. One shape is behind on equal clients and it is EH's: a global fold at 0.71x on 1.40x the server CPU.
+**One line.** On `main` at `72580aa04`, through clients that count rows on both sides, a tuple key lookup is 20.1 µs on KDS against 22.1 µs on PostgreSQL 18.7 (1.10x, on 7.0 µs against 10.9 µs of server CPU), the four other reads that fold nothing are 1.47x to 2.01x and the grouped fold 1.20x; **the scenario drivers' KDS client adds 16.6 µs a statement and 1.4 µs to 1.7 µs a returned 8-column row, where PostgreSQL's decoding client adds 0.8 µs and 0.7 µs to 0.8 µs**, which turns the same lookup into 0.62x to 0.63x. The premise EF was asked for - a short read's fixed cost is PostgreSQL's lead - is the client's on this host, and EF-Q1's gate reads "the engine stage does not open" on this evidence, which is `pk`'s alone: the 200-row tape the gate also names was not run. One shape is behind on equal clients and it is EH's: a global fold at 0.71x on 1.40x the server CPU.
 
 Measured by CLA in the session that opened EF (no `ck-tester` agent was spawned). Driver: `tools/parity_bench.py` as this stage commits it - `--kds-client` and `--pg-client` added, and a containerised backend's host pid resolved for its `schedstat`; passes A and B ran before `--pg-client` was added, which changes neither's timed path.
 
@@ -115,13 +115,13 @@ KDS idle tick in this pass: 15,720 µs of server CPU a second, subtracted from K
 - **Which scenario times which pair** (read at `72580aa04`): scenario 4's twin times `pg_wire`'s `send_command`, which counts (`tools/pg_scenario4_cabinopt_days.py:56-70`, `tools/pg_wire.py:313-322`), so its cells are pass B's pair; scenario 2's twin times its reads through `rows_timed` and scenario 3's through `Client.timed`, both `fetch` and a decode of every value (`tools/pg_scenario2_freight.py:164-168`, `tools/pg_scenario3_library.py:109-121`), so their reads are pass C's pair; scenario 1's twin decodes and renders (`tools/pg_scenario1_backtest.py:266-292`). Every KDS driver times `ckdbs_cli.send_command`.
 - **The statement term is the KDS client's on every pair**: 16.6 µs against 0.8 µs. It is the whole of scenario 4's `pk` gap (31.9 µs against 23.2 µs in the comparison file, 36.8 µs against 22.4 µs to 23.2 µs here) and of a booking's point reads.
 - **The row term is about twice PostgreSQL's**: 1.4 µs to 1.7 µs a row against 0.7 µs to 0.8 µs for 8 columns, so a decoded pair still favours PostgreSQL on rows (`bar-range` 0.93x, `symbol-history` 0.86x in pass C) where the counting pair has KDS at 1.74x and 1.50x.
-- **KDS's server CPU is higher behind `send_command` on the shapes that return many rows** (`bar-range` 43.1 µs in pass A, 61.7 µs and 60.8 µs in B and C; `symbol-history` 1,719.9 µs against 2,331.8 µs and 2,192.2 µs) and not on the lookup (7.0 µs against 6.4 µs and 6.6 µs). Not attributed; a slower reader is the only difference between the passes.
+- **KDS's server CPU is higher behind `send_command` on the shapes that return many 8-column rows** (`bar-range` 43.1 µs in pass A, 61.7 µs and 60.8 µs in B and C; `symbol-history` 1,719.9 µs against 2,331.8 µs and 2,192.2 µs) and not on the lookup (7.0 µs against 6.4 µs and 6.6 µs), nor on `agg-by-session`'s 7,560 three-column rows (5,471.1 µs against 5,435.3 µs and 5,498.9 µs). Not attributed; a slower reader is the only difference between the passes.
 
 ## Against `e81ac7cd` (another host; ratios only)
 
 | shape | KDS / PG at `e81ac7cd` | KDS / PG here | KDS / PG server CPU at `e81ac7cd` | here |
 |---|---|---|---|---|
-| `pk-lookup` | 1.30x | 1.10x | 0.64x | 0.64x |
+| `pk-lookup` | 1.30x | 1.10x | 0.64x | 0.65x |
 | `bar-range` | 1.42x | 1.74x | 0.74x | 0.54x |
 | `symbol-history` | 1.26x | 1.50x | 0.87x | 0.84x |
 | `day-slice` | 1.22x | 1.47x | 0.81x | 0.65x |
@@ -133,13 +133,14 @@ The picture is the one `e81ac7cd` gave: ahead on every shape but the global fold
 
 ## What the run teaches
 
-1. **A scenario file's "PostgreSQL ahead" on a statement that returns rows is a statement about two Python clients until shown otherwise.** On equal clients no such shape is behind.
+1. **A scenario file's "PostgreSQL ahead" on a statement that returns rows is a statement about two Python clients until shown otherwise.** On equal clients no such shape is behind but the global fold, which returns one row and is item 3's.
 2. **The lookup's server CPU is 7.0 µs against PostgreSQL's 10.9 µs.** There is no engine fixed cost to recover against PostgreSQL on this path; what §1.3 of EF's order lists is what a statement costs, not a deficit.
 3. **The fold is the engine's deficit**, and it is smaller here than the 0.47x the scenario drivers read: 0.71x of the rate, 1.40x the server CPU.
 
 ## What is cut, absent or unverified
 
 - **A booking's reads were not run** (EF-S0's plan named them): they are point reads through the same two clients as `pk-lookup`, and the scenario 2 schema was left for S2.
+- **The 200-row tape was not run either** (EF-S0's plan named it, and EF-Q1's gate names it beside `pk`): scenario 4's `tape200` is a `symbol` equality over a 200-row relation, and no shape here is it - `bar-range` returns 201 rows by a tuple key range. EF-Q1 is read above on `pk` alone.
 - **No quiet gate**, three to five reps, 30 s: a ratio inside 10 % of 1 is not a finding here (the lookup's 1.10x is just over its 7.7 % spread).
 - **The row term for other widths** is not measured: 8 columns here, 9 in `kwp.py`'s note.
 - **Why a slower reader raises KDS's server CPU** on the row-heavy shapes is not attributed.
