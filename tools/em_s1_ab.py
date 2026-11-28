@@ -2,9 +2,10 @@
 """EM-S1's G1 measurement (`instructions/v3.2.0/workorder-em-front-end-reuse-without-quiet-wrong.md`
 section 4): the spike's saving, interleaved A/B with an A2 floor.
 
-Three binaries - A (the base), A2 (a byte copy of A, the floor) and B (the
-spike) - each run every cell in a fresh server, the arms' order rotating per
-round. A cell is `tools/em_s0_premise.py`'s: server CPU per statement over a
+Every arm given - A (the base), A2 (a byte copy of A, the floor) and the
+spikes - runs every cell in a fresh server, the arms' order rotating per
+round; `--rounds` must be a multiple of the arm count, so each arm takes
+each position equally. A cell is `tools/em_s0_premise.py`'s: server CPU per statement over a
 block, with the EM-S0 spike's parts where a build carries it. The cells are
 the text and prepared paths of the point shapes and the join, the
 query-layer `SELECT` (EM-R7), the qualified `ns1.t2` and `t2` under `USE`, the
@@ -12,7 +13,7 @@ qualified name again with a view in the instance, and the join under a
 two-variant plan.
 
     em_s1_ab.py --arm A=BIN --arm A2=BIN --arm B=BIN --workdir D --out OUT.json
-                [--rounds 5] [--k 2000] [--port 15885] [--server-cpu 2]
+                [--rounds 8] [--k 2000] [--port 15885] [--server-cpu 2]
                 [--client-cpu 5] [--heartbeat F]
 """
 import argparse, hashlib, json, os, sys, time
@@ -58,16 +59,12 @@ def run_arm(binary, workdir, port, server_cpu, k, n, seed, beat):
     return out
 
 
-def med(xs):
-    return s0.med(xs)
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", action="append", required=True, help="NAME=BINARY")
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--rounds", type=int, default=5)
+    ap.add_argument("--rounds", type=int, default=8)
     ap.add_argument("--k", type=int, default=2000)
     ap.add_argument("--n", type=int, default=10000)
     ap.add_argument("--port", type=int, default=15885)
@@ -83,6 +80,8 @@ def main():
 
     os.sched_setaffinity(0, {a.client_cpu})
     arms = [tuple(x.split("=", 1)) for x in a.arm]
+    if a.rounds % len(arms):
+        sys.exit(f"--rounds {a.rounds} is not a multiple of {len(arms)} arms")
     meta = {"arms": {}, "rounds": a.rounds, "k": a.k, "n": a.n, "host_before": host_state(),
             "started": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}
     for name, binary in arms:
@@ -103,12 +102,12 @@ def main():
         row = {}
         for name, _ in arms:
             cells = [x[key] for x in rounds[name]]
-            row[name] = {"cpu_us": round(med([c["cpu_us"] for c in cells]), 3),
+            row[name] = {"cpu_us": round(s0.med([c["cpu_us"] for c in cells]), 3),
                          "cpu_us_min": round(min(c["cpu_us"] for c in cells), 3),
                          "cpu_us_max": round(max(c["cpu_us"] for c in cells), 3)}
             for part in s0.PARTS:
                 if part + "_us" in cells[0]:
-                    row[name][part + "_us"] = round(med([c[part + "_us"] for c in cells]), 3)
+                    row[name][part + "_us"] = round(s0.med([c[part + "_us"] for c in cells]), 3)
         summary[key] = row
     with open(a.out, "w") as f:
         json.dump({"meta": meta, "hosts": hosts, "summary": summary, "rounds": rounds}, f, indent=1)

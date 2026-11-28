@@ -3,7 +3,8 @@
 **Finding.** On worktree `em-front-end-reuse` from `259a7fa3a`
 (`v3.5.1-70-g259a7fa3a`; the spikes applied to detached copies of
 `b46ac5140`, whose engine source `259a7fa3a` does not change), with the A2
-floor within ±0.4 % on every cell, G1 passes two of the three:
+floor within ±0.4 % on every cell of the four-arm run, G1 passes two of the
+three:
 
 - **C4 passes.** The namespace map saves 0.40 µs of 6.94 µs on `ns1.t2`
   (5.7 %), and 0.77 µs of 7.21 µs with a view in the instance (10.6 %).
@@ -12,24 +13,32 @@ floor within ±0.4 % on every cell, G1 passes two of the three:
 - **C4 and C3 together** cost nothing on the cells they do not serve that
   A's own spread separates. The lean is +0.04 µs (+0.6 % and +0.7 %) on the
   point `SELECT`, text and prepared, which is outside the floor (±0.1 %
-  there) and inside A's spread (6.21 to 6.33 µs), and it is reported as a
-  lean, per EM-R7.
-- **C1 fails.** Over C4 and C3, the one parse at `C_PARSE` adds 0.35 to
-  0.45 µs to every text point statement (+5.9 % to +7.2 % of A) and 0.41 µs
+  there) and inside A's spread (6.21 to 6.33 µs and 5.35 to 5.47 µs), and
+  +0.03 µs (+0.4 % to +0.5 %) on the query-layer `SELECT`, `t2` under `USE`
+  and the prepared join, each outside its floor (-0.2 % to -0.3 %) and inside
+  A's spread. Each is reported as a lean, per EM-R7.
+- **C1 fails.** Over C4 and C3, the one parse at `C_PARSE` adds 0.36 to
+  0.45 µs to each of the four text point shapes (+6.0 % to +6.9 % of A;
+  +0.33 and +0.35 µs on `ns1.t2` and `t2` under `USE`) and 0.41 µs
   to the query-layer `SELECT` (+4.4 %). It saves 0.08 µs on the join. What
-  it adds is more than the 0.21 to 0.25 µs lex it removes: a parse at
-  `C_PARSE` that collects its arguments and runs 0.10 to 0.14 µs dearer
+  it adds is more than the 0.19 to 0.24 µs lex it removes (C43's `fp` on the four point shapes): a parse at
+  `C_PARSE` that collects its arguments and runs 0.12 to 0.14 µs dearer
   than the dispatcher's, and a kept parse's allocations and copies (the
   `KeptParse`, its arguments and exact text, the `BoundStatement`, the
   substituted text, `Materialize`). The kept failure carries its own text
   and status. C1 is not built (G1), and EM-R7 would refuse it anyway.
 
 A first three-arm run measured C1 with the spike's one shared trim
-(`parser::TrimmedText`) out of line. Every cell of that B arm read dearer,
-prepared statements included (+0.11 to +0.22 µs). The second run made the
+(`parser::TrimmedText`) out of line. Every cell of that B arm
+outside C4's and C3's cells and the text join read dearer, prepared
+statements included (+0.11 to +0.23 µs on three of the four; the fourth,
+the prepared join under the plan, +0.62 µs against an A2 floor of +0.38 µs).
+That run's floor is not within ±0.4 %: -2.4 % on the prepared join, +1.9 %
+and +4.4 % on the plan's two cells. The second run made the
 function inline and measured C4 with C3 as an arm of their own, which
-separated C1's cost from the rest. Prepared statements still read 0.11 to
-0.26 µs dearer with C1 than with C4 and C3 alone. That cost is not
+separated C1's cost from the rest. The prepared point `SELECT` and `UPDATE`
+still read 0.11 and 0.26 µs dearer with C1 than with C4 and C3 alone; the
+two prepared joins read 0.17 and 0.06 µs cheaper. That cost is not
 attributed; C1 is dropped either way.
 
 ## 1. Stamp
@@ -68,7 +77,9 @@ attributed; C1 is dropped either way.
 The spike's parts confirm each mechanism (`s1-four-arms.json`, per arm):
 with C4 the `ns` scope is never entered on a qualified cell; with C3 the
 plan's `args` scope is never entered; with C1 the text path's `fp` scope
-is not entered and `bind` and `mat` are.
+is not entered and `bind` and `mat` are, but on the query-layer cell, whose
+native parse fails and whose reply `FingerprintOf` answers as today (`fp`
+0.283 µs).
 
 ## 3. G1
 
@@ -76,7 +87,7 @@ is not entered and `bind` and `mat` are.
 |---|---|---|---|---|
 | C4 | `CatalogNamespaceCacheTest`, 5 cells, green; its first cell red against the spike with `MemoIsCurrent()` removed (core 1 answered the dropped relation's oid 4001, the scan 4005) | 0.40 µs and 0.77 µs | 5.7 %, 10.6 % | **passes** |
 | C3 | `KeptParseTest.ACollectingParseGivesArgumentsOfItsText`, 218 statements, green; the dispatcher's debug cross-check against `ArgumentsOf` at every plan-governed compile | 0.67 µs | 5.7 % | **passes** |
-| C1 | `KeptParseTest.AnUnnamedStatementsOneParseIsTheDispatchersParseOfItsText`, over 300 kept and over 30 declined texts, each with and without surrounding white space, green | none: +0.35 to +0.45 µs on every point shape, -0.08 µs on the join | - | **fails** |
+| C1 | `KeptParseTest.AnUnnamedStatementsOneParseIsTheDispatchersParseOfItsText`, over 300 kept and over 30 declined texts, each with and without surrounding white space, green | none: +0.36 to +0.45 µs on every point shape, -0.08 µs on the join | - | **fails** |
 
 The suite was not run on the spike trees as a whole. C4's and C3's
 implementation stages (EM-S2a, EM-S2b) build the spike's C4 and C3 code
