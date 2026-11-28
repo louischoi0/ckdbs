@@ -84,6 +84,8 @@ PostgreSQL's scenario-4 latencies are 1,000,000 / qps of its results file's medi
    The reads are bound 1's statements. `recipe-read` is also a different access on the two sides: an index on PostgreSQL, a walk of 93 rows on KDS, by the drivers' design. **`result-insert`'s 0.81x is not attributed**: scenario 2's autocommit loads at `strict` read 136.0 µs to 152.4 µs on KDS against 146.7 µs to 153.6 µs on PostgreSQL, so an autocommit insert is not slower as such; scenario 1's cell is `group` and its statement is not examined here.
 4. **The full-scan aggregate is behind, and part of it is the engine's.** `close` is four statements, three rounds: `COUNT(*)` and `SUM(qty)` over the board, `COUNT(*)` over the 10,000-row tape, and `symbol, COUNT(*) ... GROUP BY symbol`, which returns 1,000 rows (`tools/scenario4_cabinopt_days.py:434-443`), so bound 1 is in the 0.47x and its share is not measured. On equal clients at `e81ac7cd` the parity file read `agg-global` at 0.61x of PostgreSQL's rate on 1.63x its server CPU, about 95 ns against 59 ns per row folded; that is the engine, and nothing since is known to have moved it.
 
+Items 1, 3 and 4 are taken up by the work orders EF, EG and EH (`instructions/v3.2.0/`, written 2026-11-28, none opened), each of which re-measures its premise on `main` on equal terms before anything is built.
+
 ## What this file does not carry
 
 - No measurement of its own, no percentile table and no wait breakdown: both are in the PostgreSQL results file for its side, and absent for the KDS side.
