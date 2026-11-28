@@ -1,0 +1,528 @@
+diff --git a/include/kds/base/em_spike.hpp b/include/kds/base/em_spike.hpp
+new file mode 100644
+index 000000000..506838081
+--- /dev/null
++++ b/include/kds/base/em_spike.hpp
+@@ -0,0 +1,46 @@
++#pragma once
++// EM-S0 SPIKE - never committed to the source tree; archived beside the
++// results so the run can be rebuilt. EA-S0's spike (bench/v3.4.17/archive/
++// ea-s0-premise-v3.4.17-202-g481d101aa/ea_spike.hpp) with five more scopes:
++// FindNamespaceOidByName (ns), KeptParse::Of (keptof), HolesDelimited (holes),
++// parser::Bind (bind) and BoundStatement::Materialize (mat). `Report()` is
++// appended to PING's reply.
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <string>
++namespace kds::em_spike {
++enum Cat { kParse, kFingerprint, kArguments, kSubstitute, kCount, kCompile, kNamespace, kKeptOf,
++           kHoles, kBind, kMaterialize, kCats };
++inline std::atomic<std::uint64_t> g_ns[kCats];
++inline std::atomic<std::uint64_t> g_calls[kCats];
++inline thread_local int t_depth[kCats];
++struct Scope {
++    Cat c;
++    std::chrono::steady_clock::time_point t0;
++    bool outer;
++    explicit Scope(Cat cat) : c(cat), outer(t_depth[cat]++ == 0) {
++        if (outer) t0 = std::chrono::steady_clock::now();
++    }
++    ~Scope() {
++        if (outer) {
++            const auto d = std::chrono::steady_clock::now() - t0;
++            g_ns[c].fetch_add(static_cast<std::uint64_t>(
++                                  std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()),
++                              std::memory_order_relaxed);
++            g_calls[c].fetch_add(1, std::memory_order_relaxed);
++        }
++        --t_depth[c];
++    }
++};
++inline std::string Report() {
++    static const char* names[kCats] = {"parse", "fp",     "args",  "subst", "count", "compile",
++                                       "ns",    "keptof", "holes", "bind",  "mat"};
++    std::string s;
++    for (int i = 0; i < kCats; ++i) {
++        s += std::string(" ") + names[i] + "_ns=" + std::to_string(g_ns[i].load()) + " " +
++             names[i] + "_calls=" + std::to_string(g_calls[i].load());
++    }
++    return s;
++}
++}  // namespace kds::em_spike
+diff --git a/include/kds/catalog/catalog.hpp b/include/kds/catalog/catalog.hpp
+index 856baec12..ef7a2fe2b 100644
+--- a/include/kds/catalog/catalog.hpp
++++ b/include/kds/catalog/catalog.hpp
+@@ -545,6 +545,14 @@ public:
+                                   Oid default_namespace, std::uint32_t byte_offset = 0,
+                                   const txn::ReadView* view = nullptr);
+ 
++    // `FindNamespaceOidByName` for a statement's qualifier, from the
++    // cache on the unfiltered route (EM's C4; `FindTableOidByName`'s
++    // rule): a lookup under a view neither reads nor fills it, and the
++    // reserved spellings are answered first, as they always were. Only
++    // `ResolveRelation` and `ResolveView` ask it (EM-Q9 (b)); the DDL
++    // callers keep their scan.
++    StatusOr<Oid> ResolveNamespace(std::string_view name, const txn::ReadView* view);
++
+     // The SQL spelling of a namespace oid for a message: `sys`, `public`, a
+     // live namespace's name, or `oid N` for one no longer live.
+     std::string NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view = nullptr);
+diff --git a/include/kds/catalog/catalog_cache.hpp b/include/kds/catalog/catalog_cache.hpp
+index 7406198bf..49bee398a 100644
+--- a/include/kds/catalog/catalog_cache.hpp
++++ b/include/kds/catalog/catalog_cache.hpp
+@@ -24,6 +24,7 @@
+ //
+ //   cached, dropped on the DDL version bump:
+ //     name -> oid                    (sys.objects)
++//     namespace name -> oid          (sys.objects)
+ //     oid  -> TableAccess            (sys.tables + sys.columns)
+ //     the table list                 (sys.objects)
+ //     the opted patterns, fetch_id -> PatternAccess (sys.patterns), whole
+@@ -104,6 +105,19 @@ public:
+     // earlier keeps pointing at the same value.
+     void PutOidByName(Oid namespace_oid, std::string_view name, Oid oid);
+ 
++    // ---- namespace name -> oid (sys.objects) -----------------------------
++    //
++    // A live user namespace's oid by its name (EM's C4). Positive only, as
++    // the relation names above are: a namespace's oid is never issued
++    // again and no rename exists, so an entry goes stale only when its
++    // namespace is dropped, and `DropNamespace` moves the word. The one
++    // reader, `Catalog::ResolveNamespace`, asks it only while the memo is the
++    // word's (`MemoIsCurrent`), so no entry it serves is older than the scan
++    // it replaces (EM-Q12 (a)).
++    // nullptr on a miss; valid until the next Invalidate().
++    const Oid* FindNamespaceOid(std::string_view name) noexcept;
++    void PutNamespaceOid(std::string_view name, Oid oid);
++
+     // ---- oid -> TableAccess (sys.tables + sys.columns) -------------------
+ 
+     const TableAccess* FindTableAccess(Oid oid) noexcept;
+@@ -290,6 +304,9 @@ private:
+     // Namespace oid -> name -> relation oid: nested so a lookup by
+     // string_view needs no composite key built per statement.
+     std::unordered_map<Oid, NameMap> name_to_oid_;
++    // `FindNamespaceOid`'s map. Not retired under a pin: no caller holds an
++    // entry past its lookup.
++    NameMap namespace_oids_;
+ 
+     // Node-based for the same reference-stability reason as table_access_:
+     // the trail recorder holds an entry across its write. Opted rows only,
+diff --git a/include/kds/parser/lexer.hpp b/include/kds/parser/lexer.hpp
+index a0f6c2008..5b258d598 100644
+--- a/include/kds/parser/lexer.hpp
++++ b/include/kds/parser/lexer.hpp
+@@ -94,6 +94,16 @@ public:
+         return fingerprint_.Result();
+     }
+ 
++    // **The arguments as they are lexed** (EM's C3): asked before the first
++    // token, every token produced is also collected as `ArgumentsOf` would
++    // collect it, by the same hook as the fingerprint, so the two cannot see
++    // different streams. Equal to `ArgumentsOf(sql)` once the lexer has
++    // produced `kEof` with no `kError` before it, which a successful parse
++    // guarantees; before that, a prefix of it. Unasked, nothing is kept.
++    void CollectArguments() noexcept { collect_arguments_ = true; }
++    bool collects_arguments() const noexcept { return collect_arguments_; }
++    const std::vector<StatementArgument>& arguments() const noexcept { return arguments_; }
++
+ private:
+     // ReadToken() skips to the token, calls ScanToken() for it, and stamps
+     // the byte range it covered. ScanToken() never sets a position: doing
+@@ -107,6 +117,8 @@ private:
+     Token peeked_;
+     bool has_peeked_ = false;
+     FingerprintAccumulator fingerprint_;
++    bool collect_arguments_ = false;
++    std::vector<StatementArgument> arguments_;
+ };
+ 
+ }  // namespace kds::parser
+diff --git a/include/kds/parser/parser.hpp b/include/kds/parser/parser.hpp
+index 114d0b516..78f7c29cf 100644
+--- a/include/kds/parser/parser.hpp
++++ b/include/kds/parser/parser.hpp
+@@ -53,6 +53,14 @@ public:
+     // not SELECT/INSERT/UPDATE/DELETE - which is not an error and never was.
+     std::optional<Fingerprint> fingerprint() const noexcept { return lexer_.fingerprint(); }
+ 
++    // The statement's arguments, collected by the parse's own lexer (EM's
++    // C3, `Lexer::CollectArguments`): asked before `Parse()`, and after a
++    // successful one equal to `ArgumentsOf` of the text. nullptr unasked.
++    void CollectArguments() noexcept { lexer_.CollectArguments(); }
++    const std::vector<StatementArgument>* arguments() const noexcept {
++        return lexer_.collects_arguments() ? &lexer_.arguments() : nullptr;
++    }
++
+     // Whether the parse met a locking clause (`ParseLockClause` consumed a
+     // `FOR`), accepted or refused. A statement that reached one is answered
+     // by the grammar that read it up to there, never by a fallback to the
+diff --git a/src/catalog/catalog.cpp b/src/catalog/catalog.cpp
+index 1442d80de..7c82a5b5a 100644
+--- a/src/catalog/catalog.cpp
++++ b/src/catalog/catalog.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/catalog/catalog.hpp"
+ 
+ #include "kds/catalog/foreign_key.hpp"
+@@ -2316,6 +2317,7 @@ StatusOr<std::size_t> Catalog::MarkColumnsSlotClean(Oid table_oid,
+ 
+ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
+                                               const txn::ReadView* view) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kNamespace);
+     // The reserved spellings first, and **before** the page scan rather
+     // than after it: `CreateNamespace` refuses these two names, so a row
+     // carrying one cannot exist - and if a file written by some other
+@@ -2338,6 +2340,21 @@ StatusOr<Oid> Catalog::FindNamespaceOidByName(std::string_view name,
+     return Status::NotFound("no namespace with this name");
+ }
+ 
++StatusOr<Oid> Catalog::ResolveNamespace(std::string_view name, const txn::ReadView* view) {
++    // Served and filled only while the memo is the word's (EM-Q12 (a)): an
++    // entry is then no older than the scan it replaces, so it names the
++    // namespace that scan would. Once another core's catalog write moved the
++    // word, the scan answers until this core's next head drops the map.
++    if (view != nullptr || name == kNamespaceSysName || name == kNamespacePublicName ||
++        !MemoIsCurrent()) {
++        return FindNamespaceOidByName(name, view);
++    }
++    if (const Oid* cached = cache_.FindNamespaceOid(name); cached != nullptr) return *cached;
++    auto found = FindNamespaceOidByName(name, nullptr);
++    if (found.ok()) cache_.PutNamespaceOid(name, found.value());
++    return found;
++}
++
+ std::string Catalog::NamespaceSpelling(Oid namespace_oid, const txn::ReadView* view) {
+     // A relation in `public` or `sys` has no row of its own spelling
+     // (`well_known.hpp`), so the two are answered from the constants.
+@@ -2362,7 +2379,7 @@ StatusOr<Oid> Catalog::ResolveRelation(std::string_view qualifier, std::string_v
+     };
+     Oid ns = default_namespace;
+     if (!qualifier.empty()) {
+-        auto named = FindNamespaceOidByName(qualifier, view);
++        auto named = ResolveNamespace(qualifier, view);
+         if (!named.ok()) {
+             if (named.status().code() != StatusCode::kNotFound) return named.status();
+             return at(Status::NotFound("no namespace named '" + std::string(qualifier) + "'"));
+@@ -4271,7 +4288,7 @@ StatusOr<std::optional<Oid>> Catalog::ResolveView(std::string_view qualifier,
+     if (!AnyView()) return std::optional<Oid>();
+     Oid ns = default_namespace;
+     if (!qualifier.empty()) {
+-        auto named = FindNamespaceOidByName(qualifier, view);
++        auto named = ResolveNamespace(qualifier, view);
+         if (!named.ok()) {
+             if (named.status().code() == StatusCode::kNotFound) return std::optional<Oid>();
+             return named.status();
+diff --git a/src/catalog/catalog_cache.cpp b/src/catalog/catalog_cache.cpp
+index 30f9c21ec..e68d24b00 100644
+--- a/src/catalog/catalog_cache.cpp
++++ b/src/catalog/catalog_cache.cpp
+@@ -34,6 +34,20 @@ void CatalogCache::PutOidByName(Oid namespace_oid, std::string_view name, Oid oi
+     if (inserted) ++stats_.fills;
+ }
+ 
++const Oid* CatalogCache::FindNamespaceOid(std::string_view name) noexcept {
++    const auto it = namespace_oids_.find(name);
++    if (it == namespace_oids_.end()) {
++        ++stats_.misses;
++        return nullptr;
++    }
++    ++stats_.hits;
++    return &it->second;
++}
++
++void CatalogCache::PutNamespaceOid(std::string_view name, Oid oid) {
++    if (namespace_oids_.try_emplace(std::string(name), oid).second) ++stats_.fills;
++}
++
+ const TableAccess* CatalogCache::FindTableAccess(Oid oid) noexcept {
+     auto it = table_access_.find(oid);
+     if (it == table_access_.end()) {
+@@ -205,6 +219,7 @@ void CatalogCache::Invalidate() noexcept {
+     ++generation_;
+     table_access_.clear();
+     name_to_oid_.clear();
++    namespace_oids_.clear();
+     table_list_.reset();
+     view_names_.reset();
+     view_defs_.clear();
+diff --git a/src/exec/step_compiler.cpp b/src/exec/step_compiler.cpp
+index 8c925986c..9d5d82d11 100644
+--- a/src/exec/step_compiler.cpp
++++ b/src/exec/step_compiler.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/exec/step_compiler.hpp"
+ 
+ #include "kds/exec/embedded_key.hpp"
+@@ -2618,6 +2619,7 @@ Status ProjectColumns(const Scope& scope, const std::vector<parser::ColumnName>&
+ StatusOr<StepChain> Compile(catalog::Catalog& catalog, const parser::SelectStmt& stmt,
+                             const txn::ReadView* view, PositionSink* declare,
+                             const StatementContext* context, const PlanOptions* plan) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kCompile);
+     // **No chain is compiled for a locking statement** (DC-R2): a chain's
+     // walk claims nothing, so whatever ran one - `ANALYZE`, a Waystone
+     // opt-in, a plan's example - would answer the statement with its clause
+diff --git a/src/parser/fingerprint.cpp b/src/parser/fingerprint.cpp
+index 2515bb90f..4f79d85a3 100644
+--- a/src/parser/fingerprint.cpp
++++ b/src/parser/fingerprint.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/parser/fingerprint.hpp"
+ 
+ #include "kds/parser/lexer.hpp"
+@@ -408,6 +409,7 @@ std::optional<Fingerprint> FingerprintAccumulator::Result() const noexcept {
+ }
+ 
+ std::optional<Fingerprint> FingerprintOf(std::string_view sql) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kFingerprint);
+     // Driven through the accumulator rather than duplicating its walk: one
+     // set of rules, two ways in. See fingerprint.hpp on why a second copy
+     // would be a hazard rather than a convenience.
+diff --git a/src/parser/kept_parse.cpp b/src/parser/kept_parse.cpp
+index 88bfb84e8..9954987a8 100644
+--- a/src/parser/kept_parse.cpp
++++ b/src/parser/kept_parse.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/parser/kept_parse.hpp"
+ 
+ #include <cctype>
+@@ -35,6 +36,7 @@ bool IsCaseWord(const Token& tok) noexcept {
+ }
+ 
+ bool HolesDelimited(std::string_view sql) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kHoles);
+     Lexer lexer(sql);
+     Token prev;
+     for (Token tok = lexer.Next(); tok.type != TokenType::kEof && tok.type != TokenType::kError;
+@@ -205,6 +207,7 @@ HoleValue HoleValueOfString(std::string value) {
+ }
+ 
+ std::optional<KeptParse> KeptParse::Of(std::string_view sql) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kKeptOf);
+     if (sql.size() > kMaxText || !HolesDelimited(sql)) return std::nullopt;
+     Parser parser(sql);
+     parser.AdmitHoles();
+@@ -240,6 +243,7 @@ bool KeptParse::Fill(Statement& stmt, const std::vector<HoleValue>* values) cons
+ StatusOr<std::shared_ptr<const BoundStatement>> Bind(std::shared_ptr<const KeptParse> kept,
+                                                      std::vector<HoleValue> values,
+                                                      std::string text) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kBind);
+     if (values.size() != kept->holes_) {
+         return Status::InvalidArgument(std::to_string(values.size()) +
+                                        " values were bound to a statement with " +
+@@ -279,6 +283,7 @@ StatusOr<std::shared_ptr<const BoundStatement>> Bind(std::shared_ptr<const KeptP
+ }
+ 
+ Statement BoundStatement::Materialize() const {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kMaterialize);
+     Statement stmt = kept->statement_;
+     // Every hole was reached when the parse was kept, and the walk is the
+     // same walk, so this fill cannot miss one.
+diff --git a/src/parser/lexer.cpp b/src/parser/lexer.cpp
+index d83934848..196e4b628 100644
+--- a/src/parser/lexer.cpp
++++ b/src/parser/lexer.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/parser/lexer.hpp"
+ 
+ #include <cctype>
+@@ -86,6 +87,28 @@ void Lexer::SkipWhitespaceAndComments() {
+     }
+ }
+ 
++// One token's argument, `ArgumentsOf`'s rule, shared with the lexer's own
++// collection (`Lexer::CollectArguments`) so the two cannot disagree.
++namespace {
++void AppendArgument(std::vector<StatementArgument>& out, const Token& tok) {
++    switch (tok.type) {
++        case TokenType::kIntLit:
++            out.push_back({StatementArgument::Kind::kInt, tok.text});
++            break;
++        case TokenType::kNumLit:
++        case TokenType::kStrLit:
++            out.push_back({StatementArgument::Kind::kStr, tok.text});
++            break;
++        case TokenType::kParam:
++        case TokenType::kNamedParam:
++            out.push_back({StatementArgument::Kind::kUnbound, {}});
++            break;
++        default:
++            break;
++    }
++}
++}  // namespace
++
+ Token Lexer::ReadToken() {
+     SkipWhitespaceAndComments();
+ 
+@@ -104,6 +127,7 @@ Token Lexer::ReadToken() {
+     // a token comes into existence, so it is the only place that contract
+     // can be kept without the caller's cooperation.
+     fingerprint_.Feed(tok);
++    if (collect_arguments_) AppendArgument(arguments_, tok);
+     return tok;
+ }
+ 
+@@ -314,25 +338,12 @@ std::string ShapeText(std::string_view sql) {
+ }
+ 
+ std::vector<StatementArgument> ArgumentsOf(std::string_view sql) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kArguments);
+     std::vector<StatementArgument> out;
+     Lexer lexer(sql);
+     for (Token tok = lexer.Next(); tok.type != TokenType::kEof && tok.type != TokenType::kError;
+          tok = lexer.Next()) {
+-        switch (tok.type) {
+-            case TokenType::kIntLit:
+-                out.push_back({StatementArgument::Kind::kInt, tok.text});
+-                break;
+-            case TokenType::kNumLit:
+-            case TokenType::kStrLit:
+-                out.push_back({StatementArgument::Kind::kStr, tok.text});
+-                break;
+-            case TokenType::kParam:
+-            case TokenType::kNamedParam:
+-                out.push_back({StatementArgument::Kind::kUnbound, {}});
+-                break;
+-            default:
+-                break;
+-        }
++        AppendArgument(out, tok);
+     }
+     return out;
+ }
+diff --git a/src/parser/parser.cpp b/src/parser/parser.cpp
+index 27e6e805c..d690f4011 100644
+--- a/src/parser/parser.cpp
++++ b/src/parser/parser.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include <atomic>
+ #include "kds/parser/parser.hpp"
+ 
+@@ -1570,6 +1571,7 @@ StatusOr<std::vector<Condition>> Parser::ParseOptionalWhere(std::uint32_t depth)
+ }
+ 
+ StatusOr<std::vector<Condition>> Parser::ParseConditions() {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kParse);
+     std::vector<Condition> conds;
+     auto tree = ParseBoolChain(0, /*is_or=*/true);
+     if (!tree.ok()) return tree.status();
+@@ -3885,6 +3887,7 @@ Status Parser::DeclineDmlWhereExpression(Status native) const {
+ }
+ 
+ StatusOr<Statement> Parser::Parse() {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kParse);
+     Token tok = lexer_.Next();
+ 
+     if (tok.type == TokenType::kEof) {
+@@ -4156,6 +4159,7 @@ StatusOr<AlterStmt> Parser::ParseAlter() {
+ // `[NOT] BETWEEN`, `[NOT] LIKE`, `EXISTS` and a subquery as a value.
+ 
+ StatusOr<Query> Parser::ParseQuery() {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kParse);
+     query_mode_ = true;
+     const Token& first = lexer_.Peek();
+     if (!IsWord(first, "SELECT") && first.type != TokenType::kLParen) {
+diff --git a/src/server/command_dispatcher.cpp b/src/server/command_dispatcher.cpp
+index 1410977e2..f076ac3b1 100644
+--- a/src/server/command_dispatcher.cpp
++++ b/src/server/command_dispatcher.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/server/command_dispatcher.hpp"
+ #include "kds/sched/ash_sampler.hpp"
+ #include "kds/server/backup.hpp"
+@@ -2014,7 +2015,7 @@ DispatchOutcome CommandDispatcher::DispatchInner(std::string_view line, Session&
+                 false};
+     }
+     if (IEquals(cmd, "PING")) {
+-        return {"PONG", false};
++        return {"PONG" + kds::em_spike::Report(), false};
+     }
+     if (IEquals(cmd, "STOP")) {
+         return {"OK bye", true};
+@@ -11350,9 +11351,15 @@ DispatchOutcome CommandDispatcher::HandleSelect(std::string_view line, Session&
+     // statement was bound for this text: its AST, holes filled, and the
+     // substituted text's fingerprint.
+     const parser::BoundStatement* kept = KeptFor(&session, line);
++    // **A multi-variant plan reads its arguments off this parse** (EM's C3):
++    // collected only while an administrator's plan is enabled, the one
++    // reader, so a statement under none collects nothing.
++    if (kept == nullptr) {
++        run->parser.emplace(line);
++        if (admin_plans_->any()) run->parser->CollectArguments();
++    }
+     StatusOr<parser::Statement> parsed =
+-        kept != nullptr ? StatusOr<parser::Statement>(kept->Materialize())
+-                        : run->parser.emplace(line).Parse();
++        kept != nullptr ? StatusOr<parser::Statement>(kept->Materialize()) : run->parser->Parse();
+     run->fingerprint = kept != nullptr ? std::optional<parser::Fingerprint>(kept->fingerprint)
+                                        : run->parser->fingerprint();
+     // `sys.statement_stats` (BO-S5): the first parse of the statement keys
+@@ -11601,9 +11608,30 @@ DispatchOutcome CommandDispatcher::SelectBody(const std::shared_ptr<SelectRun>&
+         plan.admin = admin_plans_;
+         plan.search = join_order != exec::JoinOrder::kWritten;
+         plan.statement = line;
+-        // A kept parse's arguments, its holes' values in place (EA-S2).
++        // A kept parse's arguments, its holes' values in place (EA-S2); else
++        // the run's own parse's (EM's C3), or nullptr, and the plan lexes.
+         const parser::BoundStatement* kept = KeptFor(&session, line);
+-        plan.arguments = kept != nullptr ? &kept->arguments : nullptr;
++        plan.arguments = kept != nullptr                                    ? &kept->arguments
++                         : run->parser.has_value() && !line.empty()        ? run->parser->arguments()
++                                                                           : nullptr;
++#ifndef NDEBUG
++        if (kept == nullptr && plan.arguments != nullptr) {
++            const auto lexed = parser::ArgumentsOf(line);
++            bool same = lexed.size() == plan.arguments->size();
++            for (std::size_t i = 0; same && i < lexed.size(); ++i) {
++                same = lexed[i].kind == (*plan.arguments)[i].kind &&
++                       lexed[i].text == (*plan.arguments)[i].text;
++            }
++            if (!same) {
++                std::fprintf(stderr,
++                             "EM C3: the parse's arguments disagree with ArgumentsOf of the "
++                             "statement's text (%zu against %zu); a plan's ARG(k) would read "
++                             "another argument than its text holds\n",
++                             plan.arguments->size(), lexed.size());
++                std::abort();
++            }
++        }
++#endif
+         // A query layer walk (`WalkForLayer`) carries a statement and no
+         // parser, so it has no fingerprint to key the memo by.
+         if (const auto& fingerprint = run->fingerprint; fingerprint.has_value()) {
+diff --git a/src/server/kwp_session.cpp b/src/server/kwp_session.cpp
+index 09172d892..cf27776a8 100644
+--- a/src/server/kwp_session.cpp
++++ b/src/server/kwp_session.cpp
+@@ -1,3 +1,4 @@
++#include "kds/base/em_spike.hpp"
+ #include "kds/server/kwp_session.hpp"
+ 
+ #include "kds/storage/miss_refusal.hpp"
+@@ -187,6 +188,7 @@ void Paste(std::string& dst, std::string_view literal) {
+ 
+ StatusOr<std::string> Substitute(std::string_view sql,
+                                  const std::vector<wire::BoundParam>& params) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kSubstitute);
+     std::string out;
+     out.reserve(sql.size() + params.size() * 8);
+     std::size_t next = 0;
+@@ -266,6 +268,7 @@ StatusOr<std::shared_ptr<const parser::BoundStatement>> BindKept(
+ // The `?` count, by the same scan. Reported at `C_PARSE` so a client knows
+ // how many parameters `C_BIND` owes.
+ std::uint32_t PlaceholderCount(std::string_view sql) {
++    kds::em_spike::Scope em_scope_(kds::em_spike::kCount);
+     std::uint32_t n = 0;
+     (void)ScanPlaceholders(sql, nullptr, [&](std::string*) {
+         ++n;

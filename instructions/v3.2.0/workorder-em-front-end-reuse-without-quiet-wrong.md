@@ -546,3 +546,39 @@ findings:
   block, about 0.01 µs against C4's 0.48 µs, and its duplicated
   parts-delta loop. The run is archived as it ran, and the review found
   that no verdict changes.
+
+### EM-S1 - the spikes; G1 (2026-11-28)
+
+On `em-front-end-reuse` from `259a7fa3a`, the spikes applied to detached
+copies of `b46ac5140`. The measurement is
+`bench/v3.5.1/results-em-s1-poc-v3.5.1-70-g259a7fa3a.md`.
+
+- **C4 passes G1**: −0.40 µs on `ns1.t2` (−5.7 %) and −0.77 µs with a view
+  (−10.6 %), the A2 floor within ±0.4 %. EM-Q12 (a) is in the measured
+  spike. Its harness cell is red against the spike without the gate:
+  core 1 answers the dropped relation's oid, which measures EM-Q12's
+  premise.
+- **C3 passes G1**: −0.67 µs on the join under a two-variant plan
+  (−5.7 %).
+- **C4 and C3 together** lean +0.04 µs (+0.6 %, +0.7 %) on the point
+  `SELECT`, text and prepared. That is outside the floor but inside A's
+  spread, and it is reported as a lean (EM-R7).
+- **C1 fails G1, and EM-R7 refuses it.** It adds +0.35 to +0.45 µs to every
+  text point statement and +0.41 µs to the query-layer `SELECT`, and saves
+  0.08 µs on the join. The parse moved to `C_PARSE` runs 0.10 to 0.14 µs
+  dearer, and the kept parse's allocations and copies cost more than the
+  0.21 to 0.25 µs lex removed. **C1 is not implemented.** EM-Q3, EM-Q4,
+  EM-Q10 and EM-Q11 therefore govern nothing built. They stand as adopted
+  for the record, and EA-R4 stays unamended. Its equality harness (green)
+  and the spike are archived as figures, not code (EM-R8).
+- **A pre-existing window, measured at catalog level and not fixed**: an
+  unqualified relation name resolved within a statement, after another
+  core dropped and re-created it, answers the dropped relation's oid. This
+  is now recorded in the existing `known-gaps.md` entry ("A DDL that opens
+  and closes inside one statement..."), whose full close is unchanged.
+  C4's gate keeps qualified names out of it.
+- **The suite was not run on the spike trees.** C4's and C3's stages build
+  the same code with the harness as tests, and the full suite gates each.
+
+**The stages.** S2a builds C4, the larger saving. S2b builds C3. There is no
+S2c.
