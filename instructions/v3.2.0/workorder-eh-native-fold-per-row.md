@@ -253,6 +253,36 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 
 ## 7. Stage log (CLA, appended as stages land)
 
+### EH-S0 (2026-11-28): the premise and the ranking, on `eh-native-fold-per-row` from `01c6c741c`
+
+`[measured]` on `main`'s engine (EG's closing binary; no engine source
+differs), counting clients on both sides,
+`bench/v3.5.1/results-eh-s0-premise-v3.5.1-35-g01c6c741c.md`:
+
+- **The premise holds on `main`**: a global fold of four aggregates is
+  39.0 ns of server CPU a row against PostgreSQL 18.7's 28.0 ns (1.39x;
+  0.71x of its rate). EH-Q1's figure is 28.0 ns a row for that shape and
+  12.1 ns for a bare `COUNT(*)`.
+- **The ranking, by subtraction between eleven shapes and by 150 stack
+  samples a fold**:
+  1. **the path from a visible row to the fold**: a rejected row costs
+     10.9 ns (PostgreSQL 17.5 ns), a counted one 19.2 ns (12.1 ns) - the
+     copy, the general row's checks, the `std::function`, the fold's loop;
+  2. **decode and fold of a fixed-width cell**: 8.4 ns for the first
+     cell, 19.8 ns for four aggregates over two; `FoldInto` 34.5 % and
+     `DecodeAndResolve` 30.3 % of a global fold's samples;
+  3. **founding a group**: about 230 ns against about 160 ns, in the
+     `std::string`-keyed map and the allocator (52 % of a 7,560-group
+     fold's samples between them);
+  4. the probe is no deficit (23.5 ns against 26.2 ns a row).
+- **So S1 is §2's (a) and (b) together, for the fold the ranking's first
+  two items decide**: a global fold with no predicate, accumulated from
+  the visible row's bytes under the leaf's hold. §2's (c), the group
+  table, is S2's if S1 lands.
+- **No instruction-level profile**: the host has neither `perf` nor
+  `valgrind`.
+- The suite was not executed: no build input changed.
+
 ### Written 2026-11-28
 
 On `pg-kds-comparison-orders` from `b95be2e86`, on the operator's word.
