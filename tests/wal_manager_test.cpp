@@ -12,6 +12,8 @@
 
 #include "kds/base/current_core.hpp"
 #include "kds/sched/clock.hpp"
+#include "kds/sched/wait_state.hpp"
+#include "kds/stats/wait_event.hpp"
 #include "kds/wal/memory_log_device.hpp"
 #include "kds/wal/payload.hpp"
 #include "kds/wal/record.hpp"
@@ -107,6 +109,34 @@ TEST_F(WalManagerTest, StrictCommitIsDurableBeforeItReturns) {
     EXPECT_TRUE(DurableHasCommitFor(1));
     EXPECT_EQ(wal->stats().strict_commits, 1u);
     EXPECT_EQ(wal->stats().syncs, 1u);
+}
+
+// EG-S1: a `strict` commit syncs on the caller's stack, with no park for
+// the dispatcher to open `commit.wal_flush` around - so the manager books
+// that sync itself. A staged `group` commit and a `relaxed` one wait on
+// nothing here and book nothing.
+std::uint64_t CommitWalFlushCount() {
+    return sched::WaitTotals()
+        .totals[static_cast<std::size_t>(stats::WaitEvent::kCommitWalFlush)]
+        .count.get();
+}
+
+TEST_F(WalManagerTest, StrictCommitBooksItsSyncAsCommitWalFlush) {
+    auto wal = OpenManager();
+    ASSERT_NE(wal, nullptr);
+    const std::uint64_t before = CommitWalFlushCount();
+
+    ASSERT_TRUE(wal->Commit(1, DurabilityClass::kStrict).ok());
+    EXPECT_EQ(CommitWalFlushCount(), before + 1);
+
+    ASSERT_TRUE(wal->Commit(2, DurabilityClass::kGroup).ok());
+    ASSERT_TRUE(wal->Commit(3, DurabilityClass::kRelaxed).ok());
+    EXPECT_EQ(CommitWalFlushCount(), before + 1);
+
+    // The failed sync is a wait all the same: the time was spent in it.
+    device_->FailNextSync(Status::IoError("injected"));
+    ASSERT_FALSE(wal->Commit(4, DurabilityClass::kStrict).ok());
+    EXPECT_EQ(CommitWalFlushCount(), before + 2);
 }
 
 TEST_F(WalManagerTest, StrictCommitReportsAFailedSyncAndStaysUndurable) {

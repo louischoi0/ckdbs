@@ -276,6 +276,7 @@ add_executable(kds_tests
     assertion_recover_test.cpp
     recovery_undo_test.cpp
     wal_manager_test.cpp
+    strict_commit_wait_test.cpp
     page_mgr_wal_gate_test.cpp
     wal_checkpointer_test.cpp
     checkpoint_census_test.cpp

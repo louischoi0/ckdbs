@@ -236,6 +236,47 @@ read against it before it is built.
 
 ## 7. Stage log (CLA, appended as stages land)
 
+### EG-S1 (2026-11-28): the inline sync booked, on `eg-one-client-durable-write` from `8f0058f4a`
+
+- **The change** (`src/wal/manager.cpp`, `WalManager::Commit`): the
+  `strict` arm opens a `WaitScope` on `commit.wal_flush` - the commit's
+  LSN and its rung as the event's parameters - around the `Sync()` it
+  runs on the caller's stack. Nothing else moves. It covers every commit
+  that syncs there: a one-core instance's `strict` commits, a DDL's on
+  any instance, a caller's with no reactor.
+- **EG-R1 re-read before it was built** (`[quiet-wrong]`): the scope
+  opens after the commit record is appended and closes when `Sync()` has
+  returned; the acknowledgement still follows the sync, and a failed sync
+  still returns its refusal with `strict_commits` not counted. The scope
+  decides nothing.
+- **EG-R4**: the booking is the calling core's own words and the polled
+  task's session, with no latch and no park; a scope opened with no task
+  being polled books to the thread's totals.
+- **Nesting**: a `WaitScope` inside another asserts in a debug build.
+  The suite is a debug build and no cell tripped it, so no path of the
+  suite reaches a `strict` commit with a scope open; `Sync()` itself
+  opens none.
+- **Cells**: `WalManagerTest.StrictCommitBooksItsSyncAsCommitWalFlush`
+  (a `strict` commit books one wait, a staged `group` and a `relaxed`
+  one none, a failed sync one all the same) and
+  `StrictCommitWaitTest.AOneCoreStrictCommitBooksItsSyncUnderCommitWalFlush`
+  (through a simulator instance's dispatcher: an `INSERT` and an
+  `UPDATE` at `strict` book one each, a `SELECT` none). **The second
+  reads the thread's totals, not `sys.wait_stats`**: the simulator binds
+  no core, and a view row is a bound core's; the view on a running server
+  is read in the close's measurement. The session's row
+  (`sys.session_waits`) is not pinned by a cell: no fixture here polls a
+  statement as a task at `strict` on one core.
+- **`docs/spec/wait-events.md`**: `commit.wal_flush` gains its second
+  site, and says `sys.ash` does not show it.
+- **The suite**: 5,418 of 5,419 at this tree (`ctest -LE bs-nightly
+  -j4`, 178.9 s). The one failure is
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`, the
+  two-core `group` rig `known-gaps.md` ("Testing") names as intermittent
+  on this host: alone it failed 3 of 12 here, its recorded rate, and the
+  `strict` arm is not on its path.
+- Overhead not measured; measured at the milestone's close.
+
 ### EG-S0 (2026-11-28): the insert attributed, on `eg-one-client-durable-write` from `d50d304f8`
 
 `[measured]` on `main`'s engine (EF's binary; no engine source differs),
