@@ -55,6 +55,18 @@ One run of scenario 1 at 60,480 bars, `strict`, the EF drivers, with `sys.meta` 
 
 One run each, so no spread and no claim beyond the record: at `strict` every commit syncs on the reactor with the other seven sessions behind it, and `group` covers the commits one reactor iteration staged with one sync. No PostgreSQL twin drives more than one booker. The driver's `--verify 100` pass reports 34 and 37 failures of 400 (`I1 ... booked_cbm=..., SUM(freights.cbm)=...`, `logs/b8-s2-c1-{s,g}.stdout`): the driver's client-side lost update under the default isolation with more than one booker, as `results-scenario2-freight-v3.4.17-159-g9f8f8b354.md` records, not engine corruption.
 
+## The sync, traced
+
+One more run of the `strict` cell after the stage's review, on the corrected driver, with `strace -f -T -e trace=fdatasync` on the server (2026-11-28, about 03:07 UTC; the trace and its cells are in the archive's `strace/`). The tracer slows every call, so its latencies are not the table's; its counts are the point.
+
+| state | `fdatasync` calls on the reactor thread | a call's duration under the tracer, median (mean) |
+|---|---|---|
+| one live segment, the first | 676 calls, one a commit (the idle cell's 500 and the load's) | 140.0 µs (167.5 µs) |
+| two live segments | **506 pairs, two calls a commit**: the old segment, then the tail | old segment 60.0 µs (61.8 µs); tail 120.0 µs (123.1 µs) |
+| one live segment, the second | 500 calls, one a commit | 115.0 µs (119.9 µs) |
+
+**So the second live segment costs one more `fdatasync` a commit, and that call takes about 60 µs on a file nothing has written to since the roll.** It is the measured form of the 52.0 µs to 61.0 µs the table reads between the after-load and the settled cells. Nine other calls came from the WAL writer thread. Under the tracer the three cells read 183.6 µs, 268.4 µs and 182.1 µs.
+
 ## What the run teaches
 
 1. **`result-insert`'s 0.81x is the breadth of a sync, for as long as a bulk load's segment stays live** - 9.7 s here, about two of the default 5 s checkpoint intervals; which checkpoint removed it was not read. An instance that rolls its log continuously (about 80,000 such inserts a segment) pays it on every commit between a roll and the checkpoint that follows.
@@ -63,7 +75,7 @@ One run each, so no spread and no claim beyond the record: at `strict` every com
 
 ## What is cut, absent or unverified
 
-- **Not attributed by the kernel**: that the 52 µs to 61 µs (after-load less settled) is the second segment's `fdatasync` is read from the live-segment count moving with it and from the per-insert counters standing still; no syscall was traced.
+- **The 10 µs or so between the idle and the settled state** (12.8 µs at `strict`, 9.3 µs at `group`) is not attributed; the settled cells follow a checkpoint and carry 5 page images each.
 - **The run's bulk load** sent each batch's `BEGIN` and `COMMIT` on the driver's second session, not on the one running the `INSERT` (`tools/eg_s0_premise.py` at `b3f491527`, `Kds.batch`): each batch was one autocommit transaction, as intended, beside an empty transaction on the other session. The load books 360 syncs over its 180 batches; whether the second 180 are those empty commits was not read. The driver now sends the batch alone (review of EG-S0).
 - **One relation shape, one load size, three rounds.** A third live segment was not produced.
 - **Why KDS logs 815 B for the insert** is not examined.

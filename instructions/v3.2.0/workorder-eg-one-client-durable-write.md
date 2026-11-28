@@ -211,7 +211,7 @@ read against it before it is built.
 | | adopted | note |
 |---|---|---|
 | EG-Q0 | (a) | S0 and S1, S2 behind EG-Q1 |
-| EG-Q1 | (a) | **read at S0: S2 does not open.** The insert is behind and its cause is the engine's, but the cause is the breadth of a sync, which EG-R2 leaves to DY |
+| EG-Q1 | (a) | **S2 does not open, by CLA's resolution of a collision the order did not foresee**: taken alone, (a)'s condition is met - the insert is behind by more than the spread and its cause is in the engine - but the cause is the breadth of a sync, which EG-R2 forbids EG to touch. CLA reads the rule as bounding the item; the operator may read it the other way, and the narrowed sync is then DY-Q2's or a stage of its own |
 | EG-Q2 | (a) | the one-core inline sync booked as `commit.wal_flush`, timed in place |
 | EG-Q3 | (a) | measured at eight bookers in S0 and recorded; not built |
 | EG-Q4 | (a) | the two documents corrected at the close |
@@ -280,6 +280,12 @@ rounds, every cell through the quiet gate at once:
 - **Also seen, not EG's**: KDS logs 815 B for an insert PostgreSQL logs
   227 B for.
 - The suite was not executed: no build input changed.
+- **Traced after the review** (`strace -T -e trace=fdatasync`, the
+  results file's "The sync, traced"): with two live segments every
+  commit issues two `fdatasync` calls on the reactor, 506 pairs over
+  the cell, and the one on the old segment - a file nothing has written
+  to since the roll - takes about 60 µs. The attribution is measured,
+  not inferred.
 
 ### Written 2026-11-28
 
