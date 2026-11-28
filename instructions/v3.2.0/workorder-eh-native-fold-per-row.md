@@ -253,6 +253,35 @@ across statements (`include/kds/server/command_dispatcher.hpp`).
 
 ## 7. Stage log (CLA, appended as stages land)
 
+### EH-S2 (2026-11-28): the group table, on `eh-native-fold-per-row` from `2c82dd1d0`
+
+- **The change** (§2's (c), less the reserve): `Aggregator`'s
+  `std::unordered_map<std::string, size_t>` is replaced by an
+  open-addressing table of `(hash, group + 1)` slots over one arena of key
+  bytes, kept at most half full; founding a group appends its key to the
+  arena and fills one slot, so no map node and no key string is allocated a
+  group, and the table allocates only when it doubles. The hash is a 64-bit
+  multiply-and-shift over the encoded key eight bytes a step, replacing
+  `std::hash<std::string_view>` (11 % of a 7,560-group fold at EH-S0); a
+  probe compares the hash and then the bytes, so no answer depends on its
+  quality. `Accumulate` and `Merge` find and file groups through the same two
+  helpers. **The emit order is untouched** (AG6): groups stay in `groups_`
+  in the order they were founded, and nothing walks the table. **Not built**:
+  the reserve from the planner's prior - it needs a prior plumbed to the
+  aggregator for a saving the doubling already amortises.
+- **Cells**: the aggregate contract suite and every cell naming an
+  aggregate, `GROUP BY` or `DISTINCT`, 211 of 211, unchanged - they pin
+  first-seen order, the cap, merge and every grouped answer.
+- **The suite at this tree**: 5,433 of 5,435 (`ctest -LE bs-nightly -j4`,
+  219.3 s). The two failures are the host's two-core flakes
+  (`ContentionCountersTest.TwoCoresInsertingIntoOneRelationContendWhatAnInsertTakes`,
+  `DurableKickRigTest.APeersGroupCommitIsKickedByTheWriter`); run 20 times
+  each, interleaved with EG's build of the same window, which has no
+  aggregate change, they failed 3 and 6 times here against 5 and 8 there.
+  The suite run before it was **voided**: CLA rebuilt the test binary while
+  it ran.
+- Overhead not measured; measured at the milestone's close.
+
 ### EH-S1 (2026-11-28): a global fold from the row's bytes, on `eh-native-fold-per-row` from `1f7ef7c84`
 
 - **The change.** `exec/bytes_fold.hpp` is the seam: a consumer the

@@ -7,7 +7,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -257,10 +256,34 @@ private:
     std::span<const std::string> labels_;
     AggregateLimits limits_;
 
-    // First-seen order, by construction. `index_` maps an encoded key to a
-    // position in here.
+    // First-seen order, by construction. The group table below finds a
+    // position in here by its encoded key.
     std::vector<Group> groups_;
-    std::unordered_map<std::string, std::size_t, KeyHash, std::equal_to<>> index_;
+    // **The group table** (EH-S2): a group's encoded key, found by an
+    // open-addressing table over one arena of key bytes. Founding a group
+    // appends its key to the arena and its index to a slot: no node, no
+    // string of its own, so the table allocates only when it grows. A slot
+    // holds the group's index plus one (0: empty) beside the key's hash,
+    // and a probe compares the hash before the bytes. **The table decides
+    // which group a row folds into and nothing else**: the groups live in
+    // `groups_` in the order they were founded, which is the emit order
+    // (AG6), and no iteration ever walks the table.
+    struct GroupSlot {
+        std::uint64_t hash = 0;
+        std::size_t group_plus_one = 0;  // 0: empty
+    };
+    struct KeySpan {
+        std::size_t at = 0;
+        std::size_t length = 0;
+    };
+    std::vector<GroupSlot> table_;     // a power of two, at most half full
+    std::vector<KeySpan> key_spans_;   // one a group, in `groups_` order
+    std::string key_arena_;
+    // The group `key` names, or `groups_.size()` if none does.
+    std::size_t FindGroup(std::string_view key, std::uint64_t hash) const noexcept;
+    // Files `key` under the group just appended to `groups_`.
+    void FileGroup(std::string_view key, std::uint64_t hash);
+    static std::uint64_t HashKey(std::string_view key) noexcept;
 
     // Reused across every row. `clear()` keeps the capacity, so the encode
     // allocates on the first row of a statement and never again.

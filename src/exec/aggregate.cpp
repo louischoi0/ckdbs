@@ -58,7 +58,9 @@ Status Aggregator::Reset(const AggregateSpec& spec, std::span<const std::string>
     // `clear()` throughout, never a fresh container: every one of these
     // keeps its capacity, which is the whole point of reusing the object.
     groups_.clear();
-    index_.clear();
+    table_.clear();
+    key_spans_.clear();
+    key_arena_.clear();
     key_scratch_.clear();
     out_scratch_.clear();
     distinct_entries_ = 0;
@@ -389,6 +391,70 @@ Status Aggregator::AccumulateBytes(std::span<const std::byte> payload) {
     return Status::OK();
 }
 
+// ---- The group table (EH-S2) -------------------------------------------
+//
+// A 64-bit hash of the encoded key, eight bytes a step: the key is a few
+// dozen bytes of `EncodeValue` output at most, and `std::hash` over a
+// `string_view` was 11 % of a 7,560-group fold's time at EH-S0. Its quality
+// decides only how long a probe runs - two keys with one hash are told apart
+// by their bytes - so no answer depends on it.
+std::uint64_t Aggregator::HashKey(std::string_view key) noexcept {
+    constexpr std::uint64_t kMul = 0x9E3779B97F4A7C15ull;
+    std::uint64_t h = 0xCBF29CE484222325ull ^ (key.size() * kMul);
+    std::size_t at = 0;
+    for (; at + 8 <= key.size(); at += 8) {
+        std::uint64_t word = 0;
+        std::memcpy(&word, key.data() + at, 8);
+        h = (h ^ word) * kMul;
+        h ^= h >> 29;
+    }
+    if (at < key.size()) {
+        std::uint64_t word = 0;
+        std::memcpy(&word, key.data() + at, key.size() - at);
+        h = (h ^ word) * kMul;
+        h ^= h >> 29;
+    }
+    h *= kMul;
+    return h ^ (h >> 32);
+}
+
+std::size_t Aggregator::FindGroup(std::string_view key, std::uint64_t hash) const noexcept {
+    if (table_.empty()) return groups_.size();
+    const std::size_t mask = table_.size() - 1;
+    for (std::size_t slot = hash & mask;; slot = (slot + 1) & mask) {
+        const GroupSlot& probe = table_[slot];
+        if (probe.group_plus_one == 0) return groups_.size();
+        if (probe.hash != hash) continue;
+        const KeySpan span = key_spans_[probe.group_plus_one - 1];
+        if (std::string_view(key_arena_).substr(span.at, span.length) == key) {
+            return probe.group_plus_one - 1;
+        }
+    }
+}
+
+void Aggregator::FileGroup(std::string_view key, std::uint64_t hash) {
+    // The group was just appended to `groups_`; its span and its slot follow.
+    const std::size_t group = groups_.size() - 1;
+    key_spans_.push_back({key_arena_.size(), key.size()});
+    key_arena_.append(key);
+    // At most half full, so a probe ends at an empty slot and stays short.
+    if (2 * groups_.size() > table_.size()) {
+        std::vector<GroupSlot> grown(table_.empty() ? 64 : 2 * table_.size());
+        const std::size_t mask = grown.size() - 1;
+        for (const GroupSlot& old : table_) {
+            if (old.group_plus_one == 0) continue;
+            std::size_t slot = old.hash & mask;
+            while (grown[slot].group_plus_one != 0) slot = (slot + 1) & mask;
+            grown[slot] = old;
+        }
+        table_ = std::move(grown);
+    }
+    const std::size_t mask = table_.size() - 1;
+    std::size_t slot = hash & mask;
+    while (table_[slot].group_plus_one != 0) slot = (slot + 1) & mask;
+    table_[slot] = {hash, group + 1};
+}
+
 Status Aggregator::Accumulate(const ChainFrame& frame) {
     // ---- The global form: no key, no hash, no map --------------------
     if (spec_->group_keys.empty()) {
@@ -405,8 +471,9 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
 
     // Heterogeneous, so the probe never materialises a string. This is the
     // one lookup on the per-row path and it must stay allocation-free.
-    if (auto it = index_.find(std::string_view(key_scratch_)); it != index_.end()) {
-        return FoldInto(groups_[it->second], frame);
+    const std::uint64_t hash = HashKey(key_scratch_);
+    if (const std::size_t at = FindGroup(key_scratch_, hash); at != groups_.size()) {
+        return FoldInto(groups_[at], frame);
     }
 
     // ---- A new group. The only place this class allocates. ------------
@@ -429,7 +496,7 @@ Status Aggregator::Accumulate(const ChainFrame& frame) {
 
     const std::size_t at = groups_.size();
     groups_.push_back(std::move(group));
-    index_.emplace(key_scratch_, at);
+    FileGroup(key_scratch_, hash);
     return FoldInto(groups_[at], frame);
 }
 
@@ -713,8 +780,9 @@ Status Aggregator::Merge(Aggregator&& other) {
                 if (Status s = EncodeValue(value, key_scratch_); !s.ok()) return s;
             }
 
-            if (auto it = index_.find(std::string_view(key_scratch_)); it != index_.end()) {
-                at = it->second;
+            const std::uint64_t hash = HashKey(key_scratch_);
+            if (const std::size_t found = FindGroup(key_scratch_, hash); found != groups_.size()) {
+                at = found;
             } else {
                 if (groups_.size() >= limits_.max_groups) {
                     return Status::ResourceExhausted(
@@ -725,7 +793,7 @@ Status Aggregator::Merge(Aggregator&& other) {
                 Group fresh = NewGroup();
                 fresh.keys = incoming.keys;
                 groups_.push_back(std::move(fresh));
-                index_.emplace(key_scratch_, at);
+                FileGroup(key_scratch_, hash);
             }
         }
         if (Status s = MergeGroup(groups_[at], incoming); !s.ok()) return s;
@@ -735,7 +803,9 @@ Status Aggregator::Merge(Aggregator&& other) {
     // have been folded elsewhere must not be finishable, and an empty one
     // that is asked to finish emits nothing instead of a duplicate.
     other.groups_.clear();
-    other.index_.clear();
+    other.table_.clear();
+    other.key_spans_.clear();
+    other.key_arena_.clear();
     other.distinct_entries_ = 0;
     return Status::OK();
 }
